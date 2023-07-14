@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="/js/jquery.min.js"></script>
+  <script src="/js/sockjs.min.js"></script>
+  <script src="/js/GoTime.js"></script> 
+  <script src="/js/mosiacmesh.js"></script>
+  <script>
+    var blink = true;
+    function tickcallback(currentTime,currentTarget,drift_correction)
+    {
+        if(sock == null)
+        {
+            mosiacMeshConnect(mosiacMeshCallback);
+        }
+        if(ProgrammableTimer.isSynced())
+        {
+			if(blink)
+			{
+				if((Math.round(currentTime/1000)*1000)%2000 == 0)
+				{
+					//$('#canvas').css({'background-color': 'white', 'color': 'black'});
+					$('#canvas').text("TICK");
+					//$('#canvas').center();
+				}
+				else
+				{   
+					//$('#canvas').css({'background-color': 'black', 'color': 'white'});
+					$('#canvas').text("TOCK");
+					//$('#canvas').center();
+				}
+			}
+        }
+        else
+        {
+            //$('#canvas').css({'background-color': 'white', 'color': 'black'});
+            $('#canvas').text("Synching to time server...");
+			//$('#canvas').center();
+        }
+        //console.log(currentTime + "," +currentTarget + "," + drift_correction+"," + (1000-drift_correction)+","+(currentTarget-currentTime));
+    }
+    
+    ProgrammableTimer.setup(1000,tickcallback);
+	
+	function mosiacMeshCallback(data_obj)
+	{
+		log('Received: ' + data_obj);
+		
+		if(data_obj.DEST == udid)
+		{
+			
+		}
+		else if(data_obj.DEST == "ALL")
+		{
+			if(data_obj.REQUEST == "CALIBRATE")
+			{
+				blink = false;
+				$('#canvas').css({'background-color': 'white', 'color': 'black'});
+				$('#canvas').text("");
+				var image = new Image();
+				image.src = 'http://' + window.location.host + '/media/' + udid + "/aruco.png?"+GoTime.now();
+				
+				$('#canvas').hide()
+				$('#canvas').empty();
+				$('#canvas').prepend(image);
+				image.addEventListener('load', function() {$('#canvas').show();});
+				
+				$("html").css({
+					width: $(window).width() - 16, // subtract twice the thickness
+					height: $(window).height() - 16, // of the border from each dimension
+					border: '8px solid black',
+					'z-index': '10',
+		            position: 'relative'
+				});
+			}
+		}
+	}
+
+	$.fn.center = function () {
+	   this.css("position","absolute");
+	   this.css("top", ( $(window).height() - this.height() ) / 2  + "px");
+	   this.css("left", ( $(window).width() - this.width() ) / 2 + "px");
+	   return this;
+	}
+
+	mosiacMeshConnect(mosiacMeshCallback);
+  </script>
+  <style>
+	.canvas {
+		width: 100%;
+		-webkit-transform: translateX(-50%) translateY(-50%);
+		transform: translateX(-50%) translateY(-50%);
+		position: absolute; /*or fixed*/
+		left: 50%;
+		top: 50%;
+		text-align: center;
+	}
+  </style>
+</head>
+<body>
+	<div id="canvas" class="canvas"></div>
+</body>
+</html>
+

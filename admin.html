@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.2.1/themes/default/style.min.css" />
+  <script src="/js/jquery.min.js"></script>
+  <script src="/js/sockjs.min.js"></script>
+  <script src="/js/GoTime.js"></script> 
+  <script src="/js/mosiacmesh.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.2.1/jstree.min.js"></script>
+  <script>
+    function tickcallback(currentTime,currentTarget,drift_correction)
+    {
+        if(sock == null)
+        {
+            mosiacMeshConnect();
+        }
+    }
+	
+	$('form').submit(function() {
+		var text = generateMessage("SRV",$('#text').val(),"");
+        log('Sending: ' + text);
+        sock.send(text);
+        $('#text').val('').focus();
+        return false;
+    });
+	
+	function mosiacMeshCallback(data_obj)
+	{
+		if(data_obj.DEST == udid)
+		{
+			if(data_obj.REQUEST == "REGISTER" && data_obj.PAYLOAD == "SUCCESS")
+			{
+				refreshClients();
+			}
+		}
+		else if(data_obj.DEST == "ALL")
+		{
+			if(data_obj.REQUEST == "DISPLAYS")
+			{
+				console.log(data_obj.PAYLOAD);
+				displays = [{
+						'id' : 'Displays',
+						'text' : 'Displays',
+						'state' : { 'opened' : true, 'selected' : false },
+						'children' : [],
+						'icon': 'images/favicon.ico'
+					}];
+					
+				for(var key in data_obj.PAYLOAD)
+				{
+					displays[0].children.push({
+						'id' : key,
+						'text' : key,
+						'state' : { 'opened' : true, 'selected' : false },
+						'children' : [],
+						'icon' : 'images/display.ico'
+					});
+				}
+				$('#displays').jstree(true).settings.core.data = displays;
+				$('#displays').jstree(true).refresh();
+			}
+			else if(data_obj.REQUEST == "CLIENTS")
+			{
+				displayKeys = {'deviceHeight': 'Height',
+				               'deviceWidth': 'Width',
+							   'measuredCenter': 'Center',
+							   'ip': 'IP Address',
+							   'osName': 'OS',
+							   'osVersion': 'Version',
+							   'engine': 'Browser Engine',
+							   'deviceBrand': 'Device Brand',
+							   'deviceModel': 'Device Model',
+							   'deviceType': 'Device Type',
+							   'width': 'Width',
+							   'height': 'Height',
+							   'loginScript': 'Login Script',
+							   'startScript': 'Start Script',
+							   'stopScript': 'Stop Script',
+							   'rebootScript': 'Reboot Script',
+							   };
+							   
+				console.log(data_obj.PAYLOAD);
+				for(var key in data_obj.PAYLOAD)
+				{
+				    for(var dispKey in $('#displays').jstree(true).settings.core.data[0].children)
+					{
+						if(data_obj.PAYLOAD[key].displayID == $('#displays').jstree(true).settings.core.data[0].children[dispKey].id)
+						{
+						    children = [];
+							
+							var icon = "images/client.ico"
+							
+							for(var dataKey in data_obj.PAYLOAD[key])
+							{
+								if(dataKey in displayKeys)
+								{
+									value = data_obj.PAYLOAD[key][dataKey];
+									if(dataKey == 'engine')
+									{
+										value = data_obj.PAYLOAD[key][dataKey].default;
+									}
+									if(dataKey == 'deviceType' && value != 'desktop')
+									{
+										icon = "images/mobileclient.ico"
+									}
+									children.push({
+										'id' : key+'|'+dataKey,
+										'text' : displayKeys[dataKey] + ": "+ value,
+										'state' : { 'opened' : false, 'selected' : false },
+										'children' : false,
+										'icon' : "images/info.ico"
+									});
+								}
+							}
+			
+							$('#displays').jstree(true).settings.core.data[0].children[dispKey].children.push({
+								'id' : key,
+								'text' : key,
+								'state' : { 'opened' : false, 'selected' : false },
+								'children' : children,
+								'icon' : icon
+							});	
+						}
+					}
+			    }
+				$('#displays').jstree(true).refresh();
+		    }
+	    }
+	}
+	
+	function imageChanged() {
+		var file = event.target.files[0];
+
+		if (file.size > 5*1024*1024) {
+			alert('Max upload size is 5M');
+		}
+
+		// Also see .name, .type
+
+		var image = new Image();
+		image.src = URL.createObjectURL(file);
+		$('#canvas').empty();
+		$('#canvas').prepend(image);
+	};
+	
+	function refreshClients() {
+		sock.send(generateMessage('SRV','DISPLAYS','null'));
+	    sock.send(generateMessage('SRV','CLIENTS','null'));
+	}
+	
+	$(document).ready(function () {
+		$("#calImageForm").submit(function (event) {
+
+			//disable the default form submission
+			event.preventDefault();
+			//grab all form data  
+			var formData = new FormData($('#calImageForm')[0]);
+
+			$.ajax({
+				url: 'upload/calibrate',
+				type: 'POST',
+				data: formData,
+				cache: false,
+                enctype: 'multipart/form-data',
+				contentType: false,
+				processData: false,
+				success: function (data) {
+					image = new Image();
+					$('#canvas').hide()
+					image.src = data+"?"+GoTime.now();
+					$('#canvas').empty();
+					$('#canvas').prepend(image);
+					image.addEventListener('load', function() {$('#canvas').show();});
+				},
+				error: function(){
+					console.log("Error in ajax form submission");
+				}
+			});
+
+			return false;
+		});
+		
+		$("#mediaContentForm").submit(function (event) {
+
+			//disable the default form submission
+			event.preventDefault();
+			//grab all form data  
+			var formData = new FormData($('#mediaContentForm')[0]);
+
+			$.ajax({
+				url: 'upload/image',
+				type: 'POST',
+				data: formData,
+				cache: false,
+                enctype: 'multipart/form-data',
+				contentType: false,
+				processData: false,
+				success: function (data) {
+					console.log(data);
+				},
+				error: function(){
+					console.log("Error in ajax form submission");
+				}
+			});
+
+			return false;
+		});
+		
+		$('#displays').jstree({
+		  "core" : {
+			"multiple" : false,
+			"animation" : 0,
+			"themes" : { "stripes" : true },
+			"check_callback" : true,
+		  },
+		  "plugins" : [ "contextmenu", "dnd", "search", "state", "unique" ]
+		});
+		
+		$('#displays').on("changed.jstree", function (e, data) {
+		    console.log('Changed');
+			if(data.selected.length) {
+				console.log('The selected node is: ' + data.selected[0] + " with a value of: " + data.instance.get_node(data.selected[0]).text);
+			}
+		})
+		
+		$('#displays').jstree.bind('create.jstree',function (node, ref) {
+		  alert('oncreate');
+		});
+
+		$('#displays').jstree.bind('rename.jstree',function (node, ref) {
+		  alert('onrename');
+		});
+
+		$('#displays').jstree.bind('remove.jstree',function (node, ref) {
+		  alert('ondelete');
+		});
+		
+		var to = false;
+		$('#displays_q').keyup(function () {
+			if(to) { clearTimeout(to); }
+			to = setTimeout(function () {
+				var v = $('#displays_q').val();
+				$('#displays').jstree(true).search(v);
+			}, 250);
+		});
+	});
+	
+    ProgrammableTimer.setup(1000,tickcallback);
+	mosiacMeshConnect(mosiacMeshCallback);
+	
+  </script>
+  <style>
+	img{
+		max-width: 100%;
+		max-height: 100%;
+	}
+	
+    .flex-container {
+		display: flex;
+		overflow:hidden
+	}
+
+	.flex-child {
+		flex: 1;
+		overflow:hidden
+	}  
+
+	.flex-child:first-child {
+		margin-right: 10px;
+		overflow:hidden
+	} 
+  </style>
+</head>
+<body>
+<div class="flex-container">
+
+  <div class="flex-child">
+    <div id="canvas" style="width: 48em; height: 27em; overflow:auto; border: 1px solid black"></div>
+	<form id="calImageForm" action="javascript:;" method="post">
+		<label for="calImage">Upload Calibration Image</label>
+		<input id="calImage" name="calImage" type="file" value="" onchange='imageChanged(this);'/>
+
+		<input type="submit" value="Upload"/>
+	</form>
+  </div>
+  
+  <div class="flex-child">
+    <input type="text" id="displays_q" value="" class="input" style="margin:0em auto 1em auto; width: 23em; padding:4px; border-radius:4px; border:1px solid silver;">
+    <div id="displays" style="width: 20em; height: 25em; overflow:auto; border: 1px solid black"></div>
+	<input id="calibrate" type="button" value="Begin Calibration" onclick="sock.send(generateMessage('SRV','CALIBRATE','null'));" />
+	<input id="refresh" type="button" value="Refresh" onclick="refreshClients();" />
+  </div>
+</div>
+<br><br>
+<div>
+	<div id="Media" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
+	<form id="mediaContentForm" action="javascript:;" method="post">
+		<label for="mediaContent">Upload Media Content</label>
+		<input id="mediaContent" name="mediaContent" type="file" value=""/>
+		<input type="submit" value="Upload"/>
+	</form>
+</div>
+<br><br>
+<div id="log" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
+</div>
+<form id="chatform">
+  <input id="text" type="text" />
+  <input id="calibrate" type="button" value="Submit Query" onclick="sock.send(generateMessage('SRV',$('#text').val(),'null'));"/>
+</form>
+</body>
+</html>
+
