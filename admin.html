@@ -2,12 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.2.1/themes/default/style.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/themes/default/style.min.css" />
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script> 
   <script src="/js/mosiacmesh.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.2.1/jstree.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
   <script>
     function tickcallback(currentTime,currentTarget,drift_correction)
     {
@@ -27,106 +27,108 @@
 	
 	function mosiacMeshCallback(data_obj)
 	{
-		if(data_obj.DEST == udid)
+		if(data_obj.REQUEST == "REGISTER" && data_obj.PAYLOAD == "SUCCESS")
 		{
-			if(data_obj.REQUEST == "REGISTER" && data_obj.PAYLOAD == "SUCCESS")
-			{
-				refreshClients();
-			}
+			refreshClients();
 		}
-		else if(data_obj.DEST == "ALL")
+		else if(data_obj.REQUEST == "DISPLAYS")
 		{
-			if(data_obj.REQUEST == "DISPLAYS")
+			console.log(data_obj.PAYLOAD);
+			displays = [{
+					'id' : 'displays',
+					'text' : 'Displays',
+					'state' : { 'opened' : true, 'selected' : false },
+					'children' : [],
+					'icon': 'images/favicon.ico',
+					'li_attr' : { 'class' : 'tree_root' },
+					'draggable' : false
+				}];
+				
+			for(var key in data_obj.PAYLOAD)
 			{
-				console.log(data_obj.PAYLOAD);
-				displays = [{
-						'id' : 'Displays',
-						'text' : 'Displays',
-						'state' : { 'opened' : true, 'selected' : false },
-						'children' : [],
-						'icon': 'images/favicon.ico'
-					}];
-					
-				for(var key in data_obj.PAYLOAD)
-				{
-					displays[0].children.push({
-						'id' : key,
-						'text' : key,
-						'state' : { 'opened' : true, 'selected' : false },
-						'children' : [],
-						'icon' : 'images/display.ico'
-					});
-				}
-				$('#displays').jstree(true).settings.core.data = displays;
-				$('#displays').jstree(true).refresh();
+				displays[0].children.push({
+					'id' : key,
+					'text' : key,
+					'state' : { 'opened' : true, 'selected' : false },
+					'children' : [],
+					'icon' : 'images/display.ico',
+					'li_attr' : { 'class' : 'display_group' },
+					'draggable' : false
+				});
 			}
-			else if(data_obj.REQUEST == "CLIENTS")
+			$('#displays').jstree(true).settings.core.data = displays;
+			$('#displays').jstree(true).refresh();
+		}
+		else if(data_obj.REQUEST == "CLIENTS")
+		{
+			displayKeys = {'deviceHeight': 'Height',
+						   'deviceWidth': 'Width',
+						   'measuredCenter': 'Center',
+						   'userAgent': 'User Agent',
+						   'ip': 'IP Address',
+						   'osName': 'OS',
+						   'osVersion': 'Version',
+						   'engine': 'Browser Engine',
+						   'deviceBrand': 'Device Brand',
+						   'deviceModel': 'Device Model',
+						   'deviceType': 'Device Type',
+						   'width': 'Width',
+						   'height': 'Height',
+						   'loginScript': 'Login Script',
+						   'startScript': 'Start Script',
+						   'stopScript': 'Stop Script',
+						   'rebootScript': 'Reboot Script',
+						   };
+						   
+			console.log(data_obj.PAYLOAD);
+			for(var key in data_obj.PAYLOAD)
 			{
-				displayKeys = {'deviceHeight': 'Height',
-				               'deviceWidth': 'Width',
-							   'measuredCenter': 'Center',
-							   'ip': 'IP Address',
-							   'osName': 'OS',
-							   'osVersion': 'Version',
-							   'engine': 'Browser Engine',
-							   'deviceBrand': 'Device Brand',
-							   'deviceModel': 'Device Model',
-							   'deviceType': 'Device Type',
-							   'width': 'Width',
-							   'height': 'Height',
-							   'loginScript': 'Login Script',
-							   'startScript': 'Start Script',
-							   'stopScript': 'Stop Script',
-							   'rebootScript': 'Reboot Script',
-							   };
-							   
-				console.log(data_obj.PAYLOAD);
-				for(var key in data_obj.PAYLOAD)
+				for(var dispKey in $('#displays').jstree(true).settings.core.data[0].children)
 				{
-				    for(var dispKey in $('#displays').jstree(true).settings.core.data[0].children)
+					if(data_obj.PAYLOAD[key].displayID == $('#displays').jstree(true).settings.core.data[0].children[dispKey].id)
 					{
-						if(data_obj.PAYLOAD[key].displayID == $('#displays').jstree(true).settings.core.data[0].children[dispKey].id)
+						children = [];
+						
+						var icon = "images/client.ico"
+						
+						for(var dataKey in data_obj.PAYLOAD[key])
 						{
-						    children = [];
-							
-							var icon = "images/client.ico"
-							
-							for(var dataKey in data_obj.PAYLOAD[key])
+							if(dataKey in displayKeys)
 							{
-								if(dataKey in displayKeys)
+								value = data_obj.PAYLOAD[key][dataKey];
+								if(dataKey == 'engine')
 								{
-									value = data_obj.PAYLOAD[key][dataKey];
-									if(dataKey == 'engine')
-									{
-										value = data_obj.PAYLOAD[key][dataKey].default;
-									}
-									if(dataKey == 'deviceType' && value != 'desktop')
-									{
-										icon = "images/mobileclient.ico"
-									}
-									children.push({
-										'id' : key+'|'+dataKey,
-										'text' : displayKeys[dataKey] + ": "+ value,
-										'state' : { 'opened' : false, 'selected' : false },
-										'children' : false,
-										'icon' : "images/info.ico"
-									});
+									value = data_obj.PAYLOAD[key][dataKey].default;
 								}
+								if(dataKey == 'deviceType' && value != 'desktop')
+								{
+									icon = "images/mobileclient.ico"
+								}
+								children.push({
+									'id' : dataKey,
+									'text' : displayKeys[dataKey] + ": "+ value,
+									'state' : { 'opened' : false, 'selected' : false },
+									'children' : false,
+									'icon' : "images/info.ico",
+									'li_attr' : { 'class' : 'display_attr' },
+									'draggable' : false
+								});
 							}
-			
-							$('#displays').jstree(true).settings.core.data[0].children[dispKey].children.push({
-								'id' : key,
-								'text' : key,
-								'state' : { 'opened' : false, 'selected' : false },
-								'children' : children,
-								'icon' : icon
-							});	
 						}
+		
+						$('#displays').jstree(true).settings.core.data[0].children[dispKey].children.push({
+							'id' : key,
+							'text' : data_obj.PAYLOAD[key]['friendlyName'] || key,
+							'state' : { 'opened' : false, 'selected' : false },
+							'children' : children,
+							'icon' : icon,
+							'li_attr' : { 'class' : 'display' }
+						});	
 					}
-			    }
-				$('#displays').jstree(true).refresh();
-		    }
-	    }
+				}
+			}
+			$('#displays').jstree(true).refresh();
+		}
 	}
 	
 	function imageChanged() {
@@ -212,29 +214,140 @@
 			"multiple" : false,
 			"animation" : 0,
 			"themes" : { "stripes" : true },
-			"check_callback" : true,
+			"check_callback" :  function (operation, node, node_parent, node_position, more) {
+				if (operation === 'move_node'){
+					if (Object.hasOwn(node_parent, 'li_attr') && node.li_attr.class == 'display' && node_parent.li_attr.class == 'display_group') {
+						return true;
+					}
+					else{
+						return false;
+					}
+				}
+				return true;
+			}
 		  },
-		  "plugins" : [ "contextmenu", "dnd", "search", "state", "unique" ]
+		  "plugins" : [ "contextmenu", "dnd", "search", "state", "unique", "changed" ],
+		  'contextmenu' : {
+			'items' : customMenu
+		  }
 		});
 		
-		$('#displays').on("changed.jstree", function (e, data) {
+		function customMenu(node) {
+			// The default set of all items
+			var items = {
+				refreshItem: { // The "refresh" menu item
+					label: "Refresh",
+					action: function (obj) {
+						refreshClients();
+					}
+				},
+				calibrateItem: { // The "calibrate" menu item
+					label: "Calibrate Display",
+					action: function (obj) {
+						sock.send(generateMessage('SRV','GENERATEARUCO',{'id': node.id}));
+					}
+				},
+				identifyItem: { // The "identify" menu item
+					label: "Identify Display",
+					action: function (obj) {
+						sock.send(generateMessage('SRV','IDENTIFYDISPLAY',{'group': node.li_attr.class=='display_group', 'id': node.id}));
+					}
+				},
+			    newItem: { // The "create" menu item
+					label: "New Display Group",
+					action: function (obj) {
+						node = $('#displays').jstree(true).create_node(node);
+						$('#displays').jstree(true).edit(node);
+					}
+				},
+				renameItem: { // The "rename" menu item
+					label: "Rename",
+					action: function (obj) {
+						$('#displays').jstree(true).edit(node);
+					}
+				},
+				deleteItem: { // The "delete" menu item
+					label: "Delete",
+					action: function (obj) {
+						$('#displays').jstree(true).delete_node(node);
+					}
+				}
+			};
+			
+			// Only allow creation of Display groups
+			if(node.li_attr.class != 'tree_root') {
+				//items.newItem._disabled = true;
+				delete items.refreshItem;
+				delete items.newItem;
+			}
+			
+			// Only allow identification of displays and display groups
+			if(!(node.li_attr.class == 'display' || node.li_attr.class == 'display_group')){
+				delete items.identifyItem;
+			}
+			
+			// Only allow rename of devices and device groups except for the default display group
+			if(!(node.li_attr.class == 'display' || node.li_attr.class == 'display_group') || node.id == 'Default') {
+				//items.renameItem._disabled = true;
+				delete items.renameItem;
+			}
+			// Only show calibrate for display groups
+			if (node.li_attr.class != 'display_group'){
+				delete items.calibrateItem;
+				// Only show the delete item for non default display groups
+				delete items.deleteItem;
+			}
+			else if (node.id == 'Default') {
+				
+				delete items.deleteItem;
+			}
+
+			return items;
+		}
+		
+		/*$('#displays').on("changed.jstree", function (e, data) {
 		    console.log('Changed');
 			if(data.selected.length) {
+				console.log(data);
 				console.log('The selected node is: ' + data.selected[0] + " with a value of: " + data.instance.get_node(data.selected[0]).text);
 			}
-		})
+		})*/
 		
-		$('#displays').jstree.bind('create.jstree',function (node, ref) {
-		  alert('oncreate');
+		$('#displays').on('create_node.jstree',function (e, data) {
+		  console.log("create_node");
+		  // only allow display groups to be created
+		  data.node.icon = 'images/display.ico';
+		  data.node.li_attr  = { 'class' : 'display_group' };
+		});
+		
+		$('#displays').on('delete_node.jstree',function (e, data) {
+		  console.log("delete_node");
+		  sock.send(generateMessage('SRV','UPDATEDISPLAYGROUP',{'oldID':data.node.id, 'newID':null}));
 		});
 
-		$('#displays').jstree.bind('rename.jstree',function (node, ref) {
-		  alert('onrename');
+		$('#displays').on('rename_node.jstree',function (e, data) {
+		  console.log("rename_node");
+		  if(data.node.li_attr.class == 'display_group') {
+			  $('#displays').jstree(true).set_id(data.node,data.node.text);
+			  sock.send(generateMessage('SRV','UPDATEDISPLAYGROUP',{'oldID':data.old || data.node.id, 'newID':data.text}));
+		  }
+		  else
+		  {
+			  sock.send(generateMessage('SRV','UPDATEDISPLAY',{'clientID':data.node.id, 'friendlyName':data.text}));
+		  }
 		});
 
-		$('#displays').jstree.bind('remove.jstree',function (node, ref) {
-		  alert('ondelete');
-		});
+		$('#displays').on('move_node.jstree',function (e, data) {
+		  console.log("move_node");
+		  /* only allow moving device nodes between displays
+		  tree_root
+		  display_group
+		  display
+		  display_attr*/
+		  if(data.node.li_attr.class == 'display' && $('#'+data.old_parent).first().hasClass('display_group')) {
+			sock.send(generateMessage('SRV','UPDATEDISPLAY',{'clientID':data.node.id, 'displayID':data.parent}));
+		  }
+		})
 		
 		var to = false;
 		$('#displays_q').keyup(function () {
@@ -270,6 +383,46 @@
 		margin-right: 10px;
 		overflow:hidden
 	} 
+	.upload-area{
+		width: 70%;
+		height: 200px;
+		border: 2px solid lightgray;
+		border-radius: 3px;
+		margin: 0 auto;
+		margin-top: 100px;
+		text-align: center;
+		overflow: auto;
+	}
+
+	.upload-area:hover{
+		cursor: pointer;
+	}
+
+	.upload-area h1{
+		text-align: center;
+		font-weight: normal;
+		font-family: sans-serif;
+		line-height: 50px;
+		color: darkslategray;
+	}
+
+	#file{
+		display: none;
+	}
+
+	/* Thumbnail */
+	.thumbnail{
+		width: 80px;
+		height: 80px;
+		padding: 2px;
+		border: 2px solid lightgray;
+		border-radius: 3px;
+		float: left;
+	}
+
+	.size{
+		font-size:12px;
+	}
   </style>
 </head>
 <body>
@@ -288,18 +441,18 @@
   <div class="flex-child">
     <input type="text" id="displays_q" value="" class="input" style="margin:0em auto 1em auto; width: 23em; padding:4px; border-radius:4px; border:1px solid silver;">
     <div id="displays" style="width: 20em; height: 25em; overflow:auto; border: 1px solid black"></div>
-	<input id="calibrate" type="button" value="Begin Calibration" onclick="sock.send(generateMessage('SRV','CALIBRATE','null'));" />
-	<input id="refresh" type="button" value="Refresh" onclick="refreshClients();" />
   </div>
 </div>
 <br><br>
 <div>
 	<div id="Media" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
-	<form id="mediaContentForm" action="javascript:;" method="post">
-		<label for="mediaContent">Upload Media Content</label>
-		<input id="mediaContent" name="mediaContent" type="file" value=""/>
-		<input type="submit" value="Upload"/>
-	</form>
+	    <input type="file" name="file" id="file">
+            
+		<!-- Drag and Drop container-->
+		<div class="upload-area"  id="uploadfile">
+			<h1>Drag and Drop file here<br/>Or<br/>Click to select file</h1>
+		</div>
+	</div>
 </div>
 <br><br>
 <div id="log" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">

@@ -20,40 +20,46 @@
 			{
 				if((Math.round(currentTime/1000)*1000)%2000 == 0)
 				{
-					//$('#canvas').css({'background-color': 'white', 'color': 'black'});
-					$('#canvas').text("TICK");
-					//$('#canvas').center();
+					$('#canvas').text("TICK").css('font-size','8vw');
 				}
 				else
 				{   
-					//$('#canvas').css({'background-color': 'black', 'color': 'white'});
-					$('#canvas').text("TOCK");
-					//$('#canvas').center();
+					$('#canvas').text("TOCK").css('font-size','8vw');
 				}
 			}
         }
         else
         {
-            //$('#canvas').css({'background-color': 'white', 'color': 'black'});
-            $('#canvas').text("Synching to time server...");
-			//$('#canvas').center();
+            $('#canvas').text("Synching to time server...").css('font-size','8vw');
         }
         //console.log(currentTime + "," +currentTarget + "," + drift_correction+"," + (1000-drift_correction)+","+(currentTarget-currentTime));
     }
     
     ProgrammableTimer.setup(1000,tickcallback);
 	
+	var mediaSequence = null;
+	
 	function mosiacMeshCallback(data_obj)
 	{
 		log('Received: ' + data_obj);
 		
-		if(data_obj.DEST == udid)
+		if(data_obj.DEST == getUDID() || data_obj.DEST == 'ALL')
 		{
-			
-		}
-		else if(data_obj.DEST == "ALL")
-		{
-			if(data_obj.REQUEST == "CALIBRATE")
+			if(data_obj.REQUEST == "PRELOAD")
+			{
+				mediaSequence = data_obj.PAYLOAD;
+				for(var key in mediaSequence)
+				{
+					mediaSequence[key].URL;
+					 $('<img id=key/>').attr('src',mediaSequence[key].URL).appendTo('#canvas').css('display','none');
+				}
+			}
+			else if(data_obj.REQUEST == "IDENTIFY")
+			{
+				blink = false;
+				$('#canvas').text(data_obj.PAYLOAD).css('font-size','8vw');
+			}
+			else if(data_obj.REQUEST == "CALIBRATE")
 			{
 				blink = false;
 				$('#canvas').css({'background-color': 'white', 'color': 'black'});
@@ -61,17 +67,18 @@
 				var image = new Image();
 				image.src = 'http://' + window.location.host + '/media/' + udid + "/aruco.png?"+GoTime.now();
 				
-				$('#canvas').hide()
+				$('#canvas').hide();
 				$('#canvas').empty();
 				$('#canvas').prepend(image);
 				image.addEventListener('load', function() {$('#canvas').show();});
 				
 				$("html").css({
-					width: $(window).width() - 16, // subtract twice the thickness
+					width: $(window).width() -  16, // subtract twice the thickness
 					height: $(window).height() - 16, // of the border from each dimension
 					border: '8px solid black',
 					'z-index': '10',
-		            position: 'relative'
+					position: 'relative',
+					overflow: 'hidden'
 				});
 			}
 		}
@@ -100,6 +107,7 @@
 </head>
 <body>
 	<div id="canvas" class="canvas"></div>
+	<div id="preload" class="preload"></div>
 </body>
 </html>
 

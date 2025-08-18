@@ -1,0 +1,44 @@
+<head>
+  <link href="/js/video-js.css" rel="stylesheet" />
+
+  <!-- If you'd like to support IE8 (for Video.js versions prior to v7) -->
+  <script src="/js/videojs-ie8.min.js"></script>
+  <script src="/js/jquery.min.js"></script>
+</head>
+
+<body>
+  <div>
+	<video id="my-player" class="video-js" width="800" height="600" preload="auto" muted="muted" poster="http://vjs.zencdn.net/v/oceans.png" controls>
+      <source src="/media/sample-mp4-video.mp4" type="video/mp4">
+      Your browser does not support the video tag.
+    </video>
+  </div>
+
+  <script src="/js/video.min.js"></script>
+  <script>
+	$(document).ready(function () {
+		/*var options = {
+			src:"/media/sample-mp4-video.mp4",
+			preload:"auto",
+			width:800,
+			height:600,
+			muted:true,
+			loop:false,
+			controls:true
+		};*/
+
+		var myPlayer = videojs('my-player');
+
+		//myPlayer.src({type: 'video/mp4', src: '/media/sample-mp4-video.mp4'});
+		myPlayer.ready(function() {
+			myPlayer.requestFullscreen();
+			myPlayer.play();
+		});
+		myPlayer.on('ended', function() {
+			videojs.log('Awww...over so soon?!');
+		});
+	});
+  </script>
+</body>
+
+<!-- H.264 video   720p, 30 frames per second, Main Profile level 3.1 with AAC-LC audio up to 160 Kbps per channel, 48kHz, stereo audio in .m4v, .mp4, and .mov file formats; MPEG-4 video, up to 2.5 Mbps, 640 by 480 pixels, 30 frames per second, Simple Profile with AAC-LC audio up to 160 Kbps, 48kHz, stereo audio in .m4v, .mp4, and .mov file formats; Motion JPEG (M-JPEG) up to 35 Mbps, 1280 by 720 pixels, 30 frames per second, audio in ulaw, PCM stereo audio in .avi file format -->

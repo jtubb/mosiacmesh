@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>MosaicMesh - Test Client</title>
+    <script src="/js/jquery.min.js"></script>
+    <script src="/js/sockjs.min.js"></script>
+    <script src="/js/mosiacmesh.js"></script>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 20px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: rgba(255,255,255,0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            text-align: center;
+        }
+        .status-indicator {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            margin: 20px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2em;
+            animation: pulse 2s infinite;
+        }
+        .status-connected { background: #27ae60; }
+        .status-disconnected { background: #e74c3c; }
+        .status-connecting { background: #f39c12; }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 0.8; }
+            50% { transform: scale(1.1); opacity: 1; }
+        }
+        
+        .device-info {
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+        }
+        
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 5px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 2px solid white;
+            padding: 10px 20px;
+            border-radius: 25px;
+            cursor: pointer;
+            margin: 5px;
+            transition: all 0.3s ease;
+        }
+        
+        .btn:hover {
+            background: white;
+            color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🧪 MosaicMesh Test Client</h1>
+        <p>This page will automatically connect and register with the MosaicMesh discovery system</p>
+        
+        <div class="status-indicator status-connecting" id="statusIndicator">
+            🔄
+        </div>
+        
+        <div id="statusText">Connecting to MosaicMesh...</div>
+        
+        <div class="device-info">
+            <div class="info-row">
+                <span><strong>Screen Resolution:</strong></span>
+                <span id="resolution">-</span>
+            </div>
+            <div class="info-row">
+                <span><strong>User Agent:</strong></span>
+                <span id="userAgent">-</span>
+            </div>
+            <div class="info-row">
+                <span><strong>Client ID:</strong></span>
+                <span id="clientId">-</span>
+            </div>
+            <div class="info-row">
+                <span><strong>Display Group:</strong></span>
+                <span id="displayGroup">-</span>
+            </div>
+            <div class="info-row">
+                <span><strong>Auto-Configured:</strong></span>
+                <span id="autoConfigured">-</span>
+            </div>
+            <div class="info-row">
+                <span><strong>Capabilities:</strong></span>
+                <span id="capabilities">-</span>
+            </div>
+        </div>
+        
+        <div>
+            <button class="btn" onclick="reconnect()">🔄 Reconnect</button>
+            <button class="btn" onclick="window.open('/discovery.html', '_blank')">📊 View Discovery Dashboard</button>
+        </div>
+        
+        <div style="margin-top: 20px; font-size: 0.9em; opacity: 0.8;">
+            <p>This client will appear in the discovery dashboard with real-time status updates.</p>
+            <p>Try refreshing this page or opening multiple tabs to see the auto-discovery in action!</p>
+        </div>
+    </div>
+
+    <script>
+        var connectionStatus = 'connecting';
+        var clientInfo = {};
+        
+        function updateUI() {
+            const indicator = document.getElementById('statusIndicator');
+            const statusText = document.getElementById('statusText');
+            
+            // Update device info
+            document.getElementById('resolution').textContent = `${screen.width}x${screen.height}`;
+            document.getElementById('userAgent').textContent = navigator.userAgent.substring(0, 50) + '...';
+            document.getElementById('clientId').textContent = getUDID();
+            
+            switch(connectionStatus) {
+                case 'connected':
+                    indicator.className = 'status-indicator status-connected';
+                    indicator.innerHTML = '✅';
+                    statusText.textContent = 'Connected to MosaicMesh Server';
+                    
+                    // Show received configuration
+                    document.getElementById('displayGroup').textContent = clientInfo.displayID || 'Default';
+                    document.getElementById('autoConfigured').textContent = clientInfo.autoConfigured ? 'Yes' : 'No';
+                    document.getElementById('capabilities').textContent = (clientInfo.capabilities || []).join(', ') || 'None detected';
+                    break;
+                    
+                case 'disconnected':
+                    indicator.className = 'status-indicator status-disconnected';
+                    indicator.innerHTML = '❌';
+                    statusText.textContent = 'Disconnected from MosaicMesh Server';
+                    break;
+                    
+                case 'connecting':
+                default:
+                    indicator.className = 'status-indicator status-connecting';
+                    indicator.innerHTML = '🔄';
+                    statusText.textContent = 'Connecting to MosaicMesh Server...';
+                    break;
+            }
+        }
+        
+        function mosiacMeshCallback(data_obj) {
+            console.log('Received from server:', data_obj);
+            
+            if (data_obj.REQUEST === "REGISTER" && data_obj.PAYLOAD) {
+                // Store configuration received from server
+                clientInfo = data_obj.PAYLOAD;
+                connectionStatus = 'connected';
+                updateUI();
+                
+                // Show notification if auto-configured
+                if (clientInfo.autoConfigured) {
+                    showNotification(`Auto-configured as ${clientInfo.displayID} display!`, 'success');
+                }
+            }
+        }
+        
+        function reconnect() {
+            connectionStatus = 'connecting';
+            updateUI();
+            mosiacMeshConnect(mosiacMeshCallback);
+        }
+        
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed; top: 20px; right: 20px; z-index: 1000;
+                padding: 15px 20px; border-radius: 25px; color: white; font-weight: bold;
+                background: ${type === 'success' ? 'rgba(39, 174, 96, 0.9)' : 'rgba(231, 76, 60, 0.9)'};
+                backdrop-filter: blur(10px);
+                animation: slideIn 0.3s ease-out;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => document.body.removeChild(notification), 300);
+            }, 4000);
+        }
+        
+        // Monitor connection status
+        function checkConnectionStatus() {
+            if (sock && sock.readyState === SockJS.OPEN) {
+                if (connectionStatus !== 'connected') {
+                    connectionStatus = 'connected';
+                    updateUI();
+                }
+            } else {
+                if (connectionStatus === 'connected') {
+                    connectionStatus = 'disconnected';
+                    updateUI();
+                }
+            }
+        }
+        
+        // Update UI every second
+        setInterval(() => {
+            updateUI();
+            checkConnectionStatus();
+        }, 1000);
+        
+        // Initial connection
+        mosiacMeshConnect(mosiacMeshCallback);
+        updateUI();
+        
+        // Add some CSS animations
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    </script>
+</body>
+</html>

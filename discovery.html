@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>MosaicMesh - Device Discovery</title>
+    <script src="/js/jquery.min.js"></script>
+    <script src="/js/sockjs.min.js"></script>
+    <script src="/js/GoTime.js"></script>
+    <script src="/js/mosiacmesh.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { background: #2c3e50; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 20px; }
+        .stat-card { background: #f8f9fa; padding: 15px; border-radius: 8px; text-align: center; border-left: 4px solid #3498db; }
+        .stat-number { font-size: 2em; font-weight: bold; color: #2c3e50; }
+        .stat-label { color: #7f8c8d; margin-top: 5px; }
+        .devices-container { background: white; border: 1px solid #ddd; border-radius: 8px; }
+        .device-item { display: grid; grid-template-columns: 80px 1fr 150px 120px 100px; gap: 15px; padding: 15px; border-bottom: 1px solid #eee; align-items: center; }
+        .device-item:last-child { border-bottom: none; }
+        .device-status { 
+            width: 16px; 
+            height: 16px; 
+            border-radius: 50%; 
+            display: inline-block;
+            position: relative;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .status-online { 
+            background: #27ae60; 
+            animation: pulse-green 2s infinite;
+        }
+        .status-offline { 
+            background: #e74c3c; 
+        }
+        .status-idle { 
+            background: #f39c12; 
+            animation: pulse-orange 3s infinite;
+        }
+        .status-new { 
+            background: #3498db; 
+            animation: pulse-blue 1.5s infinite;
+        }
+        .device-info h4 { margin: 0; color: #2c3e50; }
+        .device-info p { margin: 5px 0 0 0; color: #7f8c8d; font-size: 0.9em; }
+        .device-type { background: #3498db; color: white; padding: 4px 8px; border-radius: 4px; font-size: 0.8em; }
+        .auto-configured { background: #27ae60; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; }
+        .manual-configured { background: #f39c12; color: white; padding: 2px 6px; border-radius: 3px; font-size: 0.7em; }
+        .btn { background: #3498db; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8em; }
+        .btn:hover { background: #2980b9; }
+        .btn-danger { background: #e74c3c; }
+        .btn-danger:hover { background: #c0392b; }
+        .refresh-btn { background: #27ae60; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin-bottom: 15px; }
+        .capabilities { font-size: 0.8em; color: #7f8c8d; }
+        .capability-tag { background: #ecf0f1; padding: 2px 6px; border-radius: 3px; margin-right: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔍 Device Discovery & Auto-Configuration</h1>
+        <p>Automatically discover and configure displays on your network</p>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <button class="refresh-btn" onclick="refreshDevices()">🔄 Refresh Devices</button>
+        
+        <div style="display: flex; gap: 15px; align-items: center; font-size: 0.9em;">
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <div class="device-status status-online"></div>
+                <span>Active</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <div class="device-status status-idle"></div>
+                <span>Idle</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <div class="device-status status-new"></div>
+                <span>Recent</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 5px;">
+                <div class="device-status status-offline"></div>
+                <span>Offline</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-number" id="totalDevices">0</div>
+            <div class="stat-label">Total Devices</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="onlineDevices">0</div>
+            <div class="stat-label">Online Now</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="autoConfiguredDevices">0</div>
+            <div class="stat-label">Auto-Configured</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="deviceTypes">0</div>
+            <div class="stat-label">Device Types</div>
+        </div>
+    </div>
+
+    <div class="devices-container">
+        <div style="padding: 15px; background: #f8f9fa; border-bottom: 1px solid #ddd; font-weight: bold; display: grid; grid-template-columns: 80px 1fr 150px 120px 100px; gap: 15px;">
+            <div>Status</div>
+            <div>Device Info</div>
+            <div>Type & Config</div>
+            <div>Display Group</div>
+            <div>Actions</div>
+        </div>
+        <div id="devicesList">
+            <div style="padding: 40px; text-align: center; color: #7f8c8d;">
+                Loading devices...
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var discoveryData = [];
+        var sock = null;
+
+        function mosiacMeshCallback(data_obj) {
+            console.log('Discovery received:', data_obj);
+            
+            if (data_obj.REQUEST === "NEW_DEVICE_CONFIGURED") {
+                showNotification(`New device configured: ${data_obj.PAYLOAD.friendlyName}`, 'success');
+                setTimeout(refreshDevices, 1000);
+            }
+            
+            if (data_obj.REQUEST === "CLIENTS_WENT_OFFLINE") {
+                const count = data_obj.PAYLOAD.length;
+                showNotification(`${count} device${count > 1 ? 's' : ''} went offline`, 'warning');
+                setTimeout(refreshDevices, 1000);
+            }
+            
+            if (data_obj.REQUEST === "DISCOVERY_HEARTBEAT") {
+                updateHeartbeat(data_obj.PAYLOAD);
+            }
+        }
+
+        function refreshDevices() {
+            fetch('/api/discovery/devices')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        discoveryData = data.devices;
+                        updateStats(data);
+                        renderDevices(data.devices);
+                    }
+                })
+                .catch(err => console.error('Error fetching devices:', err));
+        }
+
+        function updateStats(data) {
+            document.getElementById('totalDevices').textContent = data.total;
+            document.getElementById('onlineDevices').textContent = data.online;
+            
+            const autoConfigured = discoveryData.filter(d => d.autoConfigured).length;
+            document.getElementById('autoConfiguredDevices').textContent = autoConfigured;
+            
+            const deviceTypes = [...new Set(discoveryData.map(d => d.deviceType).filter(Boolean))].length;
+            document.getElementById('deviceTypes').textContent = deviceTypes;
+        }
+
+        function getDeviceStatus(device) {
+            const now = Date.now() / 1000;
+            const timeSince = device.lastSeen ? now - device.lastSeen : 999999;
+            
+            if (device.isOnline && timeSince < 30) {
+                return { class: 'status-online', text: 'ACTIVE', textClass: 'status-online-text' };
+            } else if (device.isOnline && timeSince < 120) {
+                return { class: 'status-idle', text: 'IDLE', textClass: 'status-idle-text' };
+            } else if (timeSince < 300) { // 5 minutes
+                return { class: 'status-new', text: 'RECENT', textClass: 'status-new-text' };
+            } else {
+                return { class: 'status-offline', text: 'OFFLINE', textClass: 'status-offline-text' };
+            }
+        }
+
+        function formatLastSeen(seconds) {
+            let cssClass = 'last-seen-offline';
+            let text = '';
+            
+            if (!seconds || seconds < 0) {
+                return { text: 'Unknown', cssClass: 'last-seen-offline' };
+            }
+            
+            if (seconds < 30) {
+                cssClass = 'last-seen-fresh';
+                text = 'Just now';
+            } else if (seconds < 60) {
+                cssClass = 'last-seen-fresh';
+                text = `${Math.round(seconds)}s ago`;
+            } else if (seconds < 120) {
+                cssClass = 'last-seen-stale';
+                text = `${Math.round(seconds/60)}m ago`;
+            } else if (seconds < 3600) {
+                cssClass = 'last-seen-stale';
+                text = `${Math.round(seconds/60)}m ago`;
+            } else {
+                cssClass = 'last-seen-offline';
+                text = `${Math.round(seconds/3600)}h ago`;
+            }
+            
+            return { text, cssClass };
+        }
+
+        function renderDevices(devices) {
+            const container = document.getElementById('devicesList');
+            
+            if (devices.length === 0) {
+                container.innerHTML = '<div style="padding: 40px; text-align: center; color: #7f8c8d;">No devices discovered yet. Connect a client to get started.</div>';
+                return;
+            }
+
+            const html = devices.map(device => {
+                const status = getDeviceStatus(device);
+                const lastSeen = formatLastSeen(device.timeSinceLastSeen);
+                
+                return `
+                <div class="device-item">
+                    <div>
+                        <div class="device-status ${status.class}" title="${status.text}"></div>
+                        <span class="status-text ${status.textClass}">${status.text}</span>
+                    </div>
+                    <div class="device-info">
+                        <h4>${device.friendlyName || device.clientKey}</h4>
+                        <p>${(device.deviceBrand || '')} ${(device.deviceModel || '')} | ${device.resolution}</p>
+                        <p>${(device.osName || '')} ${(device.osVersion || '')} | IP: ${device.ip}</p>
+                        <div class="capabilities">
+                            ${(device.capabilities || []).map(cap => `<span class="capability-tag">${cap}</span>`).join('')}
+                        </div>
+                    </div>
+                    <div>
+                        <div class="device-type">${device.deviceType || 'unknown'}</div>
+                        <div style="margin-top: 5px;">
+                            <span class="${device.autoConfigured ? 'auto-configured' : 'manual-configured'}">
+                                ${device.autoConfigured ? 'Auto' : 'Manual'}
+                            </span>
+                        </div>
+                        <div style="font-size: 0.8em; color: #7f8c8d; margin-top: 5px;">
+                            Connections: ${device.connectionCount || 0}
+                        </div>
+                    </div>
+                    <div>
+                        <strong>${device.displayID || 'Default'}</strong>
+                        <div style="font-size: 0.8em; margin-top: 5px;">
+                            <span class="${lastSeen.cssClass}">Last seen: ${lastSeen.text}</span>
+                        </div>
+                    </div>
+                    <div>
+                        <button class="btn" onclick="reconfigureDevice('${device.clientKey}')">
+                            🔧 Reconfig
+                        </button>
+                    </div>
+                </div>
+            `;
+            }).join('');
+            
+            container.innerHTML = html;
+        }
+
+
+        function reconfigureDevice(clientKey) {
+            fetch('/api/discovery/configure', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    action: 'reconfigure',
+                    clientKey: clientKey
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification('Device reconfigured successfully!', 'success');
+                    setTimeout(refreshDevices, 1000);
+                } else {
+                    showNotification('Error: ' + data.error, 'error');
+                }
+            })
+            .catch(err => {
+                console.error('Reconfigure error:', err);
+                showNotification('Reconfiguration failed', 'error');
+            });
+        }
+
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed; top: 20px; right: 20px; z-index: 1000;
+                padding: 15px 20px; border-radius: 4px; color: white; font-weight: bold;
+                background: ${type === 'success' ? '#27ae60' : type === 'warning' ? '#f39c12' : '#e74c3c'};
+                animation: slideIn 0.3s ease-out;
+            `;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-out';
+                setTimeout(() => document.body.removeChild(notification), 300);
+            }, 3000);
+        }
+
+        function updateHeartbeat(payload) {
+            // Update real-time stats from heartbeat
+            const onlineElement = document.getElementById('onlineDevices');
+            if (onlineElement) {
+                onlineElement.textContent = payload.onlineClients;
+            }
+            
+            // Update device statuses without full refresh
+            updateDeviceStatuses();
+        }
+        
+        function updateDeviceStatuses() {
+            // Update status indicators and last seen times for all visible devices
+            const deviceItems = document.querySelectorAll('.device-item');
+            deviceItems.forEach((item, index) => {
+                if (discoveryData[index]) {
+                    const device = discoveryData[index];
+                    const status = getDeviceStatus(device);
+                    const lastSeen = formatLastSeen(device.timeSinceLastSeen);
+                    
+                    // Update status indicator
+                    const statusElement = item.querySelector('.device-status');
+                    if (statusElement) {
+                        statusElement.className = `device-status ${status.class}`;
+                        statusElement.title = status.text;
+                    }
+                    
+                    // Update status text
+                    const statusTextElement = item.querySelector('.status-text');
+                    if (statusTextElement) {
+                        statusTextElement.textContent = status.text;
+                        statusTextElement.className = `status-text ${status.textClass}`;
+                    }
+                    
+                    // Update last seen
+                    const lastSeenElement = item.querySelector('.last-seen-fresh, .last-seen-stale, .last-seen-offline');
+                    if (lastSeenElement) {
+                        lastSeenElement.textContent = `Last seen: ${lastSeen.text}`;
+                        lastSeenElement.className = lastSeen.cssClass;
+                    }
+                }
+            });
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(refreshDevices, 30000);
+        
+        // Update device statuses more frequently for real-time feel
+        setInterval(updateDeviceStatuses, 5000);
+
+        // Connect to WebSocket for real-time updates
+        mosiacMeshConnect(mosiacMeshCallback);
+        
+        // Initial load
+        refreshDevices();
+    </script>
+
+    <style>
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        
+        @keyframes pulse-green {
+            0%, 100% { 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 0 0 0 rgba(39, 174, 96, 0.7);
+            }
+            50% { 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 0 0 6px rgba(39, 174, 96, 0.3);
+            }
+        }
+        
+        @keyframes pulse-orange {
+            0%, 100% { 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 0 0 0 rgba(243, 156, 18, 0.7);
+            }
+            50% { 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 0 0 4px rgba(243, 156, 18, 0.3);
+            }
+        }
+        
+        @keyframes pulse-blue {
+            0%, 100% { 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 0 0 0 rgba(52, 152, 219, 0.7);
+            }
+            50% { 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2), 0 0 0 5px rgba(52, 152, 219, 0.4);
+            }
+        }
+        
+        .status-text {
+            font-size: 0.8em;
+            font-weight: bold;
+            margin-left: 8px;
+            vertical-align: top;
+        }
+        
+        .status-online-text { color: #27ae60; }
+        .status-offline-text { color: #e74c3c; }
+        .status-idle-text { color: #f39c12; }
+        .status-new-text { color: #3498db; }
+        
+        .device-item:hover {
+            background-color: #f8f9fa;
+            transition: background-color 0.2s ease;
+        }
+        
+        .last-seen-fresh { color: #27ae60; font-weight: bold; }
+        .last-seen-stale { color: #f39c12; }
+        .last-seen-offline { color: #e74c3c; }
+    </style>
+</body>
+</html>
