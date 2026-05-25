@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 MosaicMesh is a distributed display / video-wall system. A single Python server coordinates many browser-based display clients (phones, tablets, desktops) so they can play synchronized media across a physical arrangement of screens. The server fingerprints each connecting device, auto-assigns it to a display group, and can calibrate the *physical* layout of screens by detecting ArUco markers in an uploaded photo.
 
-There is no build step. The frontend is hand-written HTML at the repo root (`index.html`, `admin.html`, `discovery.html`, `scene.html`) plus vendored JS in `js/`. The server serves these files directly.
+There is no build step. The frontend is hand-written HTML at the repo root (`index.html`, `admin.html`, `discovery.html`) plus vendored JS in `js/`. The server serves these files directly.
 
 ## Commands
 
@@ -64,13 +64,13 @@ Still relevant:
 - `server.py` — entire backend (routes, websocket dispatch, discovery, calibration, caching).
 - `js/mosiacmesh.js` — client connection logic, UDID cookie, SockJS wiring, message construction (`generateMessage`).
 - `js/GoTime.js` — clock-sync library used for synchronized playback.
-- `*.html` (root) — `index` (display client), `admin` (control), `discovery` (device management), `scene`.
+- `*.html` (root) — `index` (display client), `admin` (control), `discovery` (device management).
 - `media/<client>/{images,videos}/` — per-client media and generated ArUco markers (created at runtime).
 - `tests/unit` reliably pass; `tests/integration` and several unit suites are partially implemented (see `tests/README.md` "Test Status").
 
 ## Conventions
 
-- **Legacy device compatibility is a hard requirement.** Display clients must run on **1st-gen iPads (iOS 5.1 / Safari 5.1)**. Client JS (`js/mosiacmesh.js`, `js/GoTime.js`, inline `<script>` in `index.html`/`scene.html`) must be **ES5 only** — no `let`/`const`, arrow functions, template literals, `class`, `Promise`, `fetch`. Keep **jQuery 1.x** and **SockJS** (with its polling fallbacks). `admin.html`/`discovery.html` are desktop control consoles and may use modern JS. Server-side Python is invisible to the device.
+- **Legacy device compatibility is a hard requirement.** Display clients must run on **1st-gen iPads (iOS 5.1 / Safari 5.1)**. Client JS (`js/mosiacmesh.js`, `js/GoTime.js`, inline `<script>` in `index.html`) must be **ES5 only** — no `let`/`const`, arrow functions, template literals, `class`, `Promise`, `fetch`. Keep **jQuery 1.x** and **SockJS** (with its polling fallbacks). `admin.html`/`discovery.html` are desktop control consoles and may use modern JS. Server-side Python is invisible to the device.
 - There are **two websocket message protocols**: the legacy `REQUEST`-based one (`msg_response`, used by current JS clients — do not remove) and a newer async `type`-based one (`handle_websocket_message`, the intended replacement). Per-client delivery uses the central `socketmanager` + a `DEST` field, not per-client sockets.
 - The discovery REST API is served by granular handlers: `api_discovery_devices` / `api_discovery_stats` / `api_discovery_configure`. `configure` accepts both field-update (`{clientKey, displayID, friendlyName}`) and action (`{action: "reconfigure"|"bulk_reconfigure"}`) payloads.
 - Note the spelling: the project, files, and SockJS manager name are all **`mosiacmesh`** (transposed "ai"). Match it exactly — the websocket manager is registered under `name='mosiacmesh'`.
