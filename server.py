@@ -184,16 +184,19 @@ def saveSettings():
     save_settings_incremental()
 
 def cleanup_old_clients(max_age_seconds=24 * 3600):
-    """Remove clients offline longer than max_age_seconds, then persist."""
+    """Remove clients that have been offline longer than max_age_seconds.
+    Persists only when something was actually removed. Returns the count."""
     current_time = time.time()
     stale_keys = [
         key for key, client in settings.clients.items()
-        if not client.ready and (current_time - client.lastSeen) > max_age_seconds
+        if not client.isOnline and (current_time - client.lastSeen) > max_age_seconds
     ]
     for key in stale_keys:
         del settings.clients[key]
         logging.info(f"Removed stale client {key}")
-    saveSettings()
+    if stale_keys:
+        saveSettings()
+    return len(stale_keys)
 
 def get_cached_file(file_path):
     """Get file content with caching based on modification time.
@@ -1079,7 +1082,12 @@ async def process():
         }
         socketmanager.broadcast(jsonpickle.encode(discovery_summary))
         process.last_announcement = current_time
-    
+
+    # Prune clients offline for >24h (checked hourly, persists only on change)
+    if not hasattr(process, 'last_cleanup') or (current_time - process.last_cleanup) > 3600:
+        cleanup_old_clients()
+        process.last_cleanup = current_time
+
     #response = {"DEST":"ALL","REQUEST": "TEST", "PAYLOAD": "NONE"}
     #socketmanager.broadcast(jsonpickle.encode(response))
     ##logging.debug('Test broadcast')
