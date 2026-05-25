@@ -174,3 +174,40 @@ class TestPause:
         assert disp.action == server.PlayState.PAUSE
         assert disp.pauseOffset == 2500  # 1002500 - 1000000
         assert server.socketmanager.broadcast.call_count == 1
+
+
+class TestResume:
+    def _group(self, mock_settings, action, pause_offset=0):
+        disp = mock_settings.displays["Default"]
+        disp.mediaElements = []
+        for f, d in [("/media/server/a.jpg", 1000), ("/media/server/b.jpg", 2000)]:
+            me = server.MediaElement(); me.file = f; me.duration = d
+            disp.mediaElements.append(me)
+        disp.loop = True
+        disp.action = action
+        disp.pauseOffset = pause_offset
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["c1"] = client
+        return disp
+
+    def test_play_resumes_from_pause(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._group(mock_settings, server.PlayState.PAUSE, pause_offset=2500)
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY",
+               "PAYLOAD": {"displayID": "Default"}}
+        with patch("time.time", return_value=5000.0):  # 5000000 ms
+            server.msg_response(msg, _make_session())
+        assert disp.action == server.PlayState.PLAY
+        assert disp.playStartEpoch == 4997500  # 5000000 - 2500 (resume)
+
+    def test_play_from_stopped_starts_fresh(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._group(mock_settings, server.PlayState.STOP, pause_offset=2500)
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY",
+               "PAYLOAD": {"displayID": "Default"}}
+        with patch("time.time", return_value=5000.0):
+            server.msg_response(msg, _make_session())
+        assert disp.action == server.PlayState.PLAY
+        assert disp.playStartEpoch == 5000000  # fresh, ignores pauseOffset

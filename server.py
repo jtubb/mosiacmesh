@@ -563,8 +563,12 @@ def msg_response(msg,session):
         display_id = msg["PAYLOAD"]["displayID"]
         display = settings.displays.get(display_id)
         if display and display.mediaElements:
+            now_ms = int(time.time() * 1000)
+            if display.action == PlayState.PAUSE:
+                display.playStartEpoch = now_ms - display.pauseOffset  # resume
+            else:
+                display.playStartEpoch = now_ms                        # fresh start
             display.action = PlayState.PLAY
-            display.playStartEpoch = int(time.time() * 1000)
             items = [{"id": me.id, "file": me.file, "duration": me.duration}
                      for me in display.mediaElements]
             broadcast_to_display_group(display_id, {
