@@ -238,6 +238,39 @@ def sync_new_client_to_group(client_key, client):
         "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}
     })
 
+def order_points(pts):
+    """Reduce a set of quad points (Nx1x2 or Nx2) to 4 corners [TL, TR, BR, BL]."""
+    pts = np.array(pts, dtype="float64").reshape(-1, 2)
+    s = pts.sum(axis=1)
+    d = pts[:, 0] - pts[:, 1]
+    return np.array([
+        pts[np.argmin(s)],   # TL: smallest x+y
+        pts[np.argmax(d)],   # TR: largest x-y
+        pts[np.argmax(s)],   # BR: largest x+y
+        pts[np.argmin(d)],   # BL: smallest x-y
+    ], dtype="float32")
+
+
+def group_bounding_box(quads):
+    """Tight axis-aligned [x, y, w, h] enclosing all screen quads (photo coords)."""
+    if not quads:
+        return None
+    allpts = np.concatenate([np.array(q, dtype="int32").reshape(-1, 2) for q in quads])
+    x, y, w, h = cv.boundingRect(allpts)
+    return [int(x), int(y), int(w), int(h)]
+
+
+def resolve_media_path(file_url):
+    """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
+    media_handler's convention (images/ or videos/ by extension)."""
+    parts = file_url.strip("/").split("/")
+    if len(parts) < 3 or parts[0] != "media":
+        return None
+    client = parts[1]
+    name = parts[-1]
+    subdir = "videos" if name.lower().endswith(".mp4") else "images"
+    return os.path.join("media", client, subdir, name)
+
 def get_cached_file(file_path):
     """Get file content with caching based on modification time.
 
