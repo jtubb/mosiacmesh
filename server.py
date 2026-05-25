@@ -312,11 +312,13 @@ class Client():
         self.autoConfigured = False
         self.discoverySource = "manual"  # manual, websocket, network
 
-async def ws_handler(msg, session):
+async def ws_handler(manager, session, msg):
+    # sockjs >=0.12 handler signature: (manager, session, msg).
+    # Message types are sockjs.MsgType.* and msg carries .type / .data.
     logging.debug("WS_HANDLER")
-    if session.manager is None:
+    if manager is None:
         return
-    if msg.type == sockjs.MSG_OPEN:
+    if msg.type == sockjs.MsgType.OPEN:
         # Enhanced discovery notification with client info
         client_info = {
             "sessionId": session.id,
@@ -328,25 +330,25 @@ async def ws_handler(msg, session):
             "REQUEST": "DEVICE_DISCOVERED", 
             "PAYLOAD": client_info
         }
-        session.manager.broadcast(jsonpickle.encode(discovery_announcement))
+        manager.broadcast(jsonpickle.encode(discovery_announcement))
         
         # Also send traditional JOIN for backward compatibility
-        session.manager.broadcast(jsonpickle.encode({"REQUEST": "JOIN", "PAYLOAD":session.id}))
+        manager.broadcast(jsonpickle.encode({"REQUEST": "JOIN", "PAYLOAD":session.id}))
         
-    elif msg.type == sockjs.MSG_MESSAGE:
+    elif msg.type == sockjs.MsgType.MESSAGE:
         session.send(msg_response(jsonpickle.decode(msg.data),session))
-    elif msg.type == sockjs.MSG_CLOSED:
+    elif msg.type == sockjs.MsgType.CLOSED:
         # Enhanced disconnect notification
         handle_client_disconnect(session.id)
-        session.manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
+        manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
 
 def msg_response(msg,session):
     clientid = session.id
-    logging.debug(session.manager[clientid].request.headers['User-Agent'])
+    logging.debug(session.request.headers['User-Agent'])
     
     response = {"DEST":clientid,"REQUEST": msg["REQUEST"], "PAYLOAD": {}}
     
-    logging.debug(session.manager[clientid].request.remote)
+    logging.debug(session.request.remote)
     logging.debug(msg["SRC"])
     
     if(msg["REQUEST"] == "SERVERTIME"):
@@ -407,16 +409,16 @@ def msg_response(msg,session):
         
         # Enhanced registration with discovery tracking
         client.clientID = clientid
-        client.userAgent = session.manager[clientid].request.headers['User-Agent']
+        client.userAgent = session.request.headers['User-Agent']
         client.deviceWidth = msg["PAYLOAD"]["width"]
         client.deviceHeight = msg["PAYLOAD"]["height"]
-        client.ip = session.manager[clientid].request.remote
+        client.ip = session.request.remote
         client.lastSeen = time.time()
         client.isOnline = True
         client.connectionCount += 1
         
         # Device detection and fingerprinting
-        device = DeviceDetector(session.manager[clientid].request.headers['User-Agent']).parse()
+        device = DeviceDetector(session.request.headers['User-Agent']).parse()
         client.osName = device.os_name()
         client.osVersion = device.os_version()
         client.engine = device.engine()
