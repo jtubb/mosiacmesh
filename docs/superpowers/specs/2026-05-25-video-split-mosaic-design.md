@@ -12,12 +12,12 @@ Image `SEGMENT` mode already warps a source image onto each calibrated screen se
 
 - A `SEGMENT` playlist item may be a `.mp4`; `RENDER` produces one perspective-warped, H.264 clip per calibrated screen.
 - Rendering is **asynchronous** with a status (`rendering` → `ready`/`error`), reported via `RENDER_STATUS`; `PLAY` gates on it.
-- The display **client is unchanged** (it plays its per-screen `.mp4` exactly as in the video slice).
+- **Audio is preserved and played on every screen** (one small client change: unmute video).
 - No regression to image SEGMENT, FULL playlists, or PLAY/PAUSE/STOP.
 
 ## Non-goals (deferred)
 
-`SCRIPT` animations · playlist authoring UI · scheduling · parallel/queued multi-group renders (renders run one item×screen at a time) · audio in mosaic clips (dropped) · orphaned-render-file garbage collection · H.264 hardware-encode tuning.
+`SCRIPT` animations · playlist authoring UI · scheduling · parallel/queued multi-group renders (renders run one item×screen at a time) · per-screen audio routing / a single designated audio screen (for now every screen plays audio) · orphaned-render-file garbage collection · H.264 hardware-encode tuning.
 
 ## New dependency
 
@@ -32,10 +32,11 @@ For each (video item × calibrated screen):
    ```
    ffmpeg -y -i <src> \
      -vf "perspective=<x0>:<y0>:<x1>:<y1>:<x2>:<y2>:<x3>:<y3>:sense=source,scale=<Wd>:<Hd>" \
-     -an -c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p \
+     -c:v libx264 -profile:v baseline -level 3.0 -pix_fmt yuv420p \
+     -c:a aac -b:a 128k \
      -preset veryfast -movflags +faststart <out>
    ```
-   - `-an` drops audio (muted wall). `-profile:v baseline -level 3.0 -pix_fmt yuv420p` for 1st-gen iPad decode. `+faststart` for web seeking.
+   - **Audio is kept** (`-c:a aac -b:a 128k`, iOS-decodable AAC-LC) — the warp only touches video, so each screen's clip carries the full source audio. `-profile:v baseline -level 3.0 -pix_fmt yuv420p` for 1st-gen iPad decode. `+faststart` for web seeking.
    - Output: `media/<clientKey>/videos/seg_<token>_<itemIndex>.mp4`.
    - **Empirical verification point:** the `perspective` filter's exact corner order and `sense` semantics (source vs destination) must be confirmed with one real encode during implementation — `order_points` yields `[TL,TR,BR,BL]`, and ffmpeg's `perspective` expects `[TL,TR,BL,BR]`, so a reorder is needed; treat the precise mapping as something to validate, not assume.
 
@@ -59,6 +60,13 @@ For a playlist containing ≥1 SEGMENT item:
 
 `_broadcast_segment_play` chooses the warped file extension by source type: a `.mp4` SEGMENT source → `/media/<key>/seg_<token>_<i>.mp4`; an image source → `…/seg_<token>_<i>.png` (matching the render output and `media_handler`'s subdir routing). FULL items and uncalibrated-screen fallback unchanged.
 
+## Audio (client change)
+
+Every screen plays its clip's audio (intentional — it makes any sync drift audibly obvious). One small client change in `index.html`'s `showItem`: build the `<video>` **unmuted** (`muted = false`) instead of muted.
+
+- **Autoplay constraint:** browsers block *unmuted* autoplay without a user gesture. The client still calls `play()` and swallows the rejection (as today), so a fresh/un-armed device shows video but stays silent until armed. On the deployment iPads, the **SSH device-prep gesture** arms playback; for manual browser testing, a tap on the page arms it. No in-page "tap to arm" UI is built in this slice (device prep handles it).
+- This affects all video playback (identical-mode and mosaic), consistent with "keep audio in for now." Per-screen audio routing (one designated audio screen) is a deferred follow-up if the multi-source overlap proves undesirable.
+
 ## Edge cases
 
 - ffmpeg missing / non-zero exit → `renderStatus="error"`, no `renderedToken`; PLAY → `RENDER_REQUIRED`.
@@ -68,10 +76,10 @@ For a playlist containing ≥1 SEGMENT item:
 
 ## Testing
 
-- **pytest (pure / mocked):** `build_ffmpeg_perspective_cmd` arg string for a known quad/screen (corner reorder + H.264 flags present); `get_video_dimensions` with `cv2.VideoCapture` mocked; `render_group_async` with `asyncio.create_subprocess_exec` **mocked** (assert one ffmpeg call per video-item×screen with the expected output path, `renderStatus` transitions `rendering→ready`, `renderedToken` set, `RENDER_STATUS` broadcasts); the image-only `render_group_async` path still writes `.png` + sets token (now `await`ed — the image-render test becomes async); the `RENDER` handler schedules/validates and reports `rendering`/errors; PLAY gating returns `RENDER_IN_PROGRESS`/`RENDER_REQUIRED`/ready correctly; `_broadcast_segment_play` emits `.mp4` URLs for video SEGMENT sources.
+- **pytest (pure / mocked):** `build_ffmpeg_perspective_cmd` arg string for a known quad/screen (corner reorder, H.264 baseline flags, and the audio flags `-c:a aac` present with no `-an`); `get_video_dimensions` with `cv2.VideoCapture` mocked; `render_group_async` with `asyncio.create_subprocess_exec` **mocked** (assert one ffmpeg call per video-item×screen with the expected output path, `renderStatus` transitions `rendering→ready`, `renderedToken` set, `RENDER_STATUS` broadcasts); the image-only `render_group_async` path still writes `.png` + sets token (now `await`ed — the image-render test becomes async); the `RENDER` handler schedules/validates and reports `rendering`/errors; PLAY gating returns `RENDER_IN_PROGRESS`/`RENDER_REQUIRED`/ready correctly; `_broadcast_segment_play` emits `.mp4` URLs for video SEGMENT sources.
 - **pytest (opt-in integration):** a test that actually invokes ffmpeg on a tiny generated clip, `@pytest.mark.skipif(shutil.which('ffmpeg') is None)` — produces a real per-screen `.mp4` and asserts it exists and is non-empty. This is where the `perspective` corner-order/`sense` mapping is validated for real.
-- **Playwright (light):** confirm the status/gate wiring end to end (SEGMENT video PLAY before render → `RENDER_REQUIRED`/`RENDER_IN_PROGRESS`).
+- **Playwright (light):** confirm the status/gate wiring end to end (SEGMENT video PLAY before render → `RENDER_REQUIRED`/`RENDER_IN_PROGRESS`); and that a played video element is built **unmuted** (`muted === false`).
 
 ## ES5 / legacy
 
-No client changes. iPad-1 compatibility is carried by the H.264 baseline/`yuv420p` encode flags (validated on hardware, per the open hardware-validation item).
+The only client change is `muted = false` in `showItem` (trivially ES5). iPad-1 compatibility is carried by the H.264 baseline/`yuv420p` encode flags and AAC-LC audio (validated on hardware, per the open hardware-validation item). Unmuted playback on iPad-1 depends on the device being armed by a gesture (SSH device prep).
