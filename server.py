@@ -224,6 +224,20 @@ def playlist_index(elapsed_ms, durations, loop):
         cum += durations[i]
     return {"index": len(durations) - 1, "offsetMs": durations[-1]}
 
+def sync_new_client_to_group(client_key, client):
+    """If the client's display group is currently playing, send that one client
+    PRELOAD + PLAY so it joins the in-progress playlist in sync."""
+    display = settings.displays.get(client.displayID)
+    if not display or display.action != PlayState.PLAY or not display.mediaElements:
+        return
+    items = [{"id": me.id, "file": me.file, "duration": me.duration}
+             for me in display.mediaElements]
+    broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
+    broadcast_to_client(client_key, {
+        "REQUEST": "PLAY",
+        "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}
+    })
+
 def get_cached_file(file_path):
     """Get file content with caching based on modification time.
 
@@ -457,7 +471,8 @@ def msg_response(msg,session):
         if is_new_client:
             client.discoveryTime = time.time()
             auto_configure_client(msg["SRC"], client)
-            
+            sync_new_client_to_group(msg["SRC"], client)
+
             # Notify admin interface of new device
             new_device_notification = {
                 "REQUEST": "NEW_DEVICE_CONFIGURED",

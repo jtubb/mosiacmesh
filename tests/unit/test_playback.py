@@ -119,3 +119,31 @@ class TestPlayStop:
         assert disp.action == server.PlayState.STOP
         assert disp.currentFrame == 0
         assert server.socketmanager.broadcast.call_count == 1
+
+
+class TestMidJoinSync:
+    def test_new_client_in_playing_group_receives_preload_and_play(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.file = "/media/server/a.jpg"; me.duration = 1000
+        disp.mediaElements = [me]
+        disp.loop = True
+        disp.action = server.PlayState.PLAY
+        disp.playStartEpoch = 1000000
+
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["newc"] = client
+
+        server.sync_new_client_to_group("newc", client)
+        assert server.socketmanager.broadcast.call_count == 2
+
+    def test_new_client_in_idle_group_receives_nothing(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        disp.action = server.PlayState.STOP
+
+        client = server.Client(); client.displayID = "Default"
+        server.sync_new_client_to_group("idlec", client)
+        assert server.socketmanager.broadcast.call_count == 0
