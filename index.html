@@ -230,14 +230,33 @@
 				mediaReady = false;
 				var total = mediaSequence.length, settled = 0, j;
 				if(total === 0) { mediaReady = true; updateHeartbeat(); }
+				var onSettled = function() {
+					settled++;
+					if(settled >= total) { mediaReady = true; updateHeartbeat(); }
+				};
 				for(j = 0; j < mediaSequence.length; j++)
 				{
-					var img = new Image();
-					img.onload = img.onerror = function() {
-						settled++;
-						if(settled >= total) { mediaReady = true; updateHeartbeat(); }
-					};
-					img.src = mediaSequence[j].file;
+					if(isVideoItem(mediaSequence[j].file))
+					{
+						var vp = document.createElement('video');
+						vp.preload = 'auto';
+						vp.muted = true;
+						var onceV = function() {
+							if (this._hbDone) { return; }
+							this._hbDone = true;
+							onSettled();
+						};
+						vp.addEventListener('canplaythrough', onceV);
+						vp.addEventListener('error', onceV);
+						vp.addEventListener('stalled', onceV);
+						vp.src = mediaSequence[j].file;
+					}
+					else
+					{
+						var img = new Image();
+						img.onload = img.onerror = onSettled;
+						img.src = mediaSequence[j].file;
+					}
 				}
 			}
 			else if(data_obj.REQUEST == "IDENTIFY")
