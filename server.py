@@ -285,6 +285,7 @@ class Display():
         self.loop = False
         self.currentFrame = 0
         self.action = PlayState.NOACTION
+        self.playStartEpoch = 0   # server-time ms when playback last (re)started
 
 class PlayState(Enum):
     NOACTION = 0
