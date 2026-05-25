@@ -163,34 +163,31 @@ class TestWebSocketHandlers:
 class TestWebSocketBroadcasting:
     """Test WebSocket broadcasting functionality"""
     
-    @pytest.mark.asyncio
-    async def test_broadcast_to_display_group(self, mock_settings):
-        """Test broadcasting message to display group"""
+    def test_broadcast_to_display_group(self, mock_settings):
+        """Broadcasting to a display group fans out via the central
+        socketmanager + DEST routing (one broadcast per client in the group)."""
         if not hasattr(server, 'broadcast_to_display_group'):
             pytest.skip("broadcast_to_display_group not implemented")
-            
-        # Setup display with clients
-        display = server.Display()
-        display.clientList = ['client1', 'client2']
-        mock_settings.displays['TestDisplay'] = display
-        
-        # Create mock clients with websocket sessions
+
+        # Two clients in the target group, one outside it
         client1 = server.Client()
-        client1.websocket = AsyncMock()
+        client1.displayID = 'TestDisplay'
         client2 = server.Client()
-        client2.websocket = AsyncMock()
-        
+        client2.displayID = 'TestDisplay'
+        other = server.Client()
+        other.displayID = 'OtherDisplay'
+
         mock_settings.clients['client1'] = client1
         mock_settings.clients['client2'] = client2
+        mock_settings.clients['other'] = other
         server.settings = mock_settings
-        
-        message = {'type': 'broadcast', 'data': 'test message'}
-        
-        await server.broadcast_to_display_group('TestDisplay', message)
-        
-        # Both clients should have received the message
-        client1.websocket.send.assert_called_once()
-        client2.websocket.send.assert_called_once()
+        server.socketmanager = MagicMock()
+
+        message = {"REQUEST": "broadcast", "PAYLOAD": "test message"}
+        server.broadcast_to_display_group('TestDisplay', message)
+
+        # One broadcast per in-group client; the 'other' client is excluded
+        assert server.socketmanager.broadcast.call_count == 2
     
     @pytest.mark.asyncio
     async def test_broadcast_discovery_announcement(self, mock_settings, mock_client):

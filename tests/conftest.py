@@ -87,7 +87,9 @@ def mock_client():
     client.autoConfigured = True
     client.discoverySource = "test"
     client.capabilities = ["HD", "keyboard", "mouse"]
-    client.ready = True
+    client.ready = True       # media cached, ready to display
+    client.isOnline = True    # live / recent heartbeat
+    client.synced = True       # SYN/SYNACK handshake complete
     return client
 
 

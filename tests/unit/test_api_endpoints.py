@@ -107,10 +107,9 @@ class TestDiscoveryAPI:
             'friendlyName': 'Updated Client'
         }
         
-        request = make_mocked_request('POST', '/api/discovery/configure', 
-                                    data=json.dumps(config_data),
-                                    headers={'Content-Type': 'application/json'})
-        
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value=config_data)
+
         with patch('server.saveSettings') as mock_save:
             response = await server.api_discovery_configure(request)
         
@@ -134,12 +133,11 @@ class TestDiscoveryAPI:
             'displayID': 'NewDisplay'
         }
         
-        request = make_mocked_request('POST', '/api/discovery/configure',
-                                    data=json.dumps(config_data),
-                                    headers={'Content-Type': 'application/json'})
-        
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value=config_data)
+
         response = await server.api_discovery_configure(request)
-        
+
         assert response.status == 404
         data = json.loads(response.text)
         assert data['success'] is False
@@ -150,9 +148,8 @@ class TestDiscoveryAPI:
         """Test configure endpoint with invalid JSON"""
         server.settings = mock_settings
         
-        request = make_mocked_request('POST', '/api/discovery/configure',
-                                    data='invalid json',
-                                    headers={'Content-Type': 'application/json'})
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(side_effect=ValueError("Expecting value"))
         
         response = await server.api_discovery_configure(request)
         
@@ -171,12 +168,11 @@ class TestDiscoveryAPI:
             # Missing clientKey
         }
         
-        request = make_mocked_request('POST', '/api/discovery/configure',
-                                    data=json.dumps(config_data),
-                                    headers={'Content-Type': 'application/json'})
-        
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value=config_data)
+
         response = await server.api_discovery_configure(request)
-        
+
         assert response.status == 400
         data = json.loads(response.text)
         assert data['success'] is False

@@ -45,10 +45,13 @@ def get_pooled_file_handle(file_path, mode='rb'):
     return file_handle_pool[key]
 
 def close_file_pool():
-    """Close all pooled file handles"""
+    """Close all pooled file handles and clear the file cache"""
     for handle in file_handle_pool.values():
         handle.close()
     file_handle_pool.clear()
+    file_cache.clear()
+    cache_stats['hits'] = 0
+    cache_stats['misses'] = 0
 
 def broadcast_to_client(client_id, response_dict):
     """Send message to specific client with caching"""
@@ -77,6 +80,8 @@ def handle_client_disconnect(session_id):
     for client_key, client in settings.clients.items():
         if client.clientID == session_id:
             client.lastSeen = time.time()
+            client.isOnline = False
+            client.synced = False
             client.ready = False
             logging.info(f"Client {client.friendlyName or client_key} disconnected")
             break
@@ -139,7 +144,9 @@ def get_discovered_devices():
             "osVersion": client.osVersion,
             "discoveryTime": client.discoveryTime,
             "lastSeen": client.lastSeen,
-            "isOnline": client.ready,
+            "isOnline": client.isOnline,
+            "synced": client.synced,
+            "readyToDisplay": client.ready,
             "timeSinceLastSeen": current_time - client.lastSeen,
             "capabilities": client.capabilities,
             "autoConfigured": client.autoConfigured,
@@ -172,43 +179,61 @@ def save_settings_incremental():
     except Exception as e:
         logging.error(f"Failed to save settings: {e}")
 
+def saveSettings():
+    """Persist settings to disk (wrapper around save_settings_incremental)."""
+    save_settings_incremental()
+
+def cleanup_old_clients(max_age_seconds=24 * 3600):
+    """Remove clients offline longer than max_age_seconds, then persist."""
+    current_time = time.time()
+    stale_keys = [
+        key for key, client in settings.clients.items()
+        if not client.ready and (current_time - client.lastSeen) > max_age_seconds
+    ]
+    for key in stale_keys:
+        del settings.clients[key]
+        logging.info(f"Removed stale client {key}")
+    saveSettings()
+
 def get_cached_file(file_path):
-    """Get file content with caching based on modification time"""
+    """Get file content with caching based on modification time.
+
+    Cache entries are stored as {'content': bytes, 'mtime': float}. This
+    function is the only reader/writer of that value format.
+    """
+    if not os.path.exists(file_path):
+        return None
     try:
-        stat = os.stat(file_path)
-        mod_time = stat.st_mtime
-        
+        mod_time = os.path.getmtime(file_path)
+
         # Check if file is in cache and not modified
-        if file_path in file_cache:
-            cached_data, cached_time = file_cache[file_path]
-            if cached_time == mod_time:
-                cache_stats['hits'] += 1
-                return cached_data
-        
+        cached = file_cache.get(file_path)
+        if cached is not None and cached['mtime'] == mod_time:
+            cache_stats['hits'] += 1
+            return cached['content']
+
         # File not cached or modified - read from disk
+        with open(file_path, 'rb') as f:
+            data = f.read()
         cache_stats['misses'] += 1
-        data = Path(file_path).read_bytes()
-        file_cache[file_path] = (data, mod_time)
-        
-        # Limit cache size to prevent memory issues
+        file_cache[file_path] = {'content': data, 'mtime': mod_time}
+
+        # Limit cache size to prevent memory issues (simple FIFO)
         if len(file_cache) > 100:
-            # Remove oldest entries (simple FIFO)
             oldest_key = next(iter(file_cache))
             del file_cache[oldest_key]
-            
+
         return data
     except (OSError, IOError):
         return None
 
-# Initialize parser
-parser = argparse.ArgumentParser()
-
-# Adding optional argument
-parser.add_argument("-p", "--Port", help = "Port to run server on")
-parser.add_argument("-v", "--Verbose", action='store_true', help = "Verbose output")
-
-# Read arguments from command line
-args = parser.parse_args()
+def parse_args():
+    """Parse CLI args. Called only from __main__ so that importing this module
+    (e.g. from tests) has no argparse side effects."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-p", "--Port", help="Port to run server on")
+    parser.add_argument("-v", "--Verbose", action='store_true', help="Verbose output")
+    return parser.parse_args()
 
 class Settings():
     def __init__(self):
@@ -239,7 +264,7 @@ class PlayState(Enum):
     PAUSE = 3
 
 class MediaElement():
-    def __init(self):
+    def __init__(self):
         self.id = None
         self.file = None
         self.duration = None
@@ -273,7 +298,9 @@ class Client():
         self.startScript = None
         self.stopScript = None
         self.rebootScript = None
-        self.ready = False
+        self.ready = False      # ready to display: media cached & client ready
+        self.isOnline = False   # alive: connected / recent heartbeat
+        self.synced = False     # SYN/SYNACK handshake (clock/group) complete
         # Enhanced discovery fields
         self.discoveryTime = time.time()
         self.lastSeen = time.time()
@@ -360,13 +387,13 @@ def msg_response(msg,session):
     elif(msg["REQUEST"] == "SYN"):
         client = settings.clients.get(msg["PAYLOAD"])
         if client:
-            client.ready = False
+            client.synced = False
         response["PAYLOAD"] = "ACK"
-        
+
     elif(msg["REQUEST"] == "SYNACK"):
         client = settings.clients.get(msg["PAYLOAD"])
         if client:
-            client.ready = True
+            client.synced = True
         response["PAYLOAD"] = "SYNACK"
         
     elif(msg["REQUEST"] == "REGISTER"):
@@ -382,6 +409,7 @@ def msg_response(msg,session):
         client.deviceHeight = msg["PAYLOAD"]["height"]
         client.ip = session.manager[clientid].request.remote
         client.lastSeen = time.time()
+        client.isOnline = True
         client.connectionCount += 1
         
         # Device detection and fingerprinting
@@ -433,6 +461,10 @@ def msg_response(msg,session):
         generateAruco(msg["PAYLOAD"]["id"])
         
     elif(msg["REQUEST"] == "READY"):
+        # Client signals its media is cached and it is ready to display
+        client = settings.clients.get(msg["SRC"])
+        if client:
+            client.ready = True
         response["PAYLOAD"]="SUCCESS"
         
     elif(msg["REQUEST"] == "DISCOVERY_STATUS"):
@@ -464,6 +496,92 @@ def msg_response(msg,session):
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
 
     return jsonpickle.encode(response)
+
+# --- Structured async message protocol (intended replacement for msg_response) ---
+# Existing JS clients still speak the REQUEST-based protocol above; this handler
+# is additive for the newer 'type'-based clients until they fully migrate.
+
+class _DeviceDetectorWrapper:
+    """Adapts DeviceDetector to a parse(user_agent) call.
+
+    Exposed as a module-level singleton (`device_detector`) so it can be
+    injected/mocked in tests without constructing a DeviceDetector per call.
+    """
+    def parse(self, user_agent):
+        return DeviceDetector(user_agent or "").parse()
+
+device_detector = _DeviceDetectorWrapper()
+
+def _device_field(value):
+    """Resolve a DeviceDetector field (callable method or plain value),
+    returning it only if it is a string. Guards against mocks / unexpected
+    types leaking non-serializable objects into client state."""
+    resolved = value() if callable(value) else value
+    return resolved if isinstance(resolved, str) else None
+
+async def handle_websocket_message(session, message_data):
+    """Dispatch a structured ('type'-based) WebSocket message.
+
+    Per-client delivery still flows through the central socketmanager + DEST
+    routing used elsewhere; direct replies use session.send.
+    """
+    if not isinstance(message_data, dict):
+        return  # ignore malformed frames without raising
+
+    msg_type = message_data.get('type')
+
+    if msg_type == 'clientInfo':
+        client = settings.clients.setdefault(session.id, Client())
+        client.clientID = session.id
+        client.friendlyName = message_data.get('friendlyName', client.friendlyName)
+        client.deviceWidth = message_data.get('deviceWidth', client.deviceWidth)
+        client.deviceHeight = message_data.get('deviceHeight', client.deviceHeight)
+        client.deviceType = message_data.get('deviceType', client.deviceType)
+        client.userAgent = message_data.get('userAgent', client.userAgent)
+        if getattr(session, 'request', None) is not None:
+            client.ip = session.request.remote
+        client.lastSeen = time.time()
+        client.isOnline = True
+        client.connectionCount += 1
+        # Best-effort fingerprinting (fields may be methods or plain values)
+        try:
+            device = device_detector.parse(client.userAgent)
+            client.osName = _device_field(device.os_name) or client.osName
+            client.osVersion = _device_field(device.os_version) or client.osVersion
+            client.deviceBrand = _device_field(device.device_brand) or client.deviceBrand
+            client.deviceModel = _device_field(device.device_model) or client.deviceModel
+            detected_type = _device_field(device.device_type)
+            if detected_type and not message_data.get('deviceType'):
+                client.deviceType = detected_type
+        except Exception as e:
+            logging.debug(f"Device detection skipped: {e}")
+        auto_configure_client(session.id, client)
+
+    elif msg_type == 'ready':
+        client = settings.clients.get(session.id)
+        if client:
+            client.ready = message_data.get('ready', True)
+            client.lastSeen = time.time()
+
+    elif msg_type == 'heartbeat':
+        client = settings.clients.get(session.id)
+        if client:
+            client.lastSeen = time.time()
+            client.isOnline = True
+        await session.send(jsonpickle.encode({"REQUEST": "HEARTBEAT", "PAYLOAD": "ACK"}))
+
+    elif msg_type == 'displayData':
+        # Relay to peers in the same display group via the central manager
+        display_id = message_data.get('displayID')
+        if socketmanager is not None and display_id is not None:
+            broadcast_to_display_group(display_id, {
+                "REQUEST": "displayData",
+                "PAYLOAD": message_data.get('data')
+            })
+        await session.send(jsonpickle.encode({"REQUEST": "displayData", "PAYLOAD": "ACK"}))
+
+    else:
+        logging.debug(f"Unknown websocket message type: {msg_type}")
 
 async def index_handler(request):
     logging.debug("INDEX_HANDLER")
@@ -628,7 +746,7 @@ def identifyDisplays(isGroup,displayID):
     
 
 def createScript(scriptID,value):
-    settings.scripts.setdefault(scriptID, Script())
+    settings.scripts.setdefault(scriptID, Scripts())
     settings.scripts[scriptID].value = value
 
 def runScript(scriptID):
@@ -666,20 +784,11 @@ async def upload_handler(request):
         response, ct = calibrate(os.path.join(path,filename))
     elif(uploadDest == "image"):
         response, ct = processImage(path,filename)
-    elif(uploadDest == "video"):
-        response, ct = processVideo(path,filename)
     return web.Response(body=response, content_type=ct)
 
 def processImage(path,filename):
     logging.debug("processImage")
     imgDir = "media/server/images"
-    Path(imgDir).mkdir(parents=True, exist_ok=True)
-    Path(os.path.join(path,filename)).rename(os.path.join(imgDir,filename))
-    return "success", "text/html"
-    
-def processVideo(path):
-    logging.debug("processVideo")
-    vidDir = "media/server/videos"
     Path(imgDir).mkdir(parents=True, exist_ok=True)
     Path(os.path.join(path,filename)).rename(os.path.join(imgDir,filename))
     return "success", "text/html"
@@ -718,17 +827,26 @@ def find_squares(img):
                     squares.append(cnt)
     return squares
         
+def setup_aruco_detector():
+    """Return (dictionary, parameters) for 6x6 ArUco marker detection."""
+    dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_6X6_50)
+    parameters = cv.aruco.DetectorParameters()
+    return dictionary, parameters
+
+def detect_aruco_markers(image):
+    """Detect ArUco markers in an image. Returns (corners, ids, rejected)."""
+    dictionary, parameters = setup_aruco_detector()
+    detector = cv.aruco.ArucoDetector(dictionary, parameters)
+    return detector.detectMarkers(image)
+
 def calibrate(filename):
     logging.debug(filename)
     image = cv.imread(filename)
 
     imgray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
     ret, thresh = cv.threshold(imgray, 127, 255, 0)
-    
-    arucoDict = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_6X6_50)
-    arucoParams = cv.aruco.DetectorParameters()
-    detector = cv.aruco.ArucoDetector(arucoDict, arucoParams)
-    (corners, ids, rejected) = detector.detectMarkers(image)
+
+    (corners, ids, rejected) = detect_aruco_markers(image)
 
     contours, hierarchy = cv.findContours(thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
     #cv.drawContours(image, contours, -1, (0, 0, 255), 2)
@@ -819,78 +937,85 @@ async def cache_stats_handler(request):
     }
     return web.json_response(stats)
 
-async def discovery_api_handler(request):
-    """REST API endpoint for device discovery management"""
-    method = request.method
-    path_parts = request.path.split('/')
-    
-    if method == "GET":
-        if "devices" in path_parts:
-            # Get all discovered devices
-            devices = get_discovered_devices()
-            return web.json_response({
-                "success": True,
-                "devices": devices,
-                "total": len(devices),
-                "online": len([d for d in devices if d["isOnline"]])
-            })
-        elif "stats" in path_parts:
-            # Discovery statistics
-            devices = get_discovered_devices()
-            stats = {
-                "totalDevices": len(devices),
-                "onlineDevices": len([d for d in devices if d["isOnline"]]),
-                "deviceTypes": {},
-                "displayGroups": {},
-                "autoConfiguredCount": len([d for d in devices if d["autoConfigured"]])
-            }
-            
-            for device in devices:
-                # Count by device type
-                device_type = device["deviceType"] or "unknown"
-                stats["deviceTypes"][device_type] = stats["deviceTypes"].get(device_type, 0) + 1
-                
-                # Count by display group
-                display_id = device["displayID"] or "default"
-                stats["displayGroups"][display_id] = stats["displayGroups"].get(display_id, 0) + 1
-            
-            return web.json_response({"success": True, "stats": stats})
-    
-    elif method == "POST":
-        try:
-            data = await request.json()
-            action = data.get("action")
-            
-            if action == "reconfigure":
-                client_key = data.get("clientKey")
-                client = settings.clients.get(client_key)
-                if client:
-                    client.autoConfigured = False
-                    auto_configure_client(client_key, client)
-                    return web.json_response({"success": True, "message": "Client reconfigured"})
-                else:
-                    return web.json_response({"success": False, "error": "Client not found"}, status=404)
-                    
-            elif action == "bulk_reconfigure":
-                client_keys = data.get("clientKeys", [])
-                configured_count = 0
-                for client_key in client_keys:
-                    client = settings.clients.get(client_key)
-                    if client:
-                        client.autoConfigured = False
-                        auto_configure_client(client_key, client)
-                        configured_count += 1
-                        
-                return web.json_response({
-                    "success": True, 
-                    "message": f"Reconfigured {configured_count} clients",
-                    "configured": configured_count
-                })
-                
-        except Exception as e:
-            return web.json_response({"success": False, "error": str(e)}, status=400)
-    
-    return web.json_response({"success": False, "error": "Invalid request"}, status=400)
+# --- Granular discovery REST endpoints (one handler per resource) ---
+
+async def api_discovery_devices(request):
+    """REST: list all discovered devices."""
+    devices = get_discovered_devices()
+    return web.json_response({
+        "success": True,
+        "devices": devices,
+        "total": len(devices),
+        "online": len([d for d in devices if d["isOnline"]]),
+    })
+
+async def api_discovery_stats(request):
+    """REST: aggregate discovery + cache statistics."""
+    devices = get_discovered_devices()
+    display_groups = {}
+    for d in devices:
+        gid = d["displayID"] or "default"
+        display_groups[gid] = display_groups.get(gid, 0) + 1
+    total = cache_stats['hits'] + cache_stats['misses']
+    return web.json_response({
+        "success": True,
+        "totalDevices": len(devices),
+        "onlineDevices": len([d for d in devices if d["isOnline"]]),
+        "autoConfiguredDevices": len([d for d in devices if d["autoConfigured"]]),
+        "displayGroups": display_groups,
+        "cacheStats": {
+            "hits": cache_stats['hits'],
+            "misses": cache_stats['misses'],
+            "cachedFiles": len(file_cache),
+            "hitRatio": (cache_stats['hits'] / total) if total else 0,
+        },
+    })
+
+async def api_discovery_configure(request):
+    """REST: configure client(s). Supports three payload styles:
+
+      - {"clientKey", "displayID"?, "friendlyName"?}      -> update fields
+      - {"action": "reconfigure", "clientKey"}            -> re-run auto-config
+      - {"action": "bulk_reconfigure", "clientKeys": [...]}-> re-run for many
+
+    (The action-based forms preserve the contract that discovery.html uses.)
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
+
+    action = data.get("action")
+
+    if action == "bulk_reconfigure":
+        configured = 0
+        for key in data.get("clientKeys", []):
+            client = settings.clients.get(key)
+            if client:
+                client.autoConfigured = False
+                auto_configure_client(key, client)
+                configured += 1
+        saveSettings()
+        return web.json_response({"success": True, "configured": configured})
+
+    client_key = data.get("clientKey")
+    if not client_key:
+        return web.json_response({"success": False, "error": "clientKey required"}, status=400)
+    client = settings.clients.get(client_key)
+    if not client:
+        return web.json_response({"success": False, "error": "Client not found"}, status=404)
+
+    if action == "reconfigure":
+        client.autoConfigured = False
+        auto_configure_client(client_key, client)
+    else:
+        if "displayID" in data:
+            client.displayID = data["displayID"]
+        if "friendlyName" in data:
+            client.friendlyName = data["friendlyName"]
+
+    saveSettings()
+    return web.json_response({"success": True})
 
 def migrate_client_objects():
     """Migrate old client objects to include new discovery fields"""
@@ -908,22 +1033,25 @@ def migrate_client_objects():
             client.autoConfigured = False
         if not hasattr(client, 'discoverySource'):
             client.discoverySource = "existing"
+        if not hasattr(client, 'isOnline'):
+            client.isOnline = False
+        if not hasattr(client, 'synced'):
+            client.synced = False
 
 async def process():
     """Enhanced periodic processing with device health monitoring"""
-    global last_discovery_scan
     current_time = time.time()
     
     # Update last seen times for all active clients
     for client_key, client in settings.clients.items():
-        if client.ready:
+        if client.isOnline:
             client.lastSeen = current_time
-    
-    # Check for stale clients (offline for more than 60 seconds)
+
+    # Check for stale clients (no activity for more than 60 seconds)
     stale_clients = []
     for client_key, client in settings.clients.items():
-        if (current_time - client.lastSeen) > 60 and client.ready:
-            client.ready = False
+        if (current_time - client.lastSeen) > 60 and client.isOnline:
+            client.isOnline = False
             stale_clients.append({
                 "clientKey": client_key,
                 "friendlyName": client.friendlyName,
@@ -945,7 +1073,7 @@ async def process():
             "REQUEST": "DISCOVERY_HEARTBEAT",
             "PAYLOAD": {
                 "totalClients": len(settings.clients),
-                "onlineClients": len([c for c in settings.clients.values() if c.ready]),
+                "onlineClients": len([c for c in settings.clients.values() if c.isOnline]),
                 "timestamp": current_time
             }
         }
@@ -959,9 +1087,10 @@ async def process():
 socketmanager = None
 
 if __name__ == '__main__':
+    args = parse_args()
     settings = Settings()
     runner = None
-    
+
     try:
         if args.Verbose:
             logging.basicConfig(level=logging.DEBUG,format='%(asctime)s %(levelname)s %(message)s')
@@ -1032,10 +1161,10 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/media/{client}/{file}', media_handler),
         app.router.add_route('POST', '/upload/{dest}', upload_handler),
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
-        # Discovery API endpoints
-        app.router.add_route('GET', '/api/discovery/devices', discovery_api_handler)
-        app.router.add_route('GET', '/api/discovery/stats', discovery_api_handler)
-        app.router.add_route('POST', '/api/discovery/configure', discovery_api_handler)
+        # Discovery API endpoints (granular handlers)
+        app.router.add_route('GET', '/api/discovery/devices', api_discovery_devices)
+        app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)
+        app.router.add_route('POST', '/api/discovery/configure', api_discovery_configure)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         
         asyncio.run(run_server())
