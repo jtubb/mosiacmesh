@@ -198,6 +198,32 @@ def cleanup_old_clients(max_age_seconds=24 * 3600):
         saveSettings()
     return len(stale_keys)
 
+def playlist_index(elapsed_ms, durations, loop):
+    """Given elapsed playback time and per-item durations (ms), return the
+    current {'index', 'offsetMs'} or None when the playlist is empty/ended.
+
+    This is the synchronization core: clients call the JS mirror of this with
+    elapsed = GoTime.now() - startEpoch, so every display lands on the same
+    item at the same instant.
+    """
+    total = 0
+    for d in durations:
+        total += d
+    if total <= 0:
+        return None
+    if loop:
+        elapsed_ms = elapsed_ms % total
+    elif elapsed_ms >= total:
+        return None
+    if elapsed_ms < 0:
+        elapsed_ms = 0
+    cum = 0
+    for i in range(len(durations)):
+        if elapsed_ms < cum + durations[i]:
+            return {"index": i, "offsetMs": elapsed_ms - cum}
+        cum += durations[i]
+    return {"index": len(durations) - 1, "offsetMs": durations[-1]}
+
 def get_cached_file(file_path):
     """Get file content with caching based on modification time.
 
