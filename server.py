@@ -260,6 +260,20 @@ def group_bounding_box(quads):
     return [int(x), int(y), int(w), int(h)]
 
 
+def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
+    """Warp the region of source_img under a screen's quad onto that screen's
+    pixel rect. bbox is the group's photo-space bounding box; the full image is
+    stretched to fill bbox, so the screen quad (photo coords) maps back into
+    media coords, then a homography fits it to out_w x out_h."""
+    h, w = source_img.shape[:2]
+    bx, by, bw, bh = bbox
+    ordered = order_points(screen_quad)  # [TL, TR, BR, BL] in photo coords
+    src = np.array([[(px - bx) / bw * w, (py - by) / bh * h] for (px, py) in ordered], dtype="float32")
+    dst = np.array([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]], dtype="float32")
+    m = cv.getPerspectiveTransform(src, dst)
+    return cv.warpPerspective(source_img, m, (out_w, out_h))
+
+
 def resolve_media_path(file_url):
     """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
     media_handler's convention (images/ or videos/ by extension)."""

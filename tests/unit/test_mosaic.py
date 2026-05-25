@@ -33,3 +33,28 @@ class TestGeometryHelpers:
 
     def test_resolve_media_path_video(self):
         assert server.resolve_media_path("/media/server/clip.mp4") == os.path.join("media", "server", "videos", "clip.mp4")
+
+
+class TestWarp:
+    def _half_image(self):
+        # left half red, right half blue (BGR)
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :50] = (0, 0, 255)   # red
+        img[:, 50:] = (255, 0, 0)   # blue
+        return img
+
+    def test_warp_full_quad_is_identity_like(self):
+        img = self._half_image()
+        quad = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
+        out = server.warp_image_for_screen(img, [0, 0, 100, 100], quad, 100, 100)
+        assert out.shape == (100, 100, 3)
+        assert out[50, 25][2] > 200 and out[50, 25][0] < 50   # left still red
+        assert out[50, 75][0] > 200 and out[50, 75][2] < 50   # right still blue
+
+    def test_warp_left_quad_stretches_left_region(self):
+        img = self._half_image()
+        # this screen covers only the LEFT half of the bbox -> should show all red
+        quad = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        out = server.warp_image_for_screen(img, [0, 0, 100, 100], quad, 80, 80)
+        assert out.shape == (80, 80, 3)
+        assert out[40, 70][2] > 200 and out[40, 70][0] < 50   # red across the whole screen
