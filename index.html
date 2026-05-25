@@ -45,7 +45,7 @@
 	var mediaSequence = null;
 	var mediaReady = false;
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
-		video: null, videoIndex: -1, driftTimer: null };
+		video: null, videoIndex: -1, driftTimer: null, paused: false };
 	var HARD_SEEK_MS = 400; // drift beyond this is corrected with a seek, not a rate nudge
 
 	// JS mirror of server.playlist_index — keep the two in sync.
@@ -134,8 +134,16 @@
 		}
 	}
 
+	function pausePlayback() {
+		playback.paused = true;
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		if (playback.video) { try { playback.video.pause(); } catch (e) {} }
+	}
+
 	function stopPlayback() {
 		playback.active = false;
+		playback.paused = false;
 		clearVideo();
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		$('#canvas').empty();
@@ -144,7 +152,7 @@
 	// Frame-accurate, self-correcting render loop: each transition recomputes the
 	// current item from the shared clock and schedules the exact next boundary.
 	function renderPlayback() {
-		if (!playback.active) { return; }
+		if (!playback.active || playback.paused) { return; }
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		var durations = [], i;
 		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
@@ -292,11 +300,16 @@
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.active = true;
+				playback.paused = false;
 				renderPlayback();
 			}
 			else if(data_obj.REQUEST == "STOP")
 			{
 				stopPlayback();
+			}
+			else if(data_obj.REQUEST == "PAUSE")
+			{
+				pausePlayback();
 			}
 		}
 	}
