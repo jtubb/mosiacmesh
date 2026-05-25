@@ -75,3 +75,52 @@ class TestGroupBBoxAssignment:
         assert mock_settings.displays["Default"].boundingBox == [10, 10, 91, 51]
         assert mock_settings.displays["Default"].boundingBoxCenter == [55, 35]
         assert mock_settings.displays["Mobile"].boundingBox is None
+
+
+class TestRenderToken:
+    def _seg_group(self, mock_settings):
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]
+        disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 800; c.deviceHeight = 600
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+        return disp, c
+
+    def test_token_is_stable(self, mock_settings):
+        server.settings = mock_settings
+        self._seg_group(mock_settings)
+        assert server.compute_render_token("Default") == server.compute_render_token("Default")
+
+    def test_token_changes_with_resolution(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._seg_group(mock_settings)
+        t1 = server.compute_render_token("Default")
+        c.deviceWidth = 1920
+        assert server.compute_render_token("Default") != t1
+
+    def test_token_changes_with_duration(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._seg_group(mock_settings)
+        t1 = server.compute_render_token("Default")
+        disp.mediaElements[0].duration = 5000
+        assert server.compute_render_token("Default") != t1
+
+
+class TestSetPlaylistPlaymode:
+    def test_setplaylist_sets_segment_and_clears_rendered(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        disp.renderedToken = "stale"
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "SETPLAYLIST",
+               "PAYLOAD": {"displayID": "Default", "loop": False,
+                           "items": [{"id": "a", "file": "/media/server/x.jpg",
+                                      "duration": 1000, "playmode": "SEGMENT"}]}}
+        sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
+        sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
+        server.msg_response(msg, sess)
+        assert disp.mediaElements[0].playmode == server.PlayMode.SEGMENT
+        assert disp.renderedToken == ""

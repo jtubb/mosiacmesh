@@ -19,6 +19,7 @@ from beeprint import pp
 import sockjs
 
 import argparse
+import hashlib
 from functools import lru_cache
 
 # File cache with modification time tracking
@@ -289,6 +290,32 @@ def assign_group_bounding_boxes():
             display.boundingBoxCenter = [bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2]
 
 
+def _group_clients(display_id):
+    """Sorted [(clientKey, client)] for clients assigned to a display group."""
+    return sorted([(k, c) for k, c in settings.clients.items() if c.displayID == display_id])
+
+
+def compute_render_token(display_id):
+    """Stable hash of the inputs that affect a SEGMENT render: the playlist
+    items, the group bounding box, and each client's resolution + measured quad.
+    Rendered assets are valid only while this matches Display.renderedToken."""
+    display = settings.displays.get(display_id)
+    if not display:
+        return ""
+    items = []
+    for me in display.mediaElements:
+        pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
+        items.append((me.id, me.file, me.duration, pm))
+    clients = []
+    for key, c in _group_clients(display_id):
+        perim = None
+        if c.measuredPerimeter is not None:
+            perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
+        clients.append((key, c.deviceWidth, c.deviceHeight, perim))
+    raw = repr((items, display.boundingBox, clients))
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
 def resolve_media_path(file_url):
     """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
     media_handler's convention (images/ or videos/ by extension)."""
@@ -363,6 +390,7 @@ class Display():
         self.action = PlayState.NOACTION
         self.playStartEpoch = 0   # server-time ms when playback last (re)started
         self.pauseOffset = 0      # ms into the playlist when paused
+        self.renderedToken = ""   # token of the last successful SEGMENT render
 
 class PlayState(Enum):
     NOACTION = 0
@@ -612,9 +640,10 @@ def msg_response(msg,session):
             me.id = item.get("id")
             me.file = item.get("file")
             me.duration = item.get("duration")
-            me.playmode = PlayMode.FULL  # MVP: identical full-screen
+            me.playmode = PlayMode.SEGMENT if item.get("playmode") == "SEGMENT" else PlayMode.FULL
             display.mediaElements.append(me)
         display.loop = bool(payload.get("loop", False))
+        display.renderedToken = ""  # playlist changed -> needs (re)render
         broadcast_to_display_group(display_id, {
             "REQUEST": "PRELOAD",
             "PAYLOAD": {"items": payload.get("items", [])}
