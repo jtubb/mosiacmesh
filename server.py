@@ -367,6 +367,50 @@ def _broadcast_segment_play(display_id, display):
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
 
 
+def isVideoItem(file):
+    """True if a media file is a video (.mp4), mirroring the client's isVideoItem.
+    Tolerates a trailing ?query."""
+    return str(file or "").lower().split("?")[0].endswith(".mp4")
+
+
+def quad_to_source_points(bbox, screen_quad, src_w, src_h):
+    """Ordered [TL, TR, BR, BL] corners of the screen's quad expressed in source
+    media pixel coords (the source is stretched to fill the group bbox)."""
+    bx, by, bw, bh = bbox
+    ordered = order_points(screen_quad)  # [TL, TR, BR, BL] in photo coords
+    return [[(float(px) - bx) / bw * src_w, (float(py) - by) / bh * src_h] for (px, py) in ordered]
+
+
+def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h):
+    """ffmpeg arg list: perspective-warp the source quad to fill the frame, scale
+    to the screen resolution, encode iPad-compatible H.264 + AAC audio.
+    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR."""
+    tl, tr, br, bl = src_points
+    def n(v):
+        return str(int(round(v)))
+    persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
+             ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
+    vf = persp + ",scale=" + str(out_w) + ":" + str(out_h)
+    return ["ffmpeg", "-y", "-i", src_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-preset", "veryfast", "-movflags", "+faststart", out_path]
+
+
+def get_video_dimensions(path):
+    """Return (width, height) of a video via OpenCV, or None if unreadable."""
+    cap = cv.VideoCapture(path)
+    try:
+        w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
+        h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
+    finally:
+        cap.release()
+    if w <= 0 or h <= 0:
+        return None
+    return (w, h)
+
+
 def resolve_media_path(file_url):
     """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
     media_handler's convention (images/ or videos/ by extension)."""

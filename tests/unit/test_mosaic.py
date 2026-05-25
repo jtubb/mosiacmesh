@@ -227,3 +227,39 @@ class TestSegmentPlay:
         ret = server.msg_response(msg, self._sess())
         assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"
         assert server.socketmanager.broadcast.call_count == 1  # group broadcast, one client
+
+
+class TestFfmpegHelpers:
+    def test_quad_to_source_points(self):
+        # screen quad covers the right half of a 100x100 bbox; source video 200x100
+        quad = np.array([[[50, 0]], [[100, 0]], [[100, 100]], [[50, 100]]])
+        pts = server.quad_to_source_points([0, 0, 100, 100], quad, 200, 100)
+        # ordered [TL,TR,BR,BL] in source px: x in {100,200}, y in {0,100}
+        assert pts == [[100.0, 0.0], [200.0, 0.0], [200.0, 100.0], [100.0, 100.0]]
+
+    def test_build_ffmpeg_cmd_has_perspective_h264_and_audio(self):
+        pts = [[10.0, 20.0], [110.0, 20.0], [110.0, 220.0], [10.0, 220.0]]  # TL,TR,BR,BL
+        cmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 800, 600)
+        assert cmd[0] == "ffmpeg"
+        assert "in.mp4" in cmd and cmd[-1] == "out.mp4"
+        vf = cmd[cmd.index("-vf") + 1]
+        # ffmpeg perspective order is TL,TR,BL,BR -> x2,y2 must be the BL corner (10,220)
+        assert vf.startswith("perspective=10:20:110:20:10:220:110:220:sense=source")
+        assert "scale=800:600" in vf
+        assert "libx264" in cmd and "baseline" in cmd and "yuv420p" in cmd
+        assert "-c:a" in cmd and "aac" in cmd
+        assert "-an" not in cmd  # audio is kept
+
+    def test_is_video_item(self):
+        assert server.isVideoItem("/media/server/clip.mp4") is True
+        assert server.isVideoItem("/media/server/pic.jpg") is False
+        assert server.isVideoItem("/media/server/clip.MP4?t=1") is True
+
+    def test_get_video_dimensions(self, monkeypatch):
+        class FakeCap:
+            def get(self, prop):
+                import cv2
+                return 1920.0 if prop == cv2.CAP_PROP_FRAME_WIDTH else 1080.0
+            def release(self): pass
+        monkeypatch.setattr(server.cv, "VideoCapture", lambda p: FakeCap())
+        assert server.get_video_dimensions("x.mp4") == (1920, 1080)
