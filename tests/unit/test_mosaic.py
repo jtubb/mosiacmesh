@@ -58,3 +58,20 @@ class TestWarp:
         out = server.warp_image_for_screen(img, [0, 0, 100, 100], quad, 80, 80)
         assert out.shape == (80, 80, 3)
         assert out[40, 70][2] > 200 and out[40, 70][0] < 50   # red across the whole screen
+
+
+class TestGroupBBoxAssignment:
+    def test_assign_group_bounding_boxes(self, mock_settings):
+        server.settings = mock_settings
+        c1 = server.Client(); c1.displayID = "Default"
+        c1.measuredPerimeter = np.array([[[10, 10]], [[50, 10]], [[50, 40]], [[10, 40]]])
+        c2 = server.Client(); c2.displayID = "Default"
+        c2.measuredPerimeter = np.array([[[60, 20]], [[100, 20]], [[100, 60]], [[60, 60]]])
+        c3 = server.Client(); c3.displayID = "Mobile"  # different group, no perimeter
+        mock_settings.clients = {"c1": c1, "c2": c2, "c3": c3}
+
+        server.assign_group_bounding_boxes()
+
+        assert mock_settings.displays["Default"].boundingBox == [10, 10, 91, 51]
+        assert mock_settings.displays["Default"].boundingBoxCenter == [55, 35]
+        assert mock_settings.displays["Mobile"].boundingBox is None

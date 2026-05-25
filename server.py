@@ -274,6 +274,21 @@ def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     return cv.warpPerspective(source_img, m, (out_w, out_h))
 
 
+def assign_group_bounding_boxes():
+    """Per display group, set boundingBox/boundingBoxCenter from the ArUco
+    screens' quads (photo coords). Call after calibration."""
+    groups = {}
+    for key, client in settings.clients.items():
+        if client.measuredPerimeter is not None and client.displayID:
+            groups.setdefault(client.displayID, []).append(client.measuredPerimeter)
+    for display_id, quads in groups.items():
+        display = settings.displays.setdefault(display_id, Display())
+        bbox = group_bounding_box(quads)
+        display.boundingBox = bbox
+        if bbox:
+            display.boundingBoxCenter = [bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2]
+
+
 def resolve_media_path(file_url):
     """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
     media_handler's convention (images/ or videos/ by extension)."""
@@ -1079,7 +1094,8 @@ def calibrate(filename):
     # Clean up image memory
     del image, imgray, thresh
     cv.destroyAllWindows()
-   
+
+    assign_group_bounding_boxes()
     return "media/displays/calibration.png","text/html"
 
 async def cache_stats_handler(request):
