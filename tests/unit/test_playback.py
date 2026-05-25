@@ -74,3 +74,48 @@ class TestSetPlaylist:
         assert disp.mediaElements[0].file == "/media/server/a.jpg"
         assert disp.mediaElements[1].duration == 2000
         assert server.socketmanager.broadcast.call_count == 1
+
+
+from unittest.mock import patch
+
+
+class TestPlayStop:
+    def _group_with_items(self, mock_settings):
+        disp = mock_settings.displays["Default"]
+        disp.mediaElements = []
+        for f, d in [("/media/server/a.jpg", 1000), ("/media/server/b.jpg", 2000)]:
+            me = server.MediaElement(); me.file = f; me.duration = d
+            disp.mediaElements.append(me)
+        disp.loop = True
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["c1"] = client
+        return disp
+
+    def test_play_sets_state_and_broadcasts(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._group_with_items(mock_settings)
+
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY",
+               "PAYLOAD": {"displayID": "Default"}}
+        with patch("time.time", return_value=1000.0):
+            server.msg_response(msg, _make_session())
+
+        assert disp.action == server.PlayState.PLAY
+        assert disp.playStartEpoch == 1000000
+        assert server.socketmanager.broadcast.call_count == 1
+
+    def test_stop_resets_state_and_broadcasts(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._group_with_items(mock_settings)
+        disp.action = server.PlayState.PLAY
+        disp.currentFrame = 5
+
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "STOP",
+               "PAYLOAD": {"displayID": "Default"}}
+        server.msg_response(msg, _make_session())
+
+        assert disp.action == server.PlayState.STOP
+        assert disp.currentFrame == 0
+        assert server.socketmanager.broadcast.call_count == 1

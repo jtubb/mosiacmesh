@@ -543,6 +543,32 @@ def msg_response(msg,session):
         })
         response["PAYLOAD"] = "SUCCESS"
 
+    elif(msg["REQUEST"] == "PLAY"):
+        display_id = msg["PAYLOAD"]["displayID"]
+        display = settings.displays.get(display_id)
+        if display and display.mediaElements:
+            display.action = PlayState.PLAY
+            display.playStartEpoch = int(time.time() * 1000)
+            items = [{"id": me.id, "file": me.file, "duration": me.duration}
+                     for me in display.mediaElements]
+            broadcast_to_display_group(display_id, {
+                "REQUEST": "PLAY",
+                "PAYLOAD": {"startEpoch": display.playStartEpoch,
+                            "items": items, "loop": display.loop}
+            })
+        response["PAYLOAD"] = "SUCCESS"
+
+    elif(msg["REQUEST"] == "STOP"):
+        display_id = msg["PAYLOAD"]["displayID"]
+        display = settings.displays.get(display_id)
+        if display:
+            display.action = PlayState.STOP
+            display.currentFrame = 0
+        broadcast_to_display_group(display_id, {
+            "REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}
+        })
+        response["PAYLOAD"] = "SUCCESS"
+
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
 
