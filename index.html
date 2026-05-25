@@ -21,7 +21,7 @@
         triggerPulse();
         if(ProgrammableTimer.isSynced())
         {
-			if(blink)
+			if(blink && !playback.active)
 			{
 				if((Math.round(currentTime/1000)*1000)%2000 == 0)
 				{
@@ -44,6 +44,51 @@
 	
 	var mediaSequence = null;
 	var mediaReady = false;
+	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null };
+
+	// JS mirror of server.playlist_index — keep the two in sync.
+	function playlistIndex(elapsedMs, durations, loop) {
+		var total = 0, i;
+		for (i = 0; i < durations.length; i++) { total += durations[i]; }
+		if (total <= 0) { return null; }
+		if (loop) { elapsedMs = ((elapsedMs % total) + total) % total; }
+		else if (elapsedMs >= total) { return null; }
+		if (elapsedMs < 0) { elapsedMs = 0; }
+		var cum = 0;
+		for (i = 0; i < durations.length; i++) {
+			if (elapsedMs < cum + durations[i]) { return { index: i, offsetMs: elapsedMs - cum }; }
+			cum += durations[i];
+		}
+		return { index: durations.length - 1, offsetMs: durations[durations.length - 1] };
+	}
+
+	function showItem(i) {
+		var item = playback.items[i];
+		if (!item) { return; }
+		$('#canvas').html('<img src="' + item.file + '" style="max-width:100%; max-height:100%;">');
+	}
+
+	function stopPlayback() {
+		playback.active = false;
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		$('#canvas').empty();
+	}
+
+	// Frame-accurate, self-correcting render loop: each transition recomputes the
+	// current item from the shared clock and schedules the exact next boundary.
+	function renderPlayback() {
+		if (!playback.active) { return; }
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		var durations = [], i;
+		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
+		var elapsed = GoTime.now() - playback.startEpoch;
+		var pos = playlistIndex(elapsed, durations, playback.loop);
+		if (pos === null) { stopPlayback(); return; }
+		showItem(pos.index);
+		var msToNext = durations[pos.index] - pos.offsetMs;
+		if (msToNext < 16) { msToNext = 16; } // floor to avoid a 0ms busy loop
+		playback.timer = setTimeout(renderPlayback, msToNext);
+	}
 	var _phaseHistory = [];     // recent tick phases: signed ms from nearest second
 	var _lastTickAt = 0;        // wall-clock time of the last synchronized tick
 	var SETTLE_SAMPLES = 5;
@@ -114,22 +159,18 @@
 		{
 			if(data_obj.REQUEST == "PRELOAD")
 			{
-				mediaSequence = data_obj.PAYLOAD;
+				mediaSequence = data_obj.PAYLOAD.items || [];
 				mediaReady = false;
-				var total = 0, settled = 0, k;
-				for(k in mediaSequence) { total++; }
+				var total = mediaSequence.length, settled = 0, j;
 				if(total === 0) { mediaReady = true; updateHeartbeat(); }
-				for(var key in mediaSequence)
+				for(j = 0; j < mediaSequence.length; j++)
 				{
 					var img = new Image();
-					// count load OR error as settled so one bad URL can't wedge below green
 					img.onload = img.onerror = function() {
 						settled++;
 						if(settled >= total) { mediaReady = true; updateHeartbeat(); }
 					};
-					img.src = mediaSequence[key].URL;
-					img.style.display = 'none';
-					$('#canvas').append(img);
+					img.src = mediaSequence[j].file;
 				}
 			}
 			else if(data_obj.REQUEST == "IDENTIFY")
@@ -158,6 +199,18 @@
 					position: 'relative',
 					overflow: 'hidden'
 				});
+			}
+			else if(data_obj.REQUEST == "PLAY")
+			{
+				playback.items = data_obj.PAYLOAD.items || [];
+				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
+				playback.loop = !!data_obj.PAYLOAD.loop;
+				playback.active = true;
+				renderPlayback();
+			}
+			else if(data_obj.REQUEST == "STOP")
+			{
+				stopPlayback();
 			}
 		}
 	}
