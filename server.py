@@ -524,6 +524,25 @@ def msg_response(msg,session):
                 configured_count += 1
         response["PAYLOAD"] = {"status": "SUCCESS", "configured": configured_count}
         
+    elif(msg["REQUEST"] == "SETPLAYLIST"):
+        payload = msg["PAYLOAD"]
+        display_id = payload["displayID"]
+        display = settings.displays.setdefault(display_id, Display())
+        display.mediaElements = []
+        for item in payload.get("items", []):
+            me = MediaElement()
+            me.id = item.get("id")
+            me.file = item.get("file")
+            me.duration = item.get("duration")
+            me.playmode = PlayMode.FULL  # MVP: identical full-screen
+            display.mediaElements.append(me)
+        display.loop = bool(payload.get("loop", False))
+        broadcast_to_display_group(display_id, {
+            "REQUEST": "PRELOAD",
+            "PAYLOAD": {"items": payload.get("items", [])}
+        })
+        response["PAYLOAD"] = "SUCCESS"
+
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
 
