@@ -300,6 +300,7 @@ class Display():
         self.currentFrame = 0
         self.action = PlayState.NOACTION
         self.playStartEpoch = 0   # server-time ms when playback last (re)started
+        self.pauseOffset = 0      # ms into the playlist when paused
 
 class PlayState(Enum):
     NOACTION = 0
@@ -581,6 +582,17 @@ def msg_response(msg,session):
             display.currentFrame = 0
         broadcast_to_display_group(display_id, {
             "REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}
+        })
+        response["PAYLOAD"] = "SUCCESS"
+
+    elif(msg["REQUEST"] == "PAUSE"):
+        display_id = msg["PAYLOAD"]["displayID"]
+        display = settings.displays.get(display_id)
+        if display and display.action == PlayState.PLAY:
+            display.pauseOffset = int(time.time() * 1000) - display.playStartEpoch
+            display.action = PlayState.PAUSE
+        broadcast_to_display_group(display_id, {
+            "REQUEST": "PAUSE", "PAYLOAD": {"displayID": display_id}
         })
         response["PAYLOAD"] = "SUCCESS"
 

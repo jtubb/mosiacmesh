@@ -147,3 +147,30 @@ class TestMidJoinSync:
         client = server.Client(); client.displayID = "Default"
         server.sync_new_client_to_group("idlec", client)
         assert server.socketmanager.broadcast.call_count == 0
+
+
+class TestPause:
+    def _playing_group(self, mock_settings):
+        disp = mock_settings.displays["Default"]
+        disp.mediaElements = []
+        for f, d in [("/media/server/a.jpg", 1000), ("/media/server/b.jpg", 2000)]:
+            me = server.MediaElement(); me.file = f; me.duration = d
+            disp.mediaElements.append(me)
+        disp.loop = True
+        disp.action = server.PlayState.PLAY
+        disp.playStartEpoch = 1000000
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["c1"] = client
+        return disp
+
+    def test_pause_sets_state_offset_and_broadcasts(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._playing_group(mock_settings)
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PAUSE",
+               "PAYLOAD": {"displayID": "Default"}}
+        with patch("time.time", return_value=1002.5):  # 1002500 ms
+            server.msg_response(msg, _make_session())
+        assert disp.action == server.PlayState.PAUSE
+        assert disp.pauseOffset == 2500  # 1002500 - 1000000
+        assert server.socketmanager.broadcast.call_count == 1
