@@ -350,6 +350,23 @@ def render_group(display_id):
     return {"status": "SUCCESS", "token": token, "files": count}
 
 
+def _broadcast_segment_play(display_id, display):
+    """Send each client its own PLAY: SEGMENT items use that client's warped
+    file (or the full source if it has no calibration), FULL items use the
+    shared source. All clients share display.playStartEpoch."""
+    token = display.renderedToken
+    for key, c in _group_clients(display_id):
+        items = []
+        for i, me in enumerate(display.mediaElements):
+            if me.playmode == PlayMode.SEGMENT and c.measuredPerimeter is not None:
+                f = "/media/" + key + "/seg_" + token + "_" + str(i) + ".png"
+            else:
+                f = me.file  # FULL item, or uncalibrated fallback to full source
+            items.append({"id": me.id, "file": f, "duration": me.duration})
+        broadcast_to_client(key, {"REQUEST": "PLAY",
+            "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
+
+
 def resolve_media_path(file_url):
     """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
     media_handler's convention (images/ or videos/ by extension)."""
@@ -687,21 +704,27 @@ def msg_response(msg,session):
     elif(msg["REQUEST"] == "PLAY"):
         display_id = msg["PAYLOAD"]["displayID"]
         display = settings.displays.get(display_id)
-        if display and display.mediaElements:
+        if not display or not display.mediaElements:
+            response["PAYLOAD"] = "SUCCESS"
+        else:
             now_ms = int(time.time() * 1000)
-            if display.action == PlayState.PAUSE:
-                display.playStartEpoch = now_ms - display.pauseOffset  # resume
+            resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
+            has_segment = any(me.playmode == PlayMode.SEGMENT for me in display.mediaElements)
+            if has_segment and compute_render_token(display_id) != display.renderedToken:
+                response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
-                display.playStartEpoch = now_ms                        # fresh start
-            display.action = PlayState.PLAY
-            items = [{"id": me.id, "file": me.file, "duration": me.duration}
-                     for me in display.mediaElements]
-            broadcast_to_display_group(display_id, {
-                "REQUEST": "PLAY",
-                "PAYLOAD": {"startEpoch": display.playStartEpoch,
-                            "items": items, "loop": display.loop}
-            })
-        response["PAYLOAD"] = "SUCCESS"
+                display.playStartEpoch = resume_epoch
+                display.action = PlayState.PLAY
+                if has_segment:
+                    _broadcast_segment_play(display_id, display)
+                else:
+                    items = [{"id": me.id, "file": me.file, "duration": me.duration}
+                             for me in display.mediaElements]
+                    broadcast_to_display_group(display_id, {
+                        "REQUEST": "PLAY",
+                        "PAYLOAD": {"startEpoch": display.playStartEpoch,
+                                    "items": items, "loop": display.loop}})
+                response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "STOP"):
         display_id = msg["PAYLOAD"]["displayID"]

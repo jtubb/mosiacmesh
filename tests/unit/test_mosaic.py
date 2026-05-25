@@ -163,3 +163,67 @@ class TestRender:
         mock_settings.clients = {}  # no calibrated screens
         result = server.render_group("Default")
         assert result["status"] == "ERROR"
+
+
+import jsonpickle
+
+
+class TestSegmentPlay:
+    def _rendered_group(self, mock_settings, two_clients=True):
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]
+        disp.loop = True
+        disp.boundingBox = [0, 0, 100, 100]
+        disp.action = server.PlayState.STOP
+        c1 = server.Client(); c1.displayID = "Default"; c1.deviceWidth = 80; c1.deviceHeight = 60
+        c1.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        clients = {"c1": c1}
+        if two_clients:
+            c2 = server.Client(); c2.displayID = "Default"; c2.deviceWidth = 80; c2.deviceHeight = 60
+            c2.measuredPerimeter = np.array([[[50, 0]], [[100, 0]], [[100, 100]], [[50, 100]]])
+            clients["c2"] = c2
+        mock_settings.clients = clients
+        return disp
+
+    def _sess(self):
+        s = MagicMock(); s.id = "s"; s.request = MagicMock()
+        s.request.remote = "127.0.0.1"; s.request.headers = {"User-Agent": "T"}
+        return s
+
+    def test_play_rendered_sends_per_client_warped(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._rendered_group(mock_settings)
+        disp.renderedToken = server.compute_render_token("Default")  # mark rendered
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
+        server.msg_response(msg, self._sess())
+        # one PLAY per client (broadcast_to_client), not the group broadcast
+        assert server.socketmanager.broadcast.call_count == 2
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        assert "/seg_" in sent["PAYLOAD"]["items"][0]["file"]
+
+    def test_play_stale_emits_render_required(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        self._rendered_group(mock_settings)  # renderedToken left ""
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
+        ret = server.msg_response(msg, self._sess())
+        decoded = jsonpickle.decode(ret)
+        assert decoded["PAYLOAD"]["status"] == "RENDER_REQUIRED"
+        assert server.socketmanager.broadcast.call_count == 0
+
+    def test_play_full_only_uses_group_path(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.FULL
+        disp.mediaElements = [me]; disp.loop = True; disp.action = server.PlayState.STOP
+        c1 = server.Client(); c1.displayID = "Default"
+        mock_settings.clients = {"c1": c1}
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
+        ret = server.msg_response(msg, self._sess())
+        assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"
+        assert server.socketmanager.broadcast.call_count == 1  # group broadcast, one client
