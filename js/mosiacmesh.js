@@ -44,7 +44,7 @@ function getset_cookie(cname, cvalue, days)
 	}
 	
 	// Set new cookie and update cache
-	const d = new Date();
+	var d = new Date(); // ES5: 1st-gen iPad (iOS 5 / Safari 5.1) has no `const`
 	d.setTime(d.getTime() + (365*24*60*60*1000));
 	var expires = "expires="+ d.toUTCString();
 	document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/;SameSite=Strict";
