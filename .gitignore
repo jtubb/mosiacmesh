@@ -1,2 +1,10 @@
 settings.dat
 
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Test/coverage artifacts
+htmlcov/
+.pytest_cache/
+.coverage
