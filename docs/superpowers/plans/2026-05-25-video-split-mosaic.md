@@ -46,6 +46,11 @@ class TestFfmpegHelpers:
         assert "-c:a" in cmd and "aac" in cmd
         assert "-an" not in cmd  # audio is kept
 
+    def test_is_video_item(self):
+        assert server.isVideoItem("/media/server/clip.mp4") is True
+        assert server.isVideoItem("/media/server/pic.jpg") is False
+        assert server.isVideoItem("/media/server/clip.MP4?t=1") is True
+
     def test_get_video_dimensions(self, monkeypatch):
         class FakeCap:
             def get(self, prop):
@@ -66,6 +71,12 @@ Expected: FAIL — helpers not defined.
 In `server.py`, after `_broadcast_segment_play`, add:
 
 ```python
+def isVideoItem(file):
+    """True if a media file is a video (.mp4), mirroring the client's isVideoItem.
+    Tolerates a trailing ?query."""
+    return str(file or "").lower().split("?")[0].endswith(".mp4")
+
+
 def quad_to_source_points(bbox, screen_quad, src_w, src_h):
     """Ordered [TL, TR, BR, BL] corners of the screen's quad expressed in source
     media pixel coords (the source is stretched to fill the group bbox)."""
