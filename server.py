@@ -316,6 +316,40 @@ def compute_render_token(display_id):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def render_group(display_id):
+    """Warp every SEGMENT item onto each calibrated screen in the group, write
+    the per-screen files, and record the render token. Synchronous."""
+    display = settings.displays.get(display_id)
+    if not display or not display.mediaElements:
+        return {"status": "ERROR", "error": "no playlist"}
+    if not display.boundingBox:
+        return {"status": "ERROR", "error": "no calibration"}
+    seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
+                 if me.playmode == PlayMode.SEGMENT]
+    if not seg_items:
+        return {"status": "ERROR", "error": "no SEGMENT items"}
+    clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    if not clients:
+        return {"status": "ERROR", "error": "no calibrated screens"}
+    token = compute_render_token(display_id)
+    count = 0
+    for i, me in seg_items:
+        src_path = resolve_media_path(me.file)
+        img = cv.imread(src_path) if src_path else None
+        if img is None:
+            continue
+        for key, c in clients:
+            out_w = int(c.deviceWidth) or 1
+            out_h = int(c.deviceHeight) or 1
+            warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter, out_w, out_h)
+            out_dir = os.path.join("media", key, "images")
+            Path(out_dir).mkdir(parents=True, exist_ok=True)
+            cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
+            count += 1
+    display.renderedToken = token
+    return {"status": "SUCCESS", "token": token, "files": count}
+
+
 def resolve_media_path(file_url):
     """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
     media_handler's convention (images/ or videos/ by extension)."""
@@ -690,6 +724,9 @@ def msg_response(msg,session):
             "REQUEST": "PAUSE", "PAYLOAD": {"displayID": display_id}
         })
         response["PAYLOAD"] = "SUCCESS"
+
+    elif(msg["REQUEST"] == "RENDER"):
+        response["PAYLOAD"] = render_group(msg["PAYLOAD"]["displayID"])
 
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command

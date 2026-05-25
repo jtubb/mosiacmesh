@@ -124,3 +124,42 @@ class TestSetPlaylistPlaymode:
         server.msg_response(msg, sess)
         assert disp.mediaElements[0].playmode == server.PlayMode.SEGMENT
         assert disp.renderedToken == ""
+
+
+class TestRender:
+    def test_render_group_writes_files_and_sets_token(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)  # isolate all media/ writes to a temp dir
+        # source image on disk where resolve_media_path expects it
+        src_dir = tmp_path / "media" / "server" / "images"
+        src_dir.mkdir(parents=True)
+        img = np.zeros((100, 100, 3), dtype=np.uint8); img[:, :50] = (0, 0, 255)
+        cv.imwrite(str(src_dir / "x.jpg"), img)
+
+        server.settings = mock_settings
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]
+        disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+
+        result = server.render_group("Default")
+
+        assert result["status"] == "SUCCESS"
+        assert result["files"] == 1
+        assert disp.renderedToken == server.compute_render_token("Default")
+        out = tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")
+        assert out.exists()
+
+    def test_render_group_no_calibration_errors(self, mock_settings):
+        server.settings = mock_settings
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.file = "/media/server/x.jpg"; me.duration = 1000
+        me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]
+        disp.boundingBox = [0, 0, 100, 100]
+        mock_settings.clients = {}  # no calibrated screens
+        result = server.render_group("Default")
+        assert result["status"] == "ERROR"
