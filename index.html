@@ -44,7 +44,9 @@
 	
 	var mediaSequence = null;
 	var mediaReady = false;
-	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null };
+	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
+		video: null, videoIndex: -1, driftTimer: null };
+	var HARD_SEEK_MS = 400; // drift beyond this is corrected with a seek, not a rate nudge
 
 	// JS mirror of server.playlist_index — keep the two in sync.
 	function playlistIndex(elapsedMs, durations, loop) {
@@ -60,6 +62,46 @@
 			cum += durations[i];
 		}
 		return { index: durations.length - 1, offsetMs: durations[durations.length - 1] };
+	}
+
+	function isVideoItem(file) {
+		return /\.mp4(\?|$)/i.test(file || '');
+	}
+
+	function clearVideo() {
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		if (playback.video) {
+			try { playback.video.pause(); } catch (e) {}
+			playback.video = null;
+		}
+		playback.videoIndex = -1;
+	}
+
+	// Keep the active video aligned to the shared clock: a proportional playbackRate
+	// controller for small drift, a hard seek for large drift (the latter is also the
+	// iOS-5 path, where playbackRate may be ignored so error grows until it is seeked).
+	function driftTick() {
+		var v = playback.video;
+		if (!v || !playback.active) { return; }
+		var durations = [], i;
+		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
+		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+		if (pos === null || pos.index !== playback.videoIndex) { return; }
+		var errorMs = v.currentTime * 1000 - pos.offsetMs;
+		if (Math.abs(errorMs) > HARD_SEEK_MS) {
+			try { v.currentTime = pos.offsetMs / 1000; } catch (e) {}
+			v.playbackRate = 1;
+		} else {
+			var rate = 1 - errorMs / 2000;
+			if (rate < 0.85) { rate = 0.85; }
+			if (rate > 1.15) { rate = 1.15; }
+			v.playbackRate = rate;
+		}
+	}
+
+	function startDriftLoop() {
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); }
+		playback.driftTimer = setInterval(driftTick, 500);
 	}
 
 	function showItem(i) {
