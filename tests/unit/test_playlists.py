@@ -166,6 +166,15 @@ class TestPlaylistCRUD:
             "PAYLOAD": {"name": "Lobby"}}, _make_session())
         assert "Lobby" not in mock_settings.playlists
 
+    def test_list_tolerates_none_items(self, mock_settings):
+        server.settings = mock_settings
+        pl = server.Playlist(); pl.name = "Bad"; pl.items = None; pl.loop = False
+        mock_settings.playlists["Bad"] = pl
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "LIST_PLAYLISTS",
+             "PAYLOAD": {}}, _make_session()))
+        assert resp["PAYLOAD"][0] == {"name": "Bad", "itemCount": 0, "hasSegment": False}
+
 
 class TestAssignPlaylist:
     def _save(self, mock_settings, name, items, loop=False):

@@ -880,8 +880,9 @@ def msg_response(msg,session):
     elif(msg["REQUEST"] == "LIST_PLAYLISTS"):
         rows = []
         for name, pl in settings.playlists.items():
-            has_segment = any(it.get("playmode") == "SEGMENT" for it in pl.items)
-            rows.append({"name": name, "itemCount": len(pl.items),
+            items = pl.items or []
+            has_segment = any(it.get("playmode") == "SEGMENT" for it in items)
+            rows.append({"name": name, "itemCount": len(items),
                          "hasSegment": has_segment})
         response["PAYLOAD"] = rows
 

@@ -153,9 +153,19 @@
 		else if(data_obj.REQUEST == "ASSIGN_PLAYLIST")
 		{
 			var s = data_obj.PAYLOAD.status;
-			plSetBadge(s === "RENDER_REQUIRED" ? "⚠ needs render"
-				: s === "NOT_CALIBRATED" ? "⚠ not calibrated"
-				: s === "error" ? "⚠ assign failed" : "✓ assigned");
+			if (s === "NOT_CALIBRATED") {
+				plSetBadge("⚠ not calibrated");
+				plSetTransportState({render: false, play: false});
+			} else if (s === "RENDER_REQUIRED") {
+				plSetBadge("⚠ needs render");
+				plSetTransportState({render: true, play: false});
+			} else if (s === "error") {
+				plSetBadge("⚠ assign failed");
+				plSetTransportState({render: false, play: false});
+			} else {
+				plSetBadge("✓ assigned");
+				plSetTransportState({render: true, play: true});
+			}
 		}
 		else if(data_obj.REQUEST == "RENDER")
 		{
@@ -171,6 +181,14 @@
 			plSetBadge(st === "rendering" ? "⏳ rendering…"
 				: st === "ready" ? "✓ render ready"
 				: st === "error" ? "⚠ render error" : st || "");
+			if (st === "ready") { plSetTransportState({render: true, play: true}); }
+			else if (st === "rendering") { plSetTransportState({render: false, play: false}); }
+		}
+		else if(data_obj.REQUEST == "PLAY")
+		{
+			var ps = data_obj.PAYLOAD && data_obj.PAYLOAD.status;
+			if (ps === "RENDER_IN_PROGRESS") { plSetBadge("⏳ rendering…"); plSetTransportState({render: false, play: false}); }
+			else if (ps === "RENDER_REQUIRED") { plSetBadge("⚠ needs render"); plSetTransportState({render: true, play: false}); }
 		}
 	}
 
@@ -637,9 +655,9 @@ function plBuildTransport() {
   var $g = $('<select id="plGroup">').appendTo($t);
   $.each(plGroupOptions(), function(_, id){ $('<option>').val(id).text(id).appendTo($g); });
   $('<button type="button">Assign</button>').on('click', plAssign).appendTo($t);
-  $('<button type="button">⚙ Render</button>').on('click', plRender).appendTo($t);
+  $('<button type="button" id="plRenderBtn">⚙ Render</button>').on('click', plRender).appendTo($t);
   $('<span id="plRenderBadge" style="margin:0 8px; color:#c80;"></span>').appendTo($t);
-  $('<button type="button">▶ Play</button>').on('click', function(){ plTransport('PLAY'); }).appendTo($t);
+  $('<button type="button" id="plPlayBtn">▶ Play</button>').on('click', function(){ plTransport('PLAY'); }).appendTo($t);
   $('<button type="button">⏸ Pause</button>').on('click', function(){ plTransport('PAUSE'); }).appendTo($t);
   $('<button type="button">⏹ Stop</button>').on('click', function(){ plTransport('STOP'); }).appendTo($t);
 }
@@ -659,6 +677,11 @@ function plTransport(req) {
   sock.send(generateMessage('SRV', req, { displayID: plAssignedGroup() }));
 }
 function plSetBadge(text) { $('#plRenderBadge').text(text); }
+function plSetTransportState(opts) {
+  // opts: {render: bool, play: bool} — true = enabled
+  $('#plRenderBtn').prop('disabled', !opts.render);
+  $('#plPlayBtn').prop('disabled', !opts.play);
+}
 
 function plRefreshList() { sock.send(generateMessage('SRV', 'LIST_PLAYLISTS', {})); }
 
