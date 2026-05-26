@@ -620,6 +620,28 @@ def _media_item_payload(me):
             "endEffect": getattr(me, "endEffect", None)}
 
 
+def _build_media_elements(items):
+    """Build MediaElement objects from a list of item dicts (SETPLAYLIST /
+    ASSIGN_PLAYLIST share this). Maps the playmode string to the enum and
+    applies field defaults."""
+    elements = []
+    for item in (items or []):
+        me = MediaElement()
+        me.id = item.get("id")
+        me.file = item.get("file")
+        me.duration = item.get("duration")
+        _pm = item.get("playmode")
+        me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
+                       else PlayMode.SCRIPT if _pm == "SCRIPT"
+                       else PlayMode.INDIVIDUAL if _pm == "INDIVIDUAL"
+                       else PlayMode.FULL)
+        me.backgroundColor = item.get("backgroundColor", "#000000")
+        me.startEffect = item.get("startEffect")
+        me.endEffect = item.get("endEffect")
+        elements.append(me)
+    return elements
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -780,20 +802,7 @@ def msg_response(msg,session):
         payload = msg["PAYLOAD"]
         display_id = payload["displayID"]
         display = settings.displays.setdefault(display_id, Display())
-        display.mediaElements = []
-        for item in payload.get("items", []):
-            me = MediaElement()
-            me.id = item.get("id")
-            me.file = item.get("file")
-            me.duration = item.get("duration")
-            _pm = item.get("playmode")
-            me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
-                           else PlayMode.SCRIPT if _pm == "SCRIPT"
-                           else PlayMode.FULL)
-            me.backgroundColor = item.get("backgroundColor", "#000000")
-            me.startEffect = item.get("startEffect")
-            me.endEffect = item.get("endEffect")
-            display.mediaElements.append(me)
+        display.mediaElements = _build_media_elements(payload.get("items", []))
         display.loop = bool(payload.get("loop", False))
         display.renderedToken = ""  # playlist changed -> needs (re)render
         broadcast_to_display_group(display_id, {
@@ -906,25 +915,12 @@ def msg_response(msg,session):
             response["PAYLOAD"] = {"status": "error", "displayID": display_id}
         else:
             display = settings.displays.setdefault(display_id, Display())
-            display.mediaElements = []
-            for item in pl.items:
-                me = MediaElement()
-                me.id = item.get("id")
-                me.file = item.get("file")
-                me.duration = item.get("duration")
-                _pm = item.get("playmode")
-                me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
-                               else PlayMode.SCRIPT if _pm == "SCRIPT"
-                               else PlayMode.INDIVIDUAL if _pm == "INDIVIDUAL"
-                               else PlayMode.FULL)
-                me.backgroundColor = item.get("backgroundColor", "#000000")
-                me.startEffect = item.get("startEffect")
-                me.endEffect = item.get("endEffect")
-                display.mediaElements.append(me)
+            display.mediaElements = _build_media_elements(pl.items)
             display.loop = bool(pl.loop)
             display.renderedToken = ""
             broadcast_to_display_group(display_id, {
-                "REQUEST": "PRELOAD", "PAYLOAD": {"items": pl.items}})
+                "REQUEST": "PRELOAD",
+                "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}})
             has_segment = any(me.playmode == PlayMode.SEGMENT
                               for me in display.mediaElements)
             if has_segment and not display.boundingBox:

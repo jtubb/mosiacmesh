@@ -75,6 +75,17 @@ class TestSetPlaylistFields:
         assert sent["PAYLOAD"]["items"][0]["backgroundColor"] == "#000000"
         assert sent["PAYLOAD"]["items"][1]["startEffect"] == "wipe"
 
+    def test_setplaylist_maps_individual(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["c1"] = client
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "SETPLAYLIST",
+            "PAYLOAD": {"displayID": "Default", "loop": False, "items": [
+                {"id": "a", "file": "/m/x.jpg", "duration": 5, "playmode": "INDIVIDUAL"}]}},
+            _make_session())
+        assert mock_settings.displays["Default"].mediaElements[0].playmode is server.PlayMode.INDIVIDUAL
+
     def test_play_payload_carries_new_fields(self, mock_settings):
         server.settings = mock_settings
         server.socketmanager = MagicMock()
@@ -173,6 +184,8 @@ class TestAssignPlaylist:
         resp = self._assign("Imgs")
         assert resp["PAYLOAD"]["status"] == "ok"
         assert len(mock_settings.displays["Default"].mediaElements) == 1
+        assert mock_settings.displays["Default"].loop is False
+        assert mock_settings.displays["Default"].renderedToken == ""
 
     def test_assign_segment_not_calibrated(self, mock_settings):
         server.settings = mock_settings
