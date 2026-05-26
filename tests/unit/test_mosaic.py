@@ -127,42 +127,93 @@ class TestSetPlaylistPlaymode:
 
 
 class TestRender:
-    def test_render_group_writes_files_and_sets_token(self, mock_settings, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)  # isolate all media/ writes to a temp dir
-        # source image on disk where resolve_media_path expects it
-        src_dir = tmp_path / "media" / "server" / "images"
-        src_dir.mkdir(parents=True)
-        img = np.zeros((100, 100, 3), dtype=np.uint8); img[:, :50] = (0, 0, 255)
-        cv.imwrite(str(src_dir / "x.jpg"), img)
-
-        server.settings = mock_settings
+    def _video_group(self, mock_settings):
         disp = mock_settings.displays["Default"]
-        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
-        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 5000; me.playmode = server.PlayMode.SEGMENT
         disp.mediaElements = [me]
         disp.boundingBox = [0, 0, 100, 100]
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         mock_settings.clients = {"c1": c}
+        return disp
 
-        result = server.render_group("Default")
-
-        assert result["status"] == "SUCCESS"
-        assert result["files"] == 1
-        assert disp.renderedToken == server.compute_render_token("Default")
-        out = tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")
-        assert out.exists()
-
-    def test_render_group_no_calibration_errors(self, mock_settings):
+    async def test_render_image_writes_files_and_sets_ready(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "images"; src_dir.mkdir(parents=True)
+        img = np.zeros((100, 100, 3), dtype=np.uint8); img[:, :50] = (0, 0, 255)
+        cv.imwrite(str(src_dir / "x.jpg"), img)
         server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        assert disp.renderStatus == "ready"
+        assert disp.renderedToken == server.compute_render_token("Default")
+        assert (tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")).exists()
+
+    async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._video_group(mock_settings)
+        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (1920, 1080))
+
+        calls = []
+        class _Proc:
+            returncode = 0
+            async def communicate(self): return (b"", b"")
+        async def _fake_exec(*args, **kwargs):
+            calls.append(args)
+            return _Proc()
+        monkeypatch.setattr(server.asyncio, "create_subprocess_exec", _fake_exec)
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        assert len(calls) == 1                      # one ffmpeg per (video item x screen)
+        assert calls[0][0] == "ffmpeg"
+        assert disp.renderedToken == server.compute_render_token("Default")
+        # RENDER_STATUS broadcast at least twice (rendering, ready)
+        assert server.socketmanager.broadcast.call_count >= 2
+
+    async def test_render_video_ffmpeg_failure_sets_error(self, mock_settings, monkeypatch):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._video_group(mock_settings)
+        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (1920, 1080))
+        class _Proc:
+            returncode = 1
+            async def communicate(self): return (b"", b"boom")
+        async def _fake_exec(*args, **kwargs): return _Proc()
+        monkeypatch.setattr(server.asyncio, "create_subprocess_exec", _fake_exec)
+
+        result = await server.render_group_async("Default")
+        assert result["status"] == "error"
+        assert disp.renderStatus == "error"
+        assert disp.renderedToken == ""           # unchanged on failure
+
+    def test_render_handler_validation_errors_without_calibration(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.file = "/media/server/x.jpg"; me.duration = 1000
         me.playmode = server.PlayMode.SEGMENT
-        disp.mediaElements = [me]
-        disp.boundingBox = [0, 0, 100, 100]
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
         mock_settings.clients = {}  # no calibrated screens
-        result = server.render_group("Default")
-        assert result["status"] == "ERROR"
+        sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
+        sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
+        import jsonpickle
+        ret = server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER",
+                                   "PAYLOAD": {"displayID": "Default"}}, sess)
+        assert jsonpickle.decode(ret)["PAYLOAD"]["status"] == "ERROR"
 
 
 import jsonpickle

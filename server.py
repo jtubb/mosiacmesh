@@ -316,38 +316,64 @@ def compute_render_token(display_id):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
-def render_group(display_id):
-    """Warp every SEGMENT item onto each calibrated screen in the group, write
-    the per-screen files, and record the render token. Synchronous."""
+def _broadcast_render_status(display_id, status):
+    if socketmanager is not None:
+        socketmanager.broadcast(jsonpickle.encode(
+            {"REQUEST": "RENDER_STATUS", "PAYLOAD": {"displayID": display_id, "status": status}}))
+
+
+async def render_group_async(display_id):
+    """Async render of a group's SEGMENT items: images warped inline (OpenCV),
+    videos warped by awaiting one ffmpeg subprocess per screen. Sets renderStatus
+    and (on success) renderedToken; broadcasts RENDER_STATUS on each change."""
     display = settings.displays.get(display_id)
-    if not display or not display.mediaElements:
-        return {"status": "ERROR", "error": "no playlist"}
-    if not display.boundingBox:
-        return {"status": "ERROR", "error": "no calibration"}
-    seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
-                 if me.playmode == PlayMode.SEGMENT]
-    if not seg_items:
-        return {"status": "ERROR", "error": "no SEGMENT items"}
-    clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
-    if not clients:
-        return {"status": "ERROR", "error": "no calibrated screens"}
+    if not display:
+        return {"status": "error"}
+    display.renderStatus = "rendering"
+    _broadcast_render_status(display_id, "rendering")
     token = compute_render_token(display_id)
-    count = 0
-    for i, me in seg_items:
-        src_path = resolve_media_path(me.file)
-        img = cv.imread(src_path) if src_path else None
-        if img is None:
-            continue
-        for key, c in clients:
-            out_w = int(c.deviceWidth) or 1
-            out_h = int(c.deviceHeight) or 1
-            warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter, out_w, out_h)
-            out_dir = os.path.join("media", key, "images")
-            Path(out_dir).mkdir(parents=True, exist_ok=True)
-            cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
-            count += 1
-    display.renderedToken = token
-    return {"status": "SUCCESS", "token": token, "files": count}
+    try:
+        seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
+                     if me.playmode == PlayMode.SEGMENT]
+        clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+        for i, me in seg_items:
+            src_path = resolve_media_path(me.file)
+            if isVideoItem(me.file):
+                dims = get_video_dimensions(src_path) if src_path else None
+                if not dims:
+                    raise RuntimeError("cannot read source video: " + str(me.file))
+                sw, sh = dims
+                for key, c in clients:
+                    pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
+                    out_dir = os.path.join("media", key, "videos")
+                    Path(out_dir).mkdir(parents=True, exist_ok=True)
+                    out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
+                    cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
+                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    await proc.communicate()
+                    if proc.returncode != 0:
+                        raise RuntimeError("ffmpeg failed (" + str(proc.returncode) + ")")
+            else:
+                img = cv.imread(src_path) if src_path else None
+                if img is None:
+                    raise RuntimeError("cannot read source image: " + str(me.file))
+                for key, c in clients:
+                    warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
+                                                   int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                    out_dir = os.path.join("media", key, "images")
+                    Path(out_dir).mkdir(parents=True, exist_ok=True)
+                    cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
+        display.renderedToken = token
+        display.renderStatus = "ready"
+        _broadcast_render_status(display_id, "ready")
+        return {"status": "ready", "token": token}
+    except Exception as e:
+        logging.error("render failed for %s: %s", display_id, e)
+        display.renderStatus = "error"
+        _broadcast_render_status(display_id, "error")
+        return {"status": "error", "error": str(e)}
 
 
 def _broadcast_segment_play(display_id, display):
@@ -486,6 +512,7 @@ class Display():
         self.playStartEpoch = 0   # server-time ms when playback last (re)started
         self.pauseOffset = 0      # ms into the playlist when paused
         self.renderedToken = ""   # token of the last successful SEGMENT render
+        self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
 
 class PlayState(Enum):
     NOACTION = 0
@@ -793,7 +820,21 @@ def msg_response(msg,session):
         response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "RENDER"):
-        response["PAYLOAD"] = render_group(msg["PAYLOAD"]["displayID"])
+        display_id = msg["PAYLOAD"]["displayID"]
+        display = settings.displays.get(display_id)
+        if not display or not display.mediaElements:
+            response["PAYLOAD"] = {"status": "ERROR", "error": "no playlist"}
+        elif not display.boundingBox:
+            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibration"}
+        elif not any(me.playmode == PlayMode.SEGMENT for me in display.mediaElements):
+            response["PAYLOAD"] = {"status": "ERROR", "error": "no SEGMENT items"}
+        elif not [c for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]:
+            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibrated screens"}
+        elif display.renderStatus == "rendering":
+            response["PAYLOAD"] = {"status": "rendering"}
+        else:
+            asyncio.ensure_future(render_group_async(display_id))
+            response["PAYLOAD"] = {"status": "rendering"}
 
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
