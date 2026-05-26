@@ -108,6 +108,13 @@ class TestRenderToken:
         disp.mediaElements[0].duration = 5000
         assert server.compute_render_token("Default") != t1
 
+    def test_token_changes_with_background_color(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._seg_group(mock_settings)
+        t1 = server.compute_render_token("Default")
+        disp.mediaElements[0].backgroundColor = "#123456"
+        assert server.compute_render_token("Default") != t1
+
 
 class TestSetPlaylistPlaymode:
     def test_setplaylist_sets_segment_and_clears_rendered(self, mock_settings):

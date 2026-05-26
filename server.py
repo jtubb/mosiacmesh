@@ -263,7 +263,8 @@ def group_bounding_box(quads):
 
 def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     """Warp the region of source_img under a screen's quad onto that screen's
-    pixel rect. bbox is the group's photo-space bounding box; the full image is
+    pixel rect. bbox is the [x, y, w, h] region of the photo that the source image is stretched to fill
+    (the group bbox for SEGMENT, the screen's own quad bbox for INDIVIDUAL); the full image is
     stretched to fill bbox, so the screen quad (photo coords) maps back into
     media coords, then a homography fits it to out_w x out_h."""
     h, w = source_img.shape[:2]
@@ -319,7 +320,7 @@ def _group_clients(display_id):
 
 
 def compute_render_token(display_id):
-    """Stable hash of the inputs that affect a SEGMENT render: the playlist
+    """Stable hash of the inputs that affect a per-screen render (SEGMENT or INDIVIDUAL): the playlist
     items, the group bounding box, and each client's resolution + measured quad.
     Rendered assets are valid only while this matches Display.renderedToken."""
     display = settings.displays.get(display_id)
@@ -328,7 +329,7 @@ def compute_render_token(display_id):
     items = []
     for me in display.mediaElements:
         pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
-        items.append((me.id, me.file, me.duration, pm))
+        items.append((me.id, me.file, me.duration, pm, getattr(me, "backgroundColor", "#000000")))
     clients = []
     for key, c in _group_clients(display_id):
         perim = None
