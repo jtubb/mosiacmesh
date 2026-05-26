@@ -322,6 +322,11 @@ def _broadcast_render_status(display_id, status):
             {"REQUEST": "RENDER_STATUS", "PAYLOAD": {"displayID": display_id, "status": status}}))
 
 
+def _is_renderable(me):
+    """SEGMENT and INDIVIDUAL items require a per-screen server render."""
+    return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL)
+
+
 async def render_group_async(display_id):
     """Async render of a group's SEGMENT items: images warped inline (OpenCV),
     videos warped by awaiting one ffmpeg subprocess per screen. Sets renderStatus
@@ -376,21 +381,21 @@ async def render_group_async(display_id):
         return {"status": "error", "error": str(e)}
 
 
-def _broadcast_segment_play(display_id, display):
-    """Send each client its own PLAY: SEGMENT items use that client's warped
-    file (or the full source if it has no calibration), FULL items use the
-    shared source. All clients share display.playStartEpoch."""
+def _broadcast_per_client_play(display_id, display):
+    """Send each client its own PLAY: renderable items (SEGMENT/INDIVIDUAL) use
+    that client's warped file when calibrated, otherwise the plain source."""
     token = display.renderedToken
     for key, c in _group_clients(display_id):
         items = []
         for i, me in enumerate(display.mediaElements):
-            if me.playmode == PlayMode.SEGMENT and c.measuredPerimeter is not None:
+            if _is_renderable(me) and c.measuredPerimeter is not None:
+                prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
                 ext = ".mp4" if isVideoItem(me.file) else ".png"
-                f = "/media/" + key + "/seg_" + token + "_" + str(i) + ext
+                f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
             else:
                 f = me.file  # FULL item, or uncalibrated fallback to full source
             item = _media_item_payload(me)
-            item["file"] = f  # segment-specific warped path (overrides shared source)
+            item["file"] = f
             items.append(item)
         broadcast_to_client(key, {"REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
@@ -820,16 +825,16 @@ def msg_response(msg,session):
         else:
             now_ms = int(time.time() * 1000)
             resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
-            has_segment = any(me.playmode == PlayMode.SEGMENT for me in display.mediaElements)
-            if has_segment and display.renderStatus == "rendering":
+            has_renderable = any(_is_renderable(me) for me in display.mediaElements)
+            if has_renderable and display.renderStatus == "rendering":
                 response["PAYLOAD"] = {"status": "RENDER_IN_PROGRESS", "displayID": display_id}
-            elif has_segment and compute_render_token(display_id) != display.renderedToken:
+            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
                 response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
                 display.playStartEpoch = resume_epoch
                 display.action = PlayState.PLAY
-                if has_segment:
-                    _broadcast_segment_play(display_id, display)
+                if has_renderable:
+                    _broadcast_per_client_play(display_id, display)
                 else:
                     items = [_media_item_payload(me) for me in display.mediaElements]
                     broadcast_to_display_group(display_id, {
@@ -867,8 +872,8 @@ def msg_response(msg,session):
             response["PAYLOAD"] = {"status": "ERROR", "error": "no playlist"}
         elif not display.boundingBox:
             response["PAYLOAD"] = {"status": "ERROR", "error": "no calibration"}
-        elif not any(me.playmode == PlayMode.SEGMENT for me in display.mediaElements):
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no SEGMENT items"}
+        elif not any(_is_renderable(me) for me in display.mediaElements):
+            response["PAYLOAD"] = {"status": "ERROR", "error": "no renderable items"}
         elif not [c for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]:
             response["PAYLOAD"] = {"status": "ERROR", "error": "no calibrated screens"}
         elif display.renderStatus == "rendering":
@@ -923,11 +928,10 @@ def msg_response(msg,session):
             broadcast_to_display_group(display_id, {
                 "REQUEST": "PRELOAD",
                 "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}})
-            has_segment = any(me.playmode == PlayMode.SEGMENT
-                              for me in display.mediaElements)
-            if has_segment and not display.boundingBox:
+            has_renderable = any(_is_renderable(me) for me in display.mediaElements)
+            if has_renderable and not display.boundingBox:
                 status = "NOT_CALIBRATED"
-            elif has_segment and compute_render_token(display_id) != display.renderedToken:
+            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
                 status = "RENDER_REQUIRED"
             else:
                 status = "ok"

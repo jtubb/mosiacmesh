@@ -389,3 +389,73 @@ class TestFfmpegIntegration:
         assert result["status"] == "ready"
         out = tmp_path / "media" / "c1" / "videos" / ("seg_" + disp.renderedToken + "_0.mp4")
         assert out.exists() and out.stat().st_size > 0
+
+
+class TestIsRenderable:
+    def test_predicate(self):
+        for pm, exp in [(server.PlayMode.SEGMENT, True), (server.PlayMode.INDIVIDUAL, True),
+                        (server.PlayMode.FULL, False), (server.PlayMode.SCRIPT, False),
+                        (server.PlayMode.DEFAULT, False)]:
+            me = server.MediaElement(); me.playmode = pm
+            assert server._is_renderable(me) is exp
+
+    async def test_render_accepts_individual_only_playlist(self, monkeypatch):
+        # RENDER must not reject an INDIVIDUAL-only playlist with "no renderable items".
+        # async test (running loop) + stub ensure_future so we don't actually render.
+        scheduled = []
+        def _capture(coro):
+            scheduled.append(coro); coro.close(); return None   # close() avoids un-awaited warning
+        monkeypatch.setattr(server.asyncio, "ensure_future", _capture)
+        ms = server.Settings()
+        ms.displays = {"Default": server.Display()}
+        server.settings = ms
+        server.socketmanager = MagicMock()
+        disp = ms.displays["Default"]
+        me = server.MediaElement(); me.file = "/media/server/x.jpg"; me.duration = 1000
+        me.playmode = server.PlayMode.INDIVIDUAL
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        ms.clients = {"c1": c}
+        sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
+        sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
+        ret = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER", "PAYLOAD": {"displayID": "Default"}}, sess))
+        assert ret["PAYLOAD"]["status"] == "rendering"   # accepted, not ERROR
+        assert len(scheduled) == 1
+
+    def test_play_individual_stale_requires_render(self):
+        ms = server.Settings(); ms.displays = {"Default": server.Display()}
+        server.settings = ms; server.socketmanager = MagicMock()
+        disp = ms.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.INDIVIDUAL
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        disp.action = server.PlayState.STOP
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        ms.clients = {"c1": c}
+        sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
+        sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
+        ret = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}, sess))
+        assert ret["PAYLOAD"]["status"] == "RENDER_REQUIRED"
+
+    def test_per_client_play_routes_individual_to_ind_file(self):
+        ms = server.Settings(); ms.displays = {"Default": server.Display()}
+        server.settings = ms; server.socketmanager = MagicMock()
+        disp = ms.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.INDIVIDUAL
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]; disp.loop = True
+        disp.action = server.PlayState.STOP
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        ms.clients = {"c1": c}
+        disp.renderedToken = server.compute_render_token("Default")   # mark rendered
+        sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
+        sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
+                             "PAYLOAD": {"displayID": "Default"}}, sess)
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        assert "/ind_" in sent["PAYLOAD"]["items"][0]["file"]
