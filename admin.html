@@ -157,6 +157,14 @@
 				: s === "NOT_CALIBRATED" ? "⚠ not calibrated"
 				: s === "error" ? "⚠ assign failed" : "✓ assigned");
 		}
+		else if(data_obj.REQUEST == "RENDER")
+		{
+			if (data_obj.PAYLOAD && data_obj.PAYLOAD.status === "ERROR") {
+				plSetBadge("⚠ " + (data_obj.PAYLOAD.error || "render error"));
+			} else if (data_obj.PAYLOAD && data_obj.PAYLOAD.status === "rendering") {
+				plSetBadge("⏳ rendering…");
+			}
+		}
 		else if(data_obj.REQUEST == "RENDER_STATUS")
 		{
 			var st = data_obj.PAYLOAD.renderStatus || data_obj.PAYLOAD.status;
@@ -511,11 +519,9 @@
       <ul id="plItems" style="list-style:none; padding:0; margin:0; height:14em; overflow:auto; border:1px solid #ccc;"></ul>
     </div>
     <div id="plInspectorHost" style="flex:0 0 15em;">
-      <!-- Task 8 injects the inspector here -->
     </div>
   </div>
   <div id="plTransport" style="margin-top:6px;">
-    <!-- Task 8 injects assign + render + transport here -->
   </div>
 </div>
 <div id="log" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
@@ -646,6 +652,7 @@ function plAssign() {
     { name: plEditor.name, displayID: plAssignedGroup() }));
 }
 function plRender() {
+  if (!plEditor.name) { alert("Save and assign the playlist first"); return; }
   sock.send(generateMessage('SRV', 'RENDER', { displayID: plAssignedGroup() }));
 }
 function plTransport(req) {
