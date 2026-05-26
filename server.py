@@ -898,6 +898,43 @@ def msg_response(msg,session):
         settings.playlists.pop(msg["PAYLOAD"].get("name"), None)
         response["PAYLOAD"] = "SUCCESS"
 
+    elif(msg["REQUEST"] == "ASSIGN_PLAYLIST"):
+        payload = msg["PAYLOAD"]
+        display_id = payload.get("displayID")
+        pl = settings.playlists.get(payload.get("name"))
+        if pl is None or display_id is None:
+            response["PAYLOAD"] = {"status": "error", "displayID": display_id}
+        else:
+            display = settings.displays.setdefault(display_id, Display())
+            display.mediaElements = []
+            for item in pl.items:
+                me = MediaElement()
+                me.id = item.get("id")
+                me.file = item.get("file")
+                me.duration = item.get("duration")
+                _pm = item.get("playmode")
+                me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
+                               else PlayMode.SCRIPT if _pm == "SCRIPT"
+                               else PlayMode.INDIVIDUAL if _pm == "INDIVIDUAL"
+                               else PlayMode.FULL)
+                me.backgroundColor = item.get("backgroundColor", "#000000")
+                me.startEffect = item.get("startEffect")
+                me.endEffect = item.get("endEffect")
+                display.mediaElements.append(me)
+            display.loop = bool(pl.loop)
+            display.renderedToken = ""
+            broadcast_to_display_group(display_id, {
+                "REQUEST": "PRELOAD", "PAYLOAD": {"items": pl.items}})
+            has_segment = any(me.playmode == PlayMode.SEGMENT
+                              for me in display.mediaElements)
+            if has_segment and not display.boundingBox:
+                status = "NOT_CALIBRATED"
+            elif has_segment and compute_render_token(display_id) != display.renderedToken:
+                status = "RENDER_REQUIRED"
+            else:
+                status = "ok"
+            response["PAYLOAD"] = {"status": status, "displayID": display_id}
+
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
 

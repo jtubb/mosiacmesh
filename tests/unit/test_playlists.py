@@ -151,3 +151,55 @@ class TestPlaylistCRUD:
         server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "DELETE_PLAYLIST",
             "PAYLOAD": {"name": "Lobby"}}, _make_session())
         assert "Lobby" not in mock_settings.playlists
+
+
+class TestAssignPlaylist:
+    def _save(self, mock_settings, name, items, loop=False):
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_PLAYLIST",
+            "PAYLOAD": {"name": name, "items": items, "loop": loop}}, _make_session())
+
+    def _assign(self, name, display_id="Default"):
+        return jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "ASSIGN_PLAYLIST",
+             "PAYLOAD": {"name": name, "displayID": display_id}}, _make_session()))
+
+    def test_assign_ok_no_segment(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        self._save(mock_settings, "Imgs", [
+            {"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
+             "playmode": "FULL", "backgroundColor": "#000000",
+             "startEffect": None, "endEffect": None}])
+        resp = self._assign("Imgs")
+        assert resp["PAYLOAD"]["status"] == "ok"
+        assert len(mock_settings.displays["Default"].mediaElements) == 1
+
+    def test_assign_segment_not_calibrated(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        mock_settings.displays["Default"].boundingBox = None
+        self._save(mock_settings, "Seg", [
+            {"id": "a", "file": "/media/server/videos/v.mp4", "duration": 5,
+             "playmode": "SEGMENT", "backgroundColor": "#000000",
+             "startEffect": None, "endEffect": None}])
+        resp = self._assign("Seg")
+        assert resp["PAYLOAD"]["status"] == "NOT_CALIBRATED"
+
+    def test_assign_segment_render_required(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        disp.boundingBox = [[0, 0], [10, 0], [10, 10], [0, 10]]
+        disp.renderedToken = "stale"
+        self._save(mock_settings, "Seg", [
+            {"id": "a", "file": "/media/server/videos/v.mp4", "duration": 5,
+             "playmode": "SEGMENT", "backgroundColor": "#000000",
+             "startEffect": None, "endEffect": None}])
+        resp = self._assign("Seg")
+        assert resp["PAYLOAD"]["status"] == "RENDER_REQUIRED"
+
+    def test_assign_unknown_playlist(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        resp = self._assign("ghost")
+        assert resp["PAYLOAD"]["status"] == "error"
