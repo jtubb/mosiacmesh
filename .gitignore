@@ -11,3 +11,6 @@ htmlcov/
 
 # brainstorming visual companion
 .superpowers/
+
+# playwright MCP artifacts
+.playwright-mcp/
