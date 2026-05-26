@@ -153,6 +153,7 @@
 		clearScript();
 		var item = playback.items[i];
 		if (!item) { return; }
+		$('#canvas').css('background-color', item.backgroundColor || '#000000');
 		if (item.playmode === 'SCRIPT') {
 			var cnv = document.createElement('canvas');
 			cnv.width = window.innerWidth; cnv.height = window.innerHeight;
