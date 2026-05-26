@@ -150,6 +150,20 @@
 				plRenderItems(); plRenderInspector();
 			}
 		}
+		else if(data_obj.REQUEST == "ASSIGN_PLAYLIST")
+		{
+			var s = data_obj.PAYLOAD.status;
+			plSetBadge(s === "RENDER_REQUIRED" ? "⚠ needs render"
+				: s === "NOT_CALIBRATED" ? "⚠ not calibrated"
+				: s === "error" ? "⚠ assign failed" : "✓ assigned");
+		}
+		else if(data_obj.REQUEST == "RENDER_STATUS")
+		{
+			var st = data_obj.PAYLOAD.renderStatus || data_obj.PAYLOAD.status;
+			plSetBadge(st === "rendering" ? "⏳ rendering…"
+				: st === "ready" ? "✓ render ready"
+				: st === "error" ? "⚠ render error" : st || "");
+		}
 	}
 
 	function imageChanged() {
@@ -569,8 +583,75 @@ function plRenderItems() {
   });
 }
 
-// plRenderInspector is defined in Task 8; stub keeps Task 7 standalone.
-if (typeof plRenderInspector !== 'function') { window.plRenderInspector = function(){}; }
+function plRenderInspector() {
+  var $host = $('#plInspectorHost').empty();
+  var it = plEditor.items[plEditor.selected];
+  if (!it) { $host.html('<div class="size" style="color:#888;">Select an item</div>'); return; }
+  $('<div class="size"><b>Inspector — item ' + (plEditor.selected+1) + '</b></div>').appendTo($host);
+
+  $('<div class="size">Duration (s)</div>').appendTo($host);
+  $('<input>').val(it.duration).attr('type','number').css('width','5em')
+    .on('change', function(){ it.duration = parseFloat(this.value)||0; plRenderItems(); })
+    .appendTo($host);
+
+  $('<div class="size">Play mode</div>').appendTo($host);
+  var $pm = $('<select>').appendTo($host);
+  $.each([["FULL","FULL"],["SEGMENT","SEGMENT (mesh)"],
+          ["INDIVIDUAL","INDIVIDUAL — soon"],["SCRIPT","SCRIPT"]], function(_, o){
+    var $o = $('<option>').val(o[0]).text(o[1]);
+    if (o[0] === "INDIVIDUAL") $o.prop('disabled', true);
+    $pm.append($o);
+  });
+  $pm.val(it.playmode).on('change', function(){ it.playmode = this.value; plRenderItems(); });
+
+  $('<div class="size">Background color</div>').appendTo($host);
+  $('<input>').attr('type','color').val(it.backgroundColor || '#000000')
+    .on('change', function(){ it.backgroundColor = this.value; }).appendTo($host);
+
+  $('<div class="size" style="opacity:.5;">Start effect</div>').appendTo($host);
+  $('<select disabled><option>None (coming soon)</option></select>').appendTo($host);
+  $('<div class="size" style="opacity:.5;">End effect</div>').appendTo($host);
+  $('<select disabled><option>None (coming soon)</option></select>').appendTo($host);
+}
+
+function plGroupOptions() {
+  // Group ids = children of the 'displays' root in the jstree.
+  var ids = [];
+  try {
+    var data = $('#displays').jstree(true).settings.core.data[0].children;
+    $.each(data, function(_, g){ ids.push(g.id); });
+  } catch (e) {}
+  if (!ids.length) ids = ["Default", "Mobile", "Tablet", "Desktop"];
+  return ids;
+}
+
+function plBuildTransport() {
+  var $t = $('#plTransport').empty();
+  $('<span>Assign → </span>').appendTo($t);
+  var $g = $('<select id="plGroup">').appendTo($t);
+  $.each(plGroupOptions(), function(_, id){ $('<option>').val(id).text(id).appendTo($g); });
+  $('<button type="button">Assign</button>').on('click', plAssign).appendTo($t);
+  $('<button type="button">⚙ Render</button>').on('click', plRender).appendTo($t);
+  $('<span id="plRenderBadge" style="margin:0 8px; color:#c80;"></span>').appendTo($t);
+  $('<button type="button">▶ Play</button>').on('click', function(){ plTransport('PLAY'); }).appendTo($t);
+  $('<button type="button">⏸ Pause</button>').on('click', function(){ plTransport('PAUSE'); }).appendTo($t);
+  $('<button type="button">⏹ Stop</button>').on('click', function(){ plTransport('STOP'); }).appendTo($t);
+}
+
+function plAssignedGroup() { return $('#plGroup').val(); }
+
+function plAssign() {
+  if (!plEditor.name) { alert("Save the playlist first"); return; }
+  sock.send(generateMessage('SRV', 'ASSIGN_PLAYLIST',
+    { name: plEditor.name, displayID: plAssignedGroup() }));
+}
+function plRender() {
+  sock.send(generateMessage('SRV', 'RENDER', { displayID: plAssignedGroup() }));
+}
+function plTransport(req) {
+  sock.send(generateMessage('SRV', req, { displayID: plAssignedGroup() }));
+}
+function plSetBadge(text) { $('#plRenderBadge').text(text); }
 
 function plRefreshList() { sock.send(generateMessage('SRV', 'LIST_PLAYLISTS', {})); }
 
@@ -619,6 +700,7 @@ $(function(){
   $('#plUpload').on('change', function(){ if (this.files[0]) plUploadFile(this.files[0]); });
   plLoadLibrary();
   setTimeout(plRefreshList, 500);  // after sock connects
+  setTimeout(plBuildTransport, 600);
 });
 </script>
 </body>
