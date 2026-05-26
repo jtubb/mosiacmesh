@@ -330,7 +330,9 @@ def compute_render_token(display_id):
     items = []
     for me in display.mediaElements:
         pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
-        items.append((me.id, me.file, me.duration, pm, getattr(me, "backgroundColor", "#000000")))
+        items.append((me.id, me.file, me.duration, pm,
+                      getattr(me, "backgroundColor", "#000000"),
+                      getattr(me, "startEffect", None), getattr(me, "endEffect", None)))
     clients = []
     for key, c in _group_clients(display_id):
         perim = None
@@ -350,6 +352,35 @@ def _broadcast_render_status(display_id, status):
 def _is_renderable(me):
     """SEGMENT and INDIVIDUAL items require a per-screen server render."""
     return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL)
+
+
+def _normalize_effect(field):
+    """Tolerate an effect field as {name, params} | bare-string name | None."""
+    if not field:
+        return None
+    if isinstance(field, str):
+        return {"name": field, "params": {}}
+    if isinstance(field, dict) and field.get("name"):
+        return field
+    return None
+
+
+def _resolve_effect_filters(me, duration_ms, out_w, out_h):
+    """Collect (video_fragments, audio_fragments) for an item's start/end effects."""
+    vfs, afs = [], []
+    ctx = {"duration_ms": duration_ms, "out_w": out_w, "out_h": out_h}
+    for role, field in (("start", getattr(me, "startEffect", None)),
+                        ("end", getattr(me, "endEffect", None))):
+        spec = _normalize_effect(field)
+        if not spec:
+            continue
+        eff = effects.get_effect(spec.get("name"))
+        if eff is None:
+            continue
+        v, a = eff.video_filters(role, eff.resolve(spec.get("params")), ctx)
+        vfs += v
+        afs += a
+    return vfs, afs
 
 
 async def render_group_async(display_id):
@@ -376,6 +407,8 @@ async def render_group_async(display_id):
                 for key, c in clients:
                     out_dir = os.path.join("media", key, "videos")
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
+                    evf, eaf = _resolve_effect_filters(me, me.duration,
+                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
@@ -391,12 +424,14 @@ async def render_group_async(display_id):
                         cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
                                                           int(c.deviceWidth) or 1, int(c.deviceHeight) or 1,
                                                           pad_w, pad_h, pad_x, pad_y,
-                                                          getattr(me, "backgroundColor", "#000000"))
+                                                          getattr(me, "backgroundColor", "#000000"),
+                                                          extra_video_filters=evf, extra_audio_filters=eaf)
                     else:
                         pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
                         out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
                         cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                           int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                                                           int(c.deviceWidth) or 1, int(c.deviceHeight) or 1,
+                                                           extra_video_filters=evf, extra_audio_filters=eaf)
                     proc = await asyncio.create_subprocess_exec(
                         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                     await proc.communicate()

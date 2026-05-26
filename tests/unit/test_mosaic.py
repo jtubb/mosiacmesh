@@ -645,3 +645,101 @@ class TestIndividualFfmpegIntegration:
         assert result["status"] == "ready"
         out = tmp_path / "media" / "c1" / "videos" / ("ind_" + disp.renderedToken + "_0.mp4")
         assert out.exists() and out.stat().st_size > 0
+
+
+class TestEffectRenderHook:
+    def _video_group(self, mock_settings, playmode, start=None, end=None):
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 5000; me.playmode = playmode
+        me.startEffect = start; me.endEffect = end
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+        return disp
+
+    async def _run_capture(self, monkeypatch):
+        calls = []
+        class _Proc:
+            returncode = 0
+            async def communicate(self): return (b"", b"")
+        async def _fake_exec(*args, **kwargs):
+            calls.append(list(args)); return _Proc()
+        monkeypatch.setattr(server.asyncio, "create_subprocess_exec", _fake_exec)
+        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        await server.render_group_async("Default")
+        return calls
+
+    async def test_segment_video_bakes_fade(self, mock_settings, monkeypatch):
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        self._video_group(mock_settings, server.PlayMode.SEGMENT,
+                          start={"name": "fade", "params": {"duration": 600}},
+                          end={"name": "fade", "params": {"duration": 600}})
+        calls = await self._run_capture(monkeypatch)
+        vf = calls[0][calls[0].index("-vf") + 1]
+        assert "perspective=" in vf and "scale=80:60" in vf
+        assert "fade=t=in:st=0:d=0.6" in vf and "fade=t=out:st=4.4:d=0.6" in vf
+        assert "-af" not in calls[0]   # fade is video-only
+
+    async def test_individual_video_bakes_audiofade(self, mock_settings, monkeypatch):
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        self._video_group(mock_settings, server.PlayMode.INDIVIDUAL,
+                          start={"name": "audiofade", "params": {"duration": 1000}})
+        calls = await self._run_capture(monkeypatch)
+        assert calls[0][calls[0].index("-af") + 1] == "afade=t=in:st=0:d=1"
+
+    async def test_wipe_bakes_nothing(self, mock_settings, monkeypatch):
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        self._video_group(mock_settings, server.PlayMode.SEGMENT,
+                          start={"name": "wipe", "params": {"direction": "left", "duration": 600}})
+        calls = await self._run_capture(monkeypatch)
+        vf = calls[0][calls[0].index("-vf") + 1]
+        assert "fade" not in vf and "-af" not in calls[0]
+
+    def test_token_changes_with_effect(self, mock_settings):
+        server.settings = mock_settings
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+        t1 = server.compute_render_token("Default")
+        me.startEffect = {"name": "fade", "params": {"duration": 600}}
+        assert server.compute_render_token("Default") != t1
+
+    def test_normalize_effect_tolerates_shapes(self):
+        assert server._normalize_effect(None) is None
+        assert server._normalize_effect("fade") == {"name": "fade", "params": {}}
+        assert server._normalize_effect({"name": "fade", "params": {"duration": 1}})["name"] == "fade"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+class TestEffectFfmpegIntegration:
+    async def test_segment_fade_effect_render_produces_nonempty_mp4(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "videos"; src_dir.mkdir(parents=True)
+        src = str(src_dir / "clip.mp4")
+        import subprocess
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
+                        "-i", "testsrc=size=320x240:rate=10:duration=1",
+                        "-pix_fmt", "yuv420p", src], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        me.startEffect = {"name": "fade", "params": {"duration": 300}}
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 320, 240]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 160; c.deviceHeight = 120
+        c.measuredPerimeter = np.array([[[0, 0]], [[160, 0]], [[160, 240]], [[0, 240]]])
+        mock_settings.clients = {"c1": c}
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        out = tmp_path / "media" / "c1" / "videos" / ("seg_" + disp.renderedToken + "_0.mp4")
+        assert out.exists() and out.stat().st_size > 0
