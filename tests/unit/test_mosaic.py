@@ -314,3 +314,46 @@ class TestFfmpegHelpers:
             def release(self): pass
         monkeypatch.setattr(server.cv, "VideoCapture", lambda p: FakeCap())
         assert server.get_video_dimensions("x.mp4") == (1920, 1080)
+
+
+class TestVideoSegmentPlay:
+    def _video_group(self, mock_settings):
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 5000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]; disp.loop = True; disp.boundingBox = [0, 0, 100, 100]
+        disp.action = server.PlayState.STOP
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+        return disp
+
+    def _sess(self):
+        s = MagicMock(); s.id = "s"; s.request = MagicMock()
+        s.request.remote = "127.0.0.1"; s.request.headers = {"User-Agent": "T"}
+        return s
+
+    def test_play_while_rendering_emits_in_progress(self, mock_settings):
+        import jsonpickle
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._video_group(mock_settings)
+        disp.renderStatus = "rendering"
+        ret = server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
+                                   "PAYLOAD": {"displayID": "Default"}}, self._sess())
+        assert jsonpickle.decode(ret)["PAYLOAD"]["status"] == "RENDER_IN_PROGRESS"
+        assert server.socketmanager.broadcast.call_count == 0
+
+    def test_play_rendered_video_sends_mp4_urls(self, mock_settings):
+        import jsonpickle
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = self._video_group(mock_settings)
+        disp.renderStatus = "ready"
+        disp.renderedToken = server.compute_render_token("Default")
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
+                             "PAYLOAD": {"displayID": "Default"}}, self._sess())
+        assert server.socketmanager.broadcast.call_count == 1
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        assert sent["PAYLOAD"]["items"][0]["file"].endswith(".mp4")
+        assert "/seg_" in sent["PAYLOAD"]["items"][0]["file"]

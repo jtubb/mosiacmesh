@@ -385,7 +385,8 @@ def _broadcast_segment_play(display_id, display):
         items = []
         for i, me in enumerate(display.mediaElements):
             if me.playmode == PlayMode.SEGMENT and c.measuredPerimeter is not None:
-                f = "/media/" + key + "/seg_" + token + "_" + str(i) + ".png"
+                ext = ".mp4" if isVideoItem(me.file) else ".png"
+                f = "/media/" + key + "/seg_" + token + "_" + str(i) + ext
             else:
                 f = me.file  # FULL item, or uncalibrated fallback to full source
             items.append({"id": me.id, "file": f, "duration": me.duration})
@@ -781,7 +782,9 @@ def msg_response(msg,session):
             now_ms = int(time.time() * 1000)
             resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
             has_segment = any(me.playmode == PlayMode.SEGMENT for me in display.mediaElements)
-            if has_segment and compute_render_token(display_id) != display.renderedToken:
+            if has_segment and display.renderStatus == "rendering":
+                response["PAYLOAD"] = {"status": "RENDER_IN_PROGRESS", "displayID": display_id}
+            elif has_segment and compute_render_token(display_id) != display.renderedToken:
                 response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
                 display.playStartEpoch = resume_epoch
