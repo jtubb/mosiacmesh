@@ -105,6 +105,22 @@
 		playback.scriptIndex = -1;
 	}
 
+	function runScriptLoop(canvas, name) {
+		var ctx = canvas.getContext('2d');
+		function frame() {
+			if (!playback.active) { return; }
+			var durations = [], k;
+			for (k = 0; k < playback.items.length; k++) { durations.push(playback.items[k].duration); }
+			var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+			if (pos === null) { stopPlayback(); return; }
+			if (pos.index !== playback.scriptIndex) { return; } // transition; renderPlayback handles it
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			if (animations[name]) { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height); }
+			playback.scriptRaf = _raf(frame);
+		}
+		playback.scriptRaf = _raf(frame);
+	}
+
 	// Keep the active video aligned to the shared clock: a proportional playbackRate
 	// controller for small drift, a hard seek for large drift (the latter is also the
 	// iOS-5 path, where playbackRate may be ignored so error grows until it is seeked).
@@ -134,9 +150,18 @@
 
 	function showItem(i, offsetMs) {
 		clearVideo();
+		clearScript();
 		var item = playback.items[i];
 		if (!item) { return; }
-		if (isVideoItem(item.file)) {
+		if (item.playmode === 'SCRIPT') {
+			var cnv = document.createElement('canvas');
+			cnv.width = window.innerWidth; cnv.height = window.innerHeight;
+			cnv.style.width = '100%'; cnv.style.height = '100%';
+			$('#canvas').empty();
+			document.getElementById('canvas').appendChild(cnv);
+			playback.scriptIndex = i;
+			runScriptLoop(cnv, item.file);
+		} else if (isVideoItem(item.file)) {
 			var v = document.createElement('video');
 			v.muted = false; // every screen plays audio (video-split spec); needs a gesture to autoplay
 			v.setAttribute('webkit-playsinline', '');
@@ -173,6 +198,7 @@
 		playback.active = false;
 		playback.paused = false;
 		clearVideo();
+		clearScript();
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		$('#canvas').empty();
 	}
@@ -272,7 +298,11 @@
 				};
 				for(j = 0; j < mediaSequence.length; j++)
 				{
-					if(isVideoItem(mediaSequence[j].file))
+					if(mediaSequence[j].playmode === 'SCRIPT')
+					{
+						onSettled(); // a script item has nothing to fetch
+					}
+					else if(isVideoItem(mediaSequence[j].file))
 					{
 						var vp = document.createElement('video');
 						vp.preload = 'auto';
