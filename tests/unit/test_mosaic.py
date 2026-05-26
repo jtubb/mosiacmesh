@@ -568,6 +568,23 @@ class TestIndividualFfmpeg:
         assert any("ind_" in str(a) for a in calls[0])
 
 
+class TestIndividualDegenerateQuad:
+    async def test_zero_area_quad_raises_clear_error(self, mock_settings, monkeypatch):
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 5000; me.playmode = server.PlayMode.INDIVIDUAL; me.backgroundColor = "#000000"
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        # all four corners identical -> zero-area quad
+        c.measuredPerimeter = np.array([[[10, 10]], [[10, 10]], [[10, 10]], [[10, 10]]])
+        mock_settings.clients = {"c1": c}
+        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        result = await server.render_group_async("Default")
+        assert result["status"] == "error"
+        assert "degenerate" in result.get("error", "").lower()
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 class TestIndividualFfmpegIntegration:
     async def test_real_individual_render_produces_nonempty_mp4(self, mock_settings, tmp_path, monkeypatch):

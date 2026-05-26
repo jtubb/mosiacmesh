@@ -378,6 +378,8 @@ async def render_group_async(display_id):
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
+                            raise RuntimeError("degenerate screen quad for client " + str(key))
                         if sw * bh >= sh * bw:                 # source wider/equal -> pad height
                             pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
                         else:                                  # source taller -> pad width
@@ -409,6 +411,8 @@ async def render_group_async(display_id):
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
+                            raise RuntimeError("degenerate screen quad for client " + str(key))
                         bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
                         canvas = letterbox_to_aspect(img, bw, bh, bg)
                         warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
