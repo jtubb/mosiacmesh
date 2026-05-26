@@ -8,13 +8,13 @@
 
 Playlist items have carried inert `startEffect`/`endEffect` fields since the playlist-editor slice. This slice gives them meaning via an **extensible effect plugin framework**: each effect is a self-describing plugin that declares its parameters and contributes ffmpeg/OpenCV operations during render, **baking the transition into each screen's per-screen media**. Because the effect is baked into the rendered file the clients already play, synchronization is free and the ES5 display client (`index.html`) is untouched.
 
-This slice ships the **framework** plus **one working effect** (`fade`, video — visual + audio) and a registered **`wipe` placeholder** (param schema, no-op render) that marks the extension point. Real wipe/other effects come in later slices.
+This slice ships the **framework** plus **two working effects** — `fade` (video) and `audiofade` (audio), kept as separate single-select choices — and a registered **`wipe` placeholder** (param schema, no-op render) that marks the extension point. Real wipe/other effects come in later slices. Each effect field holds one effect, so a boundary is a visual fade *or* an audio fade (not both); making them combinable is a later concern.
 
 ## Goals
 
 - A plugin framework where adding an effect is: define a class, register it — and it automatically appears in the editor (with its parameter controls) and is honored at render.
 - Effects are self-describing: each declares a parameter schema the editor renders dynamically.
-- One real baked effect end-to-end: `fade` on rendered video (ffmpeg `fade` + `afade`), proving the pipeline.
+- Real baked effects end-to-end: `fade` (ffmpeg `fade`, video) and `audiofade` (ffmpeg `afade`, audio) on rendered video, proving the pipeline for both a video- and an audio-filter plugin.
 - A `wipe` placeholder demonstrating extensibility without implementing the geometry yet.
 - No regression to existing SEGMENT/INDIVIDUAL/FULL/SCRIPT render or playback.
 
@@ -53,10 +53,14 @@ class Effect:
 
 ### Registered plugins this slice
 
-- **`FadeEffect`** (`name="fade"`, working). `params = [duration (number, default 600 ms)]`. `video_filters`:
-  - `role="start"` → video `["fade=t=in:st=0:d=<d>"]`, audio `["afade=t=in:st=0:d=<d>"]`
-  - `role="end"` → video `["fade=t=out:st=<(duration_ms-d)/1000>:d=<d>"]`, audio `["afade=t=out:st=<...>:d=<d>"]`
+- **`FadeEffect`** (`name="fade"`, working, **video only**). `params = [duration (number, default 600 ms)]`. `video_filters`:
+  - `role="start"` → video `["fade=t=in:st=0:d=<d>"]`, audio `[]`
+  - `role="end"` → video `["fade=t=out:st=<(duration_ms-d)/1000>:d=<d>"]`, audio `[]`
   (`d` in seconds; `st` start times derived from `ctx['duration_ms']`.)
+- **`AudioFadeEffect`** (`name="audiofade"`, working, **audio only**). `params = [duration (number, default 600 ms)]`. `video_filters`:
+  - `role="start"` → video `[]`, audio `["afade=t=in:st=0:d=<d>"]`
+  - `role="end"` → video `[]`, audio `["afade=t=out:st=<(duration_ms-d)/1000>:d=<d>"]`
+  (On an item with no audio track the `afade` is harmless.)
 - **`WipeEffect`** (`name="wipe"`, placeholder). `params = [direction (choice: left/right/up/down, default left), duration (number, default 600 ms)]`. `video_filters` returns `([], [])` for now (no-op). It registers and appears in the catalog/editor; baking is a later slice.
 
 ### Catalog API
@@ -104,16 +108,17 @@ endEffect:   { "name": "fade", "params": { "duration": 600 } }   # or null
 ## Testing
 
 ### pytest
-- Registry: `fade` and `wipe` register; `get_effect` resolves them; `effect_catalog()` / `GET /api/effects` returns both with param schemas (types, defaults, `wipe` direction choices).
-- `FadeEffect.video_filters`: start → `fade=t=in:st=0:d=…` + `afade=t=in…`; end → `fade=t=out:st=<duration-d>…` + `afade=t=out…`; `duration` param respected; seconds conversion correct.
+- Registry: `fade`, `audiofade`, and `wipe` register; `get_effect` resolves them; `effect_catalog()` / `GET /api/effects` returns all three with param schemas (types, defaults, `wipe` direction choices).
+- `FadeEffect.video_filters` (video only): start → video `fade=t=in:st=0:d=…`, audio `[]`; end → video `fade=t=out:st=<duration-d>…`, audio `[]`; `duration` param respected; seconds conversion correct.
+- `AudioFadeEffect.video_filters` (audio only): start → video `[]`, audio `afade=t=in:st=0:d=…`; end → video `[]`, audio `afade=t=out:st=<duration-d>…`.
 - `WipeEffect.video_filters` → `([], [])`; still present in the catalog with `direction` choices.
 - Model: `_build_media_elements` / `_media_item_payload` round-trip `{name, params}` (and tolerate a bare-string or `None` legacy value); `compute_render_token` changes when an effect or a param changes.
-- Render hook: a SEGMENT (and an INDIVIDUAL) video item with a `fade` start+end yields an ffmpeg `-vf` containing the warp chain **and** the fade fragments in the right order, plus the `afade` audio fragments; a `wipe` adds nothing; an effect on a FULL/image item bakes nothing.
+- Render hook: a SEGMENT (and an INDIVIDUAL) video item with a `fade` start+end yields an ffmpeg `-vf` containing the warp chain **and** the `fade` fragments in the right order (no audio change); an `audiofade` adds `afade` audio fragments and no video change; a `wipe` adds nothing; an effect on a FULL/image item bakes nothing.
 - Builders: `build_ffmpeg_perspective_cmd` / `build_ffmpeg_individual_cmd` thread `extra_video_filters`/`extra_audio_filters` into the command; with none supplied the output is byte-identical to today (regression guard).
 - Opt-in real-ffmpeg integration: a faded SEGMENT or INDIVIDUAL video actually encodes to a non-empty valid file (reuse the existing opt-in skip gate).
 
 ### Playwright (light, `admin.html`)
-- Effect dropdowns populate from `/api/effects`; selecting `fade` shows a `duration` input and writes `{name:"fade", params:{duration:…}}` to the item; selecting `wipe` shows a `direction` `<select>`; "None" writes `null`.
+- Effect dropdowns populate from `/api/effects` (showing `fade`, `audiofade`, `wipe`); selecting `fade` shows a `duration` input and writes `{name:"fade", params:{duration:…}}` to the item; selecting `wipe` shows a `direction` `<select>`; "None" writes `null`.
 
 ## Legacy / ES5
 
