@@ -495,6 +495,7 @@ class Settings():
         self.displays = {}
         self.scripts = {}
         self.clients = {}
+        self.playlists = {}
 
 class Scripts():
     def __init__(self):
@@ -528,12 +529,23 @@ class MediaElement():
         self.file = None
         self.duration = None
         self.playmode = PlayMode.DEFAULT
+        self.backgroundColor = "#000000"
+        self.startEffect = None
+        self.endEffect = None
+
+
+class Playlist():
+    def __init__(self):
+        self.name = ""
+        self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect
+        self.loop = False
 
 class PlayMode(Enum):
     DEFAULT = 0
     FULL = 1
     SEGMENT = 2
     SCRIPT = 3
+    INDIVIDUAL = 4
 
 class Client():
     def __init__(self):
@@ -1371,6 +1383,8 @@ async def api_discovery_configure(request):
 
 def migrate_client_objects():
     """Migrate old client objects to include new discovery fields"""
+    if not hasattr(settings, 'playlists'):
+        settings.playlists = {}
     current_time = time.time()
     for client_key, client in settings.clients.items():
         if not hasattr(client, 'discoveryTime'):
