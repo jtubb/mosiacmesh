@@ -867,6 +867,37 @@ def msg_response(msg,session):
             asyncio.ensure_future(render_group_async(display_id))
             response["PAYLOAD"] = {"status": "rendering"}
 
+    elif(msg["REQUEST"] == "LIST_PLAYLISTS"):
+        rows = []
+        for name, pl in settings.playlists.items():
+            has_segment = any(it.get("playmode") == "SEGMENT" for it in pl.items)
+            rows.append({"name": name, "itemCount": len(pl.items),
+                         "hasSegment": has_segment})
+        response["PAYLOAD"] = rows
+
+    elif(msg["REQUEST"] == "GET_PLAYLIST"):
+        pl = settings.playlists.get(msg["PAYLOAD"].get("name"))
+        if pl is None:
+            response["PAYLOAD"] = {"error": "not found"}
+        else:
+            response["PAYLOAD"] = {"name": pl.name, "items": pl.items, "loop": pl.loop}
+
+    elif(msg["REQUEST"] == "SAVE_PLAYLIST"):
+        payload = msg["PAYLOAD"]
+        name = (payload.get("name") or "").strip()
+        if not name:
+            response["PAYLOAD"] = {"error": "name required"}
+        else:
+            pl = settings.playlists.setdefault(name, Playlist())
+            pl.name = name
+            pl.items = payload.get("items", [])
+            pl.loop = bool(payload.get("loop", False))
+            response["PAYLOAD"] = "SUCCESS"
+
+    elif(msg["REQUEST"] == "DELETE_PLAYLIST"):
+        settings.playlists.pop(msg["PAYLOAD"].get("name"), None)
+        response["PAYLOAD"] = "SUCCESS"
+
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
 

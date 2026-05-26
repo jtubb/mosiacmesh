@@ -92,3 +92,62 @@ class TestSetPlaylistFields:
         item = sent["PAYLOAD"]["items"][0]
         assert item["backgroundColor"] == "#123456"
         assert item["startEffect"] is None and item["endEffect"] is None
+
+
+class TestPlaylistCRUD:
+    def _save(self, mock_settings, name="Lobby", loop=True):
+        items = [{"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
+                  "playmode": "SEGMENT", "backgroundColor": "#000000",
+                  "startEffect": None, "endEffect": None}]
+        server.msg_response({"SRC": "admin", "DEST": "SRV", "REQUEST": "SAVE_PLAYLIST",
+            "PAYLOAD": {"name": name, "items": items, "loop": loop}}, _make_session())
+        return items
+
+    def test_save_then_get(self, mock_settings):
+        server.settings = mock_settings
+        items = self._save(mock_settings)
+        assert "Lobby" in mock_settings.playlists
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "GET_PLAYLIST",
+             "PAYLOAD": {"name": "Lobby"}}, _make_session()))
+        assert resp["PAYLOAD"]["name"] == "Lobby"
+        assert resp["PAYLOAD"]["loop"] is True
+        assert resp["PAYLOAD"]["items"] == items
+
+    def test_save_upserts(self, mock_settings):
+        server.settings = mock_settings
+        self._save(mock_settings, loop=True)
+        self._save(mock_settings, loop=False)
+        assert len(mock_settings.playlists) == 1
+        assert mock_settings.playlists["Lobby"].loop is False
+
+    def test_list_returns_summaries(self, mock_settings):
+        server.settings = mock_settings
+        self._save(mock_settings)
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "LIST_PLAYLISTS",
+             "PAYLOAD": {}}, _make_session()))
+        row = resp["PAYLOAD"][0]
+        assert row == {"name": "Lobby", "itemCount": 1, "hasSegment": True}
+
+    def test_get_unknown_returns_error(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "GET_PLAYLIST",
+             "PAYLOAD": {"name": "nope"}}, _make_session()))
+        assert resp["PAYLOAD"] == {"error": "not found"}
+
+    def test_save_requires_name(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_PLAYLIST",
+             "PAYLOAD": {"name": "", "items": [], "loop": False}}, _make_session()))
+        assert resp["PAYLOAD"] == {"error": "name required"}
+        assert mock_settings.playlists == {}
+
+    def test_delete(self, mock_settings):
+        server.settings = mock_settings
+        self._save(mock_settings)
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "DELETE_PLAYLIST",
+            "PAYLOAD": {"name": "Lobby"}}, _make_session())
+        assert "Lobby" not in mock_settings.playlists
