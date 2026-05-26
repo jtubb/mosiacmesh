@@ -34,6 +34,8 @@ pip install -r requirements.txt           # runtime
 pip install -r requirements-test.txt      # tests
 ```
 
+**System dependency:** `ffmpeg` (with libx264) must be on PATH for video split/mosaic rendering (`SEGMENT` `.mp4` items). Image mosaic and all other features work without it.
+
 ## Importing server.py
 
 Arg parsing lives in `parse_args()` and is called **only** under `if __name__ == '__main__'`, so `import server` has no side effects — tests can import it directly. (Historically `parse_args()` ran at import time and forced the `tests/server_test_patch.py` monkeypatch; that patch is now redundant but harmless.)

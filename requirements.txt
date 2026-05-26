@@ -8,3 +8,6 @@ opencv-python>=4.8.0.74
 sockjs==0.13.0
 websocket-client==1.6.1
 websockets==11.0.3
+
+# System dependency (not pip-installable): ffmpeg with libx264 must be on PATH
+# (used by the server to render perspective-warped per-screen video for SEGMENT/mosaic playback)

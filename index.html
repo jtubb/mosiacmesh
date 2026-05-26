@@ -110,7 +110,7 @@
 		if (!item) { return; }
 		if (isVideoItem(item.file)) {
 			var v = document.createElement('video');
-			v.muted = true;
+			v.muted = false; // every screen plays audio (video-split spec); needs a gesture to autoplay
 			v.setAttribute('webkit-playsinline', '');
 			v.setAttribute('playsinline', '');
 			v.preload = 'auto';
