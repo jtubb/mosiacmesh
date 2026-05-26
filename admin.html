@@ -129,8 +129,29 @@
 			}
 			$('#displays').jstree(true).refresh();
 		}
+		else if(data_obj.REQUEST == "LIST_PLAYLISTS")
+		{
+			var $sel = $('#plSelect').empty();
+			$('<option>').val("").text("-- select --").appendTo($sel);
+			$.each(data_obj.PAYLOAD, function(_, row){
+				$('<option>').val(row.name)
+					.text(row.name + " (" + row.itemCount + ")").appendTo($sel);
+			});
+			if (plEditor.name) { $sel.val(plEditor.name); }
+		}
+		else if(data_obj.REQUEST == "GET_PLAYLIST")
+		{
+			if (data_obj.PAYLOAD && !data_obj.PAYLOAD.error) {
+				plEditor = { name: data_obj.PAYLOAD.name,
+					items: data_obj.PAYLOAD.items || [],
+					loop: !!data_obj.PAYLOAD.loop, selected: -1 };
+				$('#plLoop').prop('checked', plEditor.loop);
+				$('#plName').text(plEditor.name);
+				plRenderItems(); plRenderInspector();
+			}
+		}
 	}
-	
+
 	function imageChanged() {
 		var file = event.target.files[0];
 
@@ -455,12 +476,151 @@
 	</div>
 </div>
 <br><br>
+<div id="playlistEditor" style="border:1px solid black; padding:8px; width:62em; margin-bottom:1em;">
+  <div style="margin-bottom:6px;">
+    <b>Playlists:</b>
+    <select id="plSelect"></select>
+    <button id="plNew" type="button">+ New</button>
+    <button id="plSave" type="button">Save</button>
+    <button id="plDelete" type="button">Delete</button>
+    <label style="margin-left:8px;"><input type="checkbox" id="plLoop"> Loop</label>
+    <span id="plName" style="margin-left:8px; color:#555;"></span>
+  </div>
+  <div style="display:flex; gap:10px;">
+    <div style="flex:0 0 12em;">
+      <div class="size"><b>Media Library</b></div>
+      <div id="plLibrary" style="height:14em; overflow:auto; border:1px solid #ccc;"></div>
+      <input id="plUpload" type="file" style="margin-top:4px;">
+    </div>
+    <div style="flex:1;">
+      <div class="size"><b>Playlist</b> (drag to reorder)</div>
+      <ul id="plItems" style="list-style:none; padding:0; margin:0; height:14em; overflow:auto; border:1px solid #ccc;"></ul>
+    </div>
+    <div id="plInspectorHost" style="flex:0 0 15em;">
+      <!-- Task 8 injects the inspector here -->
+    </div>
+  </div>
+  <div id="plTransport" style="margin-top:6px;">
+    <!-- Task 8 injects assign + render + transport here -->
+  </div>
+</div>
 <div id="log" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
 </div>
 <form id="chatform">
   <input id="text" type="text" />
   <input id="calibrate" type="button" value="Submit Query" onclick="sock.send(generateMessage('SRV',$('#text').val(),'null'));"/>
 </form>
+<script>
+var SCRIPT_ANIMATIONS = ["bouncingBalls"];
+var plEditor = { name: "", items: [], loop: false, selected: -1 };
+
+function plDefaultItem(file, isScript) {
+  return { id: "i" + Date.now() + Math.floor(Math.random()*1000),
+           file: file, duration: 5,
+           playmode: isScript ? "SCRIPT" : "FULL",
+           backgroundColor: "#000000", startEffect: null, endEffect: null };
+}
+
+function plRenderLibrary(images, videos) {
+  var $lib = $('#plLibrary').empty();
+  function row(label, file, isScript) {
+    $('<div>').text(label).css({padding:'3px', cursor:'pointer'})
+      .on('click', function(){ plAddItem(file, isScript); }).appendTo($lib);
+  }
+  $.each(images, function(_, f){ row("🖼 " + f.split('/').pop(), f, false); });
+  $.each(videos, function(_, f){ row("🎞 " + f.split('/').pop(), f, false); });
+  $.each(SCRIPT_ANIMATIONS, function(_, n){ row("⚡ " + n, n, true); });
+}
+
+function plLoadLibrary() {
+  $.getJSON('/api/media', function(data){
+    plRenderLibrary(data.images || [], data.videos || []);
+  });
+}
+
+function plAddItem(file, isScript) {
+  plEditor.items.push(plDefaultItem(file, isScript));
+  plRenderItems();
+}
+
+function plRenderItems() {
+  var $list = $('#plItems').empty();
+  $.each(plEditor.items, function(i, it){
+    var $li = $('<li>').attr('draggable', true)
+      .css({padding:'5px', border:'1px solid #ddd', margin:'2px', cursor:'pointer',
+            background: i === plEditor.selected ? '#d6e6fb' : '#fff'})
+      .text("⡀ " + (i+1) + "  " + it.file.split('/').pop() + " · " +
+            it.duration + "s · " + it.playmode);
+    $('<span>').text(" ✕").css({float:'right', color:'#a00'})
+      .on('click', function(e){ e.stopPropagation(); plEditor.items.splice(i,1);
+            if (plEditor.selected >= plEditor.items.length) plEditor.selected = -1;
+            plRenderItems(); plRenderInspector(); }).appendTo($li);
+    $li.on('click', function(){ plEditor.selected = i; plRenderItems(); plRenderInspector(); });
+    $li.on('dragstart', function(e){ e.originalEvent.dataTransfer.setData('text/plain', i); });
+    $li.on('dragover', function(e){ e.preventDefault(); });
+    $li.on('drop', function(e){
+      e.preventDefault();
+      var from = parseInt(e.originalEvent.dataTransfer.getData('text/plain'), 10);
+      var moved = plEditor.items.splice(from, 1)[0];
+      plEditor.items.splice(i, 0, moved);
+      plEditor.selected = i; plRenderItems(); plRenderInspector();
+    });
+    $list.append($li);
+  });
+}
+
+// plRenderInspector is defined in Task 8; stub keeps Task 7 standalone.
+if (typeof plRenderInspector !== 'function') { window.plRenderInspector = function(){}; }
+
+function plRefreshList() { sock.send(generateMessage('SRV', 'LIST_PLAYLISTS', {})); }
+
+function plLoad(name) {
+  if (!name) return;
+  sock.send(generateMessage('SRV', 'GET_PLAYLIST', { name: name }));
+}
+
+function plNew() {
+  plEditor = { name: "", items: [], loop: false, selected: -1 };
+  $('#plLoop').prop('checked', false);
+  $('#plName').text("(new, unsaved)");
+  plRenderItems(); plRenderInspector();
+}
+
+function plSave() {
+  var name = (plEditor.name || prompt("Playlist name:") || "").trim();
+  if (!name) { alert("Name required"); return; }
+  plEditor.name = name;
+  plEditor.loop = $('#plLoop').is(':checked');
+  sock.send(generateMessage('SRV', 'SAVE_PLAYLIST',
+    { name: name, items: plEditor.items, loop: plEditor.loop }));
+  $('#plName').text(name);
+  setTimeout(plRefreshList, 100);
+}
+
+function plDelete() {
+  if (!plEditor.name) return;
+  sock.send(generateMessage('SRV', 'DELETE_PLAYLIST', { name: plEditor.name }));
+  plNew(); setTimeout(plRefreshList, 100);
+}
+
+function plUploadFile(file) {
+  var fd = new FormData(); fd.append('file', file);
+  var dest = /\.mp4$/i.test(file.name) ? 'video' : 'image';
+  $.ajax({ url: '/upload/' + dest, type: 'POST', data: fd,
+           processData: false, contentType: false,
+           success: function(){ plLoadLibrary(); } });
+}
+
+$(function(){
+  $('#plNew').on('click', plNew);
+  $('#plSave').on('click', plSave);
+  $('#plDelete').on('click', plDelete);
+  $('#plSelect').on('change', function(){ plLoad($(this).val()); });
+  $('#plUpload').on('change', function(){ if (this.files[0]) plUploadFile(this.files[0]); });
+  plLoadLibrary();
+  setTimeout(plRefreshList, 500);  // after sock connects
+});
+</script>
 </body>
 </html>
 
