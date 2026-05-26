@@ -621,10 +621,8 @@ function plRenderInspector() {
   $('<div class="size">Play mode</div>').appendTo($host);
   var $pm = $('<select>').appendTo($host);
   $.each([["FULL","FULL"],["SEGMENT","SEGMENT (mesh)"],
-          ["INDIVIDUAL","INDIVIDUAL — soon"],["SCRIPT","SCRIPT"]], function(_, o){
-    var $o = $('<option>').val(o[0]).text(o[1]);
-    if (o[0] === "INDIVIDUAL") $o.prop('disabled', true);
-    $pm.append($o);
+          ["INDIVIDUAL","INDIVIDUAL"],["SCRIPT","SCRIPT"]], function(_, o){
+    $pm.append($('<option>').val(o[0]).text(o[1]));
   });
   $pm.val(it.playmode).on('change', function(){ it.playmode = this.value; plRenderItems(); });
 
