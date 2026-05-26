@@ -368,19 +368,32 @@ async def render_group_async(display_id):
         for i, me in seg_items:
             src_path = resolve_media_path(me.file)
             if isVideoItem(me.file):
-                if me.playmode == PlayMode.INDIVIDUAL:
-                    raise RuntimeError("INDIVIDUAL video render not implemented yet")
                 dims = get_video_dimensions(src_path) if src_path else None
                 if not dims:
                     raise RuntimeError("cannot read source video: " + str(me.file))
                 sw, sh = dims
                 for key, c in clients:
-                    pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
                     out_dir = os.path.join("media", key, "videos")
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
-                    cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                    if me.playmode == PlayMode.INDIVIDUAL:
+                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
+                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                        if sw * bh >= sh * bw:                 # source wider/equal -> pad height
+                            pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
+                        else:                                  # source taller -> pad width
+                            pad_h = sh; pad_w = int(round(sh * bw / float(bh)))
+                        pad_x = (pad_w - sw) // 2; pad_y = (pad_h - sh) // 2
+                        pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
+                        out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
+                        cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
+                                                          int(c.deviceWidth) or 1, int(c.deviceHeight) or 1,
+                                                          pad_w, pad_h, pad_x, pad_y,
+                                                          getattr(me, "backgroundColor", "#000000"))
+                    else:
+                        pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
+                        out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
+                        cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
+                                                           int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
                     proc = await asyncio.create_subprocess_exec(
                         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                     await proc.communicate()
@@ -460,6 +473,27 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h):
     persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
              ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
     vf = persp + ",scale=" + str(out_w) + ":" + str(out_h)
+    return ["ffmpeg", "-y", "-i", src_path,
+            "-vf", vf,
+            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k",
+            "-preset", "veryfast", "-movflags", "+faststart", out_path]
+
+
+def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
+                                pad_w, pad_h, pad_x, pad_y, bg_hex):
+    """ffmpeg args for INDIVIDUAL: pad the source to the screen bbox aspect with
+    backgroundColor, perspective-warp the whole padded frame to the screen quad,
+    scale to the device resolution. src_points is [TL, TR, BR, BL]."""
+    tl, tr, br, bl = src_points
+    def n(v):
+        return str(int(round(v)))
+    hexcol = "0x" + (bg_hex or "#000000").lstrip("#")
+    pad = ("pad=" + str(int(pad_w)) + ":" + str(int(pad_h)) + ":" +
+           str(int(pad_x)) + ":" + str(int(pad_y)) + ":color=" + hexcol)
+    persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
+             ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
+    vf = pad + "," + persp + ",scale=" + str(out_w) + ":" + str(out_h)
     return ["ffmpeg", "-y", "-i", src_path,
             "-vf", vf,
             "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",

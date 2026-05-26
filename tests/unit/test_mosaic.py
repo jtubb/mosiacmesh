@@ -528,3 +528,69 @@ class TestIndividualImageRender:
         # top/bottom margins should be green bg (wide media on square screen letterboxes vertically)
         assert out[5, 50][1] > 150 and out[5, 50][2] < 80    # green, not red
         assert out[95, 50][1] > 150 and out[95, 50][2] < 80
+
+
+class TestIndividualFfmpeg:
+    def test_build_individual_cmd_has_pad_perspective_scale_and_bg(self):
+        pts = [[0.0, 0.0], [200.0, 0.0], [200.0, 100.0], [0.0, 100.0]]  # TL,TR,BR,BL
+        cmd = server.build_ffmpeg_individual_cmd("in.mp4", "out.mp4", pts,
+                                                 800, 600, 200, 125, 0, 12, "#00ff00")
+        assert cmd[0] == "ffmpeg" and cmd[-1] == "out.mp4"
+        vf = cmd[cmd.index("-vf") + 1]
+        assert vf.startswith("pad=200:125:0:12:color=0x00ff00")
+        assert "perspective=" in vf and "sense=source" in vf
+        assert "scale=800:600" in vf
+        assert "libx264" in cmd and "-c:a" in cmd and "aac" in cmd and "-an" not in cmd
+
+    async def test_individual_video_invokes_ffmpeg_with_pad(self, mock_settings, monkeypatch):
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 5000; me.playmode = server.PlayMode.INDIVIDUAL; me.backgroundColor = "#000000"
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        calls = []
+        class _Proc:
+            returncode = 0
+            async def communicate(self): return (b"", b"")
+        async def _fake_exec(*args, **kwargs):
+            calls.append(args); return _Proc()
+        monkeypatch.setattr(server.asyncio, "create_subprocess_exec", _fake_exec)
+
+        result = await server.render_group_async("Default")
+        assert result["status"] == "ready"
+        assert len(calls) == 1 and calls[0][0] == "ffmpeg"
+        vf = list(calls[0])[list(calls[0]).index("-vf") + 1]
+        assert vf.startswith("pad=")
+        assert any("ind_" in str(a) for a in calls[0])
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+class TestIndividualFfmpegIntegration:
+    async def test_real_individual_render_produces_nonempty_mp4(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "videos"; src_dir.mkdir(parents=True)
+        src = str(src_dir / "clip.mp4")
+        import subprocess
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
+                        "-i", "testsrc=size=320x240:rate=10:duration=1",
+                        "-pix_fmt", "yuv420p", src], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 1000; me.playmode = server.PlayMode.INDIVIDUAL; me.backgroundColor = "#000000"
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 320, 240]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 160; c.deviceHeight = 120
+        c.measuredPerimeter = np.array([[[0, 0]], [[160, 0]], [[160, 240]], [[0, 240]]])
+        mock_settings.clients = {"c1": c}
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        out = tmp_path / "media" / "c1" / "videos" / ("ind_" + disp.renderedToken + "_0.mp4")
+        assert out.exists() and out.stat().st_size > 0
