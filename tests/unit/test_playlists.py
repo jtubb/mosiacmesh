@@ -166,6 +166,17 @@ class TestPlaylistCRUD:
             "PAYLOAD": {"name": "Lobby"}}, _make_session())
         assert "Lobby" not in mock_settings.playlists
 
+    def test_list_hassegment_true_for_individual(self, mock_settings):
+        server.settings = mock_settings
+        items = [{"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
+                  "playmode": "INDIVIDUAL", "backgroundColor": "#000000",
+                  "startEffect": None, "endEffect": None}]
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_PLAYLIST",
+            "PAYLOAD": {"name": "Ind", "items": items, "loop": False}}, _make_session())
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "LIST_PLAYLISTS", "PAYLOAD": {}}, _make_session()))
+        assert resp["PAYLOAD"][0]["hasSegment"] is True
+
     def test_list_tolerates_none_items(self, mock_settings):
         server.settings = mock_settings
         pl = server.Playlist(); pl.name = "Bad"; pl.items = None; pl.loop = False

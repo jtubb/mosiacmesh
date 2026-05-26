@@ -492,7 +492,10 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     tl, tr, br, bl = src_points
     def n(v):
         return str(int(round(v)))
-    hexcol = "0x" + (bg_hex or "#000000").lstrip("#")
+    _h = (bg_hex or "#000000").lstrip("#")
+    if len(_h) != 6:
+        _h = "000000"
+    hexcol = "0x" + _h
     pad = ("pad=" + str(int(pad_w)) + ":" + str(int(pad_h)) + ":" +
            str(int(pad_x)) + ":" + str(int(pad_y)) + ":color=" + hexcol)
     persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
@@ -959,7 +962,7 @@ def msg_response(msg,session):
         rows = []
         for name, pl in settings.playlists.items():
             items = pl.items or []
-            has_segment = any(it.get("playmode") == "SEGMENT" for it in items)
+            has_segment = any(it.get("playmode") in ("SEGMENT", "INDIVIDUAL") for it in items)
             rows.append({"name": name, "itemCount": len(items),
                          "hasSegment": has_segment})
         response["PAYLOAD"] = rows

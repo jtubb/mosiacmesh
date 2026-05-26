@@ -542,6 +542,12 @@ class TestIndividualFfmpeg:
         assert "scale=800:600" in vf
         assert "libx264" in cmd and "-c:a" in cmd and "aac" in cmd and "-an" not in cmd
 
+    def test_build_individual_cmd_normalizes_bad_hex(self):
+        pts = [[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]]
+        cmd = server.build_ffmpeg_individual_cmd("in.mp4", "out.mp4", pts, 80, 60, 10, 10, 0, 0, "#abc")
+        vf = cmd[cmd.index("-vf") + 1]
+        assert "color=0x000000" in vf   # malformed 3-digit hex falls back to black
+
     async def test_individual_video_invokes_ffmpeg_with_pad(self, mock_settings, monkeypatch):
         server.settings = mock_settings; server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
