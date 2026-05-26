@@ -798,7 +798,7 @@ def msg_response(msg,session):
         display.renderedToken = ""  # playlist changed -> needs (re)render
         broadcast_to_display_group(display_id, {
             "REQUEST": "PRELOAD",
-            "PAYLOAD": {"items": payload.get("items", [])}
+            "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}
         })
         response["PAYLOAD"] = "SUCCESS"
 

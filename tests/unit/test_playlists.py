@@ -53,6 +53,9 @@ class TestSetPlaylistFields:
     def test_setplaylist_stores_new_fields_with_defaults(self, mock_settings):
         server.settings = mock_settings
         server.socketmanager = MagicMock()
+        client = server.Client()
+        client.displayID = "Default"
+        mock_settings.clients["c1"] = client
         msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "SETPLAYLIST",
                "PAYLOAD": {"displayID": "Default", "loop": False, "items": [
                    {"id": "a", "file": "/media/server/images/x.jpg", "duration": 5},
@@ -67,6 +70,10 @@ class TestSetPlaylistFields:
         assert me1.backgroundColor == "#abcdef"
         assert me1.startEffect == "wipe"
         assert me1.endEffect == "fade"
+        # PRELOAD broadcast carries normalized items (defaults applied)
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args[0][0])
+        assert sent["PAYLOAD"]["items"][0]["backgroundColor"] == "#000000"
+        assert sent["PAYLOAD"]["items"][1]["startEffect"] == "wipe"
 
     def test_play_payload_carries_new_fields(self, mock_settings):
         server.settings = mock_settings
