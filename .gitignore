@@ -8,3 +8,6 @@ __pycache__/
 htmlcov/
 .pytest_cache/
 .coverage
+
+# brainstorming visual companion
+.superpowers/
