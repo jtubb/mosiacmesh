@@ -231,8 +231,7 @@ def sync_new_client_to_group(client_key, client):
     display = settings.displays.get(client.displayID)
     if not display or display.action != PlayState.PLAY or not display.mediaElements:
         return
-    items = [{"id": me.id, "file": me.file, "duration": me.duration,
-              "playmode": me.playmode.name} for me in display.mediaElements]
+    items = [_media_item_payload(me) for me in display.mediaElements]
     broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
     broadcast_to_client(client_key, {
         "REQUEST": "PLAY",
@@ -389,8 +388,9 @@ def _broadcast_segment_play(display_id, display):
                 f = "/media/" + key + "/seg_" + token + "_" + str(i) + ext
             else:
                 f = me.file  # FULL item, or uncalibrated fallback to full source
-            items.append({"id": me.id, "file": f, "duration": me.duration,
-                          "playmode": me.playmode.name})
+            item = _media_item_payload(me)
+            item["file"] = f  # segment-specific warped path (overrides shared source)
+            items.append(item)
         broadcast_to_client(key, {"REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
 
@@ -610,6 +610,16 @@ async def ws_handler(manager, session, msg):
         handle_client_disconnect(session.id)
         manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
 
+def _media_item_payload(me):
+    """Per-item dict sent to clients in PLAY/PRELOAD. getattr guards items
+    loaded from an older settings.dat that predate the newer fields."""
+    return {"id": me.id, "file": me.file, "duration": me.duration,
+            "playmode": me.playmode.name,
+            "backgroundColor": getattr(me, "backgroundColor", "#000000"),
+            "startEffect": getattr(me, "startEffect", None),
+            "endEffect": getattr(me, "endEffect", None)}
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -780,6 +790,9 @@ def msg_response(msg,session):
             me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
                            else PlayMode.SCRIPT if _pm == "SCRIPT"
                            else PlayMode.FULL)
+            me.backgroundColor = item.get("backgroundColor", "#000000")
+            me.startEffect = item.get("startEffect")
+            me.endEffect = item.get("endEffect")
             display.mediaElements.append(me)
         display.loop = bool(payload.get("loop", False))
         display.renderedToken = ""  # playlist changed -> needs (re)render
@@ -808,8 +821,7 @@ def msg_response(msg,session):
                 if has_segment:
                     _broadcast_segment_play(display_id, display)
                 else:
-                    items = [{"id": me.id, "file": me.file, "duration": me.duration,
-                              "playmode": me.playmode.name} for me in display.mediaElements]
+                    items = [_media_item_payload(me) for me in display.mediaElements]
                     broadcast_to_display_group(display_id, {
                         "REQUEST": "PLAY",
                         "PAYLOAD": {"startEpoch": display.playStartEpoch,

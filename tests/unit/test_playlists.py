@@ -47,3 +47,41 @@ class TestDataModel:
         server.settings = mock_settings
         server.migrate_client_objects()
         assert mock_settings.playlists == {}
+
+
+class TestSetPlaylistFields:
+    def test_setplaylist_stores_new_fields_with_defaults(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "SETPLAYLIST",
+               "PAYLOAD": {"displayID": "Default", "loop": False, "items": [
+                   {"id": "a", "file": "/media/server/images/x.jpg", "duration": 5},
+                   {"id": "b", "file": "/media/server/images/y.jpg", "duration": 5,
+                    "playmode": "FULL", "backgroundColor": "#abcdef",
+                    "startEffect": "wipe", "endEffect": "fade"},
+               ]}}
+        server.msg_response(msg, _make_session())
+        me0, me1 = mock_settings.displays["Default"].mediaElements
+        assert me0.backgroundColor == "#000000"   # default applied
+        assert me0.startEffect is None
+        assert me1.backgroundColor == "#abcdef"
+        assert me1.startEffect == "wipe"
+        assert me1.endEffect == "fade"
+
+    def test_play_payload_carries_new_fields(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement()
+        me.id = "a"; me.file = "/media/server/images/x.jpg"; me.duration = 1000
+        me.playmode = server.PlayMode.FULL; me.backgroundColor = "#123456"
+        disp.mediaElements = [me]
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["c1"] = client
+        with patch("time.time", return_value=1000.0):
+            server.msg_response({"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY",
+                                 "PAYLOAD": {"displayID": "Default"}}, _make_session())
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args[0][0])
+        item = sent["PAYLOAD"]["items"][0]
+        assert item["backgroundColor"] == "#123456"
+        assert item["startEffect"] is None and item["endEffect"] is None
