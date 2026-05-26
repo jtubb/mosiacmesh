@@ -45,7 +45,8 @@
 	var mediaSequence = null;
 	var mediaReady = false;
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
-		video: null, videoIndex: -1, driftTimer: null, paused: false };
+		video: null, videoIndex: -1, driftTimer: null, paused: false,
+		scriptRaf: null, scriptIndex: -1 };
 	var HARD_SEEK_MS = 400; // drift beyond this is corrected with a seek, not a rate nudge
 
 	// JS mirror of server.playlist_index — keep the two in sync.
@@ -75,6 +76,33 @@
 			playback.video = null;
 		}
 		playback.videoIndex = -1;
+	}
+
+	var _raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
+		function(cb){ return setTimeout(cb, 16); };
+	var _caf = window.cancelAnimationFrame || window.webkitCancelAnimationFrame ||
+		function(id){ clearTimeout(id); };
+
+	// Built-in animations: each is a PURE function of elapsed time (tMs) and canvas
+	// size, so every display draws the same frame at the same shared-clock instant.
+	var animations = {
+		bouncingBalls: function(ctx, tMs, w, h) {
+			var colors = ['#e74c3c', '#27ae60', '#2980b9', '#f1c40f'];
+			var r = Math.max(12, Math.min(w, h) * 0.06), n = 4, i;
+			for (i = 0; i < n; i++) {
+				var px = (Math.sin(tMs / (900 + i * 220) + i) + 1) / 2;        // 0..1
+				var py = (Math.sin(tMs / (700 + i * 180) + i * 1.7) + 1) / 2;  // 0..1
+				ctx.fillStyle = colors[i % colors.length];
+				ctx.beginPath();
+				ctx.arc(r + px * (w - 2 * r), r + py * (h - 2 * r), r, 0, Math.PI * 2);
+				ctx.fill();
+			}
+		}
+	};
+
+	function clearScript() {
+		if (playback.scriptRaf) { _caf(playback.scriptRaf); playback.scriptRaf = null; }
+		playback.scriptIndex = -1;
 	}
 
 	// Keep the active video aligned to the shared clock: a proportional playbackRate
