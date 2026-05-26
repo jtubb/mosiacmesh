@@ -275,6 +275,29 @@ def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     return cv.warpPerspective(source_img, m, (out_w, out_h))
 
 
+def _hex_to_bgr(hexstr):
+    """'#rrggbb' -> OpenCV (B, G, R) tuple; falls back to black."""
+    h = (hexstr or "#000000").lstrip("#")
+    if len(h) != 6:
+        h = "000000"
+    return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
+
+
+def letterbox_to_aspect(img, target_w, target_h, bg_bgr):
+    """Scale img to fit within target_w x target_h preserving aspect, centered
+    on a solid bg_bgr canvas of exactly that size."""
+    target_w = max(1, int(target_w)); target_h = max(1, int(target_h))
+    h, w = img.shape[:2]
+    scale = min(target_w / float(w), target_h / float(h))
+    nw = max(1, int(round(w * scale))); nh = max(1, int(round(h * scale)))
+    resized = cv.resize(img, (nw, nh))
+    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+    canvas[:] = bg_bgr
+    x = (target_w - nw) // 2; y = (target_h - nh) // 2
+    canvas[y:y + nh, x:x + nw] = resized
+    return canvas
+
+
 def assign_group_bounding_boxes():
     """Per display group, set boundingBox/boundingBoxCenter from the ArUco
     screens' quads (photo coords). Call after calibration."""
@@ -339,11 +362,13 @@ async def render_group_async(display_id):
     token = compute_render_token(display_id)
     try:
         seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
-                     if me.playmode == PlayMode.SEGMENT]
+                     if _is_renderable(me)]
         clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
         for i, me in seg_items:
             src_path = resolve_media_path(me.file)
             if isVideoItem(me.file):
+                if me.playmode == PlayMode.INDIVIDUAL:
+                    raise RuntimeError("INDIVIDUAL video render not implemented yet")
                 dims = get_video_dimensions(src_path) if src_path else None
                 if not dims:
                     raise RuntimeError("cannot read source video: " + str(me.file))
@@ -365,11 +390,20 @@ async def render_group_async(display_id):
                 if img is None:
                     raise RuntimeError("cannot read source image: " + str(me.file))
                 for key, c in clients:
-                    warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
-                                                   int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
                     out_dir = os.path.join("media", key, "images")
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
+                    if me.playmode == PlayMode.INDIVIDUAL:
+                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
+                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                        bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
+                        canvas = letterbox_to_aspect(img, bw, bh, bg)
+                        warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
+                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                        cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
+                    else:
+                        warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
+                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                        cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
         display.renderedToken = token
         display.renderStatus = "ready"
         _broadcast_render_status(display_id, "ready")

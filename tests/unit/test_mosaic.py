@@ -459,3 +459,65 @@ class TestIsRenderable:
                              "PAYLOAD": {"displayID": "Default"}}, sess)
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         assert "/ind_" in sent["PAYLOAD"]["items"][0]["file"]
+
+
+class TestLetterbox:
+    def test_letterbox_centers_and_pads_with_bg(self):
+        img = np.zeros((50, 100, 3), dtype=np.uint8); img[:] = (0, 0, 255)  # red, 2:1
+        out = server.letterbox_to_aspect(img, 100, 100, (255, 0, 0))        # target 1:1, bg blue
+        assert out.shape == (100, 100, 3)
+        assert tuple(int(v) for v in out[50, 50]) == (0, 0, 255)            # center is the red media
+        assert tuple(int(v) for v in out[5, 50]) == (255, 0, 0)            # top margin is bg blue
+        assert tuple(int(v) for v in out[95, 50]) == (255, 0, 0)           # bottom margin is bg blue
+
+    def test_hex_to_bgr(self):
+        assert server._hex_to_bgr("#ff0000") == (0, 0, 255)   # red hex -> BGR
+        assert server._hex_to_bgr("#00ff00") == (0, 255, 0)
+        assert server._hex_to_bgr(None) == (0, 0, 0)
+
+
+class TestIndividualImageRender:
+    async def test_individual_image_writes_ind_file_and_rectifies(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "images"; src_dir.mkdir(parents=True)
+        img = np.zeros((100, 100, 3), dtype=np.uint8)
+        img[:, :50] = (0, 0, 255)   # left red, right black
+        cv.imwrite(str(src_dir / "x.jpg"), img)
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.INDIVIDUAL; me.backgroundColor = "#000000"
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        out_file = tmp_path / "media" / "c1" / "images" / ("ind_" + disp.renderedToken + "_0.png")
+        assert out_file.exists()
+        out = cv.imread(str(out_file))
+        assert out.shape == (100, 100, 3)
+        assert out[50, 25][2] > 150 and out[50, 25][0] < 80   # left half still red
+        assert out[50, 75][2] < 80                            # right half not red
+
+    async def test_individual_image_letterbox_uses_background_color(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "images"; src_dir.mkdir(parents=True)
+        img = np.zeros((40, 100, 3), dtype=np.uint8); img[:] = (0, 0, 255)  # wide 2.5:1 red
+        cv.imwrite(str(src_dir / "w.jpg"), img)
+        server.settings = mock_settings; server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/w.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.INDIVIDUAL; me.backgroundColor = "#00ff00"  # green
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+
+        await server.render_group_async("Default")
+        out = cv.imread(str(tmp_path / "media" / "c1" / "images" / ("ind_" + disp.renderedToken + "_0.png")))
+        # top/bottom margins should be green bg (wide media on square screen letterboxes vertically)
+        assert out[5, 50][1] > 150 and out[5, 50][2] < 80    # green, not red
+        assert out[95, 50][1] > 150 and out[95, 50][2] < 80
