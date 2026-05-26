@@ -357,3 +357,35 @@ class TestVideoSegmentPlay:
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         assert sent["PAYLOAD"]["items"][0]["file"].endswith(".mp4")
         assert "/seg_" in sent["PAYLOAD"]["items"][0]["file"]
+
+
+import shutil
+import pytest
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
+class TestFfmpegIntegration:
+    async def test_real_render_produces_nonempty_mp4(self, mock_settings, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "videos"; src_dir.mkdir(parents=True)
+        src = str(src_dir / "clip.mp4")
+        import subprocess
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi",
+                        "-i", "testsrc=size=320x240:rate=10:duration=1",
+                        "-pix_fmt", "yuv420p", src], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 320, 240]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 160; c.deviceHeight = 120
+        c.measuredPerimeter = np.array([[[0, 0]], [[160, 0]], [[160, 240]], [[0, 240]]])
+        mock_settings.clients = {"c1": c}
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        out = tmp_path / "media" / "c1" / "videos" / ("seg_" + disp.renderedToken + "_0.mp4")
+        assert out.exists() and out.stat().st_size > 0
