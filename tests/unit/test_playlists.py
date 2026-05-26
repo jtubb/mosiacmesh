@@ -266,3 +266,14 @@ class TestMediaApi:
         open("cache/clip.mp4", "w").close()
         server.processVideo("cache", "clip.mp4")
         assert os.path.exists("media/server/videos/clip.mp4")
+
+
+class TestEffectsApi:
+    @pytest.mark.asyncio
+    async def test_api_effects_lists_registered(self):
+        resp = await server.api_effects(make_mocked_request('GET', '/api/effects'))
+        data = json.loads(resp.text)
+        names = {e["name"] for e in data["effects"]}
+        assert {"fade", "audiofade", "wipe"} <= names
+        fade = next(e for e in data["effects"] if e["name"] == "fade")
+        assert fade["params"][0]["key"] == "duration"

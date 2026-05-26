@@ -8,6 +8,7 @@ from pathlib import Path
 import time
 import jsonpickle
 import jsonpickle.ext.numpy as jsonpickle_numpy
+import effects
 jsonpickle_numpy.register_handlers()
 
 import asyncio
@@ -1482,6 +1483,11 @@ async def api_media(request):
     body = json.dumps({"images": _list("images"), "videos": _list("videos")})
     return web.Response(text=body, content_type="application/json")
 
+async def api_effects(request):
+    """List the registered transition effects and their parameter schemas."""
+    return web.Response(text=json.dumps({"effects": effects.effect_catalog()}),
+                        content_type="application/json")
+
 async def api_discovery_devices(request):
     """REST: list all discovered devices."""
     devices = get_discovered_devices()
@@ -1713,6 +1719,7 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
         # Discovery API endpoints (granular handlers)
         app.router.add_route('GET', '/api/media', api_media)
+        app.router.add_route('GET', '/api/effects', api_effects)
         app.router.add_route('GET', '/api/discovery/devices', api_discovery_devices)
         app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)
         app.router.add_route('POST', '/api/discovery/configure', api_discovery_configure)
