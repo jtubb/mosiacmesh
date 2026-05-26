@@ -551,6 +551,68 @@
 <script>
 var SCRIPT_ANIMATIONS = ["bouncingBalls"];
 var plEditor = { name: "", items: [], loop: false, selected: -1 };
+var plEffectCatalog = [];   // [{name,label,params:[{key,type,default,choices?}]}]
+
+function plLoadEffects() {
+  $.getJSON('/api/effects', function(data){ plEffectCatalog = (data && data.effects) || []; });
+}
+
+function plEffectByName(name) {
+  for (var i = 0; i < plEffectCatalog.length; i++) {
+    if (plEffectCatalog[i].name === name) { return plEffectCatalog[i]; }
+  }
+  return null;
+}
+
+// Build one labeled effect dropdown + its parameter inputs.
+// getFn() returns the item's current field ({name,params}|null); setFn(v) writes it.
+function plRenderEffectField($host, label, getFn, setFn) {
+  $('<div class="size">' + label + '</div>').appendTo($host);
+  var $sel = $('<select>').appendTo($host);
+  $('<option>').val("").text("None").appendTo($sel);
+  $.each(plEffectCatalog, function(_, e){ $('<option>').val(e.name).text(e.label).appendTo($sel); });
+  var cur = getFn();
+  $sel.val((cur && cur.name) || "");
+  var $params = $('<div>').appendTo($host);
+
+  function renderParams(name) {
+    $params.empty();
+    var e = plEffectByName(name);
+    if (!e) { return; }
+    $.each(e.params, function(_, p){
+      var field = getFn() || { name: name, params: {} };
+      var val = (field.params && field.params[p.key] != null) ? field.params[p.key] : p.default;
+      $('<span class="size" style="margin-right:4px;">' + p.key + '</span>').appendTo($params);
+      var $inp;
+      if (p.type === "choice") {
+        $inp = $('<select>');
+        $.each(p.choices, function(_, c){ $('<option>').val(c).text(c).appendTo($inp); });
+        $inp.val(val);
+      } else {
+        $inp = $('<input>').attr('type', 'number').css('width', '5em').val(val);
+      }
+      $inp.on('change', function(){
+        var f = getFn() || { name: name, params: {} };
+        f.name = name; f.params = f.params || {};
+        f.params[p.key] = (p.type === "choice") ? this.value : (parseFloat(this.value) || 0);
+        setFn(f);
+      });
+      $params.append($inp).append('<br>');
+    });
+  }
+
+  $sel.on('change', function(){
+    var name = this.value;
+    if (!name) { setFn(null); $params.empty(); return; }
+    var e = plEffectByName(name);
+    var params = {};
+    if (e) { $.each(e.params, function(_, p){ params[p.key] = p.default; }); }
+    setFn({ name: name, params: params });
+    renderParams(name);
+  });
+
+  renderParams((cur && cur.name) || "");
+}
 
 function plDefaultItem(file, isScript) {
   return { id: "i" + Date.now() + Math.floor(Math.random()*1000),
@@ -630,10 +692,10 @@ function plRenderInspector() {
   $('<input>').attr('type','color').val(it.backgroundColor || '#000000')
     .on('change', function(){ it.backgroundColor = this.value; }).appendTo($host);
 
-  $('<div class="size" style="opacity:.5;">Start effect</div>').appendTo($host);
-  $('<select disabled><option>None (coming soon)</option></select>').appendTo($host);
-  $('<div class="size" style="opacity:.5;">End effect</div>').appendTo($host);
-  $('<select disabled><option>None (coming soon)</option></select>').appendTo($host);
+  plRenderEffectField($host, "Start effect",
+    function(){ return it.startEffect; }, function(v){ it.startEffect = v; });
+  plRenderEffectField($host, "End effect",
+    function(){ return it.endEffect; }, function(v){ it.endEffect = v; });
 }
 
 function plGroupOptions() {
@@ -726,6 +788,7 @@ $(function(){
   $('#plDelete').on('click', plDelete);
   $('#plSelect').on('change', function(){ plLoad($(this).val()); });
   $('#plUpload').on('change', function(){ if (this.files[0]) plUploadFile(this.files[0]); });
+  plLoadEffects();
   plLoadLibrary();
   setTimeout(plRefreshList, 500);  // after sock connects
   setTimeout(plBuildTransport, 600);
