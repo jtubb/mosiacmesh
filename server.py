@@ -1,4 +1,5 @@
 import logging
+import json
 from enum import Enum
 import os
 import cv2 as cv
@@ -1223,6 +1224,8 @@ async def upload_handler(request):
         response, ct = calibrate(os.path.join(path,filename))
     elif(uploadDest == "image"):
         response, ct = processImage(path,filename)
+    elif(uploadDest == "video"):
+        response, ct = processVideo(path, filename)
     return web.Response(body=response, content_type=ct)
 
 def processImage(path,filename):
@@ -1230,6 +1233,13 @@ def processImage(path,filename):
     imgDir = "media/server/images"
     Path(imgDir).mkdir(parents=True, exist_ok=True)
     Path(os.path.join(path,filename)).rename(os.path.join(imgDir,filename))
+    return "success", "text/html"
+
+def processVideo(path, filename):
+    logging.debug("processVideo")
+    vidDir = "media/server/videos"
+    Path(vidDir).mkdir(parents=True, exist_ok=True)
+    Path(os.path.join(path, filename)).rename(os.path.join(vidDir, filename))
     return "success", "text/html"
 
 def angle_cos(p0, p1, p2):
@@ -1378,6 +1388,18 @@ async def cache_stats_handler(request):
     return web.json_response(stats)
 
 # --- Granular discovery REST endpoints (one handler per resource) ---
+
+async def api_media(request):
+    """List the shared media library under media/server/{images,videos}."""
+    def _list(sub):
+        d = os.path.join("media", "server", sub)
+        if not os.path.isdir(d):
+            return []
+        return ["/media/server/" + sub + "/" + f
+                for f in sorted(os.listdir(d))
+                if os.path.isfile(os.path.join(d, f))]
+    body = json.dumps({"images": _list("images"), "videos": _list("videos")})
+    return web.Response(text=body, content_type="application/json")
 
 async def api_discovery_devices(request):
     """REST: list all discovered devices."""
@@ -1609,6 +1631,7 @@ if __name__ == '__main__':
         app.router.add_route('POST', '/upload/{dest}', upload_handler),
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
         # Discovery API endpoints (granular handlers)
+        app.router.add_route('GET', '/api/media', api_media)
         app.router.add_route('GET', '/api/discovery/devices', api_discovery_devices)
         app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)
         app.router.add_route('POST', '/api/discovery/configure', api_discovery_configure)

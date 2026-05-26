@@ -1,7 +1,10 @@
 """Unit tests for the named-playlist store, CRUD, assign, and media API."""
-import sys, json
+import sys, json, os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import pytest
+from aiohttp.test_utils import make_mocked_request
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import server
@@ -216,3 +219,30 @@ class TestAssignPlaylist:
         server.socketmanager = MagicMock()
         resp = self._assign("ghost")
         assert resp["PAYLOAD"]["status"] == "error"
+
+
+class TestMediaApi:
+    @pytest.mark.asyncio
+    async def test_api_media_lists_images_and_videos(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        os.makedirs("media/server/images"); os.makedirs("media/server/videos")
+        open("media/server/images/a.jpg", "w").close()
+        open("media/server/videos/b.mp4", "w").close()
+        resp = await server.api_media(make_mocked_request('GET', '/api/media'))
+        data = json.loads(resp.text)
+        assert "/media/server/images/a.jpg" in data["images"]
+        assert "/media/server/videos/b.mp4" in data["videos"]
+
+    @pytest.mark.asyncio
+    async def test_api_media_missing_dirs_empty(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        resp = await server.api_media(make_mocked_request('GET', '/api/media'))
+        data = json.loads(resp.text)
+        assert data == {"images": [], "videos": []}
+
+    def test_process_video_moves_into_library(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        os.makedirs("cache")
+        open("cache/clip.mp4", "w").close()
+        server.processVideo("cache", "clip.mp4")
+        assert os.path.exists("media/server/videos/clip.mp4")
