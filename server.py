@@ -468,25 +468,33 @@ def quad_to_source_points(bbox, screen_quad, src_w, src_h):
     return [[(float(px) - bx) / bw * src_w, (float(py) - by) / bh * src_h] for (px, py) in ordered]
 
 
-def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h):
+def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
+                                 extra_video_filters=None, extra_audio_filters=None):
     """ffmpeg arg list: perspective-warp the source quad to fill the frame, scale
     to the screen resolution, encode iPad-compatible H.264 + AAC audio.
-    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR."""
+    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR.
+    extra_video_filters append to -vf; extra_audio_filters add an -af when present."""
     tl, tr, br, bl = src_points
     def n(v):
         return str(int(round(v)))
     persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
              ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
     vf = persp + ",scale=" + str(out_w) + ":" + str(out_h)
-    return ["ffmpeg", "-y", "-i", src_path,
-            "-vf", vf,
-            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k",
-            "-preset", "veryfast", "-movflags", "+faststart", out_path]
+    for f in (extra_video_filters or []):
+        vf += "," + f
+    cmd = ["ffmpeg", "-y", "-i", src_path,
+           "-vf", vf,
+           "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "128k"]
+    if extra_audio_filters:
+        cmd += ["-af", ",".join(extra_audio_filters)]
+    cmd += ["-preset", "veryfast", "-movflags", "+faststart", out_path]
+    return cmd
 
 
 def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
-                                pad_w, pad_h, pad_x, pad_y, bg_hex):
+                                pad_w, pad_h, pad_x, pad_y, bg_hex,
+                                extra_video_filters=None, extra_audio_filters=None):
     """ffmpeg args for INDIVIDUAL: pad the source to the screen bbox aspect with
     backgroundColor, perspective-warp the whole padded frame to the screen quad,
     scale to the device resolution. src_points is [TL, TR, BR, BL]."""
@@ -502,11 +510,16 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
              ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
     vf = pad + "," + persp + ",scale=" + str(out_w) + ":" + str(out_h)
-    return ["ffmpeg", "-y", "-i", src_path,
-            "-vf", vf,
-            "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k",
-            "-preset", "veryfast", "-movflags", "+faststart", out_path]
+    for f in (extra_video_filters or []):
+        vf += "," + f
+    cmd = ["ffmpeg", "-y", "-i", src_path,
+           "-vf", vf,
+           "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-b:a", "128k"]
+    if extra_audio_filters:
+        cmd += ["-af", ",".join(extra_audio_filters)]
+    cmd += ["-preset", "veryfast", "-movflags", "+faststart", out_path]
+    return cmd
 
 
 def get_video_dimensions(path):

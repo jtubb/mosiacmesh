@@ -591,6 +591,34 @@ class TestIndividualDegenerateQuad:
         assert "degenerate" in result.get("error", "").lower()
 
 
+class TestBuilderExtraFilters:
+    def test_perspective_appends_video_and_audio_filters(self):
+        pts = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]
+        cmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 80, 60,
+                                                  extra_video_filters=["fade=t=in:st=0:d=0.6"],
+                                                  extra_audio_filters=["afade=t=in:st=0:d=0.6"])
+        vf = cmd[cmd.index("-vf") + 1]
+        assert vf.endswith(",fade=t=in:st=0:d=0.6")
+        assert "scale=80:60" in vf
+        assert cmd[cmd.index("-af") + 1] == "afade=t=in:st=0:d=0.6"
+
+    def test_perspective_no_extras_is_unchanged(self):
+        pts = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]
+        cmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 80, 60)
+        assert "-af" not in cmd
+        assert cmd[cmd.index("-vf") + 1].endswith("scale=80:60")
+
+    def test_individual_appends_filters(self):
+        pts = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]
+        cmd = server.build_ffmpeg_individual_cmd("in.mp4", "out.mp4", pts, 80, 60,
+                                                100, 100, 0, 0, "#000000",
+                                                extra_video_filters=["fade=t=out:st=4.4:d=0.6"],
+                                                extra_audio_filters=[])
+        vf = cmd[cmd.index("-vf") + 1]
+        assert vf.endswith(",fade=t=out:st=4.4:d=0.6")
+        assert "-af" not in cmd   # empty audio list adds no -af
+
+
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 class TestIndividualFfmpegIntegration:
     async def test_real_individual_render_produces_nonempty_mp4(self, mock_settings, tmp_path, monkeypatch):
