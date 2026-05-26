@@ -231,8 +231,8 @@ def sync_new_client_to_group(client_key, client):
     display = settings.displays.get(client.displayID)
     if not display or display.action != PlayState.PLAY or not display.mediaElements:
         return
-    items = [{"id": me.id, "file": me.file, "duration": me.duration}
-             for me in display.mediaElements]
+    items = [{"id": me.id, "file": me.file, "duration": me.duration,
+              "playmode": me.playmode.name} for me in display.mediaElements]
     broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
     broadcast_to_client(client_key, {
         "REQUEST": "PLAY",
@@ -389,7 +389,8 @@ def _broadcast_segment_play(display_id, display):
                 f = "/media/" + key + "/seg_" + token + "_" + str(i) + ext
             else:
                 f = me.file  # FULL item, or uncalibrated fallback to full source
-            items.append({"id": me.id, "file": f, "duration": me.duration})
+            items.append({"id": me.id, "file": f, "duration": me.duration,
+                          "playmode": me.playmode.name})
         broadcast_to_client(key, {"REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
 
@@ -763,7 +764,10 @@ def msg_response(msg,session):
             me.id = item.get("id")
             me.file = item.get("file")
             me.duration = item.get("duration")
-            me.playmode = PlayMode.SEGMENT if item.get("playmode") == "SEGMENT" else PlayMode.FULL
+            _pm = item.get("playmode")
+            me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
+                           else PlayMode.SCRIPT if _pm == "SCRIPT"
+                           else PlayMode.FULL)
             display.mediaElements.append(me)
         display.loop = bool(payload.get("loop", False))
         display.renderedToken = ""  # playlist changed -> needs (re)render
@@ -792,8 +796,8 @@ def msg_response(msg,session):
                 if has_segment:
                     _broadcast_segment_play(display_id, display)
                 else:
-                    items = [{"id": me.id, "file": me.file, "duration": me.duration}
-                             for me in display.mediaElements]
+                    items = [{"id": me.id, "file": me.file, "duration": me.duration,
+                              "playmode": me.playmode.name} for me in display.mediaElements]
                     broadcast_to_display_group(display_id, {
                         "REQUEST": "PLAY",
                         "PAYLOAD": {"startEpoch": display.playStartEpoch,

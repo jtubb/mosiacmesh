@@ -211,3 +211,36 @@ class TestResume:
             server.msg_response(msg, _make_session())
         assert disp.action == server.PlayState.PLAY
         assert disp.playStartEpoch == 5000000  # fresh, ignores pauseOffset
+
+
+class TestScriptPlayback:
+    def _script_group(self, mock_settings):
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "anim"; me.file = "bouncingBalls"
+        me.duration = 10000; me.playmode = server.PlayMode.SCRIPT
+        disp.mediaElements = [me]; disp.loop = True; disp.action = server.PlayState.STOP
+        client = server.Client(); client.displayID = "Default"
+        mock_settings.clients["c1"] = client
+        return disp
+
+    def test_setplaylist_maps_script_playmode(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "SETPLAYLIST", "PAYLOAD": {
+            "displayID": "Default", "loop": False,
+            "items": [{"id": "a", "file": "bouncingBalls", "duration": 10000, "playmode": "SCRIPT"}]}}
+        server.msg_response(msg, _make_session())
+        assert mock_settings.displays["Default"].mediaElements[0].playmode == server.PlayMode.SCRIPT
+
+    def test_play_script_broadcasts_with_playmode_and_no_render_gate(self, mock_settings):
+        import jsonpickle
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        self._script_group(mock_settings)
+        ret = server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
+                                   "PAYLOAD": {"displayID": "Default"}}, _make_session())
+        assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"        # not RENDER_REQUIRED
+        assert server.socketmanager.broadcast.call_count == 1        # group path, one client
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        assert sent["PAYLOAD"]["items"][0]["playmode"] == "SCRIPT"
+        assert sent["PAYLOAD"]["items"][0]["file"] == "bouncingBalls"
