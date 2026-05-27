@@ -23,6 +23,8 @@ import sockjs
 import argparse
 import hashlib
 from functools import lru_cache
+import datetime
+from dateutil import rrule as _rrule
 
 # File cache with modification time tracking
 file_cache = {}
@@ -318,6 +320,60 @@ def assign_group_bounding_boxes():
 def _group_clients(display_id):
     """Sorted [(clientKey, client)] for clients assigned to a display group."""
     return sorted([(k, c) for k, c in settings.clients.items() if c.displayID == display_id])
+
+
+_FREQ_MAP = {"DAILY": _rrule.DAILY, "WEEKLY": _rrule.WEEKLY,
+             "MONTHLY": _rrule.MONTHLY, "YEARLY": _rrule.YEARLY}
+
+
+def _parse_date(s):
+    y, m, d = [int(x) for x in str(s).split("-")]
+    return datetime.datetime(y, m, d)
+
+
+def _hhmm_to_min(s):
+    hh, mm = [int(x) for x in str(s).split(":")]
+    return hh * 60 + mm
+
+
+def schedule_active_at(schedule, when):
+    """True if `schedule` is active at datetime `when` (server-local): `when`'s
+    date is an rrule occurrence (minus exdates) and the time is within the
+    [startTime, endTime] window. Pure; ignores `enabled` (caller checks that)."""
+    freq = _FREQ_MAP.get(getattr(schedule, "freq", None))
+    if freq is None:
+        return False
+    try:
+        dtstart = _parse_date(schedule.dtstart)
+    except Exception:
+        return False
+    kw = {"dtstart": dtstart, "interval": max(1, int(getattr(schedule, "interval", 1) or 1))}
+    end = getattr(schedule, "end", None) or {"type": "never"}
+    if end.get("type") == "until" and end.get("untilDate"):
+        try:
+            u = _parse_date(end["untilDate"])
+            kw["until"] = u.replace(hour=23, minute=59, second=59)
+        except Exception:
+            pass
+    elif end.get("type") == "count" and end.get("count"):
+        kw["count"] = int(end["count"])
+    if getattr(schedule, "freq", None) == "WEEKLY" and getattr(schedule, "byweekday", None):
+        kw["byweekday"] = [int(x) for x in schedule.byweekday]
+    rset = _rrule.rruleset()
+    rset.rrule(_rrule.rrule(freq, **kw))
+    for ex in (getattr(schedule, "exdates", None) or []):
+        try:
+            rset.exdate(_parse_date(ex))
+        except Exception:
+            pass
+    day_start = datetime.datetime(when.year, when.month, when.day)
+    if not rset.between(day_start, day_start, inc=True):   # occurrences sit at midnight of each day
+        return False
+    now_min = when.hour * 60 + when.minute
+    try:
+        return _hhmm_to_min(schedule.startTime) <= now_min <= _hhmm_to_min(schedule.endTime)
+    except Exception:
+        return False
 
 
 def compute_render_token(display_id):
