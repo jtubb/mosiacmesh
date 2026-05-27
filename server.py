@@ -2088,14 +2088,17 @@ def calibrate(filename):
                 #find contours that enclose a marker - optimized with spatial indexing
                 marker_bbox = (min(topLeft[0], bottomRight[0]), min(topLeft[1], bottomRight[1]),
                               max(topLeft[0], bottomRight[0]), max(topLeft[1], bottomRight[1]))
-                
+
+                # The enclosing/band contour (screen's black border) validates the
+                # fiducial extrapolation. None if nothing encloses the marker.
+                border_contour = None
                 for contour in contours:
                     # Quick bounding box check before expensive polygon test
                     x, y, w, h = cv.boundingRect(contour)
-                    if not (x <= marker_bbox[0] and y <= marker_bbox[1] and 
+                    if not (x <= marker_bbox[0] and y <= marker_bbox[1] and
                            x + w >= marker_bbox[2] and y + h >= marker_bbox[3]):
                         continue
-                    
+
                     # Only do expensive polygon tests on spatially relevant contours
                     result1 = cv.pointPolygonTest(contour, topLeft, False)
                     result2 = cv.pointPolygonTest(contour, bottomRight, False)
@@ -2109,8 +2112,27 @@ def calibrate(filename):
                         for i in range(len(approximatedShape)-1):
                             cv.line(image, approximatedShape[i][0], approximatedShape[i+1][0], (0, 255, 0), 4)
                         cv.line(image, approximatedShape[len(approximatedShape)-1][0], approximatedShape[0][0], (0, 255, 0), 4)
-                        settings.clients[clientID].measuredPerimeter = approximatedShape
+                        border_contour = approximatedShape
                         break
+
+                # Prefer the fiducial extrapolation of the full screen quad over
+                # the messy band contour; reconcile against the band outline and
+                # auto-correct stale mobile orientation.
+                _cli = settings.clients[clientID]
+                cw = getattr(_cli, "canvasWidth", 0) or _cli.deviceWidth
+                ch = getattr(_cli, "canvasHeight", 0) or _cli.deviceHeight
+                quad, source = reconcile_screen_quad(markerCorner.reshape(4, 2), border_contour, cw, ch)
+                if source == "rotated":
+                    _cli.canvasWidth, _cli.canvasHeight = ch, cw   # reported orientation was stale
+                    logging.info("calibrate: detected rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
+                elif source == "border":
+                    logging.warning("calibrate: fiducial/band mismatch for %s; using band outline", clientID)
+                _cli.measuredPerimeter = quad
+                # Visualize the reconciled quad when it differs from the raw band.
+                if source != "fiducial":
+                    qpts = quad.reshape(4, 2)
+                    for i in range(4):
+                        cv.line(image, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), (0, 255, 0), 4)
 
     # Draw the overall bounding box only if we actually found marker contours.
     # With no detectable ArUco markers, relevantContours stays an empty list and
