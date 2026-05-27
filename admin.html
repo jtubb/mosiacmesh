@@ -260,6 +260,14 @@
 		{
 			adminScheduleRefresh();
 		}
+		else if(data_obj.REQUEST == "DEVICE_REMOVED")
+		{
+			var rp = data_obj.PAYLOAD || {};
+			if (typeof toast === 'function') {
+				toast(rp.cleared != null ? ('Cleared ' + rp.cleared + ' offline device(s)') : 'Device removed', 'ok');
+			}
+			adminScheduleRefresh();
+		}
 	}
 
 	// Status badges are rendered as a DOM decoration AFTER each node draws (see
@@ -469,6 +477,15 @@
 					action: function (obj) {
 						$('#displays').jstree(true).delete_node(node);
 					}
+				},
+				removeItem: { // Remove a single device (client) from the server
+					label: "Remove Device",
+					action: function (obj) {
+						if (confirm('Remove "' + (node.text || node.id) + '" from the server? It will re-register if it reconnects.')) {
+							sock.send(generateMessage('SRV','REMOVE_CLIENT',{'clientID': node.id}));
+							adminScheduleRefresh();
+						}
+					}
 				}
 			};
 			
@@ -496,8 +513,13 @@
 				delete items.deleteItem;
 			}
 			else if (node.id == 'Default') {
-				
+
 				delete items.deleteItem;
+			}
+
+			// "Remove Device" only applies to device (client) nodes
+			if (node.li_attr.class != 'display') {
+				delete items.removeItem;
 			}
 
 			return items;
@@ -599,6 +621,15 @@
 		_adminRefreshTimer = setTimeout(adminRefreshStatus, 400);
 	}
 	$(function(){ setTimeout(adminRefreshStatus, 1200); });  // initial load only — no polling interval
+
+	$(function(){
+	  $('#clearOffline').on('click', function(){
+	    if (confirm('Remove all offline devices from the server?')) {
+	      sock.send(generateMessage('SRV','CLEAR_OFFLINE_CLIENTS',''));
+	      adminScheduleRefresh();
+	    }
+	  });
+	});
 
 	$(function(){
 	  $('#calGenerate').on('click', function(){
@@ -797,7 +828,8 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
         <div style="display:flex; gap:16px; flex-wrap:wrap;">
           <div class="panel" style="flex:0 0 30em;">
             <div class="panel-title">Groups &amp; screens</div>
-            <input type="text" id="displays_q" value="" class="input" placeholder="Search…" style="display:block; box-sizing:border-box; width:100%; margin:0 0 1em 0; padding:4px;">
+            <input type="text" id="displays_q" value="" class="input" placeholder="Search…" style="display:block; box-sizing:border-box; width:100%; margin:0 0 0.5em 0; padding:4px;">
+            <button class="btn" id="clearOffline" type="button" style="display:block; width:100%; box-sizing:border-box; margin:0 0 1em 0;">Clear offline devices</button>
             <div id="displays" style="width:100%; box-sizing:border-box; height:25em; overflow-y:auto; overflow-x:hidden; border:1px solid var(--border)"></div>
           </div>
           <div class="panel" style="flex:1; min-width:24em;">

@@ -280,8 +280,33 @@ class TestWebSocketConnectionManagement:
         # Old client should be removed, recent client should remain
         assert 'old' not in mock_settings.clients
         assert 'recent' in mock_settings.clients
-        
+
         mock_save.assert_called_once()
+
+    @patch('server.saveSettings')
+    def test_clear_offline_clients_bulk(self, mock_save, mock_settings):
+        """max_age_seconds=0 (the 'Clear offline' bulk path) removes every
+        offline client regardless of age, but never an online one."""
+        if not hasattr(server, 'cleanup_old_clients'):
+            pytest.skip("cleanup_old_clients not implemented")
+
+        offline_recent = server.Client()
+        offline_recent.lastSeen = time.time() - 90  # offline only 90s
+        offline_recent.isOnline = False
+
+        online = server.Client()
+        online.lastSeen = time.time()
+        online.isOnline = True
+
+        mock_settings.clients['offline'] = offline_recent
+        mock_settings.clients['online'] = online
+        server.settings = mock_settings
+
+        removed = server.cleanup_old_clients(max_age_seconds=0)
+
+        assert removed == 1
+        assert 'offline' not in mock_settings.clients
+        assert 'online' in mock_settings.clients
 
 
 class TestMessageValidation:

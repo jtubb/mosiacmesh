@@ -1019,7 +1019,28 @@ def msg_response(msg,session):
         if client:
             client.synced = True
         response["PAYLOAD"] = "SYNACK"
-        
+
+    elif(msg["REQUEST"] == "REMOVE_CLIENT"):
+        # Admin-initiated removal of a single device. The device re-registers
+        # (as new) if it ever reconnects — this only clears the stale record.
+        payload = msg.get("PAYLOAD") or {}
+        target = payload.get("clientID") if isinstance(payload, dict) else payload
+        removed = settings.clients.pop(target, None)
+        response["PAYLOAD"] = {"removed": target if removed is not None else None}
+        if removed is not None:
+            saveSettings()
+            logging.info(f"Removed client {target} (admin request)")
+            socketmanager.broadcast(jsonpickle.encode(
+                {"REQUEST": "DEVICE_REMOVED", "PAYLOAD": {"clientKey": target}}))
+
+    elif(msg["REQUEST"] == "CLEAR_OFFLINE_CLIENTS"):
+        # Bulk-purge every currently-offline device (max_age 0 = any age).
+        count = cleanup_old_clients(max_age_seconds=0)
+        response["PAYLOAD"] = {"removed": count}
+        if count:
+            socketmanager.broadcast(jsonpickle.encode(
+                {"REQUEST": "DEVICE_REMOVED", "PAYLOAD": {"cleared": count}}))
+
     elif(msg["REQUEST"] == "REGISTER"):
         is_new_client = msg["SRC"] not in settings.clients
         settings.clients.setdefault(msg["SRC"], Client())
