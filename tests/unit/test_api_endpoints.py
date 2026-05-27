@@ -228,3 +228,13 @@ class TestAPIHelpers:
             assert stats['totalDevices'] >= 0
             assert stats['onlineDevices'] >= 0
             assert stats['autoConfiguredDevices'] >= 0
+
+class TestClientIp:
+    def test_prefers_x_forwarded_for(self):
+        req = make_mocked_request('GET', '/', headers={'X-Forwarded-For': '203.0.113.7, 10.0.0.1'})
+        assert server._client_ip(req) == '203.0.113.7'
+
+    def test_falls_back_to_remote_without_xff(self):
+        req = make_mocked_request('GET', '/')
+        # no X-Forwarded-For -> returns request.remote (the socket peer)
+        assert server._client_ip(req) == req.remote

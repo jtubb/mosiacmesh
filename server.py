@@ -801,7 +801,7 @@ async def ws_handler(manager, session, msg):
         # Enhanced discovery notification with client info
         client_info = {
             "sessionId": session.id,
-            "ip": session.request.remote if hasattr(session, 'request') else "unknown",
+            "ip": _client_ip(session.request) if hasattr(session, 'request') else "unknown",
             "userAgent": session.request.headers.get('User-Agent', '') if hasattr(session, 'request') else "",
             "timestamp": time.time()
         }
@@ -892,6 +892,20 @@ def _stop_group_playback(display_id):
     broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
 
 
+def _client_ip(request):
+    """Best-effort client IP. Honors the first X-Forwarded-For hop (when the
+    client reaches us through a proxy/tunnel that sets it), else the socket peer.
+    Note: a client connecting via localhost legitimately reports 127.0.0.1 — only
+    a connection that actually originates from another host shows that host's IP."""
+    try:
+        xff = request.headers.get('X-Forwarded-For')
+        if xff:
+            return xff.split(',')[0].strip()
+        return request.remote
+    except Exception:
+        return ""
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -962,7 +976,7 @@ def msg_response(msg,session):
         client.userAgent = session.request.headers['User-Agent']
         client.deviceWidth = msg["PAYLOAD"]["width"]
         client.deviceHeight = msg["PAYLOAD"]["height"]
-        client.ip = session.request.remote
+        client.ip = _client_ip(session.request)
         client.lastSeen = time.time()
         client.isOnline = True
         client.connectionCount += 1
@@ -1286,7 +1300,7 @@ async def handle_websocket_message(session, message_data):
         client.deviceType = message_data.get('deviceType', client.deviceType)
         client.userAgent = message_data.get('userAgent', client.userAgent)
         if getattr(session, 'request', None) is not None:
-            client.ip = session.request.remote
+            client.ip = _client_ip(session.request)
         client.lastSeen = time.time()
         client.isOnline = True
         client.connectionCount += 1
