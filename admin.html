@@ -1065,6 +1065,7 @@ function plRenderItems() {
     });
     $list.append($li);
   });
+  plUpdateRenderButton();   // reflect layout changes (e.g. Mirror -> Video wall)
 }
 
 function plRenderInspector() {
@@ -1185,10 +1186,33 @@ function plTransport(req) {
   sock.send(generateMessage('SRV', req, { displayID: plAssignedGroup() }));
 }
 function plSetBadge(text) { $('#plRenderBadge').text(text); }
+
+// Render only applies to per-screen layouts (Video wall / Per-screen). A
+// Mirror/Animation-only playlist has nothing to render.
+function plHasRenderable() {
+  return (plEditor.items || []).some(function(it){
+    return it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL';
+  });
+}
+
+// Keep the Render button honest regardless of server status: if no item uses a
+// per-screen layout, disable it with a tooltip that points at Play instead.
+function plUpdateRenderButton() {
+  var $b = $('#plRenderBtn');
+  if (!$b.length) return;
+  if (!plHasRenderable()) {
+    $b.prop('disabled', true).attr('title',
+      'Only “Video wall” / “Per-screen” layouts need rendering. Mirror & Animation play directly — just press Play.');
+  } else {
+    $b.attr('title', '');
+  }
+}
+
 function plSetTransportState(opts) {
   // opts: {render: bool, play: bool} — true = enabled
   $('#plRenderBtn').prop('disabled', !opts.render);
   $('#plPlayBtn').prop('disabled', !opts.play);
+  plUpdateRenderButton();   // override: never enable Render with nothing to render
 }
 
 function plRefreshList() { sock.send(generateMessage('SRV', 'LIST_PLAYLISTS', {})); }

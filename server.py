@@ -1395,7 +1395,8 @@ def msg_response(msg,session):
         elif not display.boundingBox:
             response["PAYLOAD"] = {"status": "ERROR", "error": "no calibration"}
         elif not any(_is_renderable(me) for me in display.mediaElements):
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no renderable items"}
+            response["PAYLOAD"] = {"status": "ERROR",
+                                   "error": "nothing to render — Mirror/Animation play directly, just press Play"}
         elif not [c for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]:
             response["PAYLOAD"] = {"status": "ERROR", "error": "no calibrated screens"}
         elif display.renderStatus == "rendering":
