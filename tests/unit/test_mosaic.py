@@ -774,3 +774,29 @@ class TestScreenQuad:
         q = server.reconstruct_screen_quad(marker_quad, 1000, 800).reshape(4,2)
         assert abs(q[0][0]-250) <= 1 and abs(q[0][1]-200) <= 1   # TL ~ (250,200)
         assert abs(q[2][0]-750) <= 1 and abs(q[2][1]-600) <= 1   # BR ~ (750,600)
+
+
+class TestReconcileQuad:
+    # marker centered in a 1000x800 (landscape) canvas, axis-aligned at scale 1
+    MARKER = [[350,250],[650,250],[650,550],[350,550]]
+
+    def test_agreeing_border_keeps_fiducial(self):
+        border = [[0,0],[1000,0],[1000,800],[0,800]]   # matches landscape screen
+        quad, src = server.reconcile_screen_quad(self.MARKER, border, 1000, 800)
+        assert src == "fiducial"
+
+    def test_rotated_canvas_is_swapped(self):
+        # canvas reported PORTRAIT (800x1000) but the photo border is LANDSCAPE
+        # 1000x800 -> reconcile should swap cw/ch and report 'rotated'.
+        border = [[0,0],[1000,0],[1000,800],[0,800]]
+        quad, src = server.reconcile_screen_quad(self.MARKER, border, 800, 1000)
+        assert src == "rotated"
+
+    def test_irreconcilable_falls_back_to_border(self):
+        border = [[100,100],[200,100],[200,150],[100,150]]  # tiny, unrelated
+        quad, src = server.reconcile_screen_quad(self.MARKER, border, 1000, 800)
+        assert src == "border"
+
+    def test_no_border_uses_fiducial(self):
+        quad, src = server.reconcile_screen_quad(self.MARKER, None, 1000, 800)
+        assert src == "fiducial"

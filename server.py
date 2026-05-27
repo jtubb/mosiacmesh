@@ -286,6 +286,41 @@ def reconstruct_screen_quad(marker_quad, cw, ch, marker_px=300):
     return cv.perspectiveTransform(screen, H).astype("int32")
 
 
+def _quad_box(contour):
+    """Clean convex 4-corner box (minAreaRect) from any contour/quad, ordered."""
+    pts = np.array(contour, dtype="float32").reshape(-1, 1, 2)
+    return order_points(cv.boxPoints(cv.minAreaRect(pts)))
+
+
+def _quad_iou(a, b):
+    """Intersection-over-union of two convex quads (each (4,2) or (4,1,2))."""
+    a = np.array(a, dtype="float32").reshape(-1, 2)
+    b = np.array(b, dtype="float32").reshape(-1, 2)
+    inter, _ = cv.intersectConvexConvex(a, b)
+    union = cv.contourArea(a) + cv.contourArea(b) - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, min_iou=0.5):
+    """Choose the screen quad: fiducial extrapolation, validated against the
+    detected black-band outline. If the fiducial disagrees with the band but a
+    cw<->ch swap agrees, a mobile auto-rotation is assumed (the reported canvas
+    orientation was stale). Returns (quad (4,1,2) int32, source) where source is
+    'fiducial' | 'rotated' | 'border'."""
+    fid = reconstruct_screen_quad(marker_quad, cw, ch, marker_px)
+    if border_contour is None or len(np.array(border_contour).reshape(-1, 2)) < 3:
+        return fid, "fiducial"
+    box = _quad_box(border_contour)
+    iou = _quad_iou(fid, box)
+    fid_sw = reconstruct_screen_quad(marker_quad, ch, cw, marker_px)
+    iou_sw = _quad_iou(fid_sw, box)
+    if iou >= iou_sw and iou >= min_iou:
+        return fid, "fiducial"
+    if iou_sw > iou and iou_sw >= min_iou:
+        return fid_sw, "rotated"
+    return box.astype("int32").reshape(4, 1, 2), "border"
+
+
 def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     """Warp the region of source_img under a screen's quad onto that screen's
     pixel rect. bbox is the [x, y, w, h] region of the photo that the source image is stretched to fill
