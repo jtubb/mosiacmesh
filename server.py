@@ -148,6 +148,8 @@ def get_discovered_devices():
             "ip": client.ip,
             "osName": client.osName,
             "osVersion": client.osVersion,
+            "engine": getattr(client, "engine", ""),
+            "userAgent": getattr(client, "userAgent", ""),
             "discoveryTime": client.discoveryTime,
             "lastSeen": client.lastSeen,
             "isOnline": client.isOnline,
