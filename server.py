@@ -923,6 +923,44 @@ def _device_type_str(dt):
     return str(getattr(dt, 'value', dt) or '')
 
 
+# Known iPad logical screen sizes (screen.width x screen.height as iOS reports
+# them — orientation-independent, so we compare as an unordered pair). A device
+# that device_detector tags as "Apple + desktop" but which also reports touch
+# support and one of these sizes is a legacy iPad presenting a Mac user-agent
+# (Safari's "Request Desktop Website", or old iPad Safari builds). The iPad
+# identity simply isn't in that UA string, so no parser can recover it — we
+# recover it from the client-reported signals instead.
+_IPAD_SCREEN_SIZES = frozenset([
+    frozenset((768, 1024)),    # 1st-gen, iPad 2, mini 1, and most non-Pro iPads
+    frozenset((810, 1080)),    # iPad 7th-9th gen (10.2")
+    frozenset((820, 1180)),    # iPad Air 4/5, iPad 10th gen (10.9")
+    frozenset((834, 1112)),    # iPad Pro 10.5" / Air 3
+    frozenset((834, 1194)),    # iPad Pro 11"
+    frozenset((744, 1133)),    # iPad mini 6 (8.3")
+    frozenset((1024, 1366)),   # iPad Pro 12.9"
+])
+
+
+def _is_legacy_ipad_signal(brand, device_type, width, height, touch):
+    """Strict heuristic: detect a legacy iPad that presents a Mac user-agent.
+
+    All three signals must hold (to avoid mis-tagging a genuine Mac):
+    device_detector parsed it as Apple + desktop, the client reports touch
+    support, AND the reported screen size matches a known iPad size. Returns
+    True when the device should be reclassified as a tablet/iPad."""
+    if not touch:
+        return False
+    if str(brand or '').lower() != 'apple':
+        return False
+    if str(device_type or '').lower() != 'desktop':
+        return False
+    try:
+        dims = frozenset((int(width), int(height)))
+    except (TypeError, ValueError):
+        return False
+    return dims in _IPAD_SCREEN_SIZES
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -1006,7 +1044,20 @@ def msg_response(msg,session):
         client.deviceBrand = device.device_brand()
         client.deviceModel = device.device_model()
         client.deviceType = _device_type_str(device.device_type())
-        
+
+        # Recover legacy iPads that present a Mac user-agent (e.g. Safari
+        # "Request Desktop Website"). The iPad identity is absent from such a
+        # UA, so we reclassify from client-reported touch + screen-size signals
+        # BEFORE auto_configure_client runs (it groups by deviceType).
+        client.touch = bool(msg["PAYLOAD"].get("touch", False))
+        if _is_legacy_ipad_signal(client.deviceBrand, client.deviceType,
+                                  client.deviceWidth, client.deviceHeight, client.touch):
+            client.deviceType = "tablet"
+            if not client.deviceModel:
+                client.deviceModel = "iPad"
+            logging.info(f"Reclassified {msg['SRC']} as iPad (Apple+desktop UA, "
+                         f"touch, {client.deviceWidth}x{client.deviceHeight})")
+
         # Auto-configuration for new clients
         if is_new_client:
             client.discoveryTime = time.time()

@@ -101,7 +101,14 @@ function getUDID() {
 
 		sock.onopen = function() {
 			log('connected.');
-			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height}));
+			// ES5-safe touch detection (1st-gen iPad / iOS 5 Safari supports
+			// 'ontouchstart'). Lets the server recover iPads that present a
+			// desktop/Mac user-agent. maxTouchPoints is undefined on old Safari,
+			// so undefined > 0 is false — the 'ontouchstart' check carries it.
+			var hasTouch = ('ontouchstart' in window) ||
+				(navigator.maxTouchPoints > 0) ||
+				(navigator.msMaxTouchPoints > 0);
+			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height, "touch": hasTouch}));
 			update_ui();
 		};
 

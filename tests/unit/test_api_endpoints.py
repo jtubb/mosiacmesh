@@ -253,3 +253,32 @@ class TestDeviceNormalization:
         assert server._device_type_str(_E()) == 'desktop'
     def test_device_type_string_passthrough(self):
         assert server._device_type_str('tablet') == 'tablet'
+
+
+class TestLegacyIpadHeuristic:
+    """Reclassify legacy iPads that present a Mac ('Request Desktop') UA."""
+
+    def test_apple_desktop_ipad_res_with_touch_is_ipad(self):
+        # 1st-gen iPad portrait, parsed as Apple desktop, reports touch
+        assert server._is_legacy_ipad_signal('Apple', 'desktop', 768, 1024, True) is True
+
+    def test_orientation_independent(self):
+        # landscape (1024x768) matches the same way
+        assert server._is_legacy_ipad_signal('Apple', 'desktop', 1024, 768, True) is True
+
+    def test_no_touch_is_not_ipad(self):
+        # a real Mac at an iPad-like resolution but without touch stays desktop
+        assert server._is_legacy_ipad_signal('Apple', 'desktop', 768, 1024, False) is False
+
+    def test_non_ipad_resolution_is_not_ipad(self):
+        assert server._is_legacy_ipad_signal('Apple', 'desktop', 1920, 1080, True) is False
+
+    def test_non_apple_is_not_ipad(self):
+        assert server._is_legacy_ipad_signal('Microsoft', 'desktop', 768, 1024, True) is False
+
+    def test_already_tablet_is_not_reprocessed(self):
+        # a correctly-parsed iPad (device_type already tablet) is not a desktop-misparse
+        assert server._is_legacy_ipad_signal('Apple', 'tablet', 768, 1024, True) is False
+
+    def test_missing_dimensions_guarded(self):
+        assert server._is_legacy_ipad_signal('Apple', 'desktop', None, None, True) is False
