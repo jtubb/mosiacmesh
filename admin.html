@@ -567,26 +567,31 @@
 		overflow:hidden
 	} 
 	.upload-area{
-		width: 70%;
-		height: 200px;
-		border: 2px solid lightgray;
-		border-radius: 3px;
-		margin: 0 auto;
-		margin-top: 100px;
+		width: 100%;
+		min-height: 160px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border: 2px dashed var(--border);
+		border-radius: var(--radius);
+		background: var(--surface);
+		margin: 0;
 		text-align: center;
-		overflow: auto;
+		cursor: pointer;
 	}
 
-	.upload-area:hover{
-		cursor: pointer;
+	.upload-area:hover, .upload-area.dragover{
+		border-color: var(--accent);
+		background: var(--surface-2);
 	}
 
 	.upload-area h1{
 		text-align: center;
 		font-weight: normal;
-		font-family: sans-serif;
-		line-height: 50px;
-		color: darkslategray;
+		font-size: 16px;
+		line-height: 1.5;
+		color: var(--text-muted);
+		margin: 0;
 	}
 
 	#file{
@@ -688,6 +693,8 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .jstree-default .jstree-clicked { background:var(--surface-2); box-shadow:none; border-radius:var(--radius); }
 .jstree-default .jstree-hovered { background:var(--surface-2); border-radius:var(--radius); }
 .jstree-anchor .badge { vertical-align:middle; line-height:1; padding:1px 6px; margin-left:4px; }
+/* the jsTree open/close arrow sprite is dark — invert it so it shows on the dark surface */
+[data-theme="dark"] .jstree-default .jstree-ocl { filter: invert(1) brightness(1.6); }
 @media (max-width:760px) {
   .shell { flex-direction:column; }
   .sidebar { flex:none; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border); }
@@ -749,12 +756,12 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 
       <section class="section" data-route="media"><h2>Media library</h2>
 	<div id="mediaGrid" class="thumbs" style="margin-bottom:12px;"></div>
-	<div id="Media" style="width: 50em; height: 20em; overflow:auto; border: 1px solid var(--border)">
-	    <input type="file" name="file" id="file">
+	<div id="Media" style="width:100%; max-width:62em; overflow:visible; border:0;">
+	    <input type="file" name="file" id="file" multiple>
 
 		<!-- Drag and Drop container-->
 		<div class="upload-area"  id="uploadfile">
-			<h1>Drag and Drop file here<br/>Or<br/>Click to select file</h1>
+			<h1>Drag &amp; drop files here<br/>or click to select</h1>
 		</div>
 	</div>
       </section>
@@ -1053,10 +1060,30 @@ function plDelete() {
 
 function plUploadFile(file) {
   var fd = new FormData(); fd.append('file', file);
-  var dest = /\.mp4$/i.test(file.name) ? 'video' : 'image';
+  var dest = /\.(mp4|mov|webm)$/i.test(file.name) ? 'video' : 'image';
   $.ajax({ url: '/upload/' + dest, type: 'POST', data: fd,
            processData: false, contentType: false,
            success: function(){ plLoadLibrary(); } });
+}
+
+// Media-library uploads (the #uploadfile dropzone + #file picker). Uploads each
+// file by extension, then refreshes the media grid and the playlist library.
+function uploadMediaFiles(files) {
+  if (!files || !files.length) return;
+  var total = files.length, done = 0;
+  $.each(files, function(_, f){
+    var fd = new FormData(); fd.append('file', f);
+    var dest = /\.(mp4|mov|webm)$/i.test(f.name) ? 'video' : 'image';
+    $.ajax({ url: '/upload/' + dest, type: 'POST', data: fd, processData: false, contentType: false,
+      success: function(){ done++;
+        if (typeof toast === 'function') toast('Uploaded ' + f.name, 'ok');
+        if (done === total) {
+          if (typeof adminLoadMediaGrid === 'function') adminLoadMediaGrid();
+          if (typeof plLoadLibrary === 'function') plLoadLibrary();
+        }
+      },
+      error: function(){ if (typeof toast === 'function') toast('Upload failed: ' + f.name, 'danger'); } });
+  });
 }
 
 $(function(){
@@ -1065,6 +1092,13 @@ $(function(){
   $('#plDelete').on('click', plDelete);
   $('#plSelect').on('change', function(){ plLoad($(this).val()); });
   $('#plUpload').on('change', function(){ if (this.files[0]) plUploadFile(this.files[0]); });
+  // media dropzone wiring
+  $('#uploadfile').on('click', function(){ $('#file').click(); });
+  $('#file').on('change', function(){ uploadMediaFiles(this.files); this.value = ''; });
+  $('#uploadfile').on('dragover', function(e){ e.preventDefault(); $(this).addClass('dragover'); });
+  $('#uploadfile').on('dragleave', function(){ $(this).removeClass('dragover'); });
+  $('#uploadfile').on('drop', function(e){ e.preventDefault(); $(this).removeClass('dragover');
+    uploadMediaFiles(e.originalEvent.dataTransfer.files); });
   plLoadEffects();
   plLoadLibrary();
   setTimeout(plRefreshList, 500);  // after sock connects
@@ -1077,9 +1111,15 @@ var WEEKDAYS = [["0","Mon"],["1","Tue"],["2","Wed"],["3","Thu"],["4","Fri"],["5"
 
 function schGroups() { return (typeof plGroupOptions === 'function') ? plGroupOptions() : ["Default"]; }
 
+function schToday() {
+  var d = new Date();
+  var m = ('0' + (d.getMonth() + 1)).slice(-2), day = ('0' + d.getDate()).slice(-2);
+  return d.getFullYear() + '-' + m + '-' + day;
+}
+
 function schBlank() {
   return { id:"", name:"", playlistName:"", displayID:(schGroups()[0]||"Default"), priority:0,
-           enabled:true, freq:"WEEKLY", interval:1, byweekday:[], dtstart:"2026-01-01",
+           enabled:true, freq:"WEEKLY", interval:1, byweekday:[], dtstart:schToday(),
            end:{type:"never"}, exdates:[], startTime:"09:00", endTime:"17:00" };
 }
 

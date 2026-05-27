@@ -3,7 +3,9 @@ var udid;
 // Cache DOM selectors for better performance
 var domCache = {};
 function getCachedElement(selector) {
-    if (!domCache[selector]) {
+    // Re-query when missing OR cached empty (the element may not have existed
+    // in the DOM the first time this selector was requested). ES5-safe.
+    if (!domCache[selector] || domCache[selector].length === 0) {
         domCache[selector] = $(selector);
     }
     return domCache[selector];
