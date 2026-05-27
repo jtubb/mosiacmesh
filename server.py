@@ -2135,6 +2135,11 @@ def migrate_client_objects():
             # so reverse-DNS won't clobber it.
             fn = client.friendlyName or ""
             client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
+        # Re-attempt resolution for clients that never got a hostname (e.g.
+        # resolved blank before DNS was fixed / before the mDNS fallback). The
+        # 60s retry throttle keeps perpetually-nameless devices from churning.
+        if not getattr(client, 'hostname', ''):
+            client.hostnameResolved = False
 
 def evaluate_schedules(now=None):
     """Per group with a schedule or a default playlist: pick the effective target
