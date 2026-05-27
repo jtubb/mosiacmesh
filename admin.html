@@ -176,15 +176,19 @@
 			if (s === "NOT_CALIBRATED") {
 				plSetBadge("⚠ not calibrated");
 				plSetTransportState({render: false, play: false});
+				toast("Not calibrated", 'warn');
 			} else if (s === "RENDER_REQUIRED") {
 				plSetBadge("⚠ needs render");
 				plSetTransportState({render: true, play: false});
+				toast("Needs render", 'warn');
 			} else if (s === "error") {
 				plSetBadge("⚠ assign failed");
 				plSetTransportState({render: false, play: false});
+				toast("Assign failed", 'danger');
 			} else {
 				plSetBadge("✓ assigned");
 				plSetTransportState({render: true, play: true});
+				toast("Assigned", 'ok');
 			}
 		}
 		else if(data_obj.REQUEST == "RENDER")
@@ -224,8 +228,8 @@
 		}
 		else if(data_obj.REQUEST == "SAVE_SCHEDULE")
 		{
-			if (data_obj.PAYLOAD && data_obj.PAYLOAD.id && schEditor) { schEditor.id = data_obj.PAYLOAD.id; $('#schStatus').text("saved"); }
-			else if (data_obj.PAYLOAD && data_obj.PAYLOAD.error) { $('#schStatus').text("⚠ " + data_obj.PAYLOAD.error); }
+			if (data_obj.PAYLOAD && data_obj.PAYLOAD.id && schEditor) { schEditor.id = data_obj.PAYLOAD.id; $('#schStatus').text("saved"); toast('Schedule saved', 'ok'); }
+			else if (data_obj.PAYLOAD && data_obj.PAYLOAD.error) { $('#schStatus').text("⚠ " + data_obj.PAYLOAD.error); toast(data_obj.PAYLOAD.error, 'danger'); }
 		}
 		else if(data_obj.REQUEST == "GET_GROUP_DEFAULTS")
 		{
@@ -258,7 +262,7 @@
 		var file = event.target.files[0];
 
 		if (file.size > 5*1024*1024) {
-			alert('Max upload size is 5M');
+			toast('Max upload size is 5M', 'warn');
 		}
 
 		// Also see .name, .type
@@ -484,6 +488,11 @@
 		});
 	});
 	
+	function toast(msg, kind) {
+	  var $t = $('<div class="toast">').addClass(kind || '').text(msg).appendTo('#toasts');
+	  setTimeout(function(){ $t.fadeOut(250, function(){ $(this).remove(); }); }, 3000);
+	}
+
 	function adminLoadMediaGrid() {
 	  $.getJSON('/api/media', function(d){
 	    var $g = $('#mediaGrid').empty(); var all = (d.images||[]).concat(d.videos||[]);
@@ -504,7 +513,7 @@
 	  $('#calGenerate').on('click', function(){
 	    var sel = [];
 	    try { sel = $('#displays').jstree('get_selected'); } catch(e){}
-	    if (!sel || !sel.length) { if (typeof toast==='function') toast('Select a group first','warn'); else alert('Select a group first'); return; }
+	    if (!sel || !sel.length) { toast('Select a group first', 'warn'); return; }
 	    sock.send(generateMessage('SRV','GENERATEARUCO',{'id': sel[0]}));
 	  });
 	});
@@ -874,6 +883,10 @@ function plAddItem(file, isScript) {
 
 function plRenderItems() {
   var $list = $('#plItems').empty();
+  if (plEditor.items.length === 0) {
+    $('<li class="empty">').text('No items — click media in the library to add.').appendTo($list);
+    return;
+  }
   $.each(plEditor.items, function(i, it){
     var $li = $('<li>').attr('draggable', true)
       .css({padding:'5px', border:'1px solid #ddd', margin:'2px', cursor:'pointer',
@@ -954,12 +967,12 @@ function plBuildTransport() {
 function plAssignedGroup() { return $('#plGroup').val(); }
 
 function plAssign() {
-  if (!plEditor.name) { alert("Save the playlist first"); return; }
+  if (!plEditor.name) { toast("Save the playlist first", 'warn'); return; }
   sock.send(generateMessage('SRV', 'ASSIGN_PLAYLIST',
     { name: plEditor.name, displayID: plAssignedGroup() }));
 }
 function plRender() {
-  if (!plEditor.name) { alert("Save and assign the playlist first"); return; }
+  if (!plEditor.name) { toast("Save and assign the playlist first", 'warn'); return; }
   sock.send(generateMessage('SRV', 'RENDER', { displayID: plAssignedGroup() }));
 }
 function plTransport(req) {
@@ -988,7 +1001,7 @@ function plNew() {
 
 function plSave() {
   var name = (plEditor.name || prompt("Playlist name:") || "").trim();
-  if (!name) { alert("Name required"); return; }
+  if (!name) { toast("Name required", 'warn'); return; }
   plEditor.name = name;
   plEditor.loop = $('#plLoop').is(':checked');
   sock.send(generateMessage('SRV', 'SAVE_PLAYLIST',
@@ -998,6 +1011,7 @@ function plSave() {
 }
 
 function plDelete() {
+  if (!confirm('Delete this playlist?')) return;
   if (!plEditor.name) return;
   sock.send(generateMessage('SRV', 'DELETE_PLAYLIST', { name: plEditor.name }));
   plNew(); setTimeout(plRefreshList, 100);
@@ -1080,7 +1094,7 @@ function schRefreshList() { sock.send(generateMessage('SRV','LIST_SCHEDULES',{})
 function schLoad(id) { if (id) sock.send(generateMessage('SRV','GET_SCHEDULE',{id:id})); }
 function schNew() { schEditor = schBlank(); $('#schStatus').text("(new)"); schRenderForm(); }
 function schSave() { if (!schEditor) return; sock.send(generateMessage('SRV','SAVE_SCHEDULE', schEditor)); setTimeout(schRefreshList, 150); }
-function schDelete() { if (schEditor && schEditor.id) { sock.send(generateMessage('SRV','DELETE_SCHEDULE',{id:schEditor.id})); } schNew(); setTimeout(schRefreshList, 150); }
+function schDelete() { if (!confirm('Delete this schedule?')) return; if (schEditor && schEditor.id) { sock.send(generateMessage('SRV','DELETE_SCHEDULE',{id:schEditor.id})); } schNew(); setTimeout(schRefreshList, 150); }
 function schRenderDefaults(rows) {
   var $d = $('#schDefaults').empty();
   $.each(schGroups(), function(_, g){
