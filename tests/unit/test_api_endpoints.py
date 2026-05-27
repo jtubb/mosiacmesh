@@ -327,6 +327,30 @@ class TestHostnameResolution:
         assert server._is_private_ipv4('') is False
 
 
+class TestArucoIds:
+    """generateAruco must give every client a globally-unique arucoID, resolving
+    collisions left by the old counter (which produced duplicate markers)."""
+
+    def test_unique_ids_resolves_collisions(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        s = server.Settings()
+        a = server.Client(); a.arucoID = 1; a.displayID = "G"
+        b = server.Client(); b.arucoID = 1; b.displayID = "G"   # collision with a
+        c = server.Client(); c.arucoID = None; c.displayID = "G"
+        s.clients = {"a": a, "b": b, "c": c}
+        server.settings = s
+
+        class _SM:
+            def broadcast(self, *x, **k): pass
+        monkeypatch.setattr(server, "socketmanager", _SM(), raising=False)
+
+        server.generateAruco()
+        ids = [a.arucoID, b.arucoID, c.arucoID]
+        assert all(i is not None for i in ids)
+        assert len(set(ids)) == 3            # all distinct
+        assert a.arucoID == 1                # first keeps its id
+
+
 class TestClientMerge:
     """A browser-cache-cleared device reconnects with a new id; once it resolves
     to the same hostname + attributes as an OFFLINE prior client, merge them."""

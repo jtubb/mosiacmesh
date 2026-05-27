@@ -1833,18 +1833,28 @@ async def javascript_handler(request):
 def generateAruco(displayID = None):
     # Load the predefined dictionary
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_6X6_50)
-    i = 1
+    # Assign each client a GLOBALLY-UNIQUE arucoID. A client keeps its existing
+    # id unless that id is already taken by an earlier client (resolves
+    # collisions left by the old counter, which handed out duplicates across
+    # runs as clients reconnected/merged). calibrate() maps markers back by this
+    # id, so uniqueness is what lets each screen be identified.
+    taken = set()
     for key in settings.clients.keys():
-        id = settings.clients[key].arucoID or i
-        if(not settings.clients[key].arucoID):
-            settings.clients[key].arucoID = id
-            i = i + 1
+        client = settings.clients[key]
+        aid = client.arucoID
+        if aid is None or aid in taken:
+            n = 1
+            while n in taken:
+                n += 1
+            client.arucoID = n
+            aid = n
+        taken.add(aid)
         # Generate the marker
         markerImage = np.zeros((300, 300), dtype=np.uint8)
-        markerImage = cv.aruco.generateImageMarker(dictionary, settings.clients[key].arucoID, 300, markerImage, 1)
+        markerImage = cv.aruco.generateImageMarker(dictionary, client.arucoID, 300, markerImage, 1)
         Path("media/" + key + "/images").mkdir(parents=True, exist_ok=True)
         cv.imwrite("media/" + key + "/images/aruco.png", markerImage)
-        if(displayID == None or settings.clients[key].displayID == displayID):
+        if(displayID == None or client.displayID == displayID):
             #inform any client that they need to load aruco image
             response = {"DEST":key,"REQUEST": "CALIBRATE", "PAYLOAD": None}
             broadcast_to_client(key, response)
