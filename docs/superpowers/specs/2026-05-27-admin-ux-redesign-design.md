@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-27
 **Status:** Design approved, pending implementation plan
-**Scope:** `admin.html` (the desktop control console) + a new `css/admin.css`. No server change; `index.html` (the ES5 display client) untouched.
+**Scope:** `admin.html` (the desktop control console) only — CSS is inlined in its `<style>` (no `/css/` static route exists and no server change is allowed). No server change; `index.html` (the ES5 display client) untouched.
 
 ## Context
 
@@ -11,7 +11,7 @@
 ## Goals
 
 - A clear **information architecture**: a persistent status bar + left sidebar nav + a main pane showing one section at a time (`location.hash`-routed, linkable).
-- A **design system** of CSS-variable tokens with a **light/dark theme toggle** (honoring `prefers-color-scheme`, persisted), and consistent components (buttons, inputs, cards, panels, badges, toasts).
+- A **design system** of CSS-variable tokens (inlined in `admin.html`'s `<style>`) with a **light/dark theme toggle** (honoring `prefers-color-scheme`, persisted), and consistent components (buttons, inputs, cards, panels, badges, toasts).
 - **Reworked flows** for the high-impact areas (status visibility, calibration, media, console) and re-skinned editors (playlists, schedules).
 - Cross-cutting UX best practices: button hierarchy, disabled/loading states, inline feedback (toasts), empty states, confirm-on-destructive, focus styles, responsive sidebar.
 - **Zero behavior regressions**: every existing feature keeps working; element IDs and JS handlers preserved.
@@ -21,7 +21,7 @@
 - Any server-side change or new API (status bar uses existing `DISCOVERY_HEARTBEAT` + `DISPLAYS` data).
 - Replacing jsTree with a custom tree (kept, re-skinned via CSS).
 - Changes to `index.html` / the display client.
-- A CSS framework or build step (hand-written `css/admin.css`, vanilla JS).
+- A CSS framework or build step (hand-written CSS inlined in `admin.html`, vanilla JS).
 - Auth/login, multi-user, or i18n.
 
 ## Architecture: the app shell
@@ -33,7 +33,7 @@ A single-page shell in `admin.html`:
 
 A tiny vanilla-JS router: on `hashchange`/load, show the `<section>` whose `data-route` matches `location.hash` (default `#overview`), set the active nav item. **Sections are addressed by their `data-route` attribute, not by `id`** — so the inner widget IDs (e.g. the `#displays` jsTree element) are untouched and never collide with route names.
 
-## Design system (`css/admin.css`)
+## Design system (inline `<style>` in `admin.html`)
 
 CSS custom-property tokens, no framework:
 - **Theme:** tokens on `:root`; a `[data-theme="light"]` and `[data-theme="dark"]` override; default from `@media (prefers-color-scheme)`. The toggle sets `data-theme` on `<html>` and writes `localStorage.adminTheme`; on load the stored value (else the media preference) is applied.
@@ -73,7 +73,7 @@ CSS custom-property tokens, no framework:
 
 ## Implementation sequencing (each step shippable)
 
-1. `css/admin.css` token system + theme toggle; the shell (status bar, sidebar, main pane) + router; re-home all existing widgets into sections (works, reorganized & restyled).
+1. Inline `<style>` token system + theme toggle; the shell (status bar, sidebar, main pane) + router; re-home all existing widgets into sections (works, reorganized & restyled).
 2. Status-bar wiring (connection / online count / now-playing) + Overview cards.
 3. Per-section flow reworks (calibration steps, media grid, console drawer, badges).
 4. Cross-cutting UX (toasts replacing `alert()`, empty states, confirm-on-delete, responsive sidebar).
