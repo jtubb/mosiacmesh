@@ -522,12 +522,16 @@ async def render_group_async(display_id):
                 for key, c in clients:
                     out_dir = os.path.join("media", key, "videos")
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
+                    # Output at the client's TRUE rendered viewport (canvas),
+                    # falling back to reported device dims when canvas is 0/missing.
+                    out_w = int(getattr(c, "canvasWidth", 0) or c.deviceWidth) or 1
+                    out_h = int(getattr(c, "canvasHeight", 0) or c.deviceHeight) or 1
                     # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
                     # seconds-domain duration (the param name 'duration_ms' is a
                     # misnomer). Do NOT convert to ms here — only the client
                     # playback payload (_media_item_payload) needs ms.
                     evf, eaf = _resolve_effect_filters(me, me.duration,
-                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                                                       out_w, out_h)
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
@@ -541,7 +545,7 @@ async def render_group_async(display_id):
                         pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
                         out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
                         cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
-                                                          int(c.deviceWidth) or 1, int(c.deviceHeight) or 1,
+                                                          out_w, out_h,
                                                           pad_w, pad_h, pad_x, pad_y,
                                                           getattr(me, "backgroundColor", "#000000"),
                                                           extra_video_filters=evf, extra_audio_filters=eaf)
@@ -549,7 +553,7 @@ async def render_group_async(display_id):
                         pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
                         out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
                         cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                           int(c.deviceWidth) or 1, int(c.deviceHeight) or 1,
+                                                           out_w, out_h,
                                                            extra_video_filters=evf, extra_audio_filters=eaf)
                     proc = await asyncio.create_subprocess_exec(
                         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -563,6 +567,10 @@ async def render_group_async(display_id):
                 for key, c in clients:
                     out_dir = os.path.join("media", key, "images")
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
+                    # Output at the client's TRUE rendered viewport (canvas),
+                    # falling back to reported device dims when canvas is 0/missing.
+                    out_w = int(getattr(c, "canvasWidth", 0) or c.deviceWidth) or 1
+                    out_h = int(getattr(c, "canvasHeight", 0) or c.deviceHeight) or 1
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
@@ -571,11 +579,11 @@ async def render_group_async(display_id):
                         bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
                         canvas = letterbox_to_aspect(img, bw, bh, bg)
                         warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
-                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                                                       out_w, out_h)
                         cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
                     else:
                         warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
-                                                       int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
+                                                       out_w, out_h)
                         cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
         display.renderedToken = token
         display.renderStatus = "ready"

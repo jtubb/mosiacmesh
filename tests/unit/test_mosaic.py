@@ -167,6 +167,32 @@ class TestRender:
         assert disp.renderedToken == server.compute_render_token("Default")
         assert (tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")).exists()
 
+    async def test_render_image_uses_canvas_dims_over_device(self, mock_settings, tmp_path, monkeypatch):
+        # canvasWidth/canvasHeight are the TRUE rendered viewport and must win
+        # over the (orientation-unreliable) reported device dims.
+        monkeypatch.chdir(tmp_path)
+        src_dir = tmp_path / "media" / "server" / "images"; src_dir.mkdir(parents=True)
+        img = np.zeros((100, 100, 3), dtype=np.uint8); img[:, :50] = (0, 0, 255)
+        cv.imwrite(str(src_dir / "x.jpg"), img)
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.canvasWidth = 120; c.canvasHeight = 90
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+
+        result = await server.render_group_async("Default")
+
+        assert result["status"] == "ready"
+        out_png = tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")
+        assert out_png.exists()
+        # warped output is canvas-sized (120x90), not device-sized (80x60)
+        assert cv.imread(str(out_png)).shape == (90, 120, 3)
+
     async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
         server.settings = mock_settings
         server.socketmanager = MagicMock()
