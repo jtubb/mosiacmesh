@@ -313,6 +313,15 @@ class TestFfmpegHelpers:
         assert server.isVideoItem("/media/server/pic.jpg") is False
         assert server.isVideoItem("/media/server/clip.MP4?t=1") is True
 
+    def test_is_video_item_other_formats(self):
+        # .mov etc. must be recognized as video (else the renderer cv.imread's
+        # a video and crashes with 'cannot read source image')
+        assert server.isVideoItem("/media/server/videos/big_buck_bunny.mov") is True
+        assert server.isVideoItem("/media/server/clip.MOV") is True
+        assert server.isVideoItem("/media/server/clip.webm") is True
+        assert server.isVideoItem("/media/server/clip.m4v") is True
+        assert server.isVideoItem("/media/server/clip.avi") is False  # not browser/listed
+
     def test_get_video_dimensions(self, monkeypatch):
         class FakeCap:
             def get(self, prop):

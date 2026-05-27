@@ -557,10 +557,16 @@ def _broadcast_per_client_play(display_id, display):
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
 
 
+# Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded
+# to .mp4 by ffmpeg regardless of source; FULL items play directly in the
+# browser (.mp4/.webm/.m4v are broadly playable, .mov needs h264/Safari/Chrome).
+_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".ogv")
+
+
 def isVideoItem(file):
-    """True if a media file is a video (.mp4), mirroring the client's isVideoItem.
+    """True if a media file is a video, mirroring the client's isVideoItem.
     Tolerates a trailing ?query."""
-    return str(file or "").lower().split("?")[0].endswith(".mp4")
+    return str(file or "").lower().split("?")[0].endswith(_VIDEO_EXTS)
 
 
 def quad_to_source_points(bbox, screen_quad, src_w, src_h):
@@ -646,7 +652,7 @@ def resolve_media_path(file_url):
         return None
     client = parts[1]
     name = parts[-1]
-    subdir = "videos" if name.lower().endswith(".mp4") else "images"
+    subdir = "videos" if isVideoItem(name) else "images"
     return os.path.join("media", client, subdir, name)
 
 def get_cached_file(file_path):
@@ -1690,12 +1696,16 @@ async def media_handler(request):
     customStatus = 200
     data = None
     
-    if(fileName.endswith('.jpg')):
+    _fn = fileName.lower()
+    _video_ct = {'.mp4': 'video/mp4', '.mov': 'video/quicktime', '.m4v': 'video/x-m4v',
+                 '.webm': 'video/webm', '.ogv': 'video/ogg'}
+    _vext = next((e for e in _video_ct if _fn.endswith(e)), None)
+    if(_fn.endswith('.jpg') or _fn.endswith('.jpeg')):
         customHeaders = {'Content-Type':'image/jpeg'}
-    elif(fileName.endswith('.png')):
+    elif(_fn.endswith('.png')):
         customHeaders = {'Content-Type':'image/png'}
-    elif(fileName.endswith('.mp4')):
-        customHeaders = {'Content-Type':'video/mp4'}
+    elif(_vext):
+        customHeaders = {'Content-Type': _video_ct[_vext]}
         subdir = "videos"
     else:
         customHeaders = {'Content-Type':'application/octet-stream'}

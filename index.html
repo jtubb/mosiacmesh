@@ -66,7 +66,8 @@
 	}
 
 	function isVideoItem(file) {
-		return /\.mp4(\?|$)/i.test(file || '');
+		// Mirror server.isVideoItem (_VIDEO_EXTS). ES5-safe regex.
+		return /\.(mp4|mov|m4v|webm|ogv)(\?|$)/i.test(file || '');
 	}
 
 	function clearVideo() {
