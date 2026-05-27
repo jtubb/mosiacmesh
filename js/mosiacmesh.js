@@ -108,7 +108,14 @@ function getUDID() {
 			var hasTouch = ('ontouchstart' in window) ||
 				(navigator.maxTouchPoints > 0) ||
 				(navigator.msMaxTouchPoints > 0);
-			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height, "touch": hasTouch}));
+			// screen.* is the device resolution (orientation-independent on iOS);
+			// the canvas/viewport (innerWidth/innerHeight) reflects the ACTUAL
+			// rendered area and orientation. Device-aspect vs canvas-aspect lets
+			// the server infer rotation/warp from the calibration photo. ES5-safe.
+			var cw = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || screen.width;
+			var ch = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
+			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height,
+				"canvasWidth": cw, "canvasHeight": ch, "touch": hasTouch}));
 			update_ui();
 		};
 

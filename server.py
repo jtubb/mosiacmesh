@@ -147,6 +147,7 @@ def get_discovered_devices():
             "deviceBrand": client.deviceBrand,
             "deviceModel": client.deviceModel,
             "resolution": f"{client.deviceWidth}x{client.deviceHeight}",
+            "canvas": f"{getattr(client, 'canvasWidth', 0)}x{getattr(client, 'canvasHeight', 0)}",
             "ip": client.ip,
             "hostname": getattr(client, "hostname", ""),
             "osName": client.osName,
@@ -781,6 +782,8 @@ class Client():
         self.arucoID = None
         self.deviceHeight = 0
         self.deviceWidth = 0
+        self.canvasWidth = 0    # rendered viewport (innerWidth) — reflects actual
+        self.canvasHeight = 0   # orientation; device* is the raw screen resolution
         self.measuredCenter = None
         self.measuredPerimeter = None
         self.userAgent = None
@@ -1301,6 +1304,9 @@ def msg_response(msg,session):
         client.userAgent = session.request.headers['User-Agent']
         client.deviceWidth = msg["PAYLOAD"]["width"]
         client.deviceHeight = msg["PAYLOAD"]["height"]
+        # Rendered viewport (older clients omit it -> fall back to device res)
+        client.canvasWidth = msg["PAYLOAD"].get("canvasWidth") or client.deviceWidth
+        client.canvasHeight = msg["PAYLOAD"].get("canvasHeight") or client.deviceHeight
         _new_ip = _client_ip(session.request)
         if _new_ip != getattr(client, 'ip', ''):
             client.hostnameResolved = False   # new IP -> re-resolve its hostname
@@ -2287,6 +2293,10 @@ def migrate_client_objects():
             client.hostnameResolved = False
         if not hasattr(client, 'touch'):
             client.touch = False
+        if not hasattr(client, 'canvasWidth'):
+            client.canvasWidth = getattr(client, 'deviceWidth', 0)
+        if not hasattr(client, 'canvasHeight'):
+            client.canvasHeight = getattr(client, 'deviceHeight', 0)
         if not hasattr(client, 'nameIsCustom'):
             # Protect pre-existing custom names: a name that is NOT the
             # auto-generated '<device>_<key[:8]>' form is treated as user-set,
