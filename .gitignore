@@ -14,3 +14,9 @@ htmlcov/
 
 # playwright MCP artifacts
 .playwright-mcp/
+
+# Runtime artifacts
+# per-client media + generated ArUco markers (created at runtime)
+media/
+# server logs, e.g. server_run.log from a backgrounded server
+*.log
