@@ -1191,6 +1191,8 @@ def msg_response(msg,session):
             ok = False; err = "bad time"
         if ok and p.get("freq") not in _FREQ_MAP:
             ok = False; err = "bad frequency"
+        if ok and p.get("freq") == "WEEKLY" and not p.get("byweekday"):
+            ok = False; err = "weekly schedule needs at least one weekday"
         if ok:
             try:
                 _parse_date(p.get("dtstart"))
@@ -1216,6 +1218,10 @@ def msg_response(msg,session):
                       "startTime", "endTime"):
                 if k in p:
                     setattr(s, k, p[k])
+            try:
+                s.priority = int(s.priority)
+            except (TypeError, ValueError):
+                s.priority = 0
             response["PAYLOAD"] = {"id": sid}
 
     elif(msg["REQUEST"] == "DELETE_SCHEDULE"):
@@ -1841,7 +1847,7 @@ def evaluate_schedules(now=None):
             if winner is not None:
                 key, playlist_name = winner.id, winner.playlistName
             elif getattr(display, "defaultPlaylistName", None):
-                key, playlist_name = "__default__", display.defaultPlaylistName
+                key, playlist_name = "__default__:" + display.defaultPlaylistName, display.defaultPlaylistName
             else:
                 key, playlist_name = None, None
 

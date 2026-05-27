@@ -239,7 +239,7 @@ class TestEvaluator:
         mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
                                                    startTime="09:00", endTime="17:00")}
         server.evaluate_schedules(datetime.datetime(2026, 6, 1, 20, 0))
-        assert disp.scheduledEntryId == "__default__"
+        assert disp.scheduledEntryId == "__default__:P"
         assert disp.action == server.PlayState.PLAY
 
     def test_active_schedule_outranks_default(self, mock_settings, monkeypatch):
@@ -288,3 +288,39 @@ class TestEvaluator:
         server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
         assert disp.scheduledEntryId == "ok"
         assert disp.action == server.PlayState.PLAY
+
+    def test_default_playlist_change_reassigns(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch, default="P"); self._no_real_render(monkeypatch)
+        # second playlist Q
+        q = server.Playlist(); q.name = "Q"; q.loop = True
+        q.items = [{"id":"b","file":"/media/server/images/y.jpg","duration":5,"playmode":"FULL",
+                    "backgroundColor":"#000000","startEffect":None,"endEffect":None}]
+        mock_settings.playlists["Q"] = q
+        mock_settings.schedules = {}   # no schedules -> default drives it
+        server.evaluate_schedules(datetime.datetime(2026,6,1,12,0))
+        assert disp.scheduledEntryId == "__default__:P"
+        # change the default
+        disp.defaultPlaylistName = "Q"
+        server.evaluate_schedules(datetime.datetime(2026,6,1,12,0,5))
+        assert disp.scheduledEntryId == "__default__:Q"
+        assert disp.mediaElements[0].file == "/media/server/images/y.jpg"  # re-assigned to Q
+
+
+class TestScheduleCRUDExtra:
+    def test_save_coerces_bad_priority(self, mock_settings):
+        server.settings = mock_settings
+        sid = jsonpickle.decode(server.msg_response(
+            {"SRC":"a","DEST":"SRV","REQUEST":"SAVE_SCHEDULE",
+             "PAYLOAD":{"name":"X","playlistName":"P","displayID":"Default","freq":"DAILY","interval":1,
+                        "byweekday":[],"dtstart":"2026-01-01","end":{"type":"never"},"exdates":[],
+                        "startTime":"09:00","endTime":"17:00","priority":"high"}}, _make_session()))["PAYLOAD"]["id"]
+        assert mock_settings.schedules[sid].priority == 0
+
+    def test_save_rejects_weekly_no_days(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC":"a","DEST":"SRV","REQUEST":"SAVE_SCHEDULE",
+             "PAYLOAD":{"name":"X","playlistName":"P","displayID":"Default","freq":"WEEKLY","interval":1,
+                        "byweekday":[],"dtstart":"2026-01-01","end":{"type":"never"},"exdates":[],
+                        "startTime":"09:00","endTime":"17:00"}}, _make_session()))
+        assert "error" in resp["PAYLOAD"]
