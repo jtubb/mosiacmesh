@@ -1105,17 +1105,19 @@ _MERGE_FIELDS = ("displayID", "measuredCenter", "measuredPerimeter", "arucoID",
 
 def _merge_reconnected_client(new_key, new_client):
     """A device that clears its browser reconnects with a new client id. Once it
-    resolves to the same hostname (and matching device attributes) as an
-    existing OFFLINE client, fold that old client's config (group, calibration,
-    custom name) onto the live new record and drop the old one. Returns the
-    merged-away old key, or None. Strict: hostname + deviceType + resolution
-    must match, and the old client must be offline (so two live tabs on one
-    machine, or distinct devices sharing a hostname, are never collapsed)."""
+    resolves to the same hostname (and matching device attributes) as another
+    client, fold that old client's config (group, calibration, custom name) onto
+    the live new record and drop the old one. Returns the merged-away old key,
+    or None. Match key is hostname + deviceType + resolution, regardless of the
+    old client's online state (so a duplicate is collapsed immediately, without
+    waiting for socket-close detection). Identity therefore rests on hostname
+    uniqueness: two distinct devices that resolve to the SAME hostname with the
+    same attributes would be treated as one."""
     host = (getattr(new_client, "hostname", "") or "").lower()
     if not host or not getattr(new_client, "isOnline", False):
         return None
     for old_key, old in list(settings.clients.items()):
-        if old_key == new_key or getattr(old, "isOnline", False):
+        if old_key == new_key:
             continue
         if (getattr(old, "hostname", "") or "").lower() != host:
             continue

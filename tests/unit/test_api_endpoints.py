@@ -359,12 +359,16 @@ class TestClientMerge:
         assert new.measuredPerimeter == [[1, 2]]  # calibration preserved
         assert new.arucoID == 7
 
-    def test_no_merge_when_old_online(self):
-        ok, old = self._make("oldkey", True)      # still online
+    def test_merges_even_when_old_still_online(self):
+        # No offline gate: a duplicate is collapsed immediately, without waiting
+        # for the old session's socket-close to be detected.
+        ok, old = self._make("oldkey", True)      # still marked online
+        old.displayID = "Test Group"
         nk, new = self._make("newkey", True)
         s = self._settings_with((ok, old), (nk, new))
-        assert server._merge_reconnected_client("newkey", new) is None
-        assert "oldkey" in s.clients
+        assert server._merge_reconnected_client("newkey", new) == "oldkey"
+        assert "oldkey" not in s.clients
+        assert new.displayID == "Test Group"
 
     def test_no_merge_when_hostname_differs(self):
         ok, old = self._make("oldkey", False, host="other-screen")
