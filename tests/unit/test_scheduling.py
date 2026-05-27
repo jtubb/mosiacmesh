@@ -265,3 +265,26 @@ class TestEvaluator:
         server.socketmanager.broadcast.reset_mock()
         server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0, 5))
         assert server.socketmanager.broadcast.call_count == 0
+
+    def test_disabled_schedule_is_ignored(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   enabled=False, startTime="00:00", endTime="23:59")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        assert disp.scheduledEntryId is None        # disabled -> not active
+        assert disp.action != server.PlayState.PLAY
+
+    def test_one_bad_group_does_not_block_others(self, mock_settings, monkeypatch):
+        # Group A has a valid all-day schedule; Group B's schedule references a missing
+        # playlist but that must not stop Group A from playing.
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        # second group
+        mock_settings.displays["Mobile"] = server.Display()
+        mock_settings.displays["Mobile"].scheduledEntryId = None
+        mock_settings.displays["Mobile"].scheduledPlaying = False
+        mock_settings.schedules = {
+            "ok": _schedule(id="ok", playlistName="P", displayID="Default", startTime="00:00", endTime="23:59"),
+            "bad": _schedule(id="bad", playlistName="MISSING", displayID="Mobile", startTime="00:00", endTime="23:59")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        assert disp.scheduledEntryId == "ok"
+        assert disp.action == server.PlayState.PLAY

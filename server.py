@@ -1826,50 +1826,53 @@ def evaluate_schedules(now=None):
         if getattr(d, "defaultPlaylistName", None):
             group_ids.add(did)
     for display_id in group_ids:
-        display = settings.displays.get(display_id)
-        if display is None:
-            continue
-        winner = None
-        for s in settings.schedules.values():
-            if s.displayID != display_id or not getattr(s, "enabled", True):
+        try:
+            display = settings.displays.get(display_id)
+            if display is None:
                 continue
-            if schedule_active_at(s, now):
-                if (winner is None or s.priority > winner.priority
-                        or (s.priority == winner.priority and s.id < winner.id)):
-                    winner = s
-        if winner is not None:
-            key, playlist_name = winner.id, winner.playlistName
-        elif getattr(display, "defaultPlaylistName", None):
-            key, playlist_name = "__default__", display.defaultPlaylistName
-        else:
-            key, playlist_name = None, None
+            winner = None
+            for s in settings.schedules.values():
+                if s.displayID != display_id or not getattr(s, "enabled", True):
+                    continue
+                if schedule_active_at(s, now):
+                    if (winner is None or s.priority > winner.priority
+                            or (s.priority == winner.priority and s.id < winner.id)):
+                        winner = s
+            if winner is not None:
+                key, playlist_name = winner.id, winner.playlistName
+            elif getattr(display, "defaultPlaylistName", None):
+                key, playlist_name = "__default__", display.defaultPlaylistName
+            else:
+                key, playlist_name = None, None
 
-        prev = getattr(display, "scheduledEntryId", None)
-        if key is None:
-            if prev is not None:
-                _stop_group_playback(display_id)
-                display.scheduledEntryId = None
-                display.scheduledPlaying = False
-            continue
-        if key != prev:
-            pl = settings.playlists.get(playlist_name)
-            if pl is None:
+            prev = getattr(display, "scheduledEntryId", None)
+            if key is None:
                 if prev is not None:
                     _stop_group_playback(display_id)
-                display.scheduledEntryId = None
-                display.scheduledPlaying = False
+                    display.scheduledEntryId = None
+                    display.scheduledPlaying = False
                 continue
-            _apply_playlist(display_id, pl)
-            display.scheduledEntryId = key
-            display.scheduledPlaying = False
-        has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-        if has_renderable and compute_render_token(display_id) != display.renderedToken:
-            if display.renderStatus != "rendering":
-                asyncio.ensure_future(render_group_async(display_id))
+            if key != prev:
+                pl = settings.playlists.get(playlist_name)
+                if pl is None:
+                    if prev is not None:
+                        _stop_group_playback(display_id)
+                    display.scheduledEntryId = None
+                    display.scheduledPlaying = False
+                    continue
+                _apply_playlist(display_id, pl)
+                display.scheduledEntryId = key
                 display.scheduledPlaying = False
-        elif not getattr(display, "scheduledPlaying", False):
-            _start_group_playback(display_id)
-            display.scheduledPlaying = True
+            has_renderable = any(_is_renderable(me) for me in display.mediaElements)
+            if has_renderable and compute_render_token(display_id) != display.renderedToken:
+                if display.renderStatus != "rendering":
+                    asyncio.ensure_future(render_group_async(display_id))
+                    display.scheduledPlaying = False
+            elif not getattr(display, "scheduledPlaying", False):
+                _start_group_playback(display_id)
+                display.scheduledPlaying = True
+        except Exception as e:
+            logging.error("evaluate_schedules: group %s failed: %s", display_id, e)
 
 
 async def process():
