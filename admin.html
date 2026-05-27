@@ -1029,6 +1029,10 @@ function plAddItem(file, isScript) {
   plRenderItems();
 }
 
+// Short friendly names for the layout mode, shown in the item list rows.
+var LAYOUT_SHORT = { FULL: "mirror", SEGMENT: "video wall",
+                     INDIVIDUAL: "per-screen", SCRIPT: "animation" };
+
 function plRenderItems() {
   var $list = $('#plItems').empty();
   if (plEditor.items.length === 0) {
@@ -1042,7 +1046,8 @@ function plRenderItems() {
             background: i === plEditor.selected ? 'var(--surface-2)' : 'transparent',
             outline: i === plEditor.selected ? '2px solid var(--accent)' : 'none'})
       .text("⡀ " + (i+1) + "  " + it.file.split('/').pop() + " · " +
-            (it.fullLength ? "full" : it.duration + "s") + " · " + it.playmode);
+            (it.fullLength ? "full" : it.duration + "s") + " · " +
+            (LAYOUT_SHORT[it.playmode] || it.playmode));
     $('<span>').text(" ✕").css({float:'right', color:'var(--danger)'})
       .on('click', function(e){ e.stopPropagation(); plEditor.items.splice(i,1);
             if (plEditor.selected >= plEditor.items.length) plEditor.selected = -1;
@@ -1101,10 +1106,16 @@ function plRenderInspector() {
     $('<span> s</span>').appendTo($host);
   }
 
-  $('<div class="size">Play mode</div>').appendTo($host);
+  // Screen layout: how the media maps onto the physical screens. Wire values
+  // (FULL/SEGMENT/INDIVIDUAL/SCRIPT) are unchanged — these are display labels.
+  // The two calibration-dependent modes say so in-line (the editor can't grey
+  // them out because a playlist isn't bound to a group until it's assigned).
+  $('<div class="size">Screen layout</div>').appendTo($host);
   var $pm = $('<select>').appendTo($host);
-  $.each([["FULL","FULL"],["SEGMENT","SEGMENT (mesh)"],
-          ["INDIVIDUAL","INDIVIDUAL"],["SCRIPT","SCRIPT"]], function(_, o){
+  $.each([["FULL","Mirror — same on every screen"],
+          ["SEGMENT","Video wall — one image across all screens (needs calibration)"],
+          ["INDIVIDUAL","Per-screen — full image, angle-corrected (needs calibration)"],
+          ["SCRIPT","Animation — synced effect"]], function(_, o){
     $pm.append($('<option>').val(o[0]).text(o[1]));
   });
   $pm.val(it.playmode).on('change', function(){ it.playmode = this.value; plRenderItems(); });
