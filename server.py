@@ -13,6 +13,7 @@ jsonpickle_numpy.register_handlers()
 
 import asyncio
 import socket
+import threading
 from aiohttp import web
 
 from device_detector import DeviceDetector
@@ -967,9 +968,15 @@ def _is_legacy_ipad_signal(brand, device_type, width, height, touch):
     return dims in _IPAD_SCREEN_SIZES
 
 
-# IP -> resolved PTR hostname (or "" when none). Shared across clients on the
-# same IP and persists for the life of the process so we never re-resolve.
-_hostname_cache = {}
+# clientKey -> epoch after which a still-nameless client may be re-tried. Lets a
+# device that was asleep at registration (so it answered neither unicast nor
+# mDNS) get picked up when it wakes, without re-querying every tick.
+_hostname_next_retry = {}
+_HOSTNAME_RETRY_SECONDS = 60
+
+# Lazily-created, long-lived Zeroconf listener for the mDNS reverse fallback.
+_zeroconf = None
+_zeroconf_lock = threading.Lock()
 
 
 def _reverse_dns(ip):
@@ -999,45 +1006,126 @@ def _adopt_hostname_as_name(client, short_host):
     return not getattr(client, 'nameIsCustom', False)
 
 
-async def resolve_client_hostnames(timeout=2.0):
-    """Reverse-DNS every unresolved client IP off the event loop, cache by IP,
-    and adopt the short hostname as the friendlyName when it's still
-    auto-generated. One lookup per unique IP; safe to call each process() tick
-    (resolved clients short-circuit). Persists only when a name actually
-    changed."""
+def _is_private_ipv4(ip):
+    """True for RFC1918 / link-local IPv4 — the only addresses worth an mDNS
+    (multicast) reverse query. Avoids pointless multicast for public IPs."""
+    parts = str(ip).split('.')
+    if len(parts) != 4:
+        return False
+    try:
+        a, b = int(parts[0]), int(parts[1])
+    except ValueError:
+        return False
+    return a == 10 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) \
+        or (a == 169 and b == 254)
+
+
+def _in_addr_arpa(ip):
+    """IPv4 -> reverse-DNS query name. '192.168.1.50' -> '50.1.168.192.in-addr.arpa.'"""
+    return '.'.join(str(ip).split('.')[::-1]) + '.in-addr.arpa.'
+
+
+def _get_zeroconf():
+    """Lazily create one shared, long-lived Zeroconf listener (binds mDNS port
+    5353 and joins the multicast group). Reused for every reverse query so we
+    don't churn sockets. Returns None if zeroconf is unavailable."""
+    global _zeroconf
+    if _zeroconf is None:
+        with _zeroconf_lock:
+            if _zeroconf is None:
+                from zeroconf import Zeroconf
+                _zeroconf = Zeroconf()
+    return _zeroconf
+
+
+def _mdns_reverse(ip, wait=1.5):
+    """mDNS reverse PTR lookup for a LAN IPv4 (Bonjour/.local devices that
+    aren't in unicast DNS, e.g. Apple displays). Returns the hostname or "".
+    Blocking (sleeps while awaiting the multicast reply) — call via
+    run_in_executor. The device must be awake to answer (iOS goes quiet when
+    asleep)."""
+    if not _is_private_ipv4(ip):
+        return ""
+    try:
+        from zeroconf import DNSOutgoing, DNSQuestion
+        import zeroconf.const as zc_const
+        name = _in_addr_arpa(ip)
+        zc = _get_zeroconf()
+        if zc is None:
+            return ""
+        # Maybe already heard passively; otherwise ask and wait for the reply.
+        recs = zc.cache.get_all_by_details(name, zc_const._TYPE_PTR, zc_const._CLASS_IN)
+        if not recs:
+            out = DNSOutgoing(zc_const._FLAGS_QR_QUERY)
+            out.add_question(DNSQuestion(name, zc_const._TYPE_PTR, zc_const._CLASS_IN))
+            zc.send(out)
+            time.sleep(wait)
+            recs = zc.cache.get_all_by_details(name, zc_const._TYPE_PTR, zc_const._CLASS_IN)
+        for r in recs:
+            alias = getattr(r, 'alias', '') or ''
+            if alias:
+                return alias.rstrip('.')
+        return ""
+    except Exception as e:
+        logging.debug("mDNS reverse lookup failed for %s: %s", ip, e)
+        return ""
+
+
+async def resolve_client_hostnames(unicast_timeout=2.0, mdns_timeout=3.0):
+    """Resolve every unresolved client IP off the event loop and adopt the short
+    hostname as the friendlyName when it's still auto-generated. Tries unicast
+    reverse DNS first (fast, authoritative); falls back to an mDNS reverse PTR
+    for LAN devices not in unicast DNS (Bonjour/.local). One lookup per unique
+    IP per pass; resolved clients short-circuit, still-nameless ones retry every
+    ~60s (catches devices that were asleep). Persists only when a name changed."""
     loop = asyncio.get_event_loop()
-    targets = []          # (client, ip) needing a result applied
-    pending = set()       # unique IPs not yet in the cache
-    for client in list(settings.clients.values()):
+    now = time.time()
+    targets = []
+    for key, client in list(settings.clients.items()):
         ip = getattr(client, 'ip', '') or ''
         if not ip or getattr(client, 'hostnameResolved', False):
             continue
-        targets.append((client, ip))
-        if ip not in _hostname_cache:
-            pending.add(ip)
+        if now < _hostname_next_retry.get(key, 0):
+            continue
+        targets.append((key, client, ip))
     if not targets:
         return
 
-    async def _lookup(ip):
+    async def _resolve(ip):
+        # 1) unicast reverse DNS — first choice
         try:
-            return ip, await asyncio.wait_for(
-                loop.run_in_executor(None, _reverse_dns, ip), timeout)
+            host = await asyncio.wait_for(
+                loop.run_in_executor(None, _reverse_dns, ip), unicast_timeout)
         except Exception:
-            return ip, ""
+            host = ""
+        # 2) mDNS reverse fallback — for .local / Bonjour devices
+        if not host:
+            try:
+                host = await asyncio.wait_for(
+                    loop.run_in_executor(None, _mdns_reverse, ip), mdns_timeout)
+            except Exception:
+                host = ""
+        return ip, host
 
-    if pending:
-        for ip, ptr in await asyncio.gather(*[_lookup(ip) for ip in pending]):
-            _hostname_cache[ip] = ptr
+    unique = {}
+    for _, _, ip in targets:
+        unique.setdefault(ip, "")
+    for ip, host in await asyncio.gather(*[_resolve(ip) for ip in unique]):
+        unique[ip] = host
 
     changed = False
-    for client, ip in targets:
-        ptr = _hostname_cache.get(ip, "")
-        client.hostname = ptr
-        client.hostnameResolved = True
-        short = _short_hostname(ptr)
-        if _adopt_hostname_as_name(client, short):
-            client.friendlyName = short
-            changed = True
+    for key, client, ip in targets:
+        host = unique.get(ip) or ""
+        if host:
+            client.hostname = host
+            client.hostnameResolved = True
+            _hostname_next_retry.pop(key, None)
+            short = _short_hostname(host)
+            if _adopt_hostname_as_name(client, short):
+                client.friendlyName = short
+                changed = True
+        else:
+            _hostname_next_retry[key] = now + _HOSTNAME_RETRY_SECONDS
     if changed:
         saveSettings()
 

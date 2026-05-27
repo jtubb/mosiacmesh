@@ -310,3 +310,18 @@ class TestHostnameResolution:
         c = server.Client()
         c.nameIsCustom = False
         assert server._adopt_hostname_as_name(c, '') is False
+
+    def test_in_addr_arpa(self):
+        assert server._in_addr_arpa('192.168.1.50') == '50.1.168.192.in-addr.arpa.'
+
+    def test_is_private_ipv4(self):
+        assert server._is_private_ipv4('192.168.1.50') is True
+        assert server._is_private_ipv4('10.0.0.5') is True
+        assert server._is_private_ipv4('172.16.4.4') is True
+        assert server._is_private_ipv4('169.254.1.1') is True
+
+    def test_is_not_private_ipv4(self):
+        assert server._is_private_ipv4('8.8.8.8') is False
+        assert server._is_private_ipv4('172.32.0.1') is False   # outside 16-31
+        assert server._is_private_ipv4('::1') is False          # not IPv4 dotted
+        assert server._is_private_ipv4('') is False
