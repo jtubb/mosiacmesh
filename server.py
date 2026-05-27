@@ -12,6 +12,7 @@ import effects
 jsonpickle_numpy.register_handlers()
 
 import asyncio
+import socket
 from aiohttp import web
 
 from device_detector import DeviceDetector
@@ -146,6 +147,7 @@ def get_discovered_devices():
             "deviceModel": client.deviceModel,
             "resolution": f"{client.deviceWidth}x{client.deviceHeight}",
             "ip": client.ip,
+            "hostname": getattr(client, "hostname", ""),
             "osName": client.osName,
             "osVersion": client.osVersion,
             "engine": getattr(client, "engine", ""),
@@ -772,6 +774,10 @@ class Client():
         self.measuredPerimeter = None
         self.userAgent = None
         self.ip = ""
+        self.hostname = ""              # reverse-DNS (PTR) of ip, when resolvable
+        self.hostnameResolved = False   # PTR lookup attempted (don't retry per ip)
+        self.nameIsCustom = False       # user set friendlyName -> DNS won't override
+        self.touch = False              # client reported touch support at REGISTER
         self.osName=""
         self.osVersion=""
         self.engine=""
@@ -961,6 +967,81 @@ def _is_legacy_ipad_signal(brand, device_type, width, height, touch):
     return dims in _IPAD_SCREEN_SIZES
 
 
+# IP -> resolved PTR hostname (or "" when none). Shared across clients on the
+# same IP and persists for the life of the process so we never re-resolve.
+_hostname_cache = {}
+
+
+def _reverse_dns(ip):
+    """Blocking reverse-DNS (PTR) lookup. Returns the hostname, or "" when the
+    IP has no PTR record / lookup fails. MUST be called via run_in_executor —
+    socket.gethostbyaddr blocks and can hang for seconds on IPs with no record."""
+    try:
+        return socket.gethostbyaddr(ip)[0]
+    except Exception:
+        return ""
+
+
+def _short_hostname(ptr):
+    """Friendly short name from a PTR: drop the trailing dot and the domain,
+    keeping the first label. 'Jons-iPad.lan.' -> 'Jons-iPad'. "" -> ""."""
+    if not ptr:
+        return ""
+    return str(ptr).rstrip('.').split('.')[0]
+
+
+def _adopt_hostname_as_name(client, short_host):
+    """True when a resolved short hostname should become the client's
+    friendlyName: there is a hostname AND the user hasn't set a custom name.
+    (migrate_client_objects marks pre-existing custom names so they're safe.)"""
+    if not short_host:
+        return False
+    return not getattr(client, 'nameIsCustom', False)
+
+
+async def resolve_client_hostnames(timeout=2.0):
+    """Reverse-DNS every unresolved client IP off the event loop, cache by IP,
+    and adopt the short hostname as the friendlyName when it's still
+    auto-generated. One lookup per unique IP; safe to call each process() tick
+    (resolved clients short-circuit). Persists only when a name actually
+    changed."""
+    loop = asyncio.get_event_loop()
+    targets = []          # (client, ip) needing a result applied
+    pending = set()       # unique IPs not yet in the cache
+    for client in list(settings.clients.values()):
+        ip = getattr(client, 'ip', '') or ''
+        if not ip or getattr(client, 'hostnameResolved', False):
+            continue
+        targets.append((client, ip))
+        if ip not in _hostname_cache:
+            pending.add(ip)
+    if not targets:
+        return
+
+    async def _lookup(ip):
+        try:
+            return ip, await asyncio.wait_for(
+                loop.run_in_executor(None, _reverse_dns, ip), timeout)
+        except Exception:
+            return ip, ""
+
+    if pending:
+        for ip, ptr in await asyncio.gather(*[_lookup(ip) for ip in pending]):
+            _hostname_cache[ip] = ptr
+
+    changed = False
+    for client, ip in targets:
+        ptr = _hostname_cache.get(ip, "")
+        client.hostname = ptr
+        client.hostnameResolved = True
+        short = _short_hostname(ptr)
+        if _adopt_hostname_as_name(client, short):
+            client.friendlyName = short
+            changed = True
+    if changed:
+        saveSettings()
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -986,6 +1067,7 @@ def msg_response(msg,session):
         if client:
             if('friendlyName' in msg["PAYLOAD"]):
                 client.friendlyName = msg["PAYLOAD"]["friendlyName"]
+                client.nameIsCustom = True   # user-set name: DNS won't override it
             if('displayID' in msg["PAYLOAD"]):
                 client.displayID = msg["PAYLOAD"]["displayID"]
     
@@ -1052,7 +1134,10 @@ def msg_response(msg,session):
         client.userAgent = session.request.headers['User-Agent']
         client.deviceWidth = msg["PAYLOAD"]["width"]
         client.deviceHeight = msg["PAYLOAD"]["height"]
-        client.ip = _client_ip(session.request)
+        _new_ip = _client_ip(session.request)
+        if _new_ip != getattr(client, 'ip', ''):
+            client.hostnameResolved = False   # new IP -> re-resolve its hostname
+        client.ip = _new_ip
         client.lastSeen = time.time()
         client.isOnline = True
         client.connectionCount += 1
@@ -1890,6 +1975,7 @@ async def api_discovery_configure(request):
             client.displayID = data["displayID"]
         if "friendlyName" in data:
             client.friendlyName = data["friendlyName"]
+            client.nameIsCustom = True   # user-set name: DNS won't override it
 
     saveSettings()
     return web.json_response({"success": True})
@@ -1949,6 +2035,18 @@ def migrate_client_objects():
             client.isOnline = False
         if not hasattr(client, 'synced'):
             client.synced = False
+        if not hasattr(client, 'hostname'):
+            client.hostname = ""
+        if not hasattr(client, 'hostnameResolved'):
+            client.hostnameResolved = False
+        if not hasattr(client, 'touch'):
+            client.touch = False
+        if not hasattr(client, 'nameIsCustom'):
+            # Protect pre-existing custom names: a name that is NOT the
+            # auto-generated '<device>_<key[:8]>' form is treated as user-set,
+            # so reverse-DNS won't clobber it.
+            fn = client.friendlyName or ""
+            client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
 
 def evaluate_schedules(now=None):
     """Per group with a schedule or a default playlist: pick the effective target
@@ -2018,6 +2116,12 @@ async def process():
         evaluate_schedules()
     except Exception as e:
         logging.error("schedule evaluation failed: %s", e)
+
+    # Resolve client hostnames (reverse DNS) off the event loop
+    try:
+        await resolve_client_hostnames()
+    except Exception as e:
+        logging.error("hostname resolution failed: %s", e)
 
     # Update last seen times for all active clients
     for client_key, client in settings.clients.items():

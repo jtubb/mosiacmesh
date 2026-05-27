@@ -282,3 +282,31 @@ class TestLegacyIpadHeuristic:
 
     def test_missing_dimensions_guarded(self):
         assert server._is_legacy_ipad_signal('Apple', 'desktop', None, None, True) is False
+
+
+class TestHostnameResolution:
+    """Reverse-DNS hostname helpers."""
+
+    def test_short_hostname_strips_domain_and_dot(self):
+        assert server._short_hostname('Jons-iPad.lan.') == 'Jons-iPad'
+
+    def test_short_hostname_bare_label(self):
+        assert server._short_hostname('mediawall1') == 'mediawall1'
+
+    def test_short_hostname_empty(self):
+        assert server._short_hostname('') == '' and server._short_hostname(None) == ''
+
+    def test_adopt_when_name_not_custom(self):
+        c = server.Client()
+        c.nameIsCustom = False
+        assert server._adopt_hostname_as_name(c, 'living-room-ipad') is True
+
+    def test_no_adopt_when_name_custom(self):
+        c = server.Client()
+        c.nameIsCustom = True
+        assert server._adopt_hostname_as_name(c, 'living-room-ipad') is False
+
+    def test_no_adopt_when_no_hostname(self):
+        c = server.Client()
+        c.nameIsCustom = False
+        assert server._adopt_hostname_as_name(c, '') is False
