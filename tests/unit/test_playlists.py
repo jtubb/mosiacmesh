@@ -269,6 +269,28 @@ class TestMediaApi:
         assert os.path.exists("media/server/videos/clip.mp4")
 
 
+class TestDurationUnits:
+    """Durations are authored in seconds but the client/effects consume ms."""
+
+    def test_duration_ms_converts_seconds(self):
+        me = server.MediaElement(); me.duration = 5
+        assert server._duration_ms(me) == 5000
+
+    def test_duration_ms_fractional(self):
+        me = server.MediaElement(); me.duration = 596.5
+        assert server._duration_ms(me) == 596500
+
+    def test_duration_ms_none_is_zero(self):
+        me = server.MediaElement(); me.duration = None
+        assert server._duration_ms(me) == 0
+
+    def test_payload_duration_is_milliseconds(self):
+        me = server.MediaElement()
+        me.id = "i1"; me.file = "/media/server/videos/v.mp4"; me.duration = 10
+        me.playmode = server.PlayMode.FULL
+        assert server._media_item_payload(me)["duration"] == 10000
+
+
 class TestEffectsApi:
     @pytest.mark.asyncio
     async def test_api_effects_lists_registered(self):

@@ -1069,11 +1069,13 @@ function plRenderInspector() {
     .appendTo($host);
 
   // For videos with a known length, offer one-click "play the full video".
+  // Round UP (ceil) so we never advance before the clip ends — a fractional
+  // clip rounded down would clip the final frames.
   var vdur = (window._videoDurations || {})[it.file];
   if (vdur) {
-    $('<button class="btn">⏱ Full length (' + Math.round(vdur) + 's)</button>')
+    $('<button class="btn">⏱ Full length (' + Math.ceil(vdur) + 's)</button>')
       .css({display:'block', marginTop:'4px'})
-      .on('click', function(){ it.duration = Math.round(vdur); plRenderItems(); plRenderInspector(); })
+      .on('click', function(){ it.duration = Math.ceil(vdur); plRenderItems(); plRenderInspector(); })
       .appendTo($host);
   }
 

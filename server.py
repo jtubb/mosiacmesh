@@ -471,6 +471,10 @@ async def render_group_async(display_id):
                 for key, c in clients:
                     out_dir = os.path.join("media", key, "videos")
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
+                    # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
+                    # seconds-domain duration (the param name 'duration_ms' is a
+                    # misnomer). Do NOT convert to ms here — only the client
+                    # playback payload (_media_item_payload) needs ms.
                     evf, eaf = _resolve_effect_filters(me, me.duration,
                                                        int(c.deviceWidth) or 1, int(c.deviceHeight) or 1)
                     if me.playmode == PlayMode.INDIVIDUAL:
@@ -830,10 +834,23 @@ async def ws_handler(manager, session, msg):
         handle_client_disconnect(session.id)
         manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
 
+def _duration_ms(me):
+    """Item duration in milliseconds. Durations are authored/stored in SECONDS
+    (the editor's 'Duration (s)' field, default 5), but the client playback
+    engine (playlistIndex vs GoTime ms, currentTime, msToNext) and the ffmpeg
+    effect filters both consume MILLISECONDS — so convert at every boundary
+    that leaves the seconds-domain."""
+    try:
+        return int(round(float(me.duration) * 1000))
+    except (TypeError, ValueError):
+        return 0
+
+
 def _media_item_payload(me):
     """Per-item dict sent to clients in PLAY/PRELOAD. getattr guards items
-    loaded from an older settings.dat that predate the newer fields."""
-    return {"id": me.id, "file": me.file, "duration": me.duration,
+    loaded from an older settings.dat that predate the newer fields. duration
+    is emitted in MILLISECONDS (stored in seconds — see _duration_ms)."""
+    return {"id": me.id, "file": me.file, "duration": _duration_ms(me),
             "playmode": me.playmode.name,
             "backgroundColor": getattr(me, "backgroundColor", "#000000"),
             "startEffect": getattr(me, "startEffect", None),
