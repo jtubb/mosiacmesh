@@ -889,11 +889,13 @@ function plRenderItems() {
   }
   $.each(plEditor.items, function(i, it){
     var $li = $('<li>').attr('draggable', true)
-      .css({padding:'5px', border:'1px solid #ddd', margin:'2px', cursor:'pointer',
-            background: i === plEditor.selected ? '#d6e6fb' : '#fff'})
+      .css({padding:'5px', border:'1px solid var(--border)', margin:'2px', cursor:'pointer',
+            borderRadius:'var(--radius)', color:'var(--text)',
+            background: i === plEditor.selected ? 'var(--surface-2)' : 'transparent',
+            outline: i === plEditor.selected ? '2px solid var(--accent)' : 'none'})
       .text("⡀ " + (i+1) + "  " + it.file.split('/').pop() + " · " +
             it.duration + "s · " + it.playmode);
-    $('<span>').text(" ✕").css({float:'right', color:'#a00'})
+    $('<span>').text(" ✕").css({float:'right', color:'var(--danger)'})
       .on('click', function(e){ e.stopPropagation(); plEditor.items.splice(i,1);
             if (plEditor.selected >= plEditor.items.length) plEditor.selected = -1;
             plRenderItems(); plRenderInspector(); }).appendTo($li);
