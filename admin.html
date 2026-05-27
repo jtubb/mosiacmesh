@@ -248,6 +248,17 @@
 		{
 			var p = data_obj.PAYLOAD || {};
 			$('#connText').text('connected' + (p.onlineClients != null ? ' · ' + p.onlineClients + ' online' : ''));
+			adminScheduleRefresh();   // periodic fallback (~30s) for unsignaled changes
+		}
+		else if(data_obj.REQUEST == "NEW_DEVICE_CONFIGURED")
+		{
+			var nd = data_obj.PAYLOAD || {};
+			if (typeof toast === 'function') toast('Device joined: ' + (nd.friendlyName || nd.clientKey || 'unknown'), 'ok');
+			adminScheduleRefresh();
+		}
+		else if(data_obj.REQUEST == "CLIENTS_WENT_OFFLINE")
+		{
+			adminScheduleRefresh();
 		}
 	}
 
@@ -551,16 +562,29 @@
     ProgrammableTimer.setup(1000,tickcallback);
 	mosiacMeshConnect(mosiacMeshCallback);
 
+	var _adminRefreshTimer = null;
 	function adminRefreshStatus() {
+		// Don't rebuild the tree while the user is renaming a node — defer until the
+		// inline edit input is gone (jsTree's rename field has class jstree-rename-input).
+		if ($('#displays .jstree-rename-input').length) {
+			clearTimeout(_adminRefreshTimer);
+			_adminRefreshTimer = setTimeout(adminRefreshStatus, 1500);
+			return;
+		}
 		// Refresh BOTH displays and clients: the DISPLAYS handler rebuilds the tree
-		// with empty groups, so CLIENTS must follow to re-nest the screens (otherwise
-		// a connected client gets wiped from the tree on every poll).
+		// with empty groups, so CLIENTS must follow to re-nest the screens.
 		if (typeof sock !== 'undefined' && sock) {
 			try { sock.send(generateMessage('SRV','DISPLAYS','null'));
 			      sock.send(generateMessage('SRV','CLIENTS','null')); } catch(e){}
 		}
 	}
-	$(function(){ setTimeout(adminRefreshStatus, 1200); setInterval(adminRefreshStatus, 5000); });
+	// Event-driven: push signals (device joined / went offline / heartbeat) call this,
+	// debounced. No blind interval — the 30s heartbeat is the only periodic fallback.
+	function adminScheduleRefresh() {
+		clearTimeout(_adminRefreshTimer);
+		_adminRefreshTimer = setTimeout(adminRefreshStatus, 400);
+	}
+	$(function(){ setTimeout(adminRefreshStatus, 1200); });  // initial load only — no polling interval
 
 	$(function(){
 	  $('#calGenerate').on('click', function(){
