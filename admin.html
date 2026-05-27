@@ -109,7 +109,12 @@
 									icon = "images/mobileclient.ico"
 								}
 								children.push({
-									'id' : dataKey,
+									// Namespace the detail-node id by client key. A bare
+									// field name (e.g. 'deviceWidth') collides across
+									// clients — jsTree requires globally-unique ids, so
+									// duplicates merge and every device shows one device's
+									// details. Prefixing with the client key keeps them distinct.
+									'id' : key + '::' + dataKey,
 									'text' : displayKeys[dataKey] + ": "+ value,
 									'state' : { 'opened' : false, 'selected' : false },
 									'children' : false,
