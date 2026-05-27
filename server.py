@@ -2001,10 +2001,15 @@ def calibrate(filename):
                 cX = int((topLeft[0] + bottomRight[0]) / 2.0)
                 cY = int((topLeft[1] + bottomRight[1]) / 2.0)
                 cv.circle(image, (cX, cY), 10, (255, 0, 0), -1)
-                # draw the ArUco marker ID on the image
-                if(markerID >= len(settings.clients)):
-                    break
-                clientID = list(settings.clients.keys())[markerID-1]
+                # Map the detected marker to the client that OWNS that arucoID
+                # (assigned + stored in generateAruco). Mapping by client list
+                # position breaks whenever the client set/order changes between
+                # generate and calibrate — e.g. a device reconnecting with a new
+                # id — leaving most screens uncalibrated.
+                clientID = next((k for k, c in settings.clients.items()
+                                 if getattr(c, "arucoID", None) == markerID), None)
+                if clientID is None:
+                    continue  # marker for a client we no longer have
                 clientLabel = settings.clients[clientID].friendlyName or clientID
                 cv.putText(image, str(clientLabel),(topLeft[0], topLeft[1] - 15), cv.FONT_HERSHEY_SIMPLEX,5, (255, 0, 0), 10)
                 #Dictionary ordering is deterministic in python 3.7
