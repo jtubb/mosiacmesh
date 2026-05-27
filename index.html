@@ -47,7 +47,8 @@
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
 		video: null, videoIndex: -1, driftTimer: null, paused: false,
 		scriptRaf: null, scriptIndex: -1 };
-	var HARD_SEEK_MS = 400; // drift beyond this is corrected with a seek, not a rate nudge
+	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
+	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
 
 	// JS mirror of server.playlist_index — keep the two in sync.
 	function playlistIndex(elapsedMs, durations, loop) {
@@ -128,6 +129,12 @@
 	function driftTick() {
 		var v = playback.video;
 		if (!v || !playback.active) { return; }
+		// Leave the video alone while it is still seeking or lacks playable data
+		// (readyState < HAVE_FUTURE_DATA). Correcting mid-seek restarts buffering,
+		// so during startup the video can never establish playback — it gets
+		// re-seeked every tick and stays stuck at currentTime 0. Let it buffer to
+		// a playable state, then sync.
+		if (v.seeking || v.readyState < 3) { return; }
 		var durations = [], i;
 		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
 		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
