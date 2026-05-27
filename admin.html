@@ -996,8 +996,12 @@ function plRenderEffectField($host, label, getFn, setFn) {
 }
 
 function plDefaultItem(file, isScript) {
+  // Videos default to Full length (their whole clip); images/scripts to 5s.
+  var vdur = (window._videoDurations || {})[file];   // seconds, videos only
   return { id: "i" + Date.now() + Math.floor(Math.random()*1000),
-           file: file, duration: 5,
+           file: file,
+           duration: vdur ? Math.ceil(vdur) : 5,
+           fullLength: vdur ? true : false,
            playmode: isScript ? "SCRIPT" : "FULL",
            backgroundColor: "#000000", startEffect: null, endEffect: null };
 }
@@ -1038,7 +1042,7 @@ function plRenderItems() {
             background: i === plEditor.selected ? 'var(--surface-2)' : 'transparent',
             outline: i === plEditor.selected ? '2px solid var(--accent)' : 'none'})
       .text("⡀ " + (i+1) + "  " + it.file.split('/').pop() + " · " +
-            it.duration + "s · " + it.playmode);
+            (it.fullLength ? "full" : it.duration + "s") + " · " + it.playmode);
     $('<span>').text(" ✕").css({float:'right', color:'var(--danger)'})
       .on('click', function(e){ e.stopPropagation(); plEditor.items.splice(i,1);
             if (plEditor.selected >= plEditor.items.length) plEditor.selected = -1;
@@ -1063,20 +1067,38 @@ function plRenderInspector() {
   if (!it) { $host.html('<div class="size" style="color:var(--text-muted);">Select an item</div>'); return; }
   $('<div class="size"><b>Inspector — item ' + (plEditor.selected+1) + '</b></div>').appendTo($host);
 
-  $('<div class="size">Duration (s)</div>').appendTo($host);
-  $('<input>').val(it.duration).attr('type','number').css('width','5em')
-    .on('change', function(){ it.duration = parseFloat(this.value)||0; plRenderItems(); })
-    .appendTo($host);
-
-  // For videos with a known length, offer one-click "play the full video".
-  // Round UP (ceil) so we never advance before the clip ends — a fractional
-  // clip rounded down would clip the final frames.
-  var vdur = (window._videoDurations || {})[it.file];
+  // Duration. Videos get a Full-length / Custom-seconds toggle (a video has a
+  // natural length); images/scripts get a plain seconds field. Full length
+  // rounds UP (ceil) so a fractional clip is never clipped at the end.
+  $('<div class="size">Duration</div>').appendTo($host);
+  var vdur = (window._videoDurations || {})[it.file];   // seconds, videos only
   if (vdur) {
-    $('<button class="btn">⏱ Full length (' + Math.ceil(vdur) + 's)</button>')
-      .css({display:'block', marginTop:'4px'})
-      .on('click', function(){ it.duration = Math.ceil(vdur); plRenderItems(); plRenderInspector(); })
+    var full = Math.ceil(vdur);
+    if (it.fullLength) { it.duration = full; }          // re-sync if the clip changed
+    var grp = 'dur' + plEditor.selected;
+
+    var $num = $('<input>').attr({type:'number', step:'0.1', min:'0'}).css('width','5em')
+                 .val(it.fullLength ? '' : it.duration).prop('disabled', !!it.fullLength);
+
+    var $full = $('<input type="radio">').attr('name', grp).prop('checked', !!it.fullLength)
+      .on('change', function(){ if (this.checked) { it.fullLength = true; it.duration = full;
+            $num.prop('disabled', true).val(''); plRenderItems(); } });
+    $('<label>').css({display:'block', cursor:'pointer'}).append($full)
+      .append(document.createTextNode(' Full length (' + full + 's)')).appendTo($host);
+
+    var $cust = $('<input type="radio">').attr('name', grp).prop('checked', !it.fullLength)
+      .on('change', function(){ if (this.checked) { it.fullLength = false;
+            $num.prop('disabled', false).val(it.duration).focus(); plRenderItems(); } });
+    $num.on('change', function(){ it.fullLength = false; $cust.prop('checked', true);
+            it.duration = parseFloat(this.value) || 0; plRenderItems(); });
+    $('<label>').css({display:'block', cursor:'pointer'}).append($cust)
+      .append(document.createTextNode(' Custom: ')).append($num)
+      .append(document.createTextNode(' s')).appendTo($host);
+  } else {
+    $('<input>').attr({type:'number', step:'0.1', min:'0'}).css('width','5em').val(it.duration)
+      .on('change', function(){ it.duration = parseFloat(this.value) || 0; plRenderItems(); })
       .appendTo($host);
+    $('<span> s</span>').appendTo($host);
   }
 
   $('<div class="size">Play mode</div>').appendTo($host);
