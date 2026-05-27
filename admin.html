@@ -551,7 +551,15 @@
     ProgrammableTimer.setup(1000,tickcallback);
 	mosiacMeshConnect(mosiacMeshCallback);
 
-	function adminRefreshStatus() { if (typeof sock !== 'undefined' && sock) { try { sock.send(generateMessage('SRV','DISPLAYS','null')); } catch(e){} } }
+	function adminRefreshStatus() {
+		// Refresh BOTH displays and clients: the DISPLAYS handler rebuilds the tree
+		// with empty groups, so CLIENTS must follow to re-nest the screens (otherwise
+		// a connected client gets wiped from the tree on every poll).
+		if (typeof sock !== 'undefined' && sock) {
+			try { sock.send(generateMessage('SRV','DISPLAYS','null'));
+			      sock.send(generateMessage('SRV','CLIENTS','null')); } catch(e){}
+		}
+	}
 	$(function(){ setTimeout(adminRefreshStatus, 1200); setInterval(adminRefreshStatus, 5000); });
 
 	$(function(){
