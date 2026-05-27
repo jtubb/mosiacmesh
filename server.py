@@ -853,6 +853,45 @@ def _build_media_elements(items):
     return elements
 
 
+def _apply_playlist(display_id, pl):
+    """Copy a saved Playlist onto a group (mediaElements, loop, reset token, PRELOAD)."""
+    display = settings.displays.setdefault(display_id, Display())
+    display.mediaElements = _build_media_elements(pl.items)
+    display.loop = bool(pl.loop)
+    display.renderedToken = ""
+    broadcast_to_display_group(display_id, {
+        "REQUEST": "PRELOAD",
+        "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}})
+
+
+def _start_group_playback(display_id, resume_epoch=None):
+    """Set the group playing now and broadcast PLAY (per-client for renderable items,
+    else group-wide). No render gating here — callers ensure render readiness."""
+    display = settings.displays.get(display_id)
+    if not display or not display.mediaElements:
+        return
+    now_ms = int(time.time() * 1000)
+    if resume_epoch is None:
+        resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
+    display.playStartEpoch = resume_epoch
+    display.action = PlayState.PLAY
+    if any(_is_renderable(me) for me in display.mediaElements):
+        _broadcast_per_client_play(display_id, display)
+    else:
+        items = [_media_item_payload(me) for me in display.mediaElements]
+        broadcast_to_display_group(display_id, {
+            "REQUEST": "PLAY",
+            "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
+
+
+def _stop_group_playback(display_id):
+    display = settings.displays.get(display_id)
+    if display:
+        display.action = PlayState.STOP
+        display.currentFrame = 0
+    broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -1036,27 +1075,12 @@ def msg_response(msg,session):
             elif has_renderable and compute_render_token(display_id) != display.renderedToken:
                 response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
-                display.playStartEpoch = resume_epoch
-                display.action = PlayState.PLAY
-                if has_renderable:
-                    _broadcast_per_client_play(display_id, display)
-                else:
-                    items = [_media_item_payload(me) for me in display.mediaElements]
-                    broadcast_to_display_group(display_id, {
-                        "REQUEST": "PLAY",
-                        "PAYLOAD": {"startEpoch": display.playStartEpoch,
-                                    "items": items, "loop": display.loop}})
+                _start_group_playback(display_id, resume_epoch)
                 response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "STOP"):
         display_id = msg["PAYLOAD"]["displayID"]
-        display = settings.displays.get(display_id)
-        if display:
-            display.action = PlayState.STOP
-            display.currentFrame = 0
-        broadcast_to_display_group(display_id, {
-            "REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}
-        })
+        _stop_group_playback(display_id)
         response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "PAUSE"):
@@ -1126,13 +1150,8 @@ def msg_response(msg,session):
         if pl is None or display_id is None:
             response["PAYLOAD"] = {"status": "error", "displayID": display_id}
         else:
-            display = settings.displays.setdefault(display_id, Display())
-            display.mediaElements = _build_media_elements(pl.items)
-            display.loop = bool(pl.loop)
-            display.renderedToken = ""
-            broadcast_to_display_group(display_id, {
-                "REQUEST": "PRELOAD",
-                "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}})
+            _apply_playlist(display_id, pl)
+            display = settings.displays.get(display_id)
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
             if has_renderable and not display.boundingBox:
                 status = "NOT_CALIBRATED"
@@ -1796,10 +1815,72 @@ def migrate_client_objects():
         if not hasattr(client, 'synced'):
             client.synced = False
 
+def evaluate_schedules(now=None):
+    """Per group with a schedule or a default playlist: pick the effective target
+    (highest-priority active schedule, else group default, else nothing) and drive
+    assign -> auto-render -> play / stop. Called every process() tick."""
+    if now is None:
+        now = datetime.datetime.now()
+    group_ids = set(s.displayID for s in settings.schedules.values())
+    for did, d in settings.displays.items():
+        if getattr(d, "defaultPlaylistName", None):
+            group_ids.add(did)
+    for display_id in group_ids:
+        display = settings.displays.get(display_id)
+        if display is None:
+            continue
+        winner = None
+        for s in settings.schedules.values():
+            if s.displayID != display_id or not getattr(s, "enabled", True):
+                continue
+            if schedule_active_at(s, now):
+                if (winner is None or s.priority > winner.priority
+                        or (s.priority == winner.priority and s.id < winner.id)):
+                    winner = s
+        if winner is not None:
+            key, playlist_name = winner.id, winner.playlistName
+        elif getattr(display, "defaultPlaylistName", None):
+            key, playlist_name = "__default__", display.defaultPlaylistName
+        else:
+            key, playlist_name = None, None
+
+        prev = getattr(display, "scheduledEntryId", None)
+        if key is None:
+            if prev is not None:
+                _stop_group_playback(display_id)
+                display.scheduledEntryId = None
+                display.scheduledPlaying = False
+            continue
+        if key != prev:
+            pl = settings.playlists.get(playlist_name)
+            if pl is None:
+                if prev is not None:
+                    _stop_group_playback(display_id)
+                display.scheduledEntryId = None
+                display.scheduledPlaying = False
+                continue
+            _apply_playlist(display_id, pl)
+            display.scheduledEntryId = key
+            display.scheduledPlaying = False
+        has_renderable = any(_is_renderable(me) for me in display.mediaElements)
+        if has_renderable and compute_render_token(display_id) != display.renderedToken:
+            if display.renderStatus != "rendering":
+                asyncio.ensure_future(render_group_async(display_id))
+                display.scheduledPlaying = False
+        elif not getattr(display, "scheduledPlaying", False):
+            _start_group_playback(display_id)
+            display.scheduledPlaying = True
+
+
 async def process():
     """Enhanced periodic processing with device health monitoring"""
     current_time = time.time()
-    
+
+    try:
+        evaluate_schedules()
+    except Exception as e:
+        logging.error("schedule evaluation failed: %s", e)
+
     # Update last seen times for all active clients
     for client_key, client in settings.clients.items():
         if client.isOnline:

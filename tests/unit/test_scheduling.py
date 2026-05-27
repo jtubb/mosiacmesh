@@ -194,3 +194,74 @@ class TestScheduleCRUD:
                          "interval": 1, "byweekday": [], "dtstart": "2026-01-01", "end": {"type": "never"},
                          "exdates": [], "startTime": "09:00", "endTime": "17:00"}}, _make_session()))
         assert "error" in resp["PAYLOAD"]
+
+
+class TestEvaluator:
+    def _setup(self, mock_settings, monkeypatch, default=None):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        pl = server.Playlist(); pl.name = "P"; pl.loop = True
+        pl.items = [{"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
+                     "playmode": "FULL", "backgroundColor": "#000000",
+                     "startEffect": None, "endEffect": None}]
+        mock_settings.playlists = {"P": pl}
+        c = server.Client(); c.displayID = "Default"
+        mock_settings.clients = {"c1": c}
+        disp = mock_settings.displays["Default"]
+        disp.scheduledEntryId = None; disp.scheduledPlaying = False
+        disp.defaultPlaylistName = default
+        return disp
+
+    def _no_real_render(self, monkeypatch):
+        monkeypatch.setattr(server.asyncio, "ensure_future",
+                            lambda coro: (coro.close() if hasattr(coro, "close") else None))
+
+    def test_window_open_assigns_and_plays(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   startTime="00:00", endTime="23:59")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        assert disp.scheduledEntryId == "s1"
+        assert disp.action == server.PlayState.PLAY
+        assert disp.scheduledPlaying is True
+
+    def test_window_closed_no_default_stops(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        disp.scheduledEntryId = "s1"; disp.scheduledPlaying = True; disp.action = server.PlayState.PLAY
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   startTime="09:00", endTime="17:00")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 20, 0))
+        assert disp.scheduledEntryId is None
+        assert disp.action == server.PlayState.STOP
+
+    def test_window_closed_with_default_plays_default(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch, default="P"); self._no_real_render(monkeypatch)
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   startTime="09:00", endTime="17:00")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 20, 0))
+        assert disp.scheduledEntryId == "__default__"
+        assert disp.action == server.PlayState.PLAY
+
+    def test_active_schedule_outranks_default(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch, default="P"); self._no_real_render(monkeypatch)
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   startTime="00:00", endTime="23:59")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        assert disp.scheduledEntryId == "s1"
+
+    def test_priority_winner(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        mock_settings.schedules = {
+            "lo": _schedule(id="lo", priority=1, playlistName="P", displayID="Default", startTime="00:00", endTime="23:59"),
+            "hi": _schedule(id="hi", priority=5, playlistName="P", displayID="Default", startTime="00:00", endTime="23:59")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        assert disp.scheduledEntryId == "hi"
+
+    def test_idempotent_no_double_play(self, mock_settings, monkeypatch):
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   startTime="00:00", endTime="23:59")}
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        server.socketmanager.broadcast.reset_mock()
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0, 5))
+        assert server.socketmanager.broadcast.call_count == 0
