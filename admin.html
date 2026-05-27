@@ -158,6 +158,8 @@
 			});
 			if (plEditor.name) { $sel.val(plEditor.name); }
 			window._schPlaylists = $.map(data_obj.PAYLOAD, function(r){ return r.name; });
+			window._plCount = (data_obj.PAYLOAD || []).length;
+			if (typeof adminRenderSummary === 'function') adminRenderSummary();
 		}
 		else if(data_obj.REQUEST == "GET_PLAYLIST")
 		{
@@ -221,6 +223,8 @@
 			$.each(data_obj.PAYLOAD, function(_, r){
 				$('<option>').val(r.id).text((r.activeNow?"● ":"") + r.name + " ["+r.displayID+"]").appendTo($s); });
 			if (schEditor && schEditor.id) { $s.val(schEditor.id); }
+			window._schCount = (data_obj.PAYLOAD || []).length;
+			if (typeof adminRenderSummary === 'function') adminRenderSummary();
 		}
 		else if(data_obj.REQUEST == "GET_SCHEDULE")
 		{
@@ -256,6 +260,28 @@
 		});
 		if (!Object.keys(displays || {}).length) $o.html('<div class="empty">No display groups yet.</div>');
 		$('#nowPlaying').text(playing.length ? ('▶ ' + playing.join(', ')) : '');
+		window._groupCount = Object.keys(displays || {}).length;
+		adminRenderSummary();
+	}
+
+	// Aggregate count cards (media / playlists / schedules / groups), from the
+	// existing /api/media + LIST_PLAYLISTS + LIST_SCHEDULES responses.
+	function adminRenderSummary() {
+		var cards = [
+			['Display groups', window._groupCount, 'displays'],
+			['Media files', window._mediaCount, 'media'],
+			['Playlists', window._plCount, 'playlists'],
+			['Schedules', window._schCount, 'schedules']
+		];
+		var $s = $('#overviewSummary').empty();
+		$.each(cards, function(_, c){
+			var val = (c[1] == null) ? '–' : c[1];
+			$('<div class="card" style="cursor:pointer">')
+				.html('<div class="size" style="color:var(--text-muted)">'+c[0]+'</div>'
+					+ '<div style="font-size:22px;font-weight:600">'+val+'</div>')
+				.on('click', function(){ location.hash = c[2]; })
+				.appendTo($s);
+		});
 	}
 
 	function imageChanged() {
@@ -496,6 +522,7 @@
 	function adminLoadMediaGrid() {
 	  $.getJSON('/api/media', function(d){
 	    var $g = $('#mediaGrid').empty(); var all = (d.images||[]).concat(d.videos||[]);
+	    window._mediaCount = all.length; if (typeof adminRenderSummary === 'function') adminRenderSummary();
 	    if (!all.length) { $g.html('<div class="empty">No media yet — drop files below to upload.</div>'); return; }
 	    $.each(d.images||[], function(_,u){ $('<div class="thumb">').html('<img src="'+u+'"><div class="cap">'+u.split('/').pop()+'</div>').appendTo($g); });
 	    $.each(d.videos||[], function(_,u){ $('<div class="thumb">').html('<video src="'+u+'" muted></video><div class="cap">'+u.split('/').pop()+'</div>').appendTo($g); });
@@ -689,7 +716,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
       <button class="navitem" data-nav="console">Console</button>
     </nav>
     <main class="main">
-      <section class="section" data-route="overview"><h2>Overview</h2><div id="overviewCards" class="grid"></div></section>
+      <section class="section" data-route="overview"><h2>Overview</h2>
+        <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>
+        <div class="panel-title">Display groups</div>
+        <div id="overviewCards" class="grid"></div>
+      </section>
 
       <section class="section" data-route="displays"><h2>Displays &amp; Calibration</h2>
         <div style="display:flex; gap:16px; flex-wrap:wrap;">
