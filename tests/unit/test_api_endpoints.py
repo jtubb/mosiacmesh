@@ -238,3 +238,18 @@ class TestClientIp:
         req = make_mocked_request('GET', '/')
         # no X-Forwarded-For -> returns request.remote (the socket peer)
         assert server._client_ip(req) == req.remote
+
+
+class TestDeviceNormalization:
+    def test_engine_dict_to_string(self):
+        assert server._engine_str({'default': 'WebKit'}) == 'WebKit'
+    def test_engine_string_passthrough(self):
+        assert server._engine_str('Blink') == 'Blink'
+    def test_engine_empty(self):
+        assert server._engine_str(None) == '' and server._engine_str({}) == ''
+    def test_device_type_enum_value(self):
+        class _E:  # mimics an enum with a .value
+            value = 'desktop'
+        assert server._device_type_str(_E()) == 'desktop'
+    def test_device_type_string_passthrough(self):
+        assert server._device_type_str('tablet') == 'tablet'

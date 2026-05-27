@@ -48,12 +48,14 @@
 				}];
 				
 			window._lastDisplays = data_obj.PAYLOAD;
+			window._nodeBadges = {};   // rebuilt each tree refresh
 			for(var key in data_obj.PAYLOAD)
 			{
 				var d = data_obj.PAYLOAD[key] || {};
+				window._nodeBadges[key] = groupBadgeHtml(d) + groupCountBadge(0);
 				displays[0].children.push({
 					'id' : key,
-					'text' : groupLabel(key, d, 0),
+					'text' : key,
 					'state' : { 'opened' : true, 'selected' : false },
 					'children' : [],
 					'icon' : 'images/display.ico',
@@ -102,10 +104,6 @@
 							if(dataKey in displayKeys)
 							{
 								value = data_obj.PAYLOAD[key][dataKey];
-								if(dataKey == 'engine')
-								{
-									value = data_obj.PAYLOAD[key][dataKey].default;
-								}
 								if(dataKey == 'deviceType' && value != 'desktop')
 								{
 									icon = "images/mobileclient.ico"
@@ -133,9 +131,10 @@
 						} else {
 							clientBadge = ' <span class="badge offline">offline</span>';
 						}
+						window._nodeBadges[key] = clientBadge;
 						$('#displays').jstree(true).settings.core.data[0].children[dispKey].children.push({
 							'id' : key,
-							'text' : (clientObj['friendlyName'] || key) + clientBadge,
+							'text' : stripHtml(clientObj['friendlyName'] || key),
 							'state' : { 'opened' : false, 'selected' : false },
 							'children' : children,
 							'icon' : icon,
@@ -149,7 +148,8 @@
 			for(var gi in _groups)
 			{
 				var g = _groups[gi];
-				g.text = groupLabel(g.id, (window._lastDisplays || {})[g.id], (g.children || []).length);
+				window._nodeBadges[g.id] = groupBadgeHtml((window._lastDisplays || {})[g.id])
+					+ groupCountBadge((g.children || []).length);
 			}
 			$('#displays').jstree(true).refresh();
 		}
@@ -262,18 +262,32 @@
 		}
 	}
 
-	// Group node label: name + calibration badge + screen-count badge. The count
-	// makes empty groups self-explanatory (jsTree only draws an expand arrow on
-	// groups that have screens under them).
+	// Status badges are rendered as a DOM decoration AFTER each node draws (see
+	// adminDecorateTree), NOT baked into the node's `text` — otherwise jsTree's
+	// inline rename editor would expose the badge HTML and round-trip it into the
+	// saved name. window._nodeBadges maps node id -> badge HTML.
 	function groupBadgeHtml(d) {
 		d = d || {};
 		return d.boundingBox ? ' <span class="badge ok">calibrated</span>'
 		                     : ' <span class="badge warn">not calibrated</span>';
 	}
-	function groupLabel(id, d, count) {
-		return id + groupBadgeHtml(d)
-			+ ' <span class="badge">' + count + (count === 1 ? ' screen' : ' screens') + '</span>';
+	function groupCountBadge(count) {
+		return ' <span class="badge">' + count + (count === 1 ? ' screen' : ' screens') + '</span>';
 	}
+	function stripHtml(s) { return String(s == null ? '' : s).replace(/<[^>]*>/g, '').trim(); }
+
+	// Append each node's badge(s) into its anchor after the tree (re)draws. Idempotent:
+	// clears any prior decoration first so repeated redraws don't stack badges.
+	function adminDecorateTree() {
+		var map = window._nodeBadges || {};
+		$('#displays a.jstree-anchor').each(function(){
+			var $a = $(this);
+			$a.find('.deco-badge').remove();
+			var id = this.id.replace(/_anchor$/, '');
+			if (map[id]) { $a.append('<span class="deco-badge">' + map[id] + '</span>'); }
+		});
+	}
+	$(function(){ $('#displays').on('refresh.jstree redraw.jstree after_open.jstree', adminDecorateTree); });
 
 	function adminRenderOverview(displays) {
 		var $o = $('#overviewCards').empty(); var playing = [];

@@ -906,6 +906,21 @@ def _client_ip(request):
         return ""
 
 
+def _engine_str(eng):
+    """device_detector returns the engine as a dict ({'default':'WebKit'}) for some
+    UAs and a plain string ('Blink') for others — normalize to a plain string."""
+    if isinstance(eng, dict):
+        return str(eng.get('default', '') or '')
+    return str(eng or '')
+
+
+def _device_type_str(dt):
+    """device_detector returns device_type as a DeviceType enum for some UAs and a
+    plain string for others — normalize to its string value (e.g. 'desktop',
+    'tablet', 'smartphone') so storage, display, and grouping all match."""
+    return str(getattr(dt, 'value', dt) or '')
+
+
 def msg_response(msg,session):
     clientid = session.id
     logging.debug(session.request.headers['User-Agent'])
@@ -985,10 +1000,10 @@ def msg_response(msg,session):
         device = DeviceDetector(session.request.headers['User-Agent']).parse()
         client.osName = device.os_name()
         client.osVersion = device.os_version()
-        client.engine = device.engine()
+        client.engine = _engine_str(device.engine())
         client.deviceBrand = device.device_brand()
         client.deviceModel = device.device_model()
-        client.deviceType = device.device_type()
+        client.deviceType = _device_type_str(device.device_type())
         
         # Auto-configuration for new clients
         if is_new_client:
@@ -1311,7 +1326,7 @@ async def handle_websocket_message(session, message_data):
             client.osVersion = _device_field(device.os_version) or client.osVersion
             client.deviceBrand = _device_field(device.device_brand) or client.deviceBrand
             client.deviceModel = _device_field(device.device_model) or client.deviceModel
-            detected_type = _device_field(device.device_type)
+            detected_type = _device_type_str(_device_field(device.device_type))
             if detected_type and not message_data.get('deviceType'):
                 client.deviceType = detected_type
         except Exception as e:
