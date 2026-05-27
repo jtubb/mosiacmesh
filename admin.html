@@ -138,6 +138,7 @@
 					.text(row.name + " (" + row.itemCount + ")").appendTo($sel);
 			});
 			if (plEditor.name) { $sel.val(plEditor.name); }
+			window._schPlaylists = $.map(data_obj.PAYLOAD, function(r){ return r.name; });
 		}
 		else if(data_obj.REQUEST == "GET_PLAYLIST")
 		{
@@ -189,6 +190,27 @@
 			var ps = data_obj.PAYLOAD && data_obj.PAYLOAD.status;
 			if (ps === "RENDER_IN_PROGRESS") { plSetBadge("⏳ rendering…"); plSetTransportState({render: false, play: false}); }
 			else if (ps === "RENDER_REQUIRED") { plSetBadge("⚠ needs render"); plSetTransportState({render: true, play: false}); }
+		}
+		else if(data_obj.REQUEST == "LIST_SCHEDULES")
+		{
+			var $s = $('#schSelect').empty();
+			$('<option>').val("").text("-- select --").appendTo($s);
+			$.each(data_obj.PAYLOAD, function(_, r){
+				$('<option>').val(r.id).text((r.activeNow?"● ":"") + r.name + " ["+r.displayID+"]").appendTo($s); });
+			if (schEditor && schEditor.id) { $s.val(schEditor.id); }
+		}
+		else if(data_obj.REQUEST == "GET_SCHEDULE")
+		{
+			if (data_obj.PAYLOAD && !data_obj.PAYLOAD.error) { schEditor = data_obj.PAYLOAD; $('#schStatus').text(schEditor.name); schRenderForm(); }
+		}
+		else if(data_obj.REQUEST == "SAVE_SCHEDULE")
+		{
+			if (data_obj.PAYLOAD && data_obj.PAYLOAD.id && schEditor) { schEditor.id = data_obj.PAYLOAD.id; $('#schStatus').text("saved"); }
+			else if (data_obj.PAYLOAD && data_obj.PAYLOAD.error) { $('#schStatus').text("⚠ " + data_obj.PAYLOAD.error); }
+		}
+		else if(data_obj.REQUEST == "GET_GROUP_DEFAULTS")
+		{
+			schRenderDefaults(data_obj.PAYLOAD);
 		}
 	}
 
@@ -542,6 +564,21 @@
   <div id="plTransport" style="margin-top:6px;">
   </div>
 </div>
+<div id="scheduleEditor" style="border:1px solid black; padding:8px; width:62em; margin-bottom:1em;">
+  <div style="margin-bottom:6px;">
+    <b>Schedules:</b>
+    <select id="schSelect"></select>
+    <button id="schNew" type="button">+ New</button>
+    <button id="schSave" type="button">Save</button>
+    <button id="schDelete" type="button">Delete</button>
+    <span id="schStatus" style="margin-left:8px; color:#555;"></span>
+  </div>
+  <div id="schForm" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
+  <div style="margin-top:8px; border-top:1px solid #ccc; padding-top:6px;">
+    <b>Default playlist (when idle)</b>
+    <div id="schDefaults"></div>
+  </div>
+</div>
 <div id="log" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
 </div>
 <form id="chatform">
@@ -792,6 +829,83 @@ $(function(){
   plLoadLibrary();
   setTimeout(plRefreshList, 500);  // after sock connects
   setTimeout(plBuildTransport, 600);
+});
+</script>
+<script>
+var schEditor = null;
+var WEEKDAYS = [["0","Mon"],["1","Tue"],["2","Wed"],["3","Thu"],["4","Fri"],["5","Sat"],["6","Sun"]];
+
+function schGroups() { return (typeof plGroupOptions === 'function') ? plGroupOptions() : ["Default"]; }
+
+function schBlank() {
+  return { id:"", name:"", playlistName:"", displayID:(schGroups()[0]||"Default"), priority:0,
+           enabled:true, freq:"WEEKLY", interval:1, byweekday:[], dtstart:"2026-01-01",
+           end:{type:"never"}, exdates:[], startTime:"09:00", endTime:"17:00" };
+}
+
+function schRenderForm() {
+  var e = schEditor, $f = $('#schForm').empty();
+  if (!e) { $f.html('<span class="size" style="color:#888;">+ New to create a schedule</span>'); return; }
+  function row(label, $inp) { $('<div>').append('<div class="size">'+label+'</div>').append($inp).appendTo($f); }
+  row("Name", $('<input>').val(e.name).on('change', function(){ e.name=this.value; }));
+  var $grp = $('<select>'); $.each(schGroups(), function(_,g){ $('<option>').val(g).text(g).appendTo($grp); });
+  $grp.val(e.displayID).on('change', function(){ e.displayID=this.value; }); row("Group", $grp);
+  var $pl = $('<select>'); $('<option>').val("").text("-- playlist --").appendTo($pl);
+  $.each((window._schPlaylists||[]), function(_,n){ $('<option>').val(n).text(n).appendTo($pl); });
+  $pl.val(e.playlistName).on('change', function(){ e.playlistName=this.value; }); row("Playlist", $pl);
+  var $freq = $('<select>'); $.each(["DAILY","WEEKLY","MONTHLY","YEARLY"], function(_,f){ $('<option>').val(f).text(f).appendTo($freq); });
+  $freq.val(e.freq).on('change', function(){ e.freq=this.value; schRenderForm(); }); row("Frequency", $freq);
+  row("Every N", $('<input type="number">').val(e.interval).css('width','4em').on('change', function(){ e.interval=parseInt(this.value,10)||1; }));
+  if (e.freq === "WEEKLY") {
+    var $days = $('<div>');
+    $.each(WEEKDAYS, function(_,d){
+      var on = e.byweekday.indexOf(parseInt(d[0],10))>=0 || e.byweekday.indexOf(d[0])>=0;
+      var $cb = $('<input type="checkbox">').prop('checked', on)
+        .on('change', function(){ var v=parseInt(d[0],10); e.byweekday = e.byweekday.filter(function(x){return parseInt(x,10)!==v;});
+          if (this.checked) e.byweekday.push(v); });
+      $days.append($cb).append('<span class="size" style="margin-right:6px;">'+d[1]+'</span>');
+    });
+    row("Weekdays", $days);
+  }
+  row("Start date", $('<input type="date">').val(e.dtstart).on('change', function(){ e.dtstart=this.value; }));
+  var $end = $('<select>'); $.each([["never","Never"],["until","Until date"],["count","After N"]], function(_,o){ $('<option>').val(o[0]).text(o[1]).appendTo($end); });
+  $end.val(e.end.type).on('change', function(){ e.end = {type:this.value}; schRenderForm(); }); row("End", $end);
+  if (e.end.type === "until") row("Until", $('<input type="date">').val(e.end.untilDate||"").on('change', function(){ e.end.untilDate=this.value; }));
+  if (e.end.type === "count") row("Count", $('<input type="number">').val(e.end.count||1).css('width','4em').on('change', function(){ e.end.count=parseInt(this.value,10)||1; }));
+  row("Start time", $('<input type="time">').val(e.startTime).on('change', function(){ e.startTime=this.value; }));
+  row("End time", $('<input type="time">').val(e.endTime).on('change', function(){ e.endTime=this.value; }));
+  row("Priority", $('<input type="number">').val(e.priority).css('width','4em').on('change', function(){ e.priority=parseInt(this.value,10)||0; }));
+  row("Enabled", $('<input type="checkbox">').prop('checked', e.enabled!==false).on('change', function(){ e.enabled=this.checked; }));
+  var $ex = $('<div>');
+  $.each(e.exdates, function(i,d){ $('<span class="size" style="margin-right:4px;">'+d+' </span>')
+    .append($('<a href="#">✕</a>').on('click', function(ev){ ev.preventDefault(); e.exdates.splice(i,1); schRenderForm(); })).appendTo($ex); });
+  var $exAdd = $('<input type="date">');
+  $ex.append($exAdd).append($('<button type="button">+ skip</button>').on('click', function(){ if ($exAdd.val()){ e.exdates.push($exAdd.val()); schRenderForm(); } }));
+  row("Exceptions", $ex);
+}
+
+function schRefreshList() { sock.send(generateMessage('SRV','LIST_SCHEDULES',{})); sock.send(generateMessage('SRV','LIST_PLAYLISTS',{})); }
+function schLoad(id) { if (id) sock.send(generateMessage('SRV','GET_SCHEDULE',{id:id})); }
+function schNew() { schEditor = schBlank(); $('#schStatus').text("(new)"); schRenderForm(); }
+function schSave() { if (!schEditor) return; sock.send(generateMessage('SRV','SAVE_SCHEDULE', schEditor)); setTimeout(schRefreshList, 150); }
+function schDelete() { if (schEditor && schEditor.id) { sock.send(generateMessage('SRV','DELETE_SCHEDULE',{id:schEditor.id})); } schNew(); setTimeout(schRefreshList, 150); }
+function schRenderDefaults(rows) {
+  var $d = $('#schDefaults').empty();
+  $.each(schGroups(), function(_, g){
+    var cur = ""; $.each(rows||[], function(_, r){ if (r.displayID===g) cur = r.defaultPlaylistName||""; });
+    var $sel = $('<select>'); $('<option>').val("").text("None").appendTo($sel);
+    $.each((window._schPlaylists||[]), function(_,n){ $('<option>').val(n).text(n).appendTo($sel); });
+    $sel.val(cur).on('change', function(){ sock.send(generateMessage('SRV','SET_GROUP_DEFAULT',{displayID:g, playlistName:this.value})); });
+    $('<div>').append('<span class="size" style="margin-right:6px;">'+g+'</span>').append($sel).appendTo($d);
+  });
+}
+
+$(function(){
+  $('#schNew').on('click', schNew);
+  $('#schSave').on('click', schSave);
+  $('#schDelete').on('click', schDelete);
+  $('#schSelect').on('change', function(){ schLoad($(this).val()); });
+  setTimeout(function(){ schRefreshList(); sock.send(generateMessage('SRV','GET_GROUP_DEFAULTS',{})); }, 700);
 });
 </script>
 </body>
