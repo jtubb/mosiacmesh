@@ -1867,8 +1867,13 @@ def generateAruco(displayID = None):
 
 def identifyDisplays(isGroup,displayID):
     if(isGroup):
-        response = {"REQUEST": "IDENTIFY", "PAYLOAD": ""}
-        broadcast_to_display_group(displayID, response)
+        # Send each client in the group ITS OWN label — a single group-wide
+        # broadcast can only carry one payload, so it showed blank on every
+        # screen. Per-client so each display shows its own name.
+        for key, client in settings.clients.items():
+            if client.displayID == displayID:
+                response = {"REQUEST": "IDENTIFY", "PAYLOAD": client.friendlyName or key}
+                broadcast_to_client(key, response)
     else:
         client = settings.clients.get(displayID)
         if client:
