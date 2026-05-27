@@ -1170,6 +1170,13 @@ def msg_response(msg,session):
                 ok = False; err = "endTime must be after startTime"
         except Exception:
             ok = False; err = "bad time"
+        if ok and p.get("freq") not in _FREQ_MAP:
+            ok = False; err = "bad frequency"
+        if ok:
+            try:
+                _parse_date(p.get("dtstart"))
+            except Exception:
+                ok = False; err = "bad start date"
         if ok:
             probe = Schedule()
             for k in ("freq", "interval", "byweekday", "dtstart", "end"):
@@ -1202,8 +1209,9 @@ def msg_response(msg,session):
 
     elif(msg["REQUEST"] == "SET_GROUP_DEFAULT"):
         p = msg["PAYLOAD"]
-        display = settings.displays.setdefault(p.get("displayID"), Display())
-        display.defaultPlaylistName = (p.get("playlistName") or "").strip() or None
+        display = settings.displays.get(p.get("displayID"))
+        if display is not None:
+            display.defaultPlaylistName = (p.get("playlistName") or "").strip() or None
         response["PAYLOAD"] = "SUCCESS"
 
     else:

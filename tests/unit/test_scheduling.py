@@ -175,3 +175,22 @@ class TestScheduleCRUD:
         server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "SET_GROUP_DEFAULT",
                              "PAYLOAD": {"displayID": "Default", "playlistName": ""}}, _make_session())
         assert mock_settings.displays["Default"].defaultPlaylistName is None
+
+    def test_save_rejects_bad_dtstart(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_SCHEDULE",
+             "PAYLOAD": {"name": "Z", "playlistName": "P", "displayID": "Default", "freq": "DAILY",
+                         "interval": 1, "byweekday": [], "dtstart": "not-a-date", "end": {"type": "never"},
+                         "exdates": [], "startTime": "09:00", "endTime": "17:00"}}, _make_session()))
+        assert "error" in resp["PAYLOAD"]
+        assert mock_settings.schedules == {}   # not saved
+
+    def test_save_rejects_bad_freq(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_SCHEDULE",
+             "PAYLOAD": {"name": "Z", "playlistName": "P", "displayID": "Default", "freq": "NOPE",
+                         "interval": 1, "byweekday": [], "dtstart": "2026-01-01", "end": {"type": "never"},
+                         "exdates": [], "startTime": "09:00", "endTime": "17:00"}}, _make_session()))
+        assert "error" in resp["PAYLOAD"]
