@@ -1983,8 +1983,40 @@ async def cache_stats_handler(request):
 
 # --- Granular discovery REST endpoints (one handler per resource) ---
 
+# (path, mtime) -> duration in seconds (or None). Avoids re-probing unchanged
+# files on every /api/media call.
+_video_duration_cache = {}
+
+
+async def get_video_duration(path):
+    """Video length in seconds via ffprobe, or None on failure. Cached by
+    (path, mtime). Async (create_subprocess_exec) so it never blocks the loop."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    ckey = (path, mtime)
+    if ckey in _video_duration_cache:
+        return _video_duration_cache[ckey]
+    dur = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", path,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        out, _ = await proc.communicate()
+        val = (out or b"").decode("utf-8", "replace").strip()
+        if val and val != "N/A":
+            dur = float(val)
+    except Exception as e:
+        logging.debug("ffprobe duration failed for %s: %s", path, e)
+    _video_duration_cache[ckey] = dur
+    return dur
+
+
 async def api_media(request):
-    """List the shared media library under media/server/{images,videos}."""
+    """List the shared media library under media/server/{images,videos}, plus
+    per-video durations (seconds) so the playlist editor can offer 'full length'."""
     def _list(sub):
         d = os.path.join("media", "server", sub)
         if not os.path.isdir(d):
@@ -1992,7 +2024,15 @@ async def api_media(request):
         return ["/media/server/" + sub + "/" + f
                 for f in sorted(os.listdir(d))
                 if os.path.isfile(os.path.join(d, f))]
-    body = json.dumps({"images": _list("images"), "videos": _list("videos")})
+    videos = _list("videos")
+    durations = {}
+    for url in videos:
+        disk = os.path.join("media", "server", "videos", os.path.basename(url))
+        d = await get_video_duration(disk)
+        if d is not None:
+            durations[url] = round(d, 1)
+    body = json.dumps({"images": _list("images"), "videos": videos,
+                       "videoDurations": durations})
     return web.Response(text=body, content_type="application/json")
 
 async def api_effects(request):

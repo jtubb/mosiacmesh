@@ -258,7 +258,8 @@ class TestMediaApi:
         monkeypatch.chdir(tmp_path)
         resp = await server.api_media(make_mocked_request('GET', '/api/media'))
         data = json.loads(resp.text)
-        assert data == {"images": [], "videos": []}
+        assert data["images"] == [] and data["videos"] == []
+        assert data.get("videoDurations") == {}
 
     def test_process_video_moves_into_library(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)

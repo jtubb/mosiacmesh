@@ -1015,6 +1015,7 @@ function plRenderLibrary(images, videos) {
 
 function plLoadLibrary() {
   $.getJSON('/api/media', function(data){
+    window._videoDurations = data.videoDurations || {};   // url -> seconds
     plRenderLibrary(data.images || [], data.videos || []);
   });
 }
@@ -1066,6 +1067,15 @@ function plRenderInspector() {
   $('<input>').val(it.duration).attr('type','number').css('width','5em')
     .on('change', function(){ it.duration = parseFloat(this.value)||0; plRenderItems(); })
     .appendTo($host);
+
+  // For videos with a known length, offer one-click "play the full video".
+  var vdur = (window._videoDurations || {})[it.file];
+  if (vdur) {
+    $('<button class="btn">⏱ Full length (' + Math.round(vdur) + 's)</button>')
+      .css({display:'block', marginTop:'4px'})
+      .on('click', function(){ it.duration = Math.round(vdur); plRenderItems(); plRenderInspector(); })
+      .appendTo($host);
+  }
 
   $('<div class="size">Play mode</div>').appendTo($host);
   var $pm = $('<select>').appendTo($host);
