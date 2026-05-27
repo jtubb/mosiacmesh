@@ -47,15 +47,13 @@
 					'draggable' : false
 				}];
 				
+			window._lastDisplays = data_obj.PAYLOAD;
 			for(var key in data_obj.PAYLOAD)
 			{
 				var d = data_obj.PAYLOAD[key] || {};
-				var groupBadge = d.boundingBox
-					? ' <span class="badge ok">calibrated</span>'
-					: ' <span class="badge warn">not calibrated</span>';
 				displays[0].children.push({
 					'id' : key,
-					'text' : key + groupBadge,
+					'text' : groupLabel(key, d, 0),
 					'state' : { 'opened' : true, 'selected' : false },
 					'children' : [],
 					'icon' : 'images/display.ico',
@@ -145,6 +143,13 @@
 						});
 					}
 				}
+			}
+			// update each group's screen-count badge now that children are nested
+			var _groups = $('#displays').jstree(true).settings.core.data[0].children;
+			for(var gi in _groups)
+			{
+				var g = _groups[gi];
+				g.text = groupLabel(g.id, (window._lastDisplays || {})[g.id], (g.children || []).length);
 			}
 			$('#displays').jstree(true).refresh();
 		}
@@ -244,6 +249,19 @@
 			var p = data_obj.PAYLOAD || {};
 			$('#connText').text('connected' + (p.onlineClients != null ? ' · ' + p.onlineClients + ' online' : ''));
 		}
+	}
+
+	// Group node label: name + calibration badge + screen-count badge. The count
+	// makes empty groups self-explanatory (jsTree only draws an expand arrow on
+	// groups that have screens under them).
+	function groupBadgeHtml(d) {
+		d = d || {};
+		return d.boundingBox ? ' <span class="badge ok">calibrated</span>'
+		                     : ' <span class="badge warn">not calibrated</span>';
+	}
+	function groupLabel(id, d, count) {
+		return id + groupBadgeHtml(d)
+			+ ' <span class="badge">' + count + (count === 1 ? ' screen' : ' screens') + '</span>';
 	}
 
 	function adminRenderOverview(displays) {
