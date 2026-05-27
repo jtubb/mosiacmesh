@@ -383,9 +383,12 @@
 					$('#canvas').empty();
 					$('#canvas').prepend(image);
 					image.addEventListener('load', function() {$('#canvas').show();});
+					if (typeof toast === 'function') toast('Calibration image processed', 'ok');
 				},
-				error: function(){
-					console.log("Error in ajax form submission");
+				error: function(xhr){
+					console.log("Error in ajax form submission", xhr && xhr.status);
+					if (typeof toast === 'function')
+						toast('Calibration upload failed (' + ((xhr && xhr.status) || 'error') + ')', 'warn');
 				}
 			});
 

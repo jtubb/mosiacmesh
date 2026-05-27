@@ -1944,20 +1944,31 @@ def calibrate(filename):
                         settings.clients[clientID].measuredPerimeter = approximatedShape
                         break
 
-    # Handle case where there are no detected nodes
-    x, y, w, h = cv.boundingRect(relevantContours)
-    cX = int((x + (w / 2.0)))
-    cY = int((y + (h / 2.0)))
-    cv.circle(image, (cX, cY), 15, (0, 0, 255), -1)
-    cv.rectangle(image, (x, y), (x+w, y+h), (0, 0, 255), 4)
+    # Draw the overall bounding box only if we actually found marker contours.
+    # With no detectable ArUco markers, relevantContours stays an empty list and
+    # cv.boundingRect() raises — skip it and still return the (annotated) image
+    # so the user gets visual feedback instead of a 500.
+    if len(relevantContours) > 0:
+        x, y, w, h = cv.boundingRect(relevantContours)
+        cX = int((x + (w / 2.0)))
+        cY = int((y + (h / 2.0)))
+        cv.circle(image, (cX, cY), 15, (0, 0, 255), -1)
+        cv.rectangle(image, (x, y), (x+w, y+h), (0, 0, 255), 4)
+    else:
+        logging.info("calibrate: no ArUco markers detected in uploaded image")
+
     Path("media/displays/images").mkdir(parents=True, exist_ok=True)
     cv.imwrite("media/displays/images/calibration.png", image)
-    
-    # Clean up image memory
+
+    # Clean up image memory. (No cv.destroyAllWindows() — this is a headless
+    # server; that GUI call raises on OpenCV builds without highgui support.)
     del image, imgray, thresh
-    cv.destroyAllWindows()
 
     assign_group_bounding_boxes()
+    # Return the *URL* (not the disk path): media_handler serves
+    # /media/<client>/<file> by inserting the images/ subdir, so the file
+    # written to media/displays/images/calibration.png is fetched as
+    # /media/displays/calibration.png.
     return "media/displays/calibration.png","text/html"
 
 async def cache_stats_handler(request):

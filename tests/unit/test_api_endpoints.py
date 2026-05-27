@@ -325,3 +325,21 @@ class TestHostnameResolution:
         assert server._is_private_ipv4('172.32.0.1') is False   # outside 16-31
         assert server._is_private_ipv4('::1') is False          # not IPv4 dotted
         assert server._is_private_ipv4('') is False
+
+
+class TestCalibrate:
+    """Calibration upload must not 500 when an image has no ArUco markers."""
+
+    def test_calibrate_no_markers_returns_url_without_crashing(self, tmp_path):
+        import numpy as np, cv2
+        # A blank image -> zero markers -> relevantContours stays empty
+        img = np.full((120, 160, 3), 240, np.uint8)
+        p = tmp_path / "blank.png"
+        cv2.imwrite(str(p), img)
+
+        server.settings = server.Settings()
+        result = server.calibrate(str(p))
+
+        # Returns the 2-segment media URL (media_handler inserts images/),
+        # not the 3-segment disk path, and does not raise.
+        assert result == ("media/displays/calibration.png", "text/html")
