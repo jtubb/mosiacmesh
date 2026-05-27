@@ -302,23 +302,32 @@ def _quad_iou(a, b):
 
 
 def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, min_iou=0.5):
-    """Choose the screen quad: fiducial extrapolation, validated against the
-    detected black-band outline. If the fiducial disagrees with the band but a
-    cw<->ch swap agrees, a mobile auto-rotation is assumed (the reported canvas
-    orientation was stale). Returns (quad (4,1,2) int32, source) where source is
-    'fiducial' | 'rotated' | 'border'."""
+    """Choose the screen quad. The marker-derived fiducial is always the output
+    geometry (it only needs the marker visible); the detected black-band outline
+    is used purely to VALIDATE it and to detect a mobile auto-rotation. If the
+    band agrees better with the cw<->ch-swapped fiducial, a stale-orientation
+    rotation is assumed. If the band can't validate either orientation (low
+    overlap both ways — usually a bad/degenerate band detection, not bad canvas
+    dims), keep the fiducial and flag it. Returns (quad (4,1,2) int32, source)
+    where source is 'fiducial' | 'rotated' | 'unverified'."""
     fid = reconstruct_screen_quad(marker_quad, cw, ch, marker_px)
-    if border_contour is None or len(np.array(border_contour).reshape(-1, 2)) < 3:
+    # Need a usable, non-degenerate band box to validate against.
+    box = None
+    if border_contour is not None and len(np.array(border_contour).reshape(-1, 2)) >= 3:
+        b = _quad_box(border_contour)
+        if cv.contourArea(b.astype("float32").reshape(-1, 1, 2)) > 0:
+            box = b
+    if box is None:
         return fid, "fiducial"
-    box = _quad_box(border_contour)
     iou = _quad_iou(fid, box)
     fid_sw = reconstruct_screen_quad(marker_quad, ch, cw, marker_px)
     iou_sw = _quad_iou(fid_sw, box)
-    if iou >= iou_sw and iou >= min_iou:
-        return fid, "fiducial"
     if iou_sw > iou and iou_sw >= min_iou:
         return fid_sw, "rotated"
-    return box.astype("int32").reshape(4, 1, 2), "border"
+    if iou >= min_iou:
+        return fid, "fiducial"
+    # Band validated neither orientation -> trust the fiducial, flag for diagnosis.
+    return fid, "unverified"
 
 
 def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
@@ -2133,8 +2142,8 @@ def calibrate(filename):
                 if source == "rotated":
                     _cli.canvasWidth, _cli.canvasHeight = ch, cw   # reported orientation was stale
                     logging.info("calibrate: detected rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
-                elif source == "border":
-                    logging.warning("calibrate: fiducial/band mismatch for %s; using band outline", clientID)
+                elif source == "unverified":
+                    logging.warning("calibrate: couldn't validate %s against its black band; using marker fiducial", clientID)
                 _cli.measuredPerimeter = quad
                 # Visualize the reconciled quad when it differs from the raw band.
                 if source != "fiducial":

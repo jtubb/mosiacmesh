@@ -818,10 +818,19 @@ class TestReconcileQuad:
         quad, src = server.reconcile_screen_quad(self.MARKER, border, 800, 1000)
         assert src == "rotated"
 
-    def test_irreconcilable_falls_back_to_border(self):
+    def test_unvalidated_band_keeps_fiducial(self):
+        # band can't validate either orientation (tiny, unrelated) -> keep the
+        # marker-derived fiducial and flag it; never output the band geometry.
         border = [[100,100],[200,100],[200,150],[100,150]]  # tiny, unrelated
         quad, src = server.reconcile_screen_quad(self.MARKER, border, 1000, 800)
-        assert src == "border"
+        assert src == "unverified"
+        fid = server.reconstruct_screen_quad(self.MARKER, 1000, 800)
+        assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
+
+    def test_degenerate_band_ignored(self):
+        # a zero-area / collinear band must not be trusted over the fiducial
+        quad, src = server.reconcile_screen_quad(self.MARKER, [[0,0],[10,0],[20,0]], 1000, 800)
+        assert src == "fiducial"
 
     def test_no_border_uses_fiducial(self):
         quad, src = server.reconcile_screen_quad(self.MARKER, None, 1000, 800)
