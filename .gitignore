@@ -18,5 +18,7 @@ htmlcov/
 # Runtime artifacts
 # per-client media + generated ArUco markers (created at runtime)
 media/
+# uploaded-file staging (upload_handler writes here)
+cache/
 # server logs, e.g. server_run.log from a backgrounded server
 *.log
