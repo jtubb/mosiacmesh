@@ -1709,7 +1709,15 @@ async def media_handler(request):
         subdir = "videos"
     else:
         customHeaders = {'Content-Type':'application/octet-stream'}
-    
+
+    # Three-segment form /media/<client>/<sub>/<file> carries the subdir
+    # explicitly (that's how the media library URLs from /api/media look, e.g.
+    # /media/server/videos/clip.mov). Honor it over the extension guess so those
+    # source URLs resolve instead of 404ing.
+    _sub = request.match_info.get('sub')
+    if _sub:
+        subdir = _sub
+
     logging.debug("media/"+client+"/"+subdir+"/"+fileName)
     
     if(not os.path.isfile("media/"+client+"/"+subdir+"/"+fileName)):
@@ -2419,6 +2427,7 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/images/{src}', image_handler)
         app.router.add_route('GET', '/media/{file}', media_handler),
         app.router.add_route('GET', '/media/{client}/{file}', media_handler),
+        app.router.add_route('GET', '/media/{client}/{sub}/{file}', media_handler),
         app.router.add_route('POST', '/upload/{dest}', upload_handler),
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
         # Discovery API endpoints (granular handlers)
