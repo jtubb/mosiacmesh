@@ -308,6 +308,30 @@ class TestWebSocketConnectionManagement:
         assert 'offline' not in mock_settings.clients
         assert 'online' in mock_settings.clients
 
+    def test_sanitize_display_groups_merges_html_key(self, mock_settings):
+        """An HTML-corrupted group key is removed, merged into the clean name,
+        and any client referencing it is repointed."""
+        if not hasattr(server, 'sanitize_display_groups'):
+            pytest.skip("sanitize_display_groups not implemented")
+
+        bad = 'Default <span class="badge">0 screens</span>'
+        mock_settings.displays = {
+            'Default': server.Display(),
+            'Desktop': server.Display(),
+            bad: server.Display(),
+        }
+        c = server.Client()
+        c.displayID = bad
+        mock_settings.clients = {'c1': c}
+        server.settings = mock_settings
+
+        fixed = server.sanitize_display_groups()
+
+        assert fixed == 1
+        assert bad not in mock_settings.displays
+        assert set(mock_settings.displays.keys()) == {'Default', 'Desktop'}
+        assert mock_settings.clients['c1'].displayID == 'Default'
+
 
 class TestMessageValidation:
     """Test WebSocket message validation"""

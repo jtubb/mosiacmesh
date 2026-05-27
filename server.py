@@ -1894,6 +1894,32 @@ async def api_discovery_configure(request):
     saveSettings()
     return web.json_response({"success": True})
 
+def sanitize_display_groups():
+    """Self-heal display-group keys that captured HTML markup.
+
+    An older rename bug could round-trip a node's decoration badges into the
+    group name, persisting a phantom key like
+    'Default <span class="badge">…</span>' that renders as a duplicate group.
+    Recover the real name (everything before the first '<'), merge the entry
+    back into the clean key (keeping an existing clean group if present), and
+    repoint any clients that referenced the bad key. Idempotent; returns the
+    number of keys fixed."""
+    if not isinstance(getattr(settings, 'displays', None), dict):
+        return 0
+    fixed = 0
+    for bad_key in [k for k in list(settings.displays.keys()) if '<' in str(k)]:
+        clean = str(bad_key).split('<')[0].strip() or 'Default'
+        group = settings.displays.pop(bad_key)
+        settings.displays.setdefault(clean, group)
+        for c in settings.clients.values():
+            if getattr(c, 'displayID', None) == bad_key:
+                c.displayID = clean
+        fixed += 1
+    if fixed:
+        logging.info(f"Sanitized {fixed} display group key(s) containing HTML")
+    return fixed
+
+
 def migrate_client_objects():
     """Migrate old client objects to include new discovery fields"""
     if not hasattr(settings, 'playlists'):
@@ -2056,6 +2082,8 @@ if __name__ == '__main__':
             settings = jsonpickle.decode(data)
             # Migrate old client objects to include new discovery fields
             migrate_client_objects()
+            # Remove any HTML-corrupted display group keys (phantom duplicates)
+            sanitize_display_groups()
         else:
             settings.displays.setdefault("Default", Display())
         
