@@ -66,6 +66,7 @@
 			$('#displays').jstree(true).settings.core.data = displays;
 			$('#displays').jstree(true).refresh();
 			adminRenderOverview(data_obj.PAYLOAD);
+			if (typeof plRefreshGroups === 'function') { plRefreshGroups(); }
 		}
 		else if(data_obj.REQUEST == "CLIENTS")
 		{
@@ -1131,14 +1132,29 @@ function plRenderInspector() {
 }
 
 function plGroupOptions() {
-  // Group ids = children of the 'displays' root in the jstree.
-  var ids = [];
+  // Union of the server's display groups (authoritative) and any group nodes
+  // currently in the jstree (covers a group just created locally before the
+  // next DISPLAYS refresh). De-duplicated, order-preserving.
+  var ids = [], seen = {};
+  function add(id){ if (id && !seen[id]) { seen[id] = 1; ids.push(id); } }
+  $.each(Object.keys(window._lastDisplays || {}), function(_, id){ add(id); });
   try {
     var data = $('#displays').jstree(true).settings.core.data[0].children;
-    $.each(data, function(_, g){ ids.push(g.id); });
+    $.each(data, function(_, g){ add(g.id); });
   } catch (e) {}
   if (!ids.length) ids = ["Default", "Mobile", "Tablet", "Desktop"];
   return ids;
+}
+
+// Repopulate the assign-to-group dropdown from the current group list,
+// preserving the current selection. Safe to call before the dropdown exists.
+function plRefreshGroups() {
+  var $g = $('#plGroup');
+  if (!$g.length) return;
+  var cur = $g.val();
+  $g.empty();
+  $.each(plGroupOptions(), function(_, id){ $('<option>').val(id).text(id).appendTo($g); });
+  if (cur) { $g.val(cur); }
 }
 
 function plBuildTransport() {
