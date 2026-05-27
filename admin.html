@@ -252,10 +252,10 @@
 			if (isPlaying) playing.push(id);
 			var calib = d.boundingBox ? '<span class="badge ok">calibrated</span>' : '<span class="badge warn">not calibrated</span>';
 			$('<div class="card">').html('<b>'+id+'</b> '+calib+'<br><span class="size" style="color:var(--text-muted)">'
-				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">&#9654; playing</span>' : 'idle') + '</span>').appendTo($o);
+				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">▶ playing</span>' : 'idle') + '</span>').appendTo($o);
 		});
 		if (!Object.keys(displays || {}).length) $o.html('<div class="empty">No display groups yet.</div>');
-		$('#nowPlaying').text(playing.length ? ('&#9654; ' + playing.join(', ')) : '');
+		$('#nowPlaying').text(playing.length ? ('▶ ' + playing.join(', ')) : '');
 	}
 
 	function imageChanged() {
@@ -660,6 +660,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .jstree-default .jstree-anchor { color:var(--text); }
 .jstree-default .jstree-clicked { background:var(--surface-2); box-shadow:none; border-radius:var(--radius); }
 .jstree-default .jstree-hovered { background:var(--surface-2); border-radius:var(--radius); }
+.jstree-anchor .badge { vertical-align:middle; line-height:1; padding:1px 6px; margin-left:4px; }
 @media (max-width:760px) {
   .shell { flex-direction:column; }
   .sidebar { flex:none; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border); }
@@ -695,7 +696,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
           <div class="panel" style="flex:0 0 22em;">
             <div class="panel-title">Groups &amp; screens</div>
             <input type="text" id="displays_q" value="" class="input" style="margin:0em auto 1em auto; width: 23em; padding:4px; border-radius:4px; border:1px solid silver;">
-            <div id="displays" style="width: 20em; height: 25em; overflow:auto; border: 1px solid black"></div>
+            <div id="displays" style="width: 20em; height: 25em; overflow:auto; border: 1px solid var(--border)"></div>
           </div>
           <div class="panel" style="flex:1; min-width:24em;">
             <div class="panel-title">Calibration</div>
@@ -704,7 +705,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
               <li><span class="num">2</span> Photograph the wall</li>
               <li><span class="num">3</span> Upload the photo (below)</li>
             </ol>
-            <div id="canvas" style="width: 48em; height: 27em; overflow:auto; border: 1px solid black"></div>
+            <div id="canvas" style="width: 48em; height: 27em; overflow:auto; border: 1px solid var(--border)"></div>
 	<form id="calImageForm" action="javascript:;" method="post">
 		<label for="calImage">Upload Calibration Image</label>
 		<input id="calImage" name="calImage" type="file" value="" onchange='imageChanged(this);'/>
@@ -717,7 +718,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 
       <section class="section" data-route="media"><h2>Media library</h2>
 	<div id="mediaGrid" class="thumbs" style="margin-bottom:12px;"></div>
-	<div id="Media" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
+	<div id="Media" style="width: 50em; height: 20em; overflow:auto; border: 1px solid var(--border)">
 	    <input type="file" name="file" id="file">
 
 		<!-- Drag and Drop container-->
@@ -728,7 +729,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
       </section>
 
       <section class="section" data-route="playlists"><h2>Playlists</h2>
-<div id="playlistEditor" style="border:1px solid black; padding:8px; width:62em; margin-bottom:1em;">
+<div id="playlistEditor" style="border:1px solid var(--border); padding:8px; width:62em; margin-bottom:1em;">
   <div class="toolbar" style="margin-bottom:6px;">
     <b>Playlists:</b>
     <select id="plSelect"></select>
@@ -736,7 +737,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
     <button id="plSave" class="btn btn-primary" type="button">Save</button>
     <button id="plDelete" class="btn btn-danger" type="button">Delete</button>
     <label style="margin-left:8px;"><input type="checkbox" id="plLoop"> Loop</label>
-    <span id="plName" style="margin-left:8px; color:#555;"></span>
+    <span id="plName" style="margin-left:8px; color:var(--text-muted);"></span>
   </div>
   <div style="display:flex; gap:10px;">
     <div class="panel" style="flex:0 0 12em;">
@@ -764,7 +765,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
     <button id="schNew" class="btn" type="button">+ New</button>
     <button id="schSave" class="btn btn-primary" type="button">Save</button>
     <button id="schDelete" class="btn btn-danger" type="button">Delete</button>
-    <span id="schStatus" style="margin-left:8px; color:#555;"></span>
+    <span id="schStatus" style="margin-left:8px; color:var(--text-muted);"></span>
   </div>
   <div id="schForm" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
   <div style="margin-top:8px; border-top:1px solid #ccc; padding-top:6px;">
@@ -916,7 +917,7 @@ function plRenderItems() {
 function plRenderInspector() {
   var $host = $('#plInspectorHost').empty();
   var it = plEditor.items[plEditor.selected];
-  if (!it) { $host.html('<div class="size" style="color:#888;">Select an item</div>'); return; }
+  if (!it) { $host.html('<div class="size" style="color:var(--text-muted);">Select an item</div>'); return; }
   $('<div class="size"><b>Inspector — item ' + (plEditor.selected+1) + '</b></div>').appendTo($host);
 
   $('<div class="size">Duration (s)</div>').appendTo($host);
@@ -960,7 +961,7 @@ function plBuildTransport() {
   $.each(plGroupOptions(), function(_, id){ $('<option>').val(id).text(id).appendTo($g); });
   $('<button class="btn" type="button">Assign</button>').on('click', plAssign).appendTo($t);
   $('<button class="btn" type="button" id="plRenderBtn">⚙ Render</button>').on('click', plRender).appendTo($t);
-  $('<span id="plRenderBadge" style="margin:0 8px; color:#c80;"></span>').appendTo($t);
+  $('<span id="plRenderBadge" style="margin:0 8px; color:var(--warn);"></span>').appendTo($t);
   $('<button class="btn btn-primary" type="button" id="plPlayBtn">▶ Play</button>').on('click', function(){ plTransport('PLAY'); }).appendTo($t);
   $('<button class="btn" type="button">⏸ Pause</button>').on('click', function(){ plTransport('PAUSE'); }).appendTo($t);
   $('<button class="btn" type="button">⏹ Stop</button>').on('click', function(){ plTransport('STOP'); }).appendTo($t);
@@ -1053,7 +1054,7 @@ function schBlank() {
 
 function schRenderForm() {
   var e = schEditor, $f = $('#schForm').empty();
-  if (!e) { $f.html('<span class="size" style="color:#888;">+ New to create a schedule</span>'); return; }
+  if (!e) { $f.html('<span class="size" style="color:var(--text-muted);">+ New to create a schedule</span>'); return; }
   function row(label, $inp) { $('<div>').append('<div class="size">'+label+'</div>').append($inp).appendTo($f); }
   row("Name", $('<input>').val(e.name).on('change', function(){ e.name=this.value; }));
   var $grp = $('<select>'); $.each(schGroups(), function(_,g){ $('<option>').val(g).text(g).appendTo($grp); });
