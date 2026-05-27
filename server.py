@@ -627,6 +627,7 @@ class Settings():
         self.scripts = {}
         self.clients = {}
         self.playlists = {}
+        self.schedules = {}
 
 class Scripts():
     def __init__(self):
@@ -647,6 +648,9 @@ class Display():
         self.pauseOffset = 0      # ms into the playlist when paused
         self.renderedToken = ""   # token of the last successful SEGMENT render
         self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
+        self.defaultPlaylistName = None   # fallback playlist when no schedule is active
+        self.scheduledEntryId = None      # transient: which schedule/"__default__" currently drives this group
+        self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
 
 class PlayState(Enum):
     NOACTION = 0
@@ -670,6 +674,23 @@ class Playlist():
         self.name = ""
         self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect
         self.loop = False
+
+class Schedule():
+    def __init__(self):
+        self.id = ""
+        self.name = ""
+        self.playlistName = ""
+        self.displayID = ""
+        self.priority = 0
+        self.enabled = True
+        self.freq = "DAILY"          # DAILY | WEEKLY | MONTHLY | YEARLY
+        self.interval = 1
+        self.byweekday = []          # ints 0=Mon..6=Sun (WEEKLY)
+        self.dtstart = ""            # "YYYY-MM-DD"
+        self.end = {"type": "never"} # or {"type":"until","untilDate":...} / {"type":"count","count":N}
+        self.exdates = []            # ["YYYY-MM-DD", ...]
+        self.startTime = "00:00"
+        self.endTime = "23:59"
 
 class PlayMode(Enum):
     DEFAULT = 0
@@ -1618,6 +1639,13 @@ def migrate_client_objects():
     """Migrate old client objects to include new discovery fields"""
     if not hasattr(settings, 'playlists'):
         settings.playlists = {}
+    if not hasattr(settings, 'schedules'):
+        settings.schedules = {}
+    for _disp in settings.displays.values():
+        if not hasattr(_disp, 'defaultPlaylistName'):
+            _disp.defaultPlaylistName = None
+        _disp.scheduledEntryId = None      # transient — reset on startup
+        _disp.scheduledPlaying = False
     current_time = time.time()
     for client_key, client in settings.clients.items():
         if not hasattr(client, 'discoveryTime'):

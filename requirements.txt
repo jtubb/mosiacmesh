@@ -3,6 +3,7 @@ beeprint==2.4.10
 device-detector==5.0.1
 jsonpickle==3.0.1
 numpy>=1.21.6
+python-dateutil>=2.8
 opencv-contrib-python>=4.8.0.74
 opencv-python>=4.8.0.74
 sockjs==0.13.0
