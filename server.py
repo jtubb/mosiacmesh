@@ -349,6 +349,8 @@ def schedule_active_at(schedule, when):
         return False
     kw = {"dtstart": dtstart, "interval": max(1, int(getattr(schedule, "interval", 1) or 1))}
     end = getattr(schedule, "end", None) or {"type": "never"}
+    if not isinstance(end, dict):
+        end = {"type": "never"}
     if end.get("type") == "until" and end.get("untilDate"):
         try:
             u = _parse_date(end["untilDate"])
