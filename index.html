@@ -179,7 +179,18 @@
 			var seekAndPlay = function() {
 				try { v.currentTime = (offsetMs || 0) / 1000; } catch (e) {}
 				var p = v.play();
-				if (p && p['catch']) { p['catch'](function() {}); }
+				if (p && p['catch']) {
+					p['catch'](function() {
+						// Unmuted autoplay needs a user gesture; without one the
+						// browser rejects play(). Fall back to muted autoplay so the
+						// video still starts (a later gesture / kiosk policy can give
+						// it audio). ES5-safe; iPad 1's play() returns no promise, so
+						// it keeps its existing gesture-driven path.
+						v.muted = true;
+						var p2 = v.play();
+						if (p2 && p2['catch']) { p2['catch'](function() {}); }
+					});
+				}
 			};
 			if (v.readyState >= 1) { seekAndPlay(); }
 			else { v.addEventListener('loadedmetadata', seekAndPlay); }
