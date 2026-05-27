@@ -23,6 +23,7 @@ import sockjs
 import argparse
 import hashlib
 from functools import lru_cache
+import uuid
 import datetime
 from dateutil import rrule as _rrule
 
@@ -1140,6 +1141,70 @@ def msg_response(msg,session):
             else:
                 status = "ok"
             response["PAYLOAD"] = {"status": status, "displayID": display_id}
+
+    elif(msg["REQUEST"] == "LIST_SCHEDULES"):
+        now = datetime.datetime.now()
+        rows = []
+        for sid, s in settings.schedules.items():
+            rows.append({"id": s.id, "name": s.name, "playlistName": s.playlistName,
+                         "displayID": s.displayID, "priority": s.priority, "enabled": s.enabled,
+                         "activeNow": bool(getattr(s, "enabled", True)) and schedule_active_at(s, now)})
+        response["PAYLOAD"] = rows
+
+    elif(msg["REQUEST"] == "GET_SCHEDULE"):
+        s = settings.schedules.get(msg["PAYLOAD"].get("id"))
+        if s is None:
+            response["PAYLOAD"] = {"error": "not found"}
+        else:
+            response["PAYLOAD"] = {"id": s.id, "name": s.name, "playlistName": s.playlistName,
+                                   "displayID": s.displayID, "priority": s.priority, "enabled": s.enabled,
+                                   "freq": s.freq, "interval": s.interval, "byweekday": s.byweekday,
+                                   "dtstart": s.dtstart, "end": s.end, "exdates": s.exdates,
+                                   "startTime": s.startTime, "endTime": s.endTime}
+
+    elif(msg["REQUEST"] == "SAVE_SCHEDULE"):
+        p = msg["PAYLOAD"]
+        ok = True; err = None
+        try:
+            if _hhmm_to_min(p.get("startTime", "00:00")) >= _hhmm_to_min(p.get("endTime", "23:59")):
+                ok = False; err = "endTime must be after startTime"
+        except Exception:
+            ok = False; err = "bad time"
+        if ok:
+            probe = Schedule()
+            for k in ("freq", "interval", "byweekday", "dtstart", "end"):
+                setattr(probe, k, p.get(k, getattr(probe, k)))
+            probe.startTime = p.get("startTime", "00:00"); probe.endTime = p.get("endTime", "23:59")
+            try:
+                schedule_active_at(probe, datetime.datetime.now())  # compiles the rrule
+            except Exception as e:
+                ok = False; err = "bad recurrence: " + str(e)
+        if not ok:
+            response["PAYLOAD"] = {"error": err}
+        else:
+            sid = p.get("id") or ("sch_" + uuid.uuid4().hex[:10])
+            s = settings.schedules.setdefault(sid, Schedule())
+            s.id = sid
+            for k in ("name", "playlistName", "displayID", "priority", "enabled",
+                      "freq", "interval", "byweekday", "dtstart", "end", "exdates",
+                      "startTime", "endTime"):
+                if k in p:
+                    setattr(s, k, p[k])
+            response["PAYLOAD"] = {"id": sid}
+
+    elif(msg["REQUEST"] == "DELETE_SCHEDULE"):
+        settings.schedules.pop(msg["PAYLOAD"].get("id"), None)
+        response["PAYLOAD"] = "SUCCESS"
+
+    elif(msg["REQUEST"] == "GET_GROUP_DEFAULTS"):
+        response["PAYLOAD"] = [{"displayID": did, "defaultPlaylistName": getattr(d, "defaultPlaylistName", None)}
+                               for did, d in settings.displays.items()]
+
+    elif(msg["REQUEST"] == "SET_GROUP_DEFAULT"):
+        p = msg["PAYLOAD"]
+        display = settings.displays.setdefault(p.get("displayID"), Display())
+        display.defaultPlaylistName = (p.get("playlistName") or "").strip() or None
+        response["PAYLOAD"] = "SUCCESS"
 
     else:
         response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command

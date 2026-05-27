@@ -105,3 +105,73 @@ class TestScheduleActiveAt:
         s = _schedule(freq="DAILY", dtstart="2026-06-01", startTime="00:00", endTime="23:59")
         s.end = "garbage"   # malformed -> must not raise, treated as never-ending
         assert server.schedule_active_at(s, self._at(y=2026, mo=6, d=5, h=12)) is True
+
+
+class TestScheduleCRUD:
+    def _save(self, name="S", sid=None, **kw):
+        payload = {"name": name, "playlistName": kw.get("playlistName", "P"),
+                   "displayID": kw.get("displayID", "Default"), "priority": kw.get("priority", 0),
+                   "enabled": kw.get("enabled", True), "freq": kw.get("freq", "DAILY"),
+                   "interval": 1, "byweekday": kw.get("byweekday", []), "dtstart": "2026-01-01",
+                   "end": {"type": "never"}, "exdates": [], "startTime": kw.get("startTime", "09:00"),
+                   "endTime": kw.get("endTime", "17:00")}
+        if sid is not None:
+            payload["id"] = sid
+        return jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_SCHEDULE", "PAYLOAD": payload}, _make_session()))
+
+    def test_save_generates_id_and_get(self, mock_settings):
+        server.settings = mock_settings
+        resp = self._save(name="Morning")
+        sid = resp["PAYLOAD"]["id"]
+        assert sid and sid in mock_settings.schedules
+        got = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "GET_SCHEDULE", "PAYLOAD": {"id": sid}}, _make_session()))
+        assert got["PAYLOAD"]["name"] == "Morning" and got["PAYLOAD"]["startTime"] == "09:00"
+
+    def test_save_upserts_by_id(self, mock_settings):
+        server.settings = mock_settings
+        sid = self._save(name="A")["PAYLOAD"]["id"]
+        self._save(name="B", sid=sid)
+        assert len(mock_settings.schedules) == 1 and mock_settings.schedules[sid].name == "B"
+
+    def test_save_rejects_bad_window(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "SAVE_SCHEDULE",
+             "PAYLOAD": {"name": "Y", "playlistName": "P", "displayID": "Default", "freq": "DAILY",
+                         "interval": 1, "byweekday": [], "dtstart": "2026-01-01", "end": {"type": "never"},
+                         "exdates": [], "startTime": "17:00", "endTime": "09:00"}}, _make_session()))
+        assert "error" in resp["PAYLOAD"]
+
+    def test_list_includes_activenow(self, mock_settings):
+        server.settings = mock_settings
+        self._save(name="AllDay", startTime="00:00", endTime="23:59")
+        rows = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "LIST_SCHEDULES", "PAYLOAD": {}}, _make_session()))["PAYLOAD"]
+        assert len(rows) == 1 and "activeNow" in rows[0]
+
+    def test_delete(self, mock_settings):
+        server.settings = mock_settings
+        sid = self._save()["PAYLOAD"]["id"]
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "DELETE_SCHEDULE",
+                             "PAYLOAD": {"id": sid}}, _make_session())
+        assert sid not in mock_settings.schedules
+
+    def test_get_unknown_error(self, mock_settings):
+        server.settings = mock_settings
+        resp = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "GET_SCHEDULE", "PAYLOAD": {"id": "nope"}}, _make_session()))
+        assert resp["PAYLOAD"] == {"error": "not found"}
+
+    def test_group_default_set_and_get(self, mock_settings):
+        server.settings = mock_settings
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "SET_GROUP_DEFAULT",
+                             "PAYLOAD": {"displayID": "Default", "playlistName": "P"}}, _make_session())
+        assert mock_settings.displays["Default"].defaultPlaylistName == "P"
+        rows = jsonpickle.decode(server.msg_response(
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "GET_GROUP_DEFAULTS", "PAYLOAD": {}}, _make_session()))["PAYLOAD"]
+        assert {"displayID": "Default", "defaultPlaylistName": "P"} in rows
+        server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "SET_GROUP_DEFAULT",
+                             "PAYLOAD": {"displayID": "Default", "playlistName": ""}}, _make_session())
+        assert mock_settings.displays["Default"].defaultPlaylistName is None
