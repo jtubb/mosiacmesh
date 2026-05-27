@@ -12,7 +12,7 @@
     {
         if(sock == null)
         {
-            mosiacMeshConnect(mosiacMeshCallback);
+            reconnectWatchdog();   // guarded reconnect (no overlapping handshakes)
         }
         // The tick fires on the synchronized GoTime second: record its phase and
         // beat the indicator so all displays pulse together.
@@ -280,6 +280,21 @@
 	}
 	setInterval(updateHeartbeat, 1000);
 	updateHeartbeat();
+
+	// Auto-reconnect watchdog. Runs on its own fixed timer (NOT the GoTime tick,
+	// which stops when the server is unreachable) so a display recovers on its
+	// own after a server restart / network blip. Reconnect only when the socket
+	// is gone or closed; stay hands-off while it is still CONNECTING so we never
+	// spawn overlapping SockJS handshakes. ES5 — 1st-gen iPad / iOS 5 safe.
+	function reconnectWatchdog() {
+		if (typeof SockJS === 'undefined') { return; }
+		if (sock == null ||
+			(sock.readyState !== SockJS.OPEN && sock.readyState !== SockJS.CONNECTING)) {
+			log('reconnect watchdog: re-opening socket...');
+			mosiacMeshConnect(mosiacMeshCallback);
+		}
+	}
+	setInterval(reconnectWatchdog, 3000);
 
 	function mosiacMeshCallback(data_obj)
 	{
