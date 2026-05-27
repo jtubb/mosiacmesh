@@ -327,6 +327,64 @@ class TestHostnameResolution:
         assert server._is_private_ipv4('') is False
 
 
+class TestClientMerge:
+    """A browser-cache-cleared device reconnects with a new id; once it resolves
+    to the same hostname + attributes as an OFFLINE prior client, merge them."""
+
+    def _make(self, key, online, host="sign1screen1", dt="tablet", w=768, h=1024):
+        c = server.Client()
+        c.hostname = host; c.isOnline = online
+        c.deviceType = dt; c.deviceWidth = w; c.deviceHeight = h
+        return key, c
+
+    def _settings_with(self, *clients):
+        s = server.Settings(); s.clients = {k: c for k, c in clients}
+        server.settings = s
+        return s
+
+    def test_merges_offline_match_and_adopts_config(self):
+        ok, old = self._make("oldkey", False)
+        old.displayID = "Test Group"; old.friendlyName = "Lobby Screen"
+        old.nameIsCustom = True; old.measuredPerimeter = [[1, 2]]; old.arucoID = 7
+        nk, new = self._make("newkey", True)
+        new.displayID = "Tablet"; new.friendlyName = "iPad_newkey1"
+        s = self._settings_with((ok, old), (nk, new))
+
+        merged = server._merge_reconnected_client("newkey", new)
+
+        assert merged == "oldkey"
+        assert "oldkey" not in s.clients          # old record removed
+        assert new.displayID == "Test Group"      # group preserved
+        assert new.friendlyName == "Lobby Screen" # custom name preserved
+        assert new.measuredPerimeter == [[1, 2]]  # calibration preserved
+        assert new.arucoID == 7
+
+    def test_no_merge_when_old_online(self):
+        ok, old = self._make("oldkey", True)      # still online
+        nk, new = self._make("newkey", True)
+        s = self._settings_with((ok, old), (nk, new))
+        assert server._merge_reconnected_client("newkey", new) is None
+        assert "oldkey" in s.clients
+
+    def test_no_merge_when_hostname_differs(self):
+        ok, old = self._make("oldkey", False, host="other-screen")
+        nk, new = self._make("newkey", True, host="sign1screen1")
+        self._settings_with((ok, old), (nk, new))
+        assert server._merge_reconnected_client("newkey", new) is None
+
+    def test_no_merge_when_attributes_differ(self):
+        ok, old = self._make("oldkey", False, w=1024, h=768)  # rotated/different
+        nk, new = self._make("newkey", True, w=768, h=1024)
+        self._settings_with((ok, old), (nk, new))
+        assert server._merge_reconnected_client("newkey", new) is None
+
+    def test_no_merge_without_hostname(self):
+        ok, old = self._make("oldkey", False, host="")
+        nk, new = self._make("newkey", True, host="")
+        self._settings_with((ok, old), (nk, new))
+        assert server._merge_reconnected_client("newkey", new) is None
+
+
 class TestCalibrate:
     """Calibration upload must not 500 when an image has no ArUco markers."""
 

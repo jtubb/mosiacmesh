@@ -1094,6 +1094,51 @@ def _mdns_reverse(ip, wait=1.5):
         return ""
 
 
+# Config carried from an old (offline) client onto the reconnecting one, so a
+# device keeps its setup across a browser cache-clear (which yields a fresh
+# client id). Live identity fields (clientID, ip, hostname, device*, online,
+# connectionCount) are NOT copied — the new record keeps those.
+_MERGE_FIELDS = ("displayID", "measuredCenter", "measuredPerimeter", "arucoID",
+                 "capabilities", "loginScript", "startScript", "stopScript",
+                 "rebootScript")
+
+
+def _merge_reconnected_client(new_key, new_client):
+    """A device that clears its browser reconnects with a new client id. Once it
+    resolves to the same hostname (and matching device attributes) as an
+    existing OFFLINE client, fold that old client's config (group, calibration,
+    custom name) onto the live new record and drop the old one. Returns the
+    merged-away old key, or None. Strict: hostname + deviceType + resolution
+    must match, and the old client must be offline (so two live tabs on one
+    machine, or distinct devices sharing a hostname, are never collapsed)."""
+    host = (getattr(new_client, "hostname", "") or "").lower()
+    if not host or not getattr(new_client, "isOnline", False):
+        return None
+    for old_key, old in list(settings.clients.items()):
+        if old_key == new_key or getattr(old, "isOnline", False):
+            continue
+        if (getattr(old, "hostname", "") or "").lower() != host:
+            continue
+        if (old.deviceType != new_client.deviceType
+                or old.deviceWidth != new_client.deviceWidth
+                or old.deviceHeight != new_client.deviceHeight):
+            continue
+        for f in _MERGE_FIELDS:
+            if hasattr(old, f):
+                setattr(new_client, f, getattr(old, f))
+        # Carry a user-set name; otherwise keep the new record's (DNS-derived) one.
+        if getattr(old, "nameIsCustom", False) and old.friendlyName:
+            new_client.friendlyName = old.friendlyName
+            new_client.nameIsCustom = True
+        new_client.discoveryTime = min(getattr(new_client, "discoveryTime", time.time()),
+                                       getattr(old, "discoveryTime", time.time()))
+        del settings.clients[old_key]
+        logging.info("Merged reconnected client %s into prior %s (hostname %s)",
+                     new_key, old_key, host)
+        return old_key
+    return None
+
+
 async def resolve_client_hostnames(unicast_timeout=2.0, mdns_timeout=3.0):
     """Resolve every unresolved client IP off the event loop and adopt the short
     hostname as the friendlyName when it's still auto-generated. Tries unicast
@@ -1147,6 +1192,15 @@ async def resolve_client_hostnames(unicast_timeout=2.0, mdns_timeout=3.0):
             if _adopt_hostname_as_name(client, short):
                 client.friendlyName = short
                 changed = True
+            # Re-bind a browser-cache-cleared device to its prior record.
+            merged_old = _merge_reconnected_client(key, client)
+            if merged_old:
+                changed = True
+                try:
+                    socketmanager.broadcast(jsonpickle.encode(
+                        {"REQUEST": "DEVICE_REMOVED", "PAYLOAD": {"clientKey": merged_old}}))
+                except Exception:
+                    pass
         else:
             _hostname_next_retry[key] = now + _HOSTNAME_RETRY_SECONDS
     if changed:
