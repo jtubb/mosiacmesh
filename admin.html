@@ -27,6 +27,9 @@
 	
 	function mosiacMeshCallback(data_obj)
 	{
+		$('#connDot').addClass('on');
+		$('#connText').text('connected');
+
 		if(data_obj.REQUEST == "REGISTER" && data_obj.PAYLOAD == "SUCCESS")
 		{
 			refreshClients();
@@ -58,6 +61,7 @@
 			}
 			$('#displays').jstree(true).settings.core.data = displays;
 			$('#displays').jstree(true).refresh();
+			adminRenderOverview(data_obj.PAYLOAD);
 		}
 		else if(data_obj.REQUEST == "CLIENTS")
 		{
@@ -212,6 +216,27 @@
 		{
 			schRenderDefaults(data_obj.PAYLOAD);
 		}
+		else if(data_obj.REQUEST == "DISCOVERY_HEARTBEAT")
+		{
+			var p = data_obj.PAYLOAD || {};
+			$('#connText').text('connected' + (p.onlineClients != null ? ' · ' + p.onlineClients + ' online' : ''));
+		}
+	}
+
+	function adminRenderOverview(displays) {
+		var $o = $('#overviewCards').empty(); var playing = [];
+		$.each(displays || {}, function(id, d){
+			if (!d) return;
+			var act = d.action && (d.action.name || d.action);     // enum-object {name} or raw value
+			var isPlaying = (act === 'PLAY' || act === 2);
+			var n = (d.mediaElements || []).length;
+			if (isPlaying) playing.push(id);
+			var calib = d.boundingBox ? '<span class="badge ok">calibrated</span>' : '<span class="badge warn">not calibrated</span>';
+			$('<div class="card">').html('<b>'+id+'</b> '+calib+'<br><span class="size" style="color:var(--text-muted)">'
+				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">&#9654; playing</span>' : 'idle') + '</span>').appendTo($o);
+		});
+		if (!Object.keys(displays || {}).length) $o.html('<div class="empty">No display groups yet.</div>');
+		$('#nowPlaying').text(playing.length ? ('&#9654; ' + playing.join(', ')) : '');
 	}
 
 	function imageChanged() {
@@ -444,7 +469,10 @@
 	
     ProgrammableTimer.setup(1000,tickcallback);
 	mosiacMeshConnect(mosiacMeshCallback);
-	
+
+	function adminRefreshStatus() { if (typeof sock !== 'undefined' && sock) { try { sock.send(generateMessage('SRV','DISPLAYS','null')); } catch(e){} } }
+	$(function(){ setTimeout(adminRefreshStatus, 1200); setInterval(adminRefreshStatus, 5000); });
+
   </script>
   <style>
 	img{
