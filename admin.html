@@ -596,35 +596,59 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
   </style>
 </head>
 <body>
-<div class="flex-container">
+<div class="app">
+  <div class="statusbar">
+    <span class="brand">● MosaicMesh</span>
+    <span class="dot" id="connDot"></span>
+    <span id="connText" class="size">connecting…</span>
+    <span id="nowPlaying" class="size"></span>
+    <span class="spacer"></span>
+    <button class="btn btn-ghost" id="themeToggle" type="button">🌙 Theme</button>
+  </div>
+  <div class="shell">
+    <nav class="sidebar" id="sidebar">
+      <button class="navitem" data-nav="overview">Overview</button>
+      <button class="navitem" data-nav="displays">Displays</button>
+      <button class="navitem" data-nav="media">Media</button>
+      <button class="navitem" data-nav="playlists">Playlists</button>
+      <button class="navitem" data-nav="schedules">Schedules</button>
+      <button class="navitem" data-nav="console">Console</button>
+    </nav>
+    <main class="main">
+      <section class="section" data-route="overview"><h2>Overview</h2><div id="overviewCards" class="grid"></div></section>
 
-  <div class="flex-child">
-    <div id="canvas" style="width: 48em; height: 27em; overflow:auto; border: 1px solid black"></div>
+      <section class="section" data-route="displays"><h2>Displays &amp; Calibration</h2>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div class="panel" style="flex:0 0 22em;">
+            <div class="panel-title">Groups &amp; screens</div>
+            <input type="text" id="displays_q" value="" class="input" style="margin:0em auto 1em auto; width: 23em; padding:4px; border-radius:4px; border:1px solid silver;">
+            <div id="displays" style="width: 20em; height: 25em; overflow:auto; border: 1px solid black"></div>
+          </div>
+          <div class="panel" style="flex:1; min-width:24em;">
+            <div class="panel-title">Calibration</div>
+            <div id="canvas" style="width: 48em; height: 27em; overflow:auto; border: 1px solid black"></div>
 	<form id="calImageForm" action="javascript:;" method="post">
 		<label for="calImage">Upload Calibration Image</label>
 		<input id="calImage" name="calImage" type="file" value="" onchange='imageChanged(this);'/>
 
 		<input type="submit" value="Upload"/>
 	</form>
-  </div>
-  
-  <div class="flex-child">
-    <input type="text" id="displays_q" value="" class="input" style="margin:0em auto 1em auto; width: 23em; padding:4px; border-radius:4px; border:1px solid silver;">
-    <div id="displays" style="width: 20em; height: 25em; overflow:auto; border: 1px solid black"></div>
-  </div>
-</div>
-<br><br>
-<div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" data-route="media"><h2>Media library</h2>
 	<div id="Media" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
 	    <input type="file" name="file" id="file">
-            
+
 		<!-- Drag and Drop container-->
 		<div class="upload-area"  id="uploadfile">
 			<h1>Drag and Drop file here<br/>Or<br/>Click to select file</h1>
 		</div>
 	</div>
-</div>
-<br><br>
+      </section>
+
+      <section class="section" data-route="playlists"><h2>Playlists</h2>
 <div id="playlistEditor" style="border:1px solid black; padding:8px; width:62em; margin-bottom:1em;">
   <div style="margin-bottom:6px;">
     <b>Playlists:</b>
@@ -651,6 +675,9 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
   <div id="plTransport" style="margin-top:6px;">
   </div>
 </div>
+      </section>
+
+      <section class="section" data-route="schedules"><h2>Schedules</h2>
 <div id="scheduleEditor" style="border:1px solid black; padding:8px; width:62em; margin-bottom:1em;">
   <div style="margin-bottom:6px;">
     <b>Schedules:</b>
@@ -666,12 +693,20 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
     <div id="schDefaults"></div>
   </div>
 </div>
+      </section>
+
+      <section class="section" data-route="console"><h2>Console</h2>
 <div id="log" style="width: 50em; height: 20em; overflow:auto; border: 1px solid black">
 </div>
 <form id="chatform">
   <input id="text" type="text" />
   <input id="calibrate" type="button" value="Submit Query" onclick="sock.send(generateMessage('SRV',$('#text').val(),'null'));"/>
 </form>
+      </section>
+    </main>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
 <script>
 var SCRIPT_ANIMATIONS = ["bouncingBalls"];
 var plEditor = { name: "", items: [], loop: false, selected: -1 };
@@ -993,6 +1028,35 @@ $(function(){
   $('#schDelete').on('click', schDelete);
   $('#schSelect').on('change', function(){ schLoad($(this).val()); });
   setTimeout(function(){ schRefreshList(); sock.send(generateMessage('SRV','GET_GROUP_DEFAULTS',{})); }, 700);
+});
+</script>
+<script>
+function adminRoute() {
+  var r = (location.hash || "#overview").slice(1);
+  var found = false;
+  $('.section').each(function(){ var on = $(this).data('route') === r; $(this).toggleClass('active', on); if(on) found=true; });
+  if (!found) { $('.section[data-route=overview]').addClass('active'); r = "overview"; }
+  $('.navitem').each(function(){ $(this).toggleClass('active', $(this).data('nav') === r); });
+}
+$(function(){
+  $('.navitem').on('click', function(){ location.hash = $(this).data('nav'); });
+  $(window).on('hashchange', adminRoute);
+  adminRoute();
+});
+function adminApplyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  $('#themeToggle').text(t === 'light' ? '☀ Light' : '🌙 Dark');
+}
+$(function(){
+  var stored = null;
+  try { stored = localStorage.getItem('adminTheme'); } catch(e) {}
+  if (!stored) { stored = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark'; }
+  adminApplyTheme(stored);
+  $('#themeToggle').on('click', function(){
+    var t = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    adminApplyTheme(t);
+    try { localStorage.setItem('adminTheme', t); } catch(e) {}
+  });
 });
 </script>
 </body>
