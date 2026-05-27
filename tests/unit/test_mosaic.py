@@ -752,3 +752,25 @@ class TestEffectFfmpegIntegration:
         assert result["status"] == "ready"
         out = tmp_path / "media" / "c1" / "videos" / ("seg_" + disp.renderedToken + "_0.mp4")
         assert out.exists() and out.stat().st_size > 0
+
+
+class TestScreenQuad:
+    def test_axis_aligned_marker_extrapolates_full_screen(self):
+        # marker 300px centered in a 1000x800 canvas, photographed axis-aligned
+        # at scale 1 (1px canvas == 1px photo): marker corners are at
+        # (350,250),(650,250),(650,550),(350,550) and the screen quad must be
+        # the full canvas rectangle.
+        marker_quad = [[350,250],[650,250],[650,550],[350,550]]
+        q = server.reconstruct_screen_quad(marker_quad, 1000, 800).reshape(4,2)
+        assert abs(q[0][0]-0) <= 1 and abs(q[0][1]-0) <= 1       # TL
+        assert abs(q[1][0]-1000) <= 1 and abs(q[1][1]-0) <= 1    # TR
+        assert abs(q[2][0]-1000) <= 1 and abs(q[2][1]-800) <= 1  # BR
+        assert abs(q[3][0]-0) <= 1 and abs(q[3][1]-800) <= 1     # BL
+
+    def test_scaled_marker(self):
+        # marker photographed at half scale centered at photo (500,400):
+        # corners +/-75 -> screen should be 500x400 centered at (500,400).
+        marker_quad = [[425,325],[575,325],[575,475],[425,475]]
+        q = server.reconstruct_screen_quad(marker_quad, 1000, 800).reshape(4,2)
+        assert abs(q[0][0]-250) <= 1 and abs(q[0][1]-200) <= 1   # TL ~ (250,200)
+        assert abs(q[2][0]-750) <= 1 and abs(q[2][1]-600) <= 1   # BR ~ (750,600)

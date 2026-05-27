@@ -271,6 +271,21 @@ def group_bounding_box(quads):
     return [int(x), int(y), int(w), int(h)]
 
 
+def reconstruct_screen_quad(marker_quad, cw, ch, marker_px=300):
+    """Photo-space quad of the full screen, extrapolated from the centered,
+    fixed-size ArUco marker (marker and screen are coplanar). marker_quad is
+    [TL,TR,BR,BL] in photo px (ordered). Returns a (4,1,2) int32 array of the
+    screen corners [TL,TR,BR,BL]."""
+    cw = float(cw); ch = float(ch); h = marker_px / 2.0
+    marker_canvas = np.array([
+        [cw/2 - h, ch/2 - h], [cw/2 + h, ch/2 - h],
+        [cw/2 + h, ch/2 + h], [cw/2 - h, ch/2 + h]], dtype="float32")
+    dst = np.array(marker_quad, dtype="float32").reshape(4, 2)
+    H = cv.getPerspectiveTransform(marker_canvas, dst)
+    screen = np.array([[[0, 0]], [[cw, 0]], [[cw, ch]], [[0, ch]]], dtype="float32")
+    return cv.perspectiveTransform(screen, H).astype("int32")
+
+
 def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     """Warp the region of source_img under a screen's quad onto that screen's
     pixel rect. bbox is the [x, y, w, h] region of the photo that the source image is stretched to fill
