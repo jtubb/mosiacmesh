@@ -535,6 +535,11 @@ async def render_group_async(display_id):
                     # falling back to reported device dims when canvas is 0/missing.
                     out_w = int(getattr(c, "canvasWidth", 0) or c.deviceWidth) or 1
                     out_h = int(getattr(c, "canvasHeight", 0) or c.deviceHeight) or 1
+                    # libx264 requires even dimensions; canvas/viewport sizes are
+                    # often odd (e.g. 980x1185). Round down to even (harmless for
+                    # the image path too).
+                    out_w = max(2, out_w - out_w % 2)
+                    out_h = max(2, out_h - out_h % 2)
                     # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
                     # seconds-domain duration (the param name 'duration_ms' is a
                     # misnomer). Do NOT convert to ms here — only the client
@@ -566,8 +571,11 @@ async def render_group_async(display_id):
                                                            extra_video_filters=evf, extra_audio_filters=eaf)
                     proc = await asyncio.create_subprocess_exec(
                         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-                    await proc.communicate()
+                    _out, _err = await proc.communicate()
                     if proc.returncode != 0:
+                        tail = (_err or b"").decode("utf-8", "replace").strip().splitlines()[-3:]
+                        logging.error("ffmpeg rc=%s cmd=%s\n  %s", proc.returncode,
+                                      " ".join(cmd), "\n  ".join(tail))
                         raise RuntimeError("ffmpeg failed (" + str(proc.returncode) + ")")
             else:
                 img = cv.imread(src_path) if src_path else None
@@ -580,6 +588,11 @@ async def render_group_async(display_id):
                     # falling back to reported device dims when canvas is 0/missing.
                     out_w = int(getattr(c, "canvasWidth", 0) or c.deviceWidth) or 1
                     out_h = int(getattr(c, "canvasHeight", 0) or c.deviceHeight) or 1
+                    # libx264 requires even dimensions; canvas/viewport sizes are
+                    # often odd (e.g. 980x1185). Round down to even (harmless for
+                    # the image path too).
+                    out_w = max(2, out_w - out_w % 2)
+                    out_h = max(2, out_h - out_h % 2)
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]

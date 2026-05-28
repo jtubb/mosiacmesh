@@ -181,7 +181,7 @@ class TestRender:
         me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
         disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
-        c.canvasWidth = 120; c.canvasHeight = 90
+        c.canvasWidth = 121; c.canvasHeight = 91   # ODD -> must round to even (libx264)
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         mock_settings.clients = {"c1": c}
 
@@ -190,7 +190,7 @@ class TestRender:
         assert result["status"] == "ready"
         out_png = tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")
         assert out_png.exists()
-        # warped output is canvas-sized (120x90), not device-sized (80x60)
+        # canvas-sized (not device 80x60), rounded DOWN to even dims: 121x91 -> 120x90
         assert cv.imread(str(out_png)).shape == (90, 120, 3)
 
     async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
