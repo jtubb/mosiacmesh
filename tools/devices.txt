@@ -1,0 +1,8 @@
+# MosaicMesh device onboarding list — one device per line.
+# Format: IP  (or)  IP:port   — lines starting with # are ignored.
+# Run:  .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt
+192.168.1.50
+# 192.168.1.51
+# 192.168.1.52
+# 192.168.1.53
+# ...add the remaining devices...

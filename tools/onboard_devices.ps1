@@ -1,0 +1,228 @@
+<#
+.SYNOPSIS
+    Onboard jailbroken iOS display devices for MosaicMesh management by
+    installing the automation SSH public key, using the factory default
+    password once to bootstrap key auth.
+
+.DESCRIPTION
+    For each device it:
+      1. Pushes the public key into /var/root/.ssh/authorized_keys over a
+         password SSH session (plink -pw). Idempotent: skips if already
+         present. With -ReplaceKeys it instead rewrites authorized_keys to
+         contain ONLY the current automation key (clears stale lines).
+      2. Verifies key-only auth works afterward (native ssh, no password).
+
+    The key is chosen by -KeyName (default "mosaic_ipad", under ~/.ssh). If a
+    key by that name exists it is reused; otherwise a passphrase-less RSA key
+    is generated automatically (automation keys must be passphrase-less so the
+    server can run device lifecycle scripts unattended).
+
+    The device's old OpenSSH only speaks SHA-1-era crypto, so verification
+    explicitly re-enables ssh-rsa host keys / pubkey signatures.
+
+    SECURITY: the bootstrap password (default "alpine") is a known factory
+    default. Rotate it on each device after onboarding (see -PostInstall).
+
+.EXAMPLE
+    # One device, default key (~/.ssh/mosaic_ipad), generated if missing
+    .\tools\onboard_devices.ps1 -Hosts 192.168.1.50
+
+.EXAMPLE
+    # A whole batch from a file (one IP or host[:port] per line, # = comment)
+    .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt
+
+.EXAMPLE
+    # Use/create a differently-named key and wipe any stale authorized_keys
+    .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -KeyName lobby_wall -ReplaceKeys
+
+.EXAMPLE
+    # Full fleet bring-up: clean key + correct the clock (cert fix) on each device
+    .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -ReplaceKeys -FixClock
+#>
+[CmdletBinding()]
+param(
+    [string[]]$Hosts,
+    [string]$HostFile,
+    [string]$User = "root",
+    [string]$Password = "alpine",
+    [int]$Port = 22,
+    # Name of the key under ~/.ssh (reused if present, generated if missing).
+    [string]$KeyName = "mosaic_ipad",
+    # Explicit full path to the private key; overrides -KeyName when set.
+    [string]$KeyPath = "",
+    # Rewrite authorized_keys to contain ONLY this key (clears stale lines).
+    [switch]$ReplaceKeys,
+    # Fix the device clock (NTP, else this machine's UTC). On dead-RTC devices
+    # a wrong clock makes every TLS cert look invalid system-wide; correcting
+    # the date is the cert fix for SecureTransport (Safari/Cydia/etc.).
+    [switch]$FixClock,
+    # Optional extra shell run on the device after the key is installed
+    # (e.g. a password rotation). Runs over the freshly-verified key session.
+    [string]$PostInstall = ""
+)
+
+$ErrorActionPreference = "Stop"
+
+# --- locate tooling -------------------------------------------------------
+$plink = (Get-Command plink -ErrorAction SilentlyContinue).Source
+if (-not $plink) {
+    foreach ($p in @("C:\Program Files\PuTTY\plink.exe", "C:\Program Files (x86)\PuTTY\plink.exe")) {
+        if (Test-Path $p) { $plink = $p; break }
+    }
+}
+if (-not $plink) { throw "plink.exe not found. Install PuTTY or add it to PATH." }
+
+$ssh = (Get-Command ssh -ErrorAction SilentlyContinue).Source
+if (-not $ssh) { $ssh = "C:\Windows\System32\OpenSSH\ssh.exe" }
+if (-not (Test-Path $ssh)) { throw "OpenSSH client (ssh.exe) not found." }
+
+# --- resolve / generate the key -------------------------------------------
+if (-not $KeyPath) { $KeyPath = Join-Path $env:USERPROFILE ".ssh\$KeyName" }
+$pubPath = "$KeyPath.pub"
+
+function New-AutomationKey([string]$path) {
+    # Passphrase-less RSA key. cmd /c handles the empty -N "" argument
+    # reliably across both Windows PowerShell 5.1 and PowerShell 7 (where
+    # native empty-string arg passing differs/breaks).
+    $dir = Split-Path $path -Parent
+    if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $gen = 'ssh-keygen -t rsa -b 2048 -C mosaicmesh-automation -f "{0}" -N "" -q' -f $path
+    cmd /c $gen | Out-Null
+}
+
+if ((Test-Path $KeyPath) -and (Test-Path $pubPath)) {
+    Write-Host "Using existing key: $KeyPath" -ForegroundColor DarkGray
+} elseif (Test-Path $KeyPath) {
+    # Private key present but .pub missing — regenerate the public half.
+    Write-Host "Private key found, regenerating public key: $pubPath" -ForegroundColor Yellow
+    cmd /c ('ssh-keygen -y -f "{0}" -P "" > "{1}"' -f $KeyPath, $pubPath) | Out-Null
+    if (-not (Test-Path $pubPath)) { throw "Could not derive public key (is $KeyPath passphrase-protected?)." }
+} else {
+    Write-Host "Generating new passphrase-less key: $KeyPath" -ForegroundColor Yellow
+    New-AutomationKey $KeyPath
+    if (-not (Test-Path $pubPath)) { throw "Key generation failed: $pubPath not created." }
+}
+$pubKey = (Get-Content $pubPath -Raw).Trim()
+
+# --- build the host list --------------------------------------------------
+$targets = @()
+if ($Hosts)    { $targets += $Hosts }
+if ($HostFile) {
+    if (-not (Test-Path $HostFile)) { throw "HostFile not found: $HostFile" }
+    $targets += Get-Content $HostFile |
+        ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -and -not $_.StartsWith("#") }
+}
+$targets = $targets | Select-Object -Unique
+if (-not $targets) { throw "No hosts given. Use -Hosts or -HostFile." }
+
+# --- remote install command -----------------------------------------------
+# ReplaceKeys: truncate authorized_keys to just this key.
+# Default:     idempotent append (grep -qF skips if already present).
+if ($ReplaceKeys) {
+    $remoteInstall = "mkdir -p /var/root/.ssh && chmod 700 /var/root/.ssh && echo '$pubKey' > /var/root/.ssh/authorized_keys && chmod 600 /var/root/.ssh/authorized_keys && echo KEY_INSTALLED"
+} else {
+    $remoteInstall = "mkdir -p /var/root/.ssh && chmod 700 /var/root/.ssh && touch /var/root/.ssh/authorized_keys && grep -qF '$pubKey' /var/root/.ssh/authorized_keys || echo '$pubKey' >> /var/root/.ssh/authorized_keys && chmod 600 /var/root/.ssh/authorized_keys && echo KEY_INSTALLED"
+}
+
+$sshLegacy = @(
+    "-o", "HostKeyAlgorithms=+ssh-rsa",
+    "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
+    "-o", "IdentitiesOnly=yes",          # only the -i key; old sshd has low MaxAuthTries
+    "-o", "StrictHostKeyChecking=accept-new",
+    "-o", "ConnectTimeout=10"
+)
+
+# --- clock / cert fix command ---------------------------------------------
+# Prefer NTP (UDP, needs no valid certs); fall back to this machine's UTC.
+# Handles both GNU date (`-s "ISO"`) and BSD/iOS date (positional MMDDhhmmYYYY.ss).
+# Then probes CLI TLS so we can see whether cert validation recovered.
+$isoUtc = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd HH:mm:ss")
+$bsdUtc = (Get-Date).ToUniversalTime().ToString("MMddHHmmyyyy.ss")
+$clockCmd = (
+    'echo WAS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u);' +
+    ' SRC=;' +
+    ' if command -v sntp >/dev/null 2>&1; then sntp -sS time.apple.com >/dev/null 2>&1 && SRC=sntp; fi;' +
+    ' if [ -z "$SRC" ] && command -v ntpdate >/dev/null 2>&1; then ntpdate -u time.apple.com >/dev/null 2>&1 && SRC=ntpdate; fi;' +
+    ' if [ -z "$SRC" ]; then ( date -u -s "__ISO__" >/dev/null 2>&1 || date -u __BSD__ >/dev/null 2>&1 ) && SRC=manual; fi;' +
+    ' echo NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u) SRC=${SRC:-FAILED};' +
+    ' if command -v curl >/dev/null 2>&1; then curl -sS -m 10 -o /dev/null https://www.apple.com >/dev/null 2>&1 && echo CERT=OK || echo CERT=FAIL; else echo CERT=SKIP_no_curl; fi'
+) -replace '__ISO__', $isoUtc -replace '__BSD__', $bsdUtc
+
+if ($ReplaceKeys) { Write-Host "Mode: REPLACE (authorized_keys will contain only this key)" -ForegroundColor Magenta }
+if ($FixClock)    { Write-Host "Mode: FIX-CLOCK (set time + cert probe per device)" -ForegroundColor Magenta }
+
+$results = @()
+foreach ($h in $targets) {
+    $hostName = $h; $p = $Port
+    if ($h -match "^(.*):(\d+)$") { $hostName = $Matches[1]; $p = [int]$Matches[2] }
+
+    Write-Host "`n=== $hostName`:$p ===" -ForegroundColor Cyan
+    $status = "FAILED"; $detail = ""
+
+    # 1) push key via password (pipe 'y' to auto-cache host key on first contact)
+    try {
+        $out = ("y" | & $plink -ssh -P $p -pw $Password "$User@$hostName" $remoteInstall 2>&1) | Out-String
+        if ($out -match "KEY_INSTALLED") {
+            Write-Host "  key pushed" -ForegroundColor Green
+        } else {
+            $detail = "push: " + ($out.Trim() -replace "\s+", " ")
+            Write-Host "  push failed: $detail" -ForegroundColor Yellow
+            $results += [pscustomobject]@{ Host = "$hostName`:$p"; Status = $status; Detail = $detail }
+            continue
+        }
+    } catch {
+        $detail = "push exception: $($_.Exception.Message)"
+        Write-Host "  $detail" -ForegroundColor Red
+        $results += [pscustomobject]@{ Host = "$hostName`:$p"; Status = $status; Detail = $detail }
+        continue
+    }
+
+    # 2) verify key-only auth
+    try {
+        $v = (& $ssh -i $KeyPath -p $p @sshLegacy -o BatchMode=yes "$User@$hostName" "echo KEYOK" 2>&1) | Out-String
+        if ($v -match "KEYOK") {
+            $status = "OK"
+            Write-Host "  key auth verified" -ForegroundColor Green
+        } else {
+            $detail = "verify: " + ($v.Trim() -replace "\s+", " ")
+            Write-Host "  verify failed: $detail" -ForegroundColor Yellow
+        }
+    } catch {
+        $detail = "verify exception: $($_.Exception.Message)"
+        Write-Host "  $detail" -ForegroundColor Red
+    }
+
+    # 3) clock / cert fix over the keyed session
+    if ($status -eq "OK" -and $FixClock) {
+        try {
+            $c = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $clockCmd 2>&1) | Out-String
+            $clockLines = $c -split "`r?`n" | Where-Object { $_ -match '^(WAS|NOW|CERT)=' }
+            foreach ($line in $clockLines) {
+                $color = if ($line -match 'CERT=FAIL|SRC=FAILED') { "Yellow" } else { "Green" }
+                Write-Host "  $($line.Trim())" -ForegroundColor $color
+            }
+            $certLine = ($clockLines | Where-Object { $_ -match '^CERT=' }) -join ""
+            if ($certLine) { $detail = ($detail + " " + $certLine.Trim()).Trim() }
+        } catch {
+            Write-Host "  clock/cert fix failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 4) optional post-install (e.g. password rotation) over the keyed session
+    if ($status -eq "OK" -and $PostInstall) {
+        try {
+            $pi = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $PostInstall 2>&1) | Out-String
+            Write-Host "  post-install: $($pi.Trim())" -ForegroundColor Green
+        } catch {
+            Write-Host "  post-install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    $results += [pscustomobject]@{ Host = "$hostName`:$p"; Status = $status; Detail = $detail }
+}
+
+Write-Host "`n===== Summary =====" -ForegroundColor Cyan
+$results | Format-Table -AutoSize
+$ok = @($results | Where-Object { $_.Status -eq "OK" }).Count
+Write-Host "$ok / $($results.Count) device(s) onboarded with key '$KeyPath'." -ForegroundColor Cyan
