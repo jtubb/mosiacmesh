@@ -57,6 +57,9 @@ Three message types (the legacy `REQUEST`-based protocol, ES5-client-safe):
   this from the start; do not start the clock yet."
 - **`READY`** (client → server): `{prepareId}`. "I am buffered and holding
   frame 0 (and armed, if I'm a gesture device)."
+- **`NEEDS_ARM`** (client → server): `{prepareId}`. "I am buffered and holding
+  frame 0, but I am a gesture device that is not yet armed — I cannot `play()` at
+  GO until something delivers a touch." Triggers server-side auto-arming (below).
 - **`PLAY`** (server → group) — *reused* as the GO: `{startEpoch, items, loop}`
   where **`startEpoch` is a near-future server time**. Clients already prepared
   hold until `startEpoch`, then begin. (A `PLAY` whose `startEpoch` is in the
@@ -112,6 +115,47 @@ PREPARE and the GO so per-client renderable URLs keep working.
 - Existing `driftTick` (asymmetric, cooldown-limited) is unchanged and now only
   does small maintenance corrections.
 
+### Arm-then-hold (gesture devices)
+
+A tap normally *starts* playback (the `#tapstart` overlay → `activatePlayback`
+→ `play()`). During PREPARE we must instead **consume the gesture to arm the
+element, then hold frame 0**. So when a gesture device receives the arming
+touch during PREPARE, it: lets `play()` fire (which sets `activated` on the
+`'playing'` event), then immediately **pauses and seeks back to 0**, and sends
+`READY`. The element is now armed *and* held at frame 0, so the GO releases it
+like any other client. (A device already armed from a prior session skips
+straight to `READY`.)
+
+## Auto-arming (server-orchestrated VNC tap)
+
+Gesture devices (iOS) can preload/buffer without a gesture but cannot `play()`
+without one. To make the start fully unattended, the **server** delivers the
+arming touch during PREPARE:
+
+1. On PREPARE, a gesture device that is buffered but not armed sends
+   `NEEDS_ARM {prepareId}` (instead of `READY`).
+2. The server, for a `NEEDS_ARM` client that has a known LAN IP, fires a single
+   VNC tap at the screen centre via Veency (the device is configured headless,
+   password `mosaic`, port 5900 — see `tools/veency`). This is the existing
+   `vnc_tap` capability, invoked from the server as an **asyncio subprocess**
+   (`vncdo -s <ip>::5900 -p <pw> move <cx> <cy> click 1`) so it never blocks the
+   event loop. Tap centre = `deviceWidth/2 × deviceHeight/2` (the overlay is
+   full-screen).
+3. The tap arms the element (arm-then-hold, above); the client then sends
+   `READY`, and release proceeds normally.
+
+Notes:
+- **Server, not agent.** The running server process shells out to `vncdo`; this
+  is the server's own action at runtime, independent of the harness gating that
+  applies to the *agent*.
+- **Best-effort.** If `vncdo` is missing or the tap fails, the client stays
+  un-ready and the `PREPARE_TIMEOUT_MS` release covers it (degrades to "needs a
+  manual tap", today's behaviour) — auto-arming never blocks the wall.
+- **Config:** `VEENCY_PASSWORD` (default `mosaic`), `VEENCY_PORT` (5900), and a
+  toggle `AUTO_ARM` (default on) so it can be disabled per deployment.
+- A device only gets tapped when it reports `NEEDS_ARM`, so already-armed devices
+  are never touched.
+
 ## Timing constants
 
 - `RELEASE_LEAD_MS` (~750 ms): GO must reach every client and let their
@@ -131,10 +175,8 @@ PREPARE and the GO so per-client renderable URLs keep working.
   `PREPARE_TIMEOUT_MS` release fires without it; it re-syncs via the late-join
   path when it returns.
 - **Un-armed iPad:** it can buffer (preload) without a gesture but cannot `play()`
-  at GO until armed, so `READY` is gated on `activated`. Firing the arming VNC tap
-  during PREPARE is **out of scope here** (it's the existing `tools/veency`
-  capability, invoked by the operator / future lifecycle scripts); this design
-  only consumes the armed signal.
+  at GO until armed, so it sends `NEEDS_ARM` and the server auto-arms it via VNC
+  (see "Auto-arming"). If auto-arming fails, the timeout release covers it.
 - **New PLAY supersedes an in-flight PREPARE:** bump `prepareId`; stale `READY`s
   are dropped by the id check.
 - **Single-client group:** releases as soon as that one client is READY (or
@@ -155,6 +197,11 @@ PREPARE and the GO so per-client renderable URLs keep working.
 - `READY` from all online clients → releases: `action = PLAY`, `playStartEpoch`
   set to a *future* epoch, `PLAY` broadcast.
 - `READY` from a subset → no release; partial `readyClients`.
+- `NEEDS_ARM` from a touch client with an IP → server invokes the VNC-tap
+  subprocess for that client (mock the subprocess; assert it's called with the
+  client's IP + centre coords); client not counted ready until its later `READY`.
+- `NEEDS_ARM` with auto-arm disabled / no IP / vncdo missing → no crash; client
+  covered by timeout release.
 - `prepareDeadline` elapsed in `process()` → release despite missing clients.
 - Stale `READY` (wrong `prepareId`) → ignored.
 - Late joiner (`sync_new_client_to_group`) → still gets `PLAY` with the existing
@@ -166,13 +213,13 @@ PREPARE and the GO so per-client renderable URLs keep working.
 - `PLAY` with a future `startEpoch` → defers start (no `renderPlayback` until the
   scheduled instant); video stays paused at 0 until then.
 - `PLAY` with a past `startEpoch` → starts immediately.
+- Gesture device on `PREPARE`, not yet armed → emits `NEEDS_ARM` (not `READY`);
+  after a simulated arming touch, arm-then-hold pauses at 0 and emits `READY`.
 
 ## Out of scope (v1)
 
 - **Per-device-class latency compensation** (firing GO earlier for slower
   devices). Start from a pre-buffered frame should make `play()` latency small
   and uniform; revisit only if measurement shows a residual cross-class offset.
-- **Auto-firing the VNC arming tap during PREPARE** — separate
-  lifecycle-automation work; this design only reads the armed flag.
 - **Mid-playlist re-coordination** (re-syncing the whole group at each item
   boundary). Item transitions stay clock-driven via `renderPlayback`.
