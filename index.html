@@ -155,7 +155,10 @@
 	function activatePlayback() {
 		var v = getPersistentVideo();
 		v.style.display = 'block';
-		try { v.load(); } catch (e) {}
+		// NB: no v.load() here. The element is already loaded by showItem /
+		// prepareFirstItem before the overlay appears; calling load() again resets
+		// it and re-fires the PREPARE loadedmetadata handler (which pauses for the
+		// hold), which would swallow this tap's play() and leave the overlay stuck.
 		try {
 			var p = v.play();
 			if (p && p['catch']) {
@@ -188,16 +191,18 @@
 	// and send READY. The server's GO (PLAY with a future startEpoch) releases us.
 	function prepareFirstItem(prepareId) {
 		clearScript();
-		var item = playback.items[0];
-		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }
-		if (item.playmode === 'SCRIPT' || !isVideoItem(item.file)) {
-			sendMsg("READY", { prepareId: prepareId });   // no buffering / gesture needed
-			return;
+		// Arm/buffer off the first VIDEO item in the playlist — the gesture is
+		// needed before the first video plays, even if item 0 is a non-video (e.g.
+		// a SCRIPT animation). The persistent <video> is reused for every video
+		// item, so blessing it once (with the first video's src) arms them all.
+		var item = null, i;
+		for (i = 0; i < playback.items.length; i++) {
+			if (isVideoItem(playback.items[i].file)) { item = playback.items[i]; break; }
 		}
+		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }  // no video -> nothing to arm
 		var v = getPersistentVideo();
 		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = false;
-		$('#canvas').empty();
-		playback.video = v; playback.videoIndex = 0; playback.videoSrc = item.file;
+		playback.videoSrc = item.file;
 		var holdAtZero = function () {
 			try { v.pause(); } catch (e) {}
 			try { v.currentTime = 0; } catch (e) {}
