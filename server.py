@@ -1024,6 +1024,10 @@ def _stop_group_playback(display_id):
     if display:
         display.action = PlayState.STOP
         display.currentFrame = 0
+        # cancel any in-flight coordinated-start prepare (don't leave stale state)
+        display.prepareId = None
+        display.readyClients = set()
+        display.prepareDeadline = 0
     broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
 
 
@@ -1063,6 +1067,9 @@ def _maybe_release(display_id):
     if not display or display.action != PlayState.PREPARING:
         return
     online = _group_online_keys(display_id)
+    # Release only when there is at least one online client AND all of them are
+    # ready. The leading `online and` is required: set().issubset(x) is True, so
+    # without it an empty group would release immediately.
     if online and online.issubset(display.readyClients):
         _release_group(display_id)
 
@@ -1555,11 +1562,12 @@ def msg_response(msg,session):
         client = settings.clients.get(msg["SRC"])
         if client:
             client.ready = True
-        display = settings.displays.get(getattr(client, "displayID", None)) if client else None
+        did = getattr(client, "displayID", None) if client else None
+        display = settings.displays.get(did)
         if display and display.action == PlayState.PREPARING \
                 and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
             display.readyClients.add(msg["SRC"])
-            _maybe_release(client.displayID)
+            _maybe_release(did)
         response["PAYLOAD"]="SUCCESS"
 
     elif(msg["REQUEST"] == "NEEDS_ARM"):
@@ -2514,6 +2522,11 @@ def migrate_client_objects():
             _disp.defaultPlaylistName = None
         _disp.scheduledEntryId = None      # transient — reset on startup
         _disp.scheduledPlaying = False
+        # coordinated-start fields: backfill onto older Displays AND reset the
+        # transient prepare state (a restart cancels any in-flight prepare).
+        _disp.prepareId = None
+        _disp.readyClients = set()
+        _disp.prepareDeadline = 0
     current_time = time.time()
     for client_key, client in settings.clients.items():
         if not hasattr(client, 'discoveryTime'):

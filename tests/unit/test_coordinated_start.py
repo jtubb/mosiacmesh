@@ -106,3 +106,32 @@ def test_auto_arm_invokes_vncdo_with_center_coords():
     assert "vncdo" in called["args"][0]
     assert "192.168.1.50::5900" in called["args"]
     assert "512" in called["args"] and "384" in called["args"]   # center of 1024x768
+
+
+def test_migrate_backfills_prepare_fields_and_resets_transient_state():
+    """Old persisted Displays lack the prepare fields; migration backfills them
+    and resets the transient prepare state on startup."""
+    server.settings = server.Settings()
+    d = server.Display()
+    # Simulate an old object: drop the new fields and dirty them.
+    for attr in ("prepareId", "readyClients", "prepareDeadline"):
+        if hasattr(d, attr):
+            delattr(d, attr)
+    server.settings.displays["g1"] = d
+    server.migrate_client_objects()
+    assert d.prepareId is None
+    assert d.readyClients == set()
+    assert d.prepareDeadline == 0
+
+
+def test_stop_clears_in_flight_prepare():
+    disp = _display_with_items(server)
+    _online_client(server, "a", "g1")
+    with patch.object(server, "broadcast_to_display_group"):
+        server._begin_prepare("g1")
+        assert disp.prepareId is not None
+        server._stop_group_playback("g1")
+    assert disp.prepareId is None
+    assert disp.readyClients == set()
+    assert disp.prepareDeadline == 0
+    assert disp.action == server.PlayState.STOP
