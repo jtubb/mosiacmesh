@@ -36,17 +36,13 @@ AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devi
 VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"
 
-# Rendered-segment keyframe interval (x264 -g). Devices that snap a seek to the
-# nearest keyframe (iPad 1) position playback only to a keyframe, so a large GOP
-# leaves a sync offset on mid-clip drift seeks. The coordinated start already
-# aligns frame 0 exactly (it's always a keyframe), so a MODERATE interval is the
-# sweet spot: ~1s keyframes for reasonable drift-seek precision WITHOUT the
-# bitrate explosion of all-intra (-g 1 produced a 1.4GB/19.5Mbps file that the
-# iPad 1's ~14Mbps Baseline-L3.1 decoder could not play at all). ~30 = ~1s @30fps.
-RENDER_KEYINT = 30
-# Hard ceiling on the rendered bitrate (VBV) so segments stay within the iPad 1's
-# decoder budget regardless of content/keyframe density. kbps.
-RENDER_MAXRATE_K = 6000
+# Render encode note: segments use plain libx264 Constrained Baseline + CRF, with
+# NO forced keyframe interval (-g) and NO VBV (-maxrate/-bufsize). Both were tried
+# for frame-accurate iPad seeking but backfired: all-intra (-g 1) blew the bitrate
+# past the iPad-1 decoder, and VBV injects HRD params into the SPS that iOS-5 /
+# Chrome-29 (UIWebView) reject with MEDIA_ERR_SRC_NOT_SUPPORTED. The coordinated
+# start already aligns frame 0 exactly (frame 0 is always a keyframe); mid-clip
+# frame-lock isn't achievable on iPad-1 anyway, so we keep the proven plain encode.
 
 # Max bytes returned for a single HTTP range response. Bounds server memory when
 # a browser seeks into a large segment with an open-ended range ("bytes=N-");
@@ -505,9 +501,9 @@ def compute_render_token(display_id):
         if c.measuredPerimeter is not None:
             perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
-    # Include encoder settings that change the bytes (e.g. keyframe interval) so a
-    # change invalidates stale renders and forces a re-encode.
-    raw = repr((items, display.boundingBox, clients, RENDER_KEYINT, RENDER_MAXRATE_K))
+    # Bump this when the encode settings change, to invalidate stale renders.
+    encode_ver = "plain-cbl-v2"
+    raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -710,8 +706,6 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
     cmd = ["ffmpeg", "-y", "-i", src_path,
            "-vf", vf,
            "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
-           "-g", str(RENDER_KEYINT), "-keyint_min", str(RENDER_KEYINT), "-sc_threshold", "0",
-           "-maxrate", str(RENDER_MAXRATE_K) + "k", "-bufsize", str(RENDER_MAXRATE_K * 2) + "k",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
@@ -742,8 +736,6 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     cmd = ["ffmpeg", "-y", "-i", src_path,
            "-vf", vf,
            "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
-           "-g", str(RENDER_KEYINT), "-keyint_min", str(RENDER_KEYINT), "-sc_threshold", "0",
-           "-maxrate", str(RENDER_MAXRATE_K) + "k", "-bufsize", str(RENDER_MAXRATE_K * 2) + "k",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]

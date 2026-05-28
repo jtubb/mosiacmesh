@@ -360,17 +360,17 @@ class TestFfmpegHelpers:
         assert "-c:a" in cmd and "aac" in cmd
         assert "-an" not in cmd  # audio is kept
 
-    def test_build_ffmpeg_cmds_emit_frequent_keyframes(self):
-        # Devices that snap seeks to keyframes need a small GOP for frame-accurate
-        # positioning; both builders must set -g/-keyint_min to RENDER_KEYINT.
+    def test_build_ffmpeg_cmds_use_ios5_compatible_plain_encode(self):
+        # iPad-1 / iOS-5 (UIWebView) rejects VBV (HRD params land in the SPS ->
+        # MEDIA_ERR_SRC_NOT_SUPPORTED) and can't decode all-intra's bitrate. Segments
+        # must be plain Constrained Baseline: no -maxrate/-bufsize and no forced -g.
         pts = [[10.0, 20.0], [110.0, 20.0], [110.0, 220.0], [10.0, 220.0]]
         pcmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 800, 600)
         icmd = server.build_ffmpeg_individual_cmd("in.mp4", "out.mp4", pts, 80, 60, 10, 10, 0, 0, "#000000")
         for cmd in (pcmd, icmd):
-            assert "-g" in cmd and cmd[cmd.index("-g") + 1] == str(server.RENDER_KEYINT)
-            assert "-keyint_min" in cmd and cmd[cmd.index("-keyint_min") + 1] == str(server.RENDER_KEYINT)
-            # bitrate cap keeps segments within the iPad-1 decoder budget
-            assert "-maxrate" in cmd and cmd[cmd.index("-maxrate") + 1] == str(server.RENDER_MAXRATE_K) + "k"
+            assert "baseline" in cmd and "libx264" in cmd
+            assert "-maxrate" not in cmd and "-bufsize" not in cmd
+            assert "-g" not in cmd
 
     def test_is_video_item(self):
         assert server.isVideoItem("/media/server/clip.mp4") is True
