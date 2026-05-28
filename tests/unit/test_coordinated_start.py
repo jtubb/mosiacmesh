@@ -78,3 +78,31 @@ def test_timeout_release_helper():
         server._release_expired_prepares()
         assert sgp.call_count == 1
     assert disp.prepareId is None
+
+
+import asyncio
+
+def test_auto_arm_invokes_vncdo_with_center_coords():
+    server.settings = server.Settings()
+    c = server.Client()
+    c.displayID = "g1"; c.isOnline = True; c.ip = "192.168.1.50"
+    c.deviceWidth = 1024; c.deviceHeight = 768
+    server.settings.clients["a"] = c
+
+    called = {}
+    async def fake_exec(*args, **kwargs):
+        called["args"] = args
+        class P:
+            async def wait(self): return 0
+        return P()
+
+    server.AUTO_ARM = True
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(server._auto_arm_client("a"))
+        finally:
+            loop.close()
+    assert "vncdo" in called["args"][0]
+    assert "192.168.1.50::5900" in called["args"]
+    assert "512" in called["args"] and "384" in called["args"]   # center of 1024x768

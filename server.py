@@ -1077,6 +1077,29 @@ def _release_expired_prepares():
             _release_group(display_id)
 
 
+async def _auto_arm_client(client_key):
+    """Deliver one Veency VNC tap (screen centre) to arm an un-armed iOS device.
+    Best-effort: missing vncdo / no IP / failure just logs — the PREPARE timeout
+    covers a device that can't be armed."""
+    if not AUTO_ARM:
+        return
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        return
+    cx = int((getattr(client, "deviceWidth", 0) or 1024) / 2)
+    cy = int((getattr(client, "deviceHeight", 0) or 768) / 2)
+    target = f"{client.ip}::{VEENCY_PORT}"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "vncdo", "-s", target, "-p", VEENCY_PASSWORD,
+            "move", str(cx), str(cy), "click", "1",
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        await asyncio.wait_for(proc.wait(), timeout=10)
+        logging.info("auto-arm: tapped %s at %d,%d", client_key, cx, cy)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("auto-arm tap failed for %s: %s", client_key, e)
+
+
 def _client_ip(request):
     """Best-effort client IP. Honors the first X-Forwarded-For hop (when the
     client reaches us through a proxy/tunnel that sets it), else the socket peer.
@@ -1538,7 +1561,14 @@ def msg_response(msg,session):
             display.readyClients.add(msg["SRC"])
             _maybe_release(client.displayID)
         response["PAYLOAD"]="SUCCESS"
-        
+
+    elif(msg["REQUEST"] == "NEEDS_ARM"):
+        client = settings.clients.get(msg["SRC"])
+        display = settings.displays.get(getattr(client, "displayID", None)) if client else None
+        if display and display.action == PlayState.PREPARING \
+                and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
+            asyncio.ensure_future(_auto_arm_client(msg["SRC"]))
+
     elif(msg["REQUEST"] == "DISCOVERY_STATUS"):
         # Return discovery information for all clients
         response["PAYLOAD"] = get_discovered_devices()
