@@ -62,12 +62,22 @@
 			v.setAttribute('webkit-playsinline', '');
 			v.setAttribute('playsinline', '');
 			v.preload = 'auto';
-			v.style.maxWidth = '100%';
-			v.style.maxHeight = '100%';
+			// Lock the video to the viewport itself (position:fixed, full size). It
+			// is appended to <body>, NOT #canvas — #canvas is transform-centered,
+			// which (a) is a containing block that would trap a fixed child and
+			// (b) mis-positions under scroll on iOS-5. Explicit 100%/100% also sizes
+			// it (iOS-5 won't auto-size a <video> to its content).
+			v.style.position = 'fixed';
+			v.style.left = '0'; v.style.top = '0';
+			v.style.width = '100%'; v.style.height = '100%';
+			v.style.background = '#000';
+			v.style.zIndex = '1';
+			v.style.display = 'none';
 			// Once the video actually starts (modern autoplay, the muted fallback,
 			// or a post-tap play), drop the overlay and mark the session active. On
 			// iPad 1 'playing' won't fire until the gesture, so the overlay persists.
 			v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+			document.body.appendChild(v);
 			playback.pvid = v;
 		}
 		return playback.pvid;
@@ -106,7 +116,7 @@
 	// getPersistentVideo) dismisses the overlay, and the drift loop syncs position.
 	function activatePlayback() {
 		var v = getPersistentVideo();
-		if (!v.parentNode) { try { document.getElementById('canvas').appendChild(v); } catch (e) {} }
+		v.style.display = 'block';
 		try { v.load(); } catch (e) {}
 		try {
 			var p = v.play();
@@ -124,9 +134,10 @@
 			try { playback.video.pause(); } catch (e) {}
 			playback.video = null;
 		}
+		// Hide (don't destroy) the persistent element so non-video items show; the
+		// element and its iOS gesture activation must survive across items.
+		if (playback.pvid) { playback.pvid.style.display = 'none'; }
 		playback.videoIndex = -1;
-		// NOTE: keep playback.pvid — the persistent element (and its iOS gesture
-		// activation) must survive across items.
 	}
 
 	var _raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
@@ -222,12 +233,8 @@
 			runScriptLoop(cnv, item.file);
 		} else if (isVideoItem(item.file)) {
 			var v = getPersistentVideo();
-			// iOS-5 won't auto-size a <video> to its content (it stays at the 300x150
-			// default — the "black bar"). Set an explicit viewport-filling size.
-			v.style.width = (window.innerWidth || screen.width) + 'px';
-			v.style.height = (window.innerHeight || screen.height) + 'px';
-			$('#canvas').empty();
-			document.getElementById('canvas').appendChild(v);   // reattach the SAME element
+			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
+			$('#canvas').empty();        // clear any prior image/script content
 			playback.video = v;
 			playback.videoIndex = i;
 			var seekAndPlay = function() {
@@ -481,7 +488,7 @@
   <style>
 	/* Full-bleed black page: kills the default 8px body margin (white strip at
 	   the top/edges) and any white background behind the video/UI. */
-	html, body { margin: 0; padding: 0; height: 100%; background: #000; }
+	html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
 	.canvas {
 		width: 100%;
 		-webkit-transform: translateX(-50%) translateY(-50%);
