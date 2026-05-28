@@ -667,12 +667,16 @@
 				playback.paused = false;
 				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 				var _delay = playback.startEpoch - GoTime.now();
-				if (_delay > 0) {
-					// Coordinated GO: we're already holding frame 0 from PREPARE —
-					// release exactly at the shared start epoch.
+				// Defer ONLY for a plausible coordinated GO (the start epoch is at most
+				// ~RELEASE_LEAD_MS ahead). A large delay means the clock isn't synced
+				// yet (e.g. just reconnected) or the epoch is stale; a <=0 delay is a
+				// past epoch (late-join / resume / reconnect). Both start immediately so
+				// we never hang waiting on a bogus future time.
+				if (_delay > 0 && _delay < 3000) {
+					// Holding frame 0 from PREPARE — release at the shared start epoch.
 					playback.startTimer = setTimeout(function () { renderPlayback(); }, _delay);
 				} else {
-					renderPlayback();   // past epoch: late-join / resume / reconnect — start now
+					renderPlayback();
 				}
 			}
 			else if(data_obj.REQUEST == "STOP")
