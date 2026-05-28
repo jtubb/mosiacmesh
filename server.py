@@ -36,6 +36,18 @@ AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devi
 VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"
 
+# Rendered-segment keyframe interval (x264 -g). Devices that snap a seek to the
+# nearest keyframe (iPad 1) can only position playback to a keyframe, so a large
+# GOP leaves a static sub-second sync offset. 1 = all-intra (every frame is a
+# keyframe) => seeks land on the exact frame => frame-accurate wall sync. Raise
+# it to trade sync precision for smaller files.
+RENDER_KEYINT = 1
+
+# Max bytes returned for a single HTTP range response. Bounds server memory when
+# a browser seeks into a large segment with an open-ended range ("bytes=N-");
+# the client re-requests subsequent chunks as it plays.
+MAX_RANGE_CHUNK = 8 * 1024 * 1024  # 8 MB
+
 # File cache with modification time tracking
 file_cache = {}
 cache_stats = {'hits': 0, 'misses': 0}
@@ -488,7 +500,9 @@ def compute_render_token(display_id):
         if c.measuredPerimeter is not None:
             perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
-    raw = repr((items, display.boundingBox, clients))
+    # Include encoder settings that change the bytes (e.g. keyframe interval) so a
+    # change invalidates stale renders and forces a re-encode.
+    raw = repr((items, display.boundingBox, clients, RENDER_KEYINT))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -691,6 +705,7 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
     cmd = ["ffmpeg", "-y", "-i", src_path,
            "-vf", vf,
            "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
+           "-g", str(RENDER_KEYINT), "-keyint_min", str(RENDER_KEYINT), "-sc_threshold", "0",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
@@ -721,6 +736,7 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     cmd = ["ffmpeg", "-y", "-i", src_path,
            "-vf", vf,
            "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
+           "-g", str(RENDER_KEYINT), "-keyint_min", str(RENDER_KEYINT), "-sc_threshold", "0",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
@@ -2024,6 +2040,11 @@ async def media_handler(request):
                     start = 0
                 if stop is None or stop > file_size:
                     stop = file_size               # open-ended -> read to EOF
+            # Cap a single range response so an open-ended seek into a large
+            # (all-intra) segment doesn't read the whole remainder into memory;
+            # the client re-requests the next chunk as it plays. Still a valid 206.
+            if stop - start > MAX_RANGE_CHUNK:
+                stop = start + MAX_RANGE_CHUNK
             logging.debug(f'Range {start}-{stop-1}/{file_size}')
             customHeaders['Accept-Ranges'] = 'bytes'
             customHeaders['Content-Range'] = f'bytes {start}-{stop-1}/{file_size}'

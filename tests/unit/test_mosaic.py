@@ -360,6 +360,16 @@ class TestFfmpegHelpers:
         assert "-c:a" in cmd and "aac" in cmd
         assert "-an" not in cmd  # audio is kept
 
+    def test_build_ffmpeg_cmds_emit_frequent_keyframes(self):
+        # Devices that snap seeks to keyframes need a small GOP for frame-accurate
+        # positioning; both builders must set -g/-keyint_min to RENDER_KEYINT.
+        pts = [[10.0, 20.0], [110.0, 20.0], [110.0, 220.0], [10.0, 220.0]]
+        pcmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 800, 600)
+        icmd = server.build_ffmpeg_individual_cmd("in.mp4", "out.mp4", pts, 80, 60, 10, 10, 0, 0, "#000000")
+        for cmd in (pcmd, icmd):
+            assert "-g" in cmd and cmd[cmd.index("-g") + 1] == str(server.RENDER_KEYINT)
+            assert "-keyint_min" in cmd and cmd[cmd.index("-keyint_min") + 1] == str(server.RENDER_KEYINT)
+
     def test_is_video_item(self):
         assert server.isVideoItem("/media/server/clip.mp4") is True
         assert server.isVideoItem("/media/server/pic.jpg") is False
