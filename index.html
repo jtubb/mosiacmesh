@@ -189,6 +189,17 @@
 	function driftTick() {
 		var v = playback.video;
 		if (!v || !playback.active) { return; }
+		// Should be playing but isn't (not a user PAUSE)? iOS-5 can drop the
+		// element's user-activation across a stop/start, so a programmatic play()
+		// gets blocked again. Retry it; if it still won't go, re-show the tap
+		// prompt so a gesture can re-bless it. The 'playing' listener hides the
+		// prompt once it actually starts (so modern displays never see it).
+		if (v.paused && !playback.paused) {
+			var pr = v.play();
+			if (pr && pr['catch']) { pr['catch'](function () {}); }
+			if (v.paused) { showTapStart(); }
+			return;
+		}
 		// Leave the video alone while it is still seeking or lacks playable data
 		// (readyState < HAVE_FUTURE_DATA). Correcting mid-seek restarts buffering,
 		// so during startup the video can never establish playback — it gets
