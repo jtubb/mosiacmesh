@@ -369,6 +369,8 @@ class TestFfmpegHelpers:
         for cmd in (pcmd, icmd):
             assert "-g" in cmd and cmd[cmd.index("-g") + 1] == str(server.RENDER_KEYINT)
             assert "-keyint_min" in cmd and cmd[cmd.index("-keyint_min") + 1] == str(server.RENDER_KEYINT)
+            # bitrate cap keeps segments within the iPad-1 decoder budget
+            assert "-maxrate" in cmd and cmd[cmd.index("-maxrate") + 1] == str(server.RENDER_MAXRATE_K) + "k"
 
     def test_is_video_item(self):
         assert server.isVideoItem("/media/server/clip.mp4") is True

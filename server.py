@@ -37,11 +37,16 @@ VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"
 
 # Rendered-segment keyframe interval (x264 -g). Devices that snap a seek to the
-# nearest keyframe (iPad 1) can only position playback to a keyframe, so a large
-# GOP leaves a static sub-second sync offset. 1 = all-intra (every frame is a
-# keyframe) => seeks land on the exact frame => frame-accurate wall sync. Raise
-# it to trade sync precision for smaller files.
-RENDER_KEYINT = 1
+# nearest keyframe (iPad 1) position playback only to a keyframe, so a large GOP
+# leaves a sync offset on mid-clip drift seeks. The coordinated start already
+# aligns frame 0 exactly (it's always a keyframe), so a MODERATE interval is the
+# sweet spot: ~1s keyframes for reasonable drift-seek precision WITHOUT the
+# bitrate explosion of all-intra (-g 1 produced a 1.4GB/19.5Mbps file that the
+# iPad 1's ~14Mbps Baseline-L3.1 decoder could not play at all). ~30 = ~1s @30fps.
+RENDER_KEYINT = 30
+# Hard ceiling on the rendered bitrate (VBV) so segments stay within the iPad 1's
+# decoder budget regardless of content/keyframe density. kbps.
+RENDER_MAXRATE_K = 6000
 
 # Max bytes returned for a single HTTP range response. Bounds server memory when
 # a browser seeks into a large segment with an open-ended range ("bytes=N-");
@@ -502,7 +507,7 @@ def compute_render_token(display_id):
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
     # Include encoder settings that change the bytes (e.g. keyframe interval) so a
     # change invalidates stale renders and forces a re-encode.
-    raw = repr((items, display.boundingBox, clients, RENDER_KEYINT))
+    raw = repr((items, display.boundingBox, clients, RENDER_KEYINT, RENDER_MAXRATE_K))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
@@ -706,6 +711,7 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
            "-vf", vf,
            "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
            "-g", str(RENDER_KEYINT), "-keyint_min", str(RENDER_KEYINT), "-sc_threshold", "0",
+           "-maxrate", str(RENDER_MAXRATE_K) + "k", "-bufsize", str(RENDER_MAXRATE_K * 2) + "k",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
@@ -737,6 +743,7 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
            "-vf", vf,
            "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
            "-g", str(RENDER_KEYINT), "-keyint_min", str(RENDER_KEYINT), "-sc_threshold", "0",
+           "-maxrate", str(RENDER_MAXRATE_K) + "k", "-bufsize", str(RENDER_MAXRATE_K * 2) + "k",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
