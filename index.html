@@ -45,7 +45,7 @@
 	var mediaSequence = null;
 	var mediaReady = false;
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
-		video: null, videoIndex: -1, driftTimer: null, paused: false,
+		video: null, videoIndex: -1, driftTimer: null, paused: false, startTimer: null,
 		scriptRaf: null, scriptIndex: -1,
 		// Adaptive seek-ahead: on slow devices (iPad 1) a hard seek takes ~1s to
 		// land, so seeking to the exact clock target lands late and playback never
@@ -168,6 +168,64 @@
 
 	function showBlackout() { var el = document.getElementById('blackout'); if (el) { el.style.display = 'block'; } }
 	function hideBlackout() { var el = document.getElementById('blackout'); if (el) { el.style.display = 'none'; } }
+
+	function sendMsg(request, payload) {
+		try { sock.send(generateMessage("SRV", request, payload)); } catch (e) {}
+	}
+
+	// Undo the calibrate view's <html> framing (8px border + window-16 sizing) and
+	// its white page override, returning to the black playback background.
+	function exitCalibrateView() {
+		$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
+		$('html, body').css('background-color', '');
+		$('#canvas').css({ color: '' });
+	}
+
+	// Coordinated-start phase 1: buffer the first item and HOLD frame 0 (paused).
+	// Report READY when buffered (and armed, for gesture devices). A gesture device
+	// that is not yet armed reports NEEDS_ARM and, when the arming touch lands,
+	// "arm-then-hold": let play() fire to consume the gesture, then pause back to 0
+	// and send READY. The server's GO (PLAY with a future startEpoch) releases us.
+	function prepareFirstItem(prepareId) {
+		clearScript();
+		var item = playback.items[0];
+		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }
+		if (item.playmode === 'SCRIPT' || !isVideoItem(item.file)) {
+			sendMsg("READY", { prepareId: prepareId });   // no buffering / gesture needed
+			return;
+		}
+		var v = getPersistentVideo();
+		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = false;
+		$('#canvas').empty();
+		playback.video = v; playback.videoIndex = 0; playback.videoSrc = item.file;
+		var holdAtZero = function () {
+			try { v.pause(); } catch (e) {}
+			try { v.currentTime = 0; } catch (e) {}
+		};
+		var reportReady = function () { sendMsg("READY", { prepareId: prepareId }); };
+		var onArmed = function () {            // 'playing' fired => gesture consumed
+			playback.activated = true; hideTapStart();
+			holdAtZero(); reportReady();
+		};
+		var afterLoad = function () {
+			v.removeEventListener('loadedmetadata', afterLoad);
+			holdAtZero();
+			if (playback.activated) {
+				reportReady();                 // already blessed: buffered + held
+			} else {
+				sendMsg("NEEDS_ARM", { prepareId: prepareId });   // ask the server to tap us
+				v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
+				showTapStart();                // a manual tap also works (activatePlayback -> play())
+			}
+		};
+		if (v.getAttribute('src') !== item.file) {
+			v.src = item.file; v.addEventListener('loadedmetadata', afterLoad); try { v.load(); } catch (e) {}
+		} else if (v.readyState >= 1) {
+			afterLoad();
+		} else {
+			v.addEventListener('loadedmetadata', afterLoad);
+		}
+	}
 
 	function clearVideo() {
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
@@ -377,6 +435,7 @@
 	function pausePlayback() {
 		playback.paused = true;
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		if (playback.video) { try { playback.video.pause(); } catch (e) {} }
 	}
@@ -385,6 +444,7 @@
 		playback.active = false;
 		playback.paused = false;
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		clearScript();
 		$('#canvas').empty();
@@ -581,23 +641,39 @@
 				// (the page may have been registered before going full screen).
 				if (window._mmReportCanvas) { window._mmReportCanvas(); }
 			}
+			else if(data_obj.REQUEST == "PREPARE")
+			{
+				// Phase 1 of coordinated start: buffer + HOLD frame 0, then report
+				// READY (or NEEDS_ARM). Do NOT start the clock — the GO (a PLAY with a
+				// future startEpoch) releases us at the shared instant.
+				blink = false;
+				exitCalibrateView();
+				hideBlackout();
+				playback.items = data_obj.PAYLOAD.items || [];
+				playback.loop = !!data_obj.PAYLOAD.loop;
+				playback.active = false;
+				playback.paused = false;
+				prepareFirstItem(data_obj.PAYLOAD.prepareId);
+			}
 			else if(data_obj.REQUEST == "PLAY")
 			{
-				// Undo the calibrate view's <html> framing (8px border + window-16
-				// sizing) so it doesn't leave a strip around the playing video.
 				blink = false;
-				$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
-				// Revert the calibrate view's white page back to the black playback bg
-				// (removing the inline override falls back to the html,body { #000 } rule).
-				$('html, body').css('background-color', '');
-				$('#canvas').css({ color: '' });
-				hideBlackout();   // lift the 'stopped' cover from a prior keep-alive
+				exitCalibrateView();   // undo calibrate <html> framing + white page
+				hideBlackout();        // lift the 'stopped' cover from a prior keep-alive
 				playback.items = data_obj.PAYLOAD.items || [];
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.active = true;
 				playback.paused = false;
-				renderPlayback();
+				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
+				var _delay = playback.startEpoch - GoTime.now();
+				if (_delay > 0) {
+					// Coordinated GO: we're already holding frame 0 from PREPARE —
+					// release exactly at the shared start epoch.
+					playback.startTimer = setTimeout(function () { renderPlayback(); }, _delay);
+				} else {
+					renderPlayback();   // past epoch: late-join / resume / reconnect — start now
+				}
 			}
 			else if(data_obj.REQUEST == "STOP")
 			{
