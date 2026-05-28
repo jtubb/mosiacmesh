@@ -167,9 +167,11 @@ class TestRender:
         assert disp.renderedToken == server.compute_render_token("Default")
         assert (tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")).exists()
 
-    async def test_render_image_uses_canvas_dims_over_device(self, mock_settings, tmp_path, monkeypatch):
-        # canvasWidth/canvasHeight are the TRUE rendered viewport and must win
-        # over the (orientation-unreliable) reported device dims.
+    async def test_render_uses_canvas_aspect_capped_to_device_even(self, mock_settings, tmp_path, monkeypatch):
+        # Output keeps the canvas ASPECT (true shape/orientation) but is capped to
+        # FIT WITHIN the device screen res (decodable on the panel) and rounded to
+        # even (libx264). Device 80x60 (landscape) + canvas 61x121 (portrait, odd):
+        # fit-within scale = min(80/61, 60/121) = 0.4959 -> 30x60 (portrait, even).
         monkeypatch.chdir(tmp_path)
         src_dir = tmp_path / "media" / "server" / "images"; src_dir.mkdir(parents=True)
         img = np.zeros((100, 100, 3), dtype=np.uint8); img[:, :50] = (0, 0, 255)
@@ -181,7 +183,7 @@ class TestRender:
         me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
         disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
-        c.canvasWidth = 121; c.canvasHeight = 91   # ODD -> must round to even (libx264)
+        c.canvasWidth = 61; c.canvasHeight = 121   # portrait + odd
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         mock_settings.clients = {"c1": c}
 
@@ -190,8 +192,18 @@ class TestRender:
         assert result["status"] == "ready"
         out_png = tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")
         assert out_png.exists()
-        # canvas-sized (not device 80x60), rounded DOWN to even dims: 121x91 -> 120x90
-        assert cv.imread(str(out_png)).shape == (90, 120, 3)
+        assert cv.imread(str(out_png)).shape == (60, 30, 3)   # canvas aspect, capped, even
+
+    def test_render_output_dims_caps_to_device(self):
+        # iPad-like: canvas (bogusly) larger than the 768x1024 screen -> capped.
+        c = server.Client(); c.deviceWidth = 768; c.deviceHeight = 1024
+        c.canvasWidth = 980; c.canvasHeight = 1185
+        w, h = server._render_output_dims(c)
+        assert w <= 768 and h <= 1024 and w % 2 == 0 and h % 2 == 0
+        # Windows-like: canvas already fits the big screen -> unchanged (even).
+        c2 = server.Client(); c2.deviceWidth = 2560; c2.deviceHeight = 1440
+        c2.canvasWidth = 1278; c2.canvasHeight = 1260
+        assert server._render_output_dims(c2) == (1278, 1260)
 
     async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
         server.settings = mock_settings

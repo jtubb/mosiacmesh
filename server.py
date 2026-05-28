@@ -330,6 +330,22 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
     return fid, "unverified"
 
 
+def _render_output_dims(client):
+    """Per-screen render output size: the canvas/viewport ASPECT (true shape and
+    orientation), scaled to FIT WITHIN the device's reported screen resolution so
+    it stays displayable AND decodable on the panel — a 1st-gen iPad's H.264
+    decoder maxes near its 768x1024 screen, and the viewport can't exceed the
+    screen anyway. Returns even (w, h) for libx264."""
+    aw = int(getattr(client, "canvasWidth", 0) or client.deviceWidth) or 1
+    ah = int(getattr(client, "canvasHeight", 0) or client.deviceHeight) or 1
+    dw = int(getattr(client, "deviceWidth", 0) or 0)
+    dh = int(getattr(client, "deviceHeight", 0) or 0)
+    if dw and dh:
+        s = min(1.0, dw / float(aw), dh / float(ah))
+        aw = int(round(aw * s)); ah = int(round(ah * s))
+    return max(2, aw - aw % 2), max(2, ah - ah % 2)
+
+
 def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     """Warp the region of source_img under a screen's quad onto that screen's
     pixel rect. bbox is the [x, y, w, h] region of the photo that the source image is stretched to fill
@@ -533,13 +549,7 @@ async def render_group_async(display_id):
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
                     # Output at the client's TRUE rendered viewport (canvas),
                     # falling back to reported device dims when canvas is 0/missing.
-                    out_w = int(getattr(c, "canvasWidth", 0) or c.deviceWidth) or 1
-                    out_h = int(getattr(c, "canvasHeight", 0) or c.deviceHeight) or 1
-                    # libx264 requires even dimensions; canvas/viewport sizes are
-                    # often odd (e.g. 980x1185). Round down to even (harmless for
-                    # the image path too).
-                    out_w = max(2, out_w - out_w % 2)
-                    out_h = max(2, out_h - out_h % 2)
+                    out_w, out_h = _render_output_dims(c)
                     # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
                     # seconds-domain duration (the param name 'duration_ms' is a
                     # misnomer). Do NOT convert to ms here — only the client
@@ -586,13 +596,7 @@ async def render_group_async(display_id):
                     Path(out_dir).mkdir(parents=True, exist_ok=True)
                     # Output at the client's TRUE rendered viewport (canvas),
                     # falling back to reported device dims when canvas is 0/missing.
-                    out_w = int(getattr(c, "canvasWidth", 0) or c.deviceWidth) or 1
-                    out_h = int(getattr(c, "canvasHeight", 0) or c.deviceHeight) or 1
-                    # libx264 requires even dimensions; canvas/viewport sizes are
-                    # often odd (e.g. 980x1185). Round down to even (harmless for
-                    # the image path too).
-                    out_w = max(2, out_w - out_w % 2)
-                    out_h = max(2, out_h - out_h % 2)
+                    out_w, out_h = _render_output_dims(c)
                     if me.playmode == PlayMode.INDIVIDUAL:
                         quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
                         bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
@@ -674,7 +678,7 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
         vf += "," + f
     cmd = ["ffmpeg", "-y", "-i", src_path,
            "-vf", vf,
-           "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+           "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
@@ -704,7 +708,7 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
         vf += "," + f
     cmd = ["ffmpeg", "-y", "-i", src_path,
            "-vf", vf,
-           "-c:v", "libx264", "-profile:v", "baseline", "-level", "3.0", "-pix_fmt", "yuv420p",
+           "-c:v", "libx264", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
