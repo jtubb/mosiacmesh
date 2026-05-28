@@ -66,3 +66,15 @@ def test_release_when_all_online_ready():
         epoch = sgp.call_args[0][1]                     # released with a FUTURE epoch
         assert epoch > int(time.time() * 1000)
     assert disp.prepareId is None
+
+
+def test_timeout_release_helper():
+    disp = _display_with_items(server)
+    _online_client(server, "a", "g1")
+    with patch.object(server, "broadcast_to_display_group"):
+        server._begin_prepare("g1")
+    disp.prepareDeadline = int(time.time() * 1000) - 1   # already past
+    with patch.object(server, "_start_group_playback") as sgp:
+        server._release_expired_prepares()
+        assert sgp.call_count == 1
+    assert disp.prepareId is None

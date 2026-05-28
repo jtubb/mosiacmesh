@@ -1067,6 +1067,16 @@ def _maybe_release(display_id):
         _release_group(display_id)
 
 
+def _release_expired_prepares():
+    """Release any display groups whose PREPARE timeout has elapsed."""
+    now = int(time.time() * 1000)
+    for display_id, display in list(settings.displays.items()):
+        if display.action == PlayState.PREPARING and display.prepareDeadline and now > display.prepareDeadline:
+            logging.warning("PREPARE timeout for %s; releasing without %s",
+                            display_id, _group_online_keys(display_id) - display.readyClients)
+            _release_group(display_id)
+
+
 def _client_ip(request):
     """Best-effort client IP. Honors the first X-Forwarded-For hop (when the
     client reaches us through a proxy/tunnel that sets it), else the socket peer.
@@ -2613,6 +2623,12 @@ async def process():
         }
         socketmanager.broadcast(jsonpickle.encode(stale_notification))
         logging.info(f"{len(stale_clients)} clients went offline")
+
+    # Release any PREPARING groups whose timeout has elapsed
+    try:
+        _release_expired_prepares()
+    except Exception as e:
+        logging.error("_release_expired_prepares failed: %s", e)
     
     # Periodic discovery announcements (every 30 seconds)
     if not hasattr(process, 'last_announcement') or (current_time - process.last_announcement) > 30:
