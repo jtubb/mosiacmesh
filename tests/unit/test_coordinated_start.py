@@ -42,3 +42,27 @@ def test_begin_prepare_broadcasts_prepare_and_sets_state():
     assert req["REQUEST"] == "PREPARE"
     assert req["PAYLOAD"]["prepareId"] == disp.prepareId
     assert len(req["PAYLOAD"]["items"]) == 2
+
+
+def _online_client(server, key, display_id):
+    c = server.Client()
+    c.displayID = display_id
+    c.isOnline = True
+    server.settings.clients[key] = c
+    return c
+
+def test_release_when_all_online_ready():
+    disp = _display_with_items(server)
+    _online_client(server, "a", "g1")
+    _online_client(server, "b", "g1")
+    with patch.object(server, "broadcast_to_display_group"):
+        server._begin_prepare("g1")
+    with patch.object(server, "_start_group_playback") as sgp:
+        server._maybe_release("g1")                    # not all ready yet
+        assert sgp.call_count == 0
+        disp.readyClients = {"a", "b"}
+        server._maybe_release("g1")                    # now all ready -> release
+        assert sgp.call_count == 1
+        epoch = sgp.call_args[0][1]                     # released with a FUTURE epoch
+        assert epoch > int(time.time() * 1000)
+    assert disp.prepareId is None

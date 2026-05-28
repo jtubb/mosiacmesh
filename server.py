@@ -1047,6 +1047,26 @@ def _begin_prepare(display_id):
         "PAYLOAD": {"prepareId": display.prepareId, "items": items, "loop": display.loop}})
 
 
+def _release_group(display_id):
+    """Phase 2: pick a shared near-future start epoch and broadcast the GO."""
+    display = settings.displays.get(display_id)
+    if not display:
+        return
+    start_epoch = int(time.time() * 1000) + RELEASE_LEAD_MS
+    display.prepareId = None
+    display.prepareDeadline = 0
+    _start_group_playback(display_id, start_epoch)
+
+
+def _maybe_release(display_id):
+    display = settings.displays.get(display_id)
+    if not display or display.action != PlayState.PREPARING:
+        return
+    online = _group_online_keys(display_id)
+    if online and online.issubset(display.readyClients):
+        _release_group(display_id)
+
+
 def _client_ip(request):
     """Best-effort client IP. Honors the first X-Forwarded-For hop (when the
     client reaches us through a proxy/tunnel that sets it), else the socket peer.
@@ -1502,6 +1522,11 @@ def msg_response(msg,session):
         client = settings.clients.get(msg["SRC"])
         if client:
             client.ready = True
+        display = settings.displays.get(getattr(client, "displayID", None)) if client else None
+        if display and display.action == PlayState.PREPARING \
+                and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
+            display.readyClients.add(msg["SRC"])
+            _maybe_release(client.displayID)
         response["PAYLOAD"]="SUCCESS"
         
     elif(msg["REQUEST"] == "DISCOVERY_STATUS"):
