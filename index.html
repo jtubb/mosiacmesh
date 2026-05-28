@@ -99,15 +99,22 @@
 	function showTapStart() { var el = document.getElementById('tapstart'); if (el) { el.style.display = 'block'; } }
 	function hideTapStart() { var el = document.getElementById('tapstart'); if (el) { el.style.display = 'none'; } }
 
-	// Called from the #tapstart overlay's touch/click handler — i.e. a real user
-	// gesture (your SSH/gesture script can tap it). The first play() of the
-	// persistent element blesses it so all later items play programmatically.
+	// Called from the #tapstart overlay's tap handler — a real user gesture.
+	// iOS-5 only begins LOADING a <video> from a gesture-triggered play(), and the
+	// gesture is voided by any DOM mutation / async deferral before play(). So do
+	// load()+play() FIRST and nothing else; the 'playing' listener (in
+	// getPersistentVideo) dismisses the overlay, and the drift loop syncs position.
 	function activatePlayback() {
-		playback.activated = true;
-		hideTapStart();
 		var v = getPersistentVideo();
-		try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e) {}
-		if (playback.active) { renderPlayback(); }   // (re)start the current item under the gesture
+		if (!v.parentNode) { try { document.getElementById('canvas').appendChild(v); } catch (e) {} }
+		try { v.load(); } catch (e) {}
+		try {
+			var p = v.play();
+			if (p && p['catch']) {
+				p['catch'](function () { v.muted = true; var q = v.play(); if (q && q['catch']) { q['catch'](function () {}); } });
+			}
+		} catch (e) {}
+		playback.activated = true;   // overlay auto-hides on the 'playing' event
 		return false;
 	}
 
@@ -215,6 +222,10 @@
 			runScriptLoop(cnv, item.file);
 		} else if (isVideoItem(item.file)) {
 			var v = getPersistentVideo();
+			// iOS-5 won't auto-size a <video> to its content (it stays at the 300x150
+			// default — the "black bar"). Set an explicit viewport-filling size.
+			v.style.width = (window.innerWidth || screen.width) + 'px';
+			v.style.height = (window.innerHeight || screen.height) + 'px';
 			$('#canvas').empty();
 			document.getElementById('canvas').appendChild(v);   // reattach the SAME element
 			playback.video = v;
@@ -435,6 +446,11 @@
 			}
 			else if(data_obj.REQUEST == "PLAY")
 			{
+				// Undo the calibrate view's <html> framing (8px border + window-16
+				// sizing) so it doesn't leave a strip around the playing video.
+				blink = false;
+				$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
+				$('#canvas').css({ color: '' });
 				playback.items = data_obj.PAYLOAD.items || [];
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
@@ -463,6 +479,9 @@
 	mosiacMeshConnect(mosiacMeshCallback);
   </script>
   <style>
+	/* Full-bleed black page: kills the default 8px body margin (white strip at
+	   the top/edges) and any white background behind the video/UI. */
+	html, body { margin: 0; padding: 0; height: 100%; background: #000; }
 	.canvas {
 		width: 100%;
 		-webkit-transform: translateX(-50%) translateY(-50%);
@@ -534,7 +553,7 @@
 	<!-- iOS needs a user gesture to start <video>; this full-screen overlay is the
 	     tap target (a person or the gesture/SSH script taps it once per session).
 	     Inline handlers + px units for 1st-gen iPad / iOS 5 compatibility. -->
-	<div id="tapstart" onclick="return activatePlayback();" ontouchstart="return activatePlayback();"
+	<div id="tapstart" onclick="return activatePlayback();" ontouchend="return activatePlayback();" ontouchstart="return activatePlayback();"
 	     style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; z-index:1000;
 	            background:#000; color:#fff; text-align:center; font-size:28px; cursor:pointer;">
 		<div style="margin-top:42%;">&#9658; Tap to start</div>
