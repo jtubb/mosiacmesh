@@ -1521,7 +1521,6 @@ def msg_response(msg,session):
         if is_new_client:
             client.discoveryTime = time.time()
             auto_configure_client(msg["SRC"], client)
-            sync_new_client_to_group(msg["SRC"], client)
 
             # Notify admin interface of new device
             new_device_notification = {
@@ -1535,7 +1534,12 @@ def msg_response(msg,session):
                 }
             }
             socketmanager.broadcast(jsonpickle.encode(new_device_notification))
-        
+
+        # Sync EVERY (re)connecting client to its group, not just first-timers: a
+        # reload/reconnect mid-playback must resume (re-send PRELOAD + PLAY with the
+        # in-progress epoch). Idempotent — no-op unless the group is currently PLAY.
+        sync_new_client_to_group(msg["SRC"], client)
+
         # Enhanced success response with configuration info
         response["PAYLOAD"] = {
             "status": "SUCCESS",
