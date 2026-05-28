@@ -155,10 +155,11 @@
 	function activatePlayback() {
 		var v = getPersistentVideo();
 		v.style.display = 'block';
-		// NB: no v.load() here. The element is already loaded by showItem /
-		// prepareFirstItem before the overlay appears; calling load() again resets
-		// it and re-fires the PREPARE loadedmetadata handler (which pauses for the
-		// hold), which would swallow this tap's play() and leave the overlay stuck.
+		// iOS-5 Safari needs load()+play() TOGETHER inside the tap gesture to start
+		// a held/paused element (play() alone won't restart it). The PREPARE
+		// loadedmetadata handler is one-shot (removes itself), so this load() can't
+		// re-trigger the hold. ES5/iOS-5 proven arming sequence.
+		try { v.load(); } catch (e) {}
 		try {
 			var p = v.play();
 			if (p && p['catch']) {
