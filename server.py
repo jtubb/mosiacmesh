@@ -1027,6 +1027,26 @@ def _stop_group_playback(display_id):
     broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
 
 
+def _group_online_keys(display_id):
+    return {k for k, c in settings.clients.items()
+            if getattr(c, "displayID", None) == display_id and getattr(c, "isOnline", False)}
+
+
+def _begin_prepare(display_id):
+    """Phase 1: tell the group to buffer + hold frame 0 (don't start the clock)."""
+    display = settings.displays.get(display_id)
+    if not display or not display.mediaElements:
+        return
+    display.prepareId = uuid.uuid4().hex
+    display.readyClients = set()
+    display.prepareDeadline = int(time.time() * 1000) + PREPARE_TIMEOUT_MS
+    display.action = PlayState.PREPARING
+    items = [_media_item_payload(me) for me in display.mediaElements]
+    broadcast_to_display_group(display_id, {
+        "REQUEST": "PREPARE",
+        "PAYLOAD": {"prepareId": display.prepareId, "items": items, "loop": display.loop}})
+
+
 def _client_ip(request):
     """Best-effort client IP. Honors the first X-Forwarded-For hop (when the
     client reaches us through a proxy/tunnel that sets it), else the socket peer.
@@ -1550,7 +1570,10 @@ def msg_response(msg,session):
             elif has_renderable and compute_render_token(display_id) != display.renderedToken:
                 response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
-                _start_group_playback(display_id, resume_epoch)
+                if display.action == PlayState.PAUSE:
+                    _start_group_playback(display_id, resume_epoch)   # resume: direct, today's path
+                else:
+                    _begin_prepare(display_id)                        # fresh start: coordinated
                 response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "STOP"):

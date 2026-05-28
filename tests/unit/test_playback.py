@@ -92,6 +92,7 @@ class TestPlayStop:
         return disp
 
     def test_play_sets_state_and_broadcasts(self, mock_settings):
+        # Fresh start: PLAY now enters coordinated prepare (PREPARING state, PREPARE broadcast)
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._group_with_items(mock_settings)
@@ -101,9 +102,9 @@ class TestPlayStop:
         with patch("time.time", return_value=1000.0):
             server.msg_response(msg, _make_session())
 
-        assert disp.action == server.PlayState.PLAY
-        assert disp.playStartEpoch == 1000000
-        assert server.socketmanager.broadcast.call_count == 1
+        assert disp.action == server.PlayState.PREPARING
+        assert disp.prepareId  # set by _begin_prepare
+        assert server.socketmanager.broadcast.call_count == 1  # PREPARE broadcast
 
     def test_stop_resets_state_and_broadcasts(self, mock_settings):
         server.settings = mock_settings
@@ -202,6 +203,7 @@ class TestResume:
         assert disp.playStartEpoch == 4997500  # 5000000 - 2500 (resume)
 
     def test_play_from_stopped_starts_fresh(self, mock_settings):
+        # Fresh start from STOP: enters coordinated prepare (PREPARING state, PREPARE broadcast)
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._group(mock_settings, server.PlayState.STOP, pause_offset=2500)
@@ -209,8 +211,8 @@ class TestResume:
                "PAYLOAD": {"displayID": "Default"}}
         with patch("time.time", return_value=5000.0):
             server.msg_response(msg, _make_session())
-        assert disp.action == server.PlayState.PLAY
-        assert disp.playStartEpoch == 5000000  # fresh, ignores pauseOffset
+        assert disp.action == server.PlayState.PREPARING
+        assert disp.prepareId  # set by _begin_prepare; clock not started yet
 
 
 class TestScriptPlayback:

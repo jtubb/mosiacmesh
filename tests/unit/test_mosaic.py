@@ -301,10 +301,12 @@ class TestSegmentPlay:
         return s
 
     def test_play_rendered_sends_per_client_warped(self, mock_settings):
+        # Resume-from-pause path: direct per-client PLAY with warped segment URLs
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._rendered_group(mock_settings)
         disp.renderedToken = server.compute_render_token("Default")  # mark rendered
+        disp.action = server.PlayState.PAUSE  # resume path bypasses coordinated prepare
         msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
         server.msg_response(msg, self._sess())
         # one PLAY per client (broadcast_to_client), not the group broadcast
@@ -411,12 +413,14 @@ class TestVideoSegmentPlay:
         assert server.socketmanager.broadcast.call_count == 0
 
     def test_play_rendered_video_sends_mp4_urls(self, mock_settings):
+        # Resume-from-pause path: direct per-client PLAY with segmented mp4 URLs
         import jsonpickle
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
         disp.renderStatus = "ready"
         disp.renderedToken = server.compute_render_token("Default")
+        disp.action = server.PlayState.PAUSE  # resume path bypasses coordinated prepare
         server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
                              "PAYLOAD": {"displayID": "Default"}}, self._sess())
         assert server.socketmanager.broadcast.call_count == 1
@@ -508,13 +512,14 @@ class TestIsRenderable:
         assert ret["PAYLOAD"]["status"] == "RENDER_REQUIRED"
 
     def test_per_client_play_routes_individual_to_ind_file(self):
+        # Resume-from-pause path: direct per-client PLAY with individual-crop URLs
         ms = server.Settings(); ms.displays = {"Default": server.Display()}
         server.settings = ms; server.socketmanager = MagicMock()
         disp = ms.displays["Default"]
         me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
         me.duration = 1000; me.playmode = server.PlayMode.INDIVIDUAL
         disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]; disp.loop = True
-        disp.action = server.PlayState.STOP
+        disp.action = server.PlayState.PAUSE  # resume path bypasses coordinated prepare
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         ms.clients = {"c1": c}
