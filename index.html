@@ -128,6 +128,9 @@
 		return false;
 	}
 
+	function showBlackout() { var el = document.getElementById('blackout'); if (el) { el.style.display = 'block'; } }
+	function hideBlackout() { var el = document.getElementById('blackout'); if (el) { el.style.display = 'none'; } }
+
 	function clearVideo() {
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		if (playback.video) {
@@ -245,6 +248,9 @@
 		} else if (isVideoItem(item.file)) {
 			var v = getPersistentVideo();
 			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
+			v.loop = false;              // playlist advances via renderPlayback, not element loop
+			v.muted = false;             // restore audio (keep-alive muted it); fallback re-mutes if blocked
+			hideBlackout();              // drop the 'stopped' cover
 			$('#canvas').empty();        // clear any prior image/script content
 			playback.video = v;
 			playback.videoIndex = i;
@@ -292,10 +298,27 @@
 	function stopPlayback() {
 		playback.active = false;
 		playback.paused = false;
-		clearVideo();
-		clearScript();
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		clearScript();
 		$('#canvas').empty();
+		var v = playback.pvid;
+		if (v && playback.activated && v.getAttribute('src')) {
+			// Keep the blessed element ALIVE — playing, muted, looping, behind a
+			// black cover — instead of pausing it. iOS drops the element's
+			// user-activation on pause, which would force a new tap on the next
+			// start; keeping it playing preserves it (audio is muted, screen is
+			// black, so it reads as 'stopped').
+			v.muted = true; v.loop = true; v.style.display = 'block';
+			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
+			showBlackout();
+		} else if (v) {
+			try { v.pause(); } catch (e) {}
+			v.style.display = 'none';
+			showBlackout();
+		}
+		playback.video = null;
+		playback.videoIndex = -1;
 	}
 
 	// Frame-accurate, self-correcting render loop: each transition recomputes the
@@ -469,6 +492,7 @@
 				blink = false;
 				$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
 				$('#canvas').css({ color: '' });
+				hideBlackout();   // lift the 'stopped' cover from a prior keep-alive
 				playback.items = data_obj.PAYLOAD.items || [];
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
@@ -576,6 +600,9 @@
 	            background:#000; color:#fff; text-align:center; font-size:28px; cursor:pointer;">
 		<div style="margin-top:42%;">&#9658; Tap to start</div>
 	</div>
+	<!-- 'Stopped' cover: black screen over the persistent video, which is kept
+	     playing (muted, looping) behind it to preserve iOS user-activation. -->
+	<div id="blackout" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; z-index:2; background:#000;"></div>
 	<div id="preload" class="preload"></div>
 </body>
 </html>
