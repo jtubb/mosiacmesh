@@ -121,6 +121,36 @@
 				' el=' + Math.round(elapsed) +
 				' r=' + (window._mmRenderN || 0) + ' #' + window._tdbgN;
 		};
+		// Always-on persistent-<video> state line (updates during PREPARE/arming,
+		// when the drift HUD above isn't running). Shows why a tap doesn't start:
+		// verr=decode/network error code, rs/ns=ready/network state, evt=last media
+		// event. ES5-safe. pointer-events:none so it never blocks the tap overlay.
+		window._mmVidEvt = '-';
+		setInterval(function () {
+			var v = playback.pvid;
+			var el2 = document.getElementById('tdbg2');
+			if (!el2) {
+				if (!document.body) { return; }
+				el2 = document.createElement('div'); el2.id = 'tdbg2';
+				el2.style.cssText = 'position:fixed;left:0;bottom:20px;z-index:99999;' +
+					'background:rgba(0,0,0,0.7);color:#ff0;font:12px monospace;' +
+					'padding:3px 5px;white-space:pre;pointer-events:none;';
+				document.body.appendChild(el2);
+			}
+			if (v && !v._mmEvtHooked) {
+				v._mmEvtHooked = true;
+				var names = ['playing', 'error', 'stalled', 'waiting', 'pause', 'canplay', 'suspend', 'abort'];
+				var mk = function (n) { return function () { window._mmVidEvt = n + (v.error ? ('/e' + v.error.code) : ''); }; };
+				var i; for (i = 0; i < names.length; i++) { v.addEventListener(names[i], mk(names[i]), false); }
+			}
+			el2.textContent = 'arm activated=' + playback.activated +
+				' paused=' + (v ? v.paused : '-') +
+				' rs=' + (v ? v.readyState : '-') +
+				' ns=' + (v ? v.networkState : '-') +
+				' verr=' + (v && v.error ? v.error.code : '-') +
+				' src=' + (v && v.getAttribute('src') ? '1' : '0') +
+				' evt=' + window._mmVidEvt;
+		}, 500);
 	}
 
 	// JS mirror of server.playlist_index — keep the two in sync.
