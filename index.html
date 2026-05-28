@@ -47,6 +47,11 @@
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
 		video: null, videoIndex: -1, driftTimer: null, paused: false,
 		scriptRaf: null, scriptIndex: -1,
+		// Adaptive seek-ahead: on slow devices (iPad 1) a hard seek takes ~1s to
+		// land, so seeking to the exact clock target lands late and playback never
+		// catches up. We seek to target+seekAheadMs and tune seekAheadMs from the
+		// residual error after each seek settles (0 on fast devices => no change).
+		seekAheadMs: 0, seekPending: false, lastSeekAt: 0,
 		// iOS (esp. iPad 1 / iOS 5) won't start <video> without a user gesture and
 		// the activation does NOT transfer to a freshly-created element. So we reuse
 		// ONE persistent <video> (pvid) across items and bless it once via a tap
@@ -84,6 +89,39 @@
 	}
 	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
 	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
+	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
+	                             // time to settle + establish playback before another,
+	                             // else a slow/stalled element gets re-seeked every tick
+	                             // and stays stuck at currentTime 0 (never plays).
+
+	// Optional on-screen timing HUD. Open the page with ?tdbg to diagnose sync /
+	// flashing on a device: live clock(el) vs video(ct), drift(err), look-ahead,
+	// and a tick counter (rapidly climbing # == a re-render/flash loop). Element
+	// is created lazily on first use (the <video> is in <body> by then). ES5-safe.
+	if (/tdbg/.test(location.href)) {
+		window._tdbg = function(pos, v, errorMs) {
+			var el = document.getElementById('tdbg');
+			if (!el) {
+				if (!document.body) { return; }
+				el = document.createElement('div'); el.id = 'tdbg';
+				el.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;' +
+					'background:rgba(0,0,0,0.7);color:#0f0;font:12px monospace;' +
+					'padding:3px 5px;white-space:pre;pointer-events:none;';
+				document.body.appendChild(el);
+				window._tdbgN = 0;
+			}
+			window._tdbgN++;
+			var elapsed = GoTime.now() - playback.startEpoch;
+			el.textContent = 'idx=' + (pos ? pos.index : '-') +
+				' off=' + (pos ? Math.round(pos.offsetMs) : '-') +
+				' ct=' + (v ? Math.round(v.currentTime * 1000) : '-') +
+				' err=' + Math.round(errorMs) +
+				' ahead=' + Math.round(playback.seekAheadMs) +
+				' rs=' + (v ? v.readyState : '-') +
+				' el=' + Math.round(elapsed) +
+				' r=' + (window._mmRenderN || 0) + ' #' + window._tdbgN;
+		};
+	}
 
 	// JS mirror of server.playlist_index — keep the two in sync.
 	function playlistIndex(elapsedMs, durations, loop) {
@@ -133,13 +171,23 @@
 
 	function clearVideo() {
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
-		if (playback.video) {
-			try { playback.video.pause(); } catch (e) {}
-			playback.video = null;
+		var v = playback.pvid;
+		if (v && playback.activated && v.getAttribute('src')) {
+			// Do NOT pause the blessed element between items. iOS-5 drops the
+			// element's user-activation on pause, which re-locks playback so the
+			// NEXT video's play() is blocked again (and, with activated already
+			// true, showItem won't re-prompt) — the "video didn't start, no tap
+			// prompt" bug. Instead keep it playing, muted and looping, but fully
+			// transparent so the non-video item shows through it. showItem's video
+			// branch restores opacity + audio. Mirrors stopPlayback's keep-alive.
+			v.muted = true; v.loop = true; v.style.opacity = '0';
+			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
+		} else if (v) {
+			// Not yet gesture-blessed (nothing to preserve): just hide it.
+			try { v.pause(); } catch (e) {}
+			v.style.display = 'none';
 		}
-		// Hide (don't destroy) the persistent element so non-video items show; the
-		// element and its iOS gesture activation must survive across items.
-		if (playback.pvid) { playback.pvid.style.display = 'none'; }
+		playback.video = null;
 		playback.videoIndex = -1;
 	}
 
@@ -213,16 +261,46 @@
 		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
 		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
 		if (pos === null || pos.index !== playback.videoIndex) { return; }
-		var errorMs = v.currentTime * 1000 - pos.offsetMs;
-		if (Math.abs(errorMs) > HARD_SEEK_MS) {
-			try { v.currentTime = pos.offsetMs / 1000; } catch (e) {}
+		var errorMs = v.currentTime * 1000 - pos.offsetMs;   // <0 => BEHIND clock, >0 => AHEAD
+		// A prior catch-up seek just settled: tune the look-ahead from the residual
+		// so the next catch-up lands closer (we only seek-ahead when behind, below).
+		if (playback.seekPending) {
+			playback.seekPending = false;
+			playback.seekAheadMs -= errorMs * 0.5;
+			if (playback.seekAheadMs < 0) { playback.seekAheadMs = 0; }
+			if (playback.seekAheadMs > 1500) { playback.seekAheadMs = 1500; }
+		}
+		// Rate-limit hard seeks so a seek can settle + establish playback before the
+		// next one (otherwise a slow/stalled element is re-seeked every tick and
+		// never plays). Between seeks, playbackRate handles the drift.
+		var nowMs = GoTime.now();
+		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
+		var tgtMs = null;
+		if (canSeek && errorMs < -HARD_SEEK_MS) {
+			// Too far BEHIND: seek ahead by the learned seek latency so we land on
+			// the clock (a slow device's seek takes ~latency to settle).
+			tgtMs = pos.offsetMs + playback.seekAheadMs;
+			playback.seekPending = true;
+		} else if (canSeek && errorMs > HARD_SEEK_MS) {
+			// Too far AHEAD: seek to the EXACT target (no look-ahead). On a slow
+			// device the seek lands ~latency later, i.e. on/behind the clock — never
+			// ahead. Don't tune the look-ahead from this (it's not a catch-up).
+			tgtMs = pos.offsetMs;
+		}
+		if (tgtMs !== null) {
+			var maxMs = ((v.duration || (durations[pos.index] / 1000)) * 1000) - 50;
+			if (tgtMs > maxMs) { tgtMs = maxMs; }
+			if (tgtMs < 0) { tgtMs = 0; }
+			try { v.currentTime = tgtMs / 1000; } catch (e) {}
 			v.playbackRate = 1;
+			playback.lastSeekAt = nowMs;
 		} else {
 			var rate = 1 - errorMs / 2000;
 			if (rate < 0.85) { rate = 0.85; }
 			if (rate > 1.15) { rate = 1.15; }
 			v.playbackRate = rate;
 		}
+		if (window._tdbg) { window._tdbg(pos, v, errorMs); }
 	}
 
 	function startDriftLoop() {
@@ -248,6 +326,7 @@
 		} else if (isVideoItem(item.file)) {
 			var v = getPersistentVideo();
 			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
+			v.style.opacity = '1';       // restore visibility (clearVideo keep-alive set it to 0)
 			v.loop = false;              // playlist advances via renderPlayback, not element loop
 			v.muted = false;             // restore audio (keep-alive muted it); fallback re-mutes if blocked
 			hideBlackout();              // drop the 'stopped' cover
@@ -276,7 +355,14 @@
 				v.addEventListener('loadedmetadata', once);
 				try { v.load(); } catch (e) {}
 			} else if (v.readyState >= 1) {
-				seekAndPlay();   // same clip already loaded (e.g. loop) -> just seek
+				// Same clip already loaded. Only (re)seek if it's paused or
+				// meaningfully off the target. A redundant PLAY/renderPlayback for
+				// the clip already playing (e.g. a reconnect re-sending PLAY) must
+				// NOT re-seek — on the iPad that rebuffers and visibly flashes the
+				// clip. A genuine loop restart still seeks (offset ~0 vs currentTime
+				// near the end is a large diff).
+				var driftMs = Math.abs(v.currentTime * 1000 - (offsetMs || 0));
+				if (v.paused || driftMs > HARD_SEEK_MS) { seekAndPlay(); }
 			} else {
 				var once2 = function() { v.removeEventListener('loadedmetadata', once2); seekAndPlay(); };
 				v.addEventListener('loadedmetadata', once2);
@@ -325,6 +411,7 @@
 	// current item from the shared clock and schedules the exact next boundary.
 	function renderPlayback() {
 		if (!playback.active || playback.paused) { return; }
+		window._mmRenderN = (window._mmRenderN || 0) + 1;   // tdbg: re-render/flash counter
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		var durations = [], i;
 		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
@@ -466,6 +553,11 @@
 			else if(data_obj.REQUEST == "CALIBRATE")
 			{
 				blink = false;
+				// The page background is black for video playback, but calibration
+				// needs a WHITE screen field so the <html> 8px black border reads as
+				// the screen-perimeter band against white. Force the page white here;
+				// PLAY/stop revert it to black.
+				$('html, body').css('background-color', '#ffffff');
 				$('#canvas').css({'background-color': 'white', 'color': 'black'});
 				$('#canvas').text("");
 				var image = new Image();
@@ -484,6 +576,10 @@
 					position: 'relative',
 					overflow: 'hidden'
 				});
+				// Report the CURRENT viewport size so calibration reconstructs the
+				// screen from the marker using the dims actually being photographed
+				// (the page may have been registered before going full screen).
+				if (window._mmReportCanvas) { window._mmReportCanvas(); }
 			}
 			else if(data_obj.REQUEST == "PLAY")
 			{
@@ -491,6 +587,9 @@
 				// sizing) so it doesn't leave a strip around the playing video.
 				blink = false;
 				$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
+				// Revert the calibrate view's white page back to the black playback bg
+				// (removing the inline override falls back to the html,body { #000 } rule).
+				$('html, body').css('background-color', '');
 				$('#canvas').css({ color: '' });
 				hideBlackout();   // lift the 'stopped' cover from a prior keep-alive
 				playback.items = data_obj.PAYLOAD.items || [];

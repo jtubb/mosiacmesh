@@ -116,6 +116,28 @@ function getUDID() {
 			var ch = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
 			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height,
 				"canvasWidth": cw, "canvasHeight": ch, "touch": hasTouch}));
+			// Re-report the viewport whenever it changes (e.g. entering full screen
+			// for calibration, or rotating). REGISTER only captures it once; if the
+			// page registered while NOT full screen, the stored canvas dims would be
+			// stale and the calibration reconstruction (which extrapolates the screen
+			// from the 300px marker using canvas dims) would come out mis-scaled.
+			// Wired once; exposed as window._mmReportCanvas for the CALIBRATE handler.
+			if (!window._mmCanvasWatch) {
+				window._mmCanvasWatch = true;
+				var _mmRT = null;
+				var _mmReport = function() {
+					if (!(sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN)) { return; }
+					var w = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || screen.width;
+					var h = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
+					sock.send(generateMessage("SRV", "REPORT_CANVAS", { "canvasWidth": w, "canvasHeight": h }));
+				};
+				window._mmReportCanvas = _mmReport;
+				var _mmDeb = function() { if (_mmRT) { clearTimeout(_mmRT); } _mmRT = setTimeout(_mmReport, 400); };
+				if (window.addEventListener) {
+					window.addEventListener('resize', _mmDeb, false);
+					window.addEventListener('orientationchange', _mmDeb, false);
+				}
+			}
 			update_ui();
 		};
 

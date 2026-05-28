@@ -429,3 +429,58 @@ class TestCalibrate:
         # Returns the 2-segment media URL (media_handler inserts images/),
         # not the 3-segment disk path, and does not raise.
         assert result == ("media/displays/calibration.png", "text/html")
+
+
+class TestMediaRange:
+    """media_handler must answer byte-range requests with 206 — including the
+    OPEN-ENDED ranges browsers send when seeking video ("bytes=N-"). Regression:
+    those used to fall through to a 200 full-file-from-0, so Chrome treated a
+    seek as a reload and restarted playback at 0 (iOS Safari sends bounded
+    ranges, so it was unaffected — which masked the bug)."""
+
+    FILE_SIZE = 10000
+
+    def _request(self, range_header=None):
+        headers = {'Range': range_header} if range_header else {}
+        req = make_mocked_request('GET', '/media/c/videos/clip.mp4', headers=headers)
+        req._match_info = {'client': 'c', 'file': 'clip.mp4'}
+        return req
+
+    @pytest.mark.asyncio
+    async def test_open_ended_range_returns_206(self):
+        """bytes=1000-  ->  206 covering 1000..EOF (the seek case that regressed)."""
+        handle = MagicMock()
+        handle.read.return_value = b'x' * (self.FILE_SIZE - 1000)
+        with patch('server.os.path.isfile', return_value=True), \
+             patch('server.os.path.getsize', return_value=self.FILE_SIZE), \
+             patch('server.get_pooled_file_handle', return_value=handle):
+            resp = await server.media_handler(self._request('bytes=1000-'))
+        assert resp.status == 206
+        assert resp.headers['Content-Range'] == f'bytes 1000-{self.FILE_SIZE - 1}/{self.FILE_SIZE}'
+        assert resp.headers['Accept-Ranges'] == 'bytes'
+        handle.seek.assert_called_once_with(1000)
+        handle.read.assert_called_once_with(self.FILE_SIZE - 1000)
+
+    @pytest.mark.asyncio
+    async def test_bounded_range_returns_206(self):
+        """bytes=0-1023  ->  206 for exactly that window (the always-worked case)."""
+        handle = MagicMock()
+        handle.read.return_value = b'x' * 1024
+        with patch('server.os.path.isfile', return_value=True), \
+             patch('server.os.path.getsize', return_value=self.FILE_SIZE), \
+             patch('server.get_pooled_file_handle', return_value=handle):
+            resp = await server.media_handler(self._request('bytes=0-1023'))
+        assert resp.status == 206
+        assert resp.headers['Content-Range'] == f'bytes 0-1023/{self.FILE_SIZE}'
+        handle.seek.assert_called_once_with(0)
+        handle.read.assert_called_once_with(1024)
+
+    @pytest.mark.asyncio
+    async def test_no_range_returns_200_full(self):
+        """No Range header  ->  200 full file, no Content-Range."""
+        with patch('server.os.path.isfile', return_value=True), \
+             patch('server.os.path.getsize', return_value=self.FILE_SIZE), \
+             patch('server.get_cached_file', return_value=b'full'):
+            resp = await server.media_handler(self._request())
+        assert resp.status == 200
+        assert 'Content-Range' not in resp.headers

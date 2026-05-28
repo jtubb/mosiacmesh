@@ -1498,6 +1498,20 @@ def msg_response(msg,session):
                 configured_count += 1
         response["PAYLOAD"] = {"status": "SUCCESS", "configured": configured_count}
         
+    elif(msg["REQUEST"] == "REPORT_CANVAS"):
+        # Client re-reporting its viewport size (e.g. after going full screen for
+        # calibration). Keep canvasWidth/Height fresh so calibrate() reconstructs
+        # the screen quad from the marker using the dims actually photographed.
+        client = settings.clients.get(msg["SRC"])
+        if client is not None:
+            payload = msg.get("PAYLOAD") or {}
+            cw = payload.get("canvasWidth")
+            ch = payload.get("canvasHeight")
+            if cw and ch:
+                client.canvasWidth = int(cw)
+                client.canvasHeight = int(ch)
+                save_settings_incremental()
+
     elif(msg["REQUEST"] == "SETPLAYLIST"):
         payload = msg["PAYLOAD"]
         display_id = payload["displayID"]
@@ -1881,16 +1895,32 @@ async def media_handler(request):
     logging.debug(request.http_range)
     
     try:
-        if request.http_range.stop:
-            logging.debug(f'Range Start {request.http_range.start} - Stop {request.http_range.stop-1}')
-            customHeaders['Accept-Ranges'] = 'bytes'
+        _rng = request.http_range
+        if _rng.start is not None or _rng.stop is not None:
+            # Honor BOTH bounded ("bytes=0-1023") and OPEN-ENDED ("bytes=512-")
+            # ranges. Browsers seek with open-ended ranges (stop=None); the old
+            # `if request.http_range.stop:` missed those and returned the whole
+            # file as 200 from byte 0 -> the client (Chrome) treats a seek as a
+            # full reload and restarts playback at 0. We must answer 206.
             file_size = os.path.getsize(file_path)
-            customHeaders['Content-Range'] = f'bytes {request.http_range.start}-{request.http_range.stop-1}/{file_size}'
+            start = _rng.start
+            stop = _rng.stop
+            if start is None:                      # suffix range "bytes=-N" (last N bytes)
+                start = max(0, file_size - (stop or 0))
+                stop = file_size
+            else:
+                if start < 0:
+                    start = 0
+                if stop is None or stop > file_size:
+                    stop = file_size               # open-ended -> read to EOF
+            logging.debug(f'Range {start}-{stop-1}/{file_size}')
+            customHeaders['Accept-Ranges'] = 'bytes'
+            customHeaders['Content-Range'] = f'bytes {start}-{stop-1}/{file_size}'
             customStatus = 206
             # Use pooled file handle for better performance
             handle = get_pooled_file_handle(file_path, 'rb')
-            handle.seek(request.http_range.start)
-            data = handle.read(request.http_range.stop-request.http_range.start)
+            handle.seek(start)
+            data = handle.read(stop - start)
         else:
             # For small files, use caching; for large video files, stream directly
             if subdir == "images" or os.path.getsize(file_path) < 10 * 1024 * 1024:  # 10MB threshold
