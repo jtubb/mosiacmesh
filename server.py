@@ -29,6 +29,13 @@ import uuid
 import datetime
 from dateutil import rrule as _rrule
 
+# Coordinated-start constants
+RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
+PREPARE_TIMEOUT_MS = 5000   # ms to wait for all READYs before releasing anyway
+AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
+VEENCY_PORT = 5900
+VEENCY_PASSWORD = "mosaic"
+
 # File cache with modification time tracking
 file_cache = {}
 cache_stats = {'hits': 0, 'misses': 0}
@@ -815,12 +822,16 @@ class Display():
         self.defaultPlaylistName = None   # fallback playlist when no schedule is active
         self.scheduledEntryId = None      # transient: which schedule/"__default__" currently drives this group
         self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
+        self.prepareId = None
+        self.readyClients = set()
+        self.prepareDeadline = 0
 
 class PlayState(Enum):
     NOACTION = 0
     STOP = 1
     PLAY = 2
     PAUSE = 3
+    PREPARING = 4
 
 class MediaElement():
     def __init__(self):
