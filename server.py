@@ -354,7 +354,9 @@ def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
     media coords, then a homography fits it to out_w x out_h."""
     h, w = source_img.shape[:2]
     bx, by, bw, bh = bbox
-    ordered = order_points(screen_quad)  # [TL, TR, BR, BL] in photo coords
+    # Use the quad in its STORED order (screen TL,TR,BR,BL from the marker), not a
+    # geometric re-sort — otherwise a non-upright panel (e.g. 180°-mounted) flips.
+    ordered = np.array(screen_quad, dtype="float32").reshape(-1, 2)
     src = np.array([[(px - bx) / bw * w, (py - by) / bh * h] for (px, py) in ordered], dtype="float32")
     dst = np.array([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]], dtype="float32")
     m = cv.getPerspectiveTransform(src, dst)
@@ -655,11 +657,14 @@ def isVideoItem(file):
 
 
 def quad_to_source_points(bbox, screen_quad, src_w, src_h):
-    """Ordered [TL, TR, BR, BL] corners of the screen's quad expressed in source
-    media pixel coords (the source is stretched to fill the group bbox)."""
+    """Corners of the screen's quad expressed in source media pixel coords (the
+    source is stretched to fill the group bbox). Uses the quad in its STORED
+    order — reconstruct_screen_quad emits screen [TL,TR,BR,BL] in the panel's own
+    orientation (from the marker). Re-ordering geometrically would discard that
+    and flip a non-upright panel (e.g. a 180°-mounted screen)."""
     bx, by, bw, bh = bbox
-    ordered = order_points(screen_quad)  # [TL, TR, BR, BL] in photo coords
-    return [[(float(px) - bx) / bw * src_w, (float(py) - by) / bh * src_h] for (px, py) in ordered]
+    pts = np.array(screen_quad, dtype="float32").reshape(-1, 2)
+    return [[(float(px) - bx) / bw * src_w, (float(py) - by) / bh * src_h] for (px, py) in pts]
 
 
 def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,

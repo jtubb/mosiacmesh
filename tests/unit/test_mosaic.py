@@ -34,6 +34,18 @@ class TestGeometryHelpers:
     def test_resolve_media_path_video(self):
         assert server.resolve_media_path("/media/server/clip.mp4") == os.path.join("media", "server", "videos", "clip.mp4")
 
+    def test_quad_to_source_points_preserves_marker_order(self):
+        # The quad's stored order carries the panel's orientation (from the
+        # marker). A 180°-rotated corner order must NOT be re-sorted geometrically
+        # — else a 180°-mounted screen renders upside down.
+        bbox = [0, 0, 100, 100]
+        upright = [[0, 0], [100, 0], [100, 100], [0, 100]]      # TL,TR,BR,BL
+        rotated = [[100, 100], [0, 100], [0, 0], [100, 0]]      # same quad, 180° order
+        assert server.quad_to_source_points(bbox, upright, 200, 200)[0] == [0.0, 0.0]
+        # first source point follows the FIRST given corner (200,200), not a
+        # geometric top-left (which would be [0,0] if it re-sorted).
+        assert server.quad_to_source_points(bbox, rotated, 200, 200)[0] == [200.0, 200.0]
+
 
 class TestWarp:
     def _half_image(self):
