@@ -46,7 +46,32 @@
 	var mediaReady = false;
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
 		video: null, videoIndex: -1, driftTimer: null, paused: false,
-		scriptRaf: null, scriptIndex: -1 };
+		scriptRaf: null, scriptIndex: -1,
+		// iOS (esp. iPad 1 / iOS 5) won't start <video> without a user gesture and
+		// the activation does NOT transfer to a freshly-created element. So we reuse
+		// ONE persistent <video> (pvid) across items and bless it once via a tap
+		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
+		pvid: null, activated: false, videoSrc: null };
+
+	// One persistent video element, created once and reused for every video item
+	// so a single user gesture keeps the whole session playable on iOS.
+	function getPersistentVideo() {
+		if (!playback.pvid) {
+			var v = document.createElement('video');
+			v.muted = false; // audio on every screen once the element is gesture-blessed
+			v.setAttribute('webkit-playsinline', '');
+			v.setAttribute('playsinline', '');
+			v.preload = 'auto';
+			v.style.maxWidth = '100%';
+			v.style.maxHeight = '100%';
+			// Once the video actually starts (modern autoplay, the muted fallback,
+			// or a post-tap play), drop the overlay and mark the session active. On
+			// iPad 1 'playing' won't fire until the gesture, so the overlay persists.
+			v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+			playback.pvid = v;
+		}
+		return playback.pvid;
+	}
 	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
 	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
 
@@ -71,6 +96,21 @@
 		return /\.(mp4|mov|m4v|webm|ogv)(\?|$)/i.test(file || '');
 	}
 
+	function showTapStart() { var el = document.getElementById('tapstart'); if (el) { el.style.display = 'block'; } }
+	function hideTapStart() { var el = document.getElementById('tapstart'); if (el) { el.style.display = 'none'; } }
+
+	// Called from the #tapstart overlay's touch/click handler — i.e. a real user
+	// gesture (your SSH/gesture script can tap it). The first play() of the
+	// persistent element blesses it so all later items play programmatically.
+	function activatePlayback() {
+		playback.activated = true;
+		hideTapStart();
+		var v = getPersistentVideo();
+		try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e) {}
+		if (playback.active) { renderPlayback(); }   // (re)start the current item under the gesture
+		return false;
+	}
+
 	function clearVideo() {
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		if (playback.video) {
@@ -78,6 +118,8 @@
 			playback.video = null;
 		}
 		playback.videoIndex = -1;
+		// NOTE: keep playback.pvid — the persistent element (and its iOS gesture
+		// activation) must survive across items.
 	}
 
 	var _raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
@@ -159,6 +201,7 @@
 	function showItem(i, offsetMs) {
 		clearVideo();
 		clearScript();
+		hideTapStart();   // only video items that still need a gesture re-show it
 		var item = playback.items[i];
 		if (!item) { return; }
 		$('#canvas').css('background-color', item.backgroundColor || '#000000');
@@ -171,37 +214,40 @@
 			playback.scriptIndex = i;
 			runScriptLoop(cnv, item.file);
 		} else if (isVideoItem(item.file)) {
-			var v = document.createElement('video');
-			v.muted = false; // every screen plays audio (video-split spec); needs a gesture to autoplay
-			v.setAttribute('webkit-playsinline', '');
-			v.setAttribute('playsinline', '');
-			v.preload = 'auto';
-			v.style.maxWidth = '100%';
-			v.style.maxHeight = '100%';
-			v.src = item.file;
+			var v = getPersistentVideo();
 			$('#canvas').empty();
-			document.getElementById('canvas').appendChild(v);
+			document.getElementById('canvas').appendChild(v);   // reattach the SAME element
 			playback.video = v;
 			playback.videoIndex = i;
 			var seekAndPlay = function() {
 				try { v.currentTime = (offsetMs || 0) / 1000; } catch (e) {}
 				var p = v.play();
 				if (p && p['catch']) {
+					// Modern browsers: unmuted autoplay may be blocked -> fall back to
+					// muted so it still starts. (iPad 1's play() returns no promise, so
+					// this never runs there — it relies on the tap-to-start gesture.)
 					p['catch'](function() {
-						// Unmuted autoplay needs a user gesture; without one the
-						// browser rejects play(). Fall back to muted autoplay so the
-						// video still starts (a later gesture / kiosk policy can give
-						// it audio). ES5-safe; iPad 1's play() returns no promise, so
-						// it keeps its existing gesture-driven path.
 						v.muted = true;
 						var p2 = v.play();
 						if (p2 && p2['catch']) { p2['catch'](function() {}); }
 					});
 				}
 			};
-			if (v.readyState >= 1) { seekAndPlay(); }
-			else { v.addEventListener('loadedmetadata', seekAndPlay); }
+			if (item.file !== playback.videoSrc) {
+				// New clip: (re)load, then seek+play once metadata is ready.
+				playback.videoSrc = item.file;
+				v.src = item.file;
+				var once = function() { v.removeEventListener('loadedmetadata', once); seekAndPlay(); };
+				v.addEventListener('loadedmetadata', once);
+				try { v.load(); } catch (e) {}
+			} else if (v.readyState >= 1) {
+				seekAndPlay();   // same clip already loaded (e.g. loop) -> just seek
+			} else {
+				var once2 = function() { v.removeEventListener('loadedmetadata', once2); seekAndPlay(); };
+				v.addEventListener('loadedmetadata', once2);
+			}
 			startDriftLoop();
+			if (!playback.activated) { showTapStart(); }   // need a gesture to start on iOS
 		} else {
 			$('#canvas').html('<img src="' + item.file + '" style="max-width:100%; max-height:100%;">');
 		}
@@ -485,6 +531,14 @@
 <body>
 	<div id="heartbeat" class="hb-red"></div>
 	<div id="canvas" class="canvas"></div>
+	<!-- iOS needs a user gesture to start <video>; this full-screen overlay is the
+	     tap target (a person or the gesture/SSH script taps it once per session).
+	     Inline handlers + px units for 1st-gen iPad / iOS 5 compatibility. -->
+	<div id="tapstart" onclick="return activatePlayback();" ontouchstart="return activatePlayback();"
+	     style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; z-index:1000;
+	            background:#000; color:#fff; text-align:center; font-size:28px; cursor:pointer;">
+		<div style="margin-top:42%;">&#9658; Tap to start</div>
+	</div>
 	<div id="preload" class="preload"></div>
 </body>
 </html>
