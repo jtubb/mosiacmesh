@@ -58,10 +58,13 @@ SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
 # The wall's display page each device opens. Edit for your network.
 DISPLAY_URL = "http://192.168.1.60:3000/"
 DEFAULT_DEVICE_SCRIPTS = {
-    # Wake + keep the screen lit: disable SpringBoard auto-lock. Best-effort on
-    # iOS-5 jailbreak (the pref is read on the next lock; respring to force).
-    # Refine the exact wake/unlock for your devices.
-    "loginScript":  "defaults write /var/mobile/Library/Preferences/com.apple.springboard SBAutoLockTime -int 0 2>/dev/null; echo LOGIN_OK",
+    # Wake + unlock (slide-to-unlock, no passcode) + keep the screen lit, via
+    # Activator (installed on the fleet): homebutton wakes the display,
+    # lockscreen.dismiss skips the slide-to-unlock, and the SBSettings autolock
+    # switch off prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
+    "loginScript":  "activator send libactivator.system.homebutton; sleep 1; "
+                    "activator send libactivator.lockscreen.dismiss; "
+                    "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
     # Open the display page in mobile Safari.
     "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Close Safari (the display client).
