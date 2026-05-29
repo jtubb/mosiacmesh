@@ -67,8 +67,12 @@ DEFAULT_DEVICE_SCRIPTS = {
                     "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
     # Open the display page in mobile Safari.
     "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
-    # Close Safari (the display client).
-    "stopScript":   "killall MobileSafari 2>/dev/null; echo STOP_OK",
+    # Close Safari (the display client), re-enable auto-lock (login disabled it to
+    # keep the wall lit), and sleep the screen now via the sleep button. Symmetric
+    # with login: stop -> screen off + allowed to stay asleep.
+    "stopScript":   "killall MobileSafari 2>/dev/null; "
+                    "activator send switch-on.com.a3tweaks.switch.autolock; "
+                    "activator send libactivator.system.sleepbutton; echo STOP_OK",
     # Full device reboot.
     "rebootScript": "echo REBOOTING; reboot",
 }
