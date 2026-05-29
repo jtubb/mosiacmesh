@@ -99,6 +99,12 @@
 	                             // re-aligns by seeking to this keyframe grid so iOS-5
 	                             // (keyframe-accurate seek) and modern clients land on
 	                             // the same frame -> the wall agrees with itself.
+	// Drift past this triggers a grid re-align seek. iOS-5 IGNORES playbackRate
+	// (verified: rate set to 1.15 but currentTime advances 1.0x), so rate can't trim
+	// the residual — a grid seek is the only lever there. Just above half a grid cell
+	// (250ms) so that after a round-to-grid seek (lands within +-250ms) it doesn't
+	// immediately re-seek. Modern clients rarely exceed this (rate keeps them tight).
+	var DRIFT_SEEK_MS = 300;
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
 	                             // time to settle + establish playback before another,
 	                             // else a slow/stalled element gets re-seeked every tick
@@ -406,7 +412,7 @@
 		// behind->seek loop is what stalled the iPad and wrecked sync. playbackRate
 		// trims the small residual on browsers that honor it; on iOS-5 (which ignores
 		// rate) the clip just rides at rate 1 until the next grid re-align.
-		if (canSeek && (errorMs < -HARD_SEEK_MS || errorMs > HARD_SEEK_MS)) {
+		if (canSeek && (errorMs < -DRIFT_SEEK_MS || errorMs > DRIFT_SEEK_MS)) {
 			tgtMs = Math.round(pos.offsetMs / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
 		}
 		if (tgtMs !== null) {
