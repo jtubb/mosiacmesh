@@ -31,12 +31,12 @@ from dateutil import rrule as _rrule
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
-PREPARE_TIMEOUT_MS = 25000  # ms to wait for all READYs before releasing anyway.
-                            # Generous because iOS-5 clients need a HUMAN arming tap
-                            # during PREPARE (synthetic taps don't satisfy the gesture
-                            # gate) -- the GO holds until every display is armed so the
-                            # wall starts together, instead of modern displays racing
-                            # ahead while an iPad sits on tap-to-start.
+PREPARE_TIMEOUT_MS = 25000  # Safety-net timeout for SILENT/stuck clients only. A
+                            # client that reported NEEDS_ARM (iOS-5 awaiting a human
+                            # tap) is waited on indefinitely (_release_expired_prepares
+                            # holds the GO while any online client is arm-pending), so
+                            # the whole wall starts together once all are armed. This
+                            # timeout only releases past clients that never responded.
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"
@@ -861,6 +861,7 @@ class Display():
         self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
         self.prepareId = None
         self.readyClients = set()
+        self.armPending = set()   # clients that sent NEEDS_ARM, awaiting a human tap
         self.prepareDeadline = 0
 
 class PlayState(Enum):
@@ -1064,6 +1065,7 @@ def _stop_group_playback(display_id):
         # cancel any in-flight coordinated-start prepare (don't leave stale state)
         display.prepareId = None
         display.readyClients = set()
+        display.armPending = set()
         display.prepareDeadline = 0
     broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
 
@@ -1080,6 +1082,7 @@ def _begin_prepare(display_id):
         return
     display.prepareId = uuid.uuid4().hex
     display.readyClients = set()
+    display.armPending = set()
     display.prepareDeadline = int(time.time() * 1000) + PREPARE_TIMEOUT_MS
     display.action = PlayState.PREPARING
     # Per-client PREPARE: each client must buffer/arm with ITS OWN rendered
@@ -1116,12 +1119,21 @@ def _maybe_release(display_id):
 
 
 def _release_expired_prepares():
-    """Release any display groups whose PREPARE timeout has elapsed."""
+    """Safety net: release a PREPARE only when the timeout has elapsed AND no online
+    client is still awaiting a human arming tap. Clients that reported NEEDS_ARM
+    (e.g. a 1st-gen iPad that needs a real finger to start its video) are waited on
+    indefinitely so the whole wall starts together once every display is armed —
+    the timeout then only covers clients that went silent/stuck (never responded)."""
     now = int(time.time() * 1000)
     for display_id, display in list(settings.displays.items()):
-        if display.action == PlayState.PREPARING and display.prepareDeadline and now > display.prepareDeadline:
+        if display.action != PlayState.PREPARING or not display.prepareDeadline:
+            continue
+        online = _group_online_keys(display_id)
+        if getattr(display, "armPending", set()) & online:
+            continue   # someone still needs a tap -> keep holding the GO
+        if now > display.prepareDeadline:
             logging.warning("PREPARE timeout for %s; releasing without %s",
-                            display_id, _group_online_keys(display_id) - display.readyClients)
+                            display_id, online - display.readyClients)
             _release_group(display_id)
 
 
@@ -1612,6 +1624,7 @@ def msg_response(msg,session):
         if display and display.action == PlayState.PREPARING \
                 and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
             display.readyClients.add(msg["SRC"])
+            display.armPending.discard(msg["SRC"])   # armed now (was awaiting a tap)
             _maybe_release(did)
         response["PAYLOAD"]="SUCCESS"
 
@@ -1620,6 +1633,9 @@ def msg_response(msg,session):
         display = settings.displays.get(getattr(client, "displayID", None)) if client else None
         if display and display.action == PlayState.PREPARING \
                 and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
+            # Mark this client as awaiting a HUMAN arming tap so the GO timeout won't
+            # release the wall without it (see _release_expired_prepares).
+            display.armPending.add(msg["SRC"])
             asyncio.ensure_future(_auto_arm_client(msg["SRC"]))
 
     elif(msg["REQUEST"] == "CLIENTLOG"):
@@ -2596,6 +2612,7 @@ def migrate_client_objects():
         # transient prepare state (a restart cancels any in-flight prepare).
         _disp.prepareId = None
         _disp.readyClients = set()
+        _disp.armPending = set()
         _disp.prepareDeadline = 0
     current_time = time.time()
     for client_key, client in settings.clients.items():

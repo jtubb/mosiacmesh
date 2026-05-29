@@ -85,6 +85,24 @@ def test_timeout_release_helper():
     assert disp.prepareId is None
 
 
+def test_arm_pending_client_holds_timeout_release():
+    """An online client awaiting a human arming tap (NEEDS_ARM) blocks the timeout
+    release, so the whole wall waits; once it reports READY the timeout can fire."""
+    disp = _display_with_items(server)
+    _online_client(server, "a", "g1")
+    with patch.object(server, "broadcast_to_client"):
+        server._begin_prepare("g1")
+    disp.prepareDeadline = int(time.time() * 1000) - 1   # already past
+    disp.armPending = {"a"}                               # 'a' still needs its tap
+    with patch.object(server, "_start_group_playback") as sgp:
+        server._release_expired_prepares()
+        assert sgp.call_count == 0                         # held: don't start without 'a'
+        disp.armPending = set()                            # 'a' tapped -> armed
+        server._release_expired_prepares()
+        assert sgp.call_count == 1                          # now the safety-net can release
+    assert disp.prepareId is None
+
+
 import asyncio
 
 def test_auto_arm_invokes_vncdo_with_center_coords():
