@@ -31,7 +31,12 @@ from dateutil import rrule as _rrule
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
-PREPARE_TIMEOUT_MS = 5000   # ms to wait for all READYs before releasing anyway
+PREPARE_TIMEOUT_MS = 25000  # ms to wait for all READYs before releasing anyway.
+                            # Generous because iOS-5 clients need a HUMAN arming tap
+                            # during PREPARE (synthetic taps don't satisfy the gesture
+                            # gate) -- the GO holds until every display is armed so the
+                            # wall starts together, instead of modern displays racing
+                            # ahead while an iPad sits on tap-to-start.
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"

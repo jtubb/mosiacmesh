@@ -47,16 +47,18 @@
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
 		video: null, videoIndex: -1, driftTimer: null, paused: false, startTimer: null,
 		scriptRaf: null, scriptIndex: -1,
-		// Adaptive seek-ahead: on slow devices (iPad 1) a hard seek takes ~1s to
-		// land, so seeking to the exact clock target lands late and playback never
-		// catches up. We seek to target+seekAheadMs and tune seekAheadMs from the
-		// residual error after each seek settles (0 on fast devices => no change).
-		seekAheadMs: 0, seekPending: false, lastSeekAt: 0,
+		// Adaptive seek-ahead: a hard seek on the iPad-1 settles ~latency late (the
+		// shared clock advances during the rebuffer), so seeking to the exact target
+		// lands ~that-latency behind and stays there (iOS-5 can't rate-correct). We
+		// seek to target+seekAheadMs and tune seekAheadMs from each seek's residual so
+		// it converges to the device's seek latency (~200ms observed on iPad-1; fast
+		// devices tune it back toward 0). Start near the iPad estimate for fast convergence.
+		seekAheadMs: 200, seekPending: false, lastSeekAt: 0,
 		// iOS (esp. iPad 1 / iOS 5) won't start <video> without a user gesture and
 		// the activation does NOT transfer to a freshly-created element. So we reuse
 		// ONE persistent <video> (pvid) across items and bless it once via a tap
 		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
-		pvid: null, activated: false, videoSrc: null };
+		pvid: null, activated: false, videoSrc: null, armTimer: null };
 
 	// Play video MUTED. A muted <video> is exempt from autoplay policy on every
 	// browser, so it starts with NO user gesture — no tap-to-start anywhere
@@ -214,7 +216,11 @@
 				p['catch'](function () { v.muted = true; var q = v.play(); if (q && q['catch']) { q['catch'](function () {}); } });
 			}
 		} catch (e) {}
-		playback.activated = true;   // overlay auto-hides on the 'playing' event
+		// Do NOT optimistically set activated here: a synthetic/blocked tap (e.g. an
+		// auto-arm VNC tap on iOS 5, where play() needs a REAL gesture) would falsely
+		// mark us armed and suppress the prompt while the video stays paused. The
+		// 'playing' listener (getPersistentVideo) sets activated only once it actually
+		// starts, and hides the overlay then.
 		return false;
 	}
 
@@ -260,6 +266,7 @@
 	// and send READY. The server's GO (PLAY with a future startEpoch) releases us.
 	function prepareFirstItem(prepareId) {
 		clearScript();
+		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
 		// Arm/buffer off the first VIDEO item in the playlist — the gesture is
 		// needed before the first video plays, even if item 0 is a non-video (e.g.
 		// a SCRIPT animation). The persistent <video> is reused for every video
@@ -277,25 +284,32 @@
 			try { v.currentTime = 0; } catch (e) {}
 		};
 		var reportReady = function () { dbg("send-READY"); sendMsg("READY", { prepareId: prepareId }); };
-		var onArmed = function () {            // 'playing' fired => gesture consumed
+		var onArmed = function () {            // 'playing' fired => armed (autoplay or tap)
+			if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
 			playback.activated = true; hideTapStart();
 			holdAtZero(); reportReady();
 		};
 		var afterLoad = function () {
 			v.removeEventListener('loadedmetadata', afterLoad);
 			holdAtZero();
-			if (VIDEO_MUTED || playback.activated) {
-				// Muted: don't pre-arm. Report READY so the coordinated start releases
-				// promptly; at GO showItem's play() autoplays on browsers that allow
-				// muted autoplay. iOS 5 (1st-gen iPad) blocks ALL video autoplay, so it
-				// still falls to the showItem/driftTick tap prompt — one unavoidable
-				// tap there, not up front. (Don't set activated until it actually plays.)
-				reportReady();
-			} else {
-				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });   // ask the server to tap us
-				v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
-				showTapStart();                // a manual tap also works (activatePlayback -> play())
-			}
+			if (playback.activated) { reportReady(); return; }   // blessed already -> GO releases it
+			// Not yet blessed: ARM NOW (during PREPARE) so the GO can start the clip
+			// PROGRAMMATICALLY in sync with displays that autoplay — instead of first
+			// showing a tap prompt at GO (which is why a modern display would start
+			// while the iPad sat on "tap to start"). Attempt muted autoplay: browsers
+			// that allow it (modern) fire 'playing' -> onArmed -> READY with no visible
+			// tap. iOS 5 blocks ALL video autoplay, so after a short grace we show the
+			// tap prompt + NEEDS_ARM; the human tap during PREPARE blesses the element.
+			// The server holds the GO until every client reports READY.
+			v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
+			if (VIDEO_MUTED) { var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); } }
+			if (playback.armTimer) { clearTimeout(playback.armTimer); }
+			playback.armTimer = setTimeout(function () {
+				if (!playback.activated) {
+					dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });
+					showTapStart();           // human tap (activatePlayback -> play()) blesses it
+				}
+			}, 700);
 		};
 		if (v.getAttribute('src') !== item.file) {
 			v.src = item.file; v.addEventListener('loadedmetadata', afterLoad); try { v.load(); } catch (e) {}
@@ -399,21 +413,33 @@
 		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
 		if (pos === null || pos.index !== playback.videoIndex) { return; }
 		var errorMs = v.currentTime * 1000 - pos.offsetMs;   // <0 => BEHIND clock, >0 => AHEAD
+		// A prior grid seek has settled (we're past the v.seeking guard): tune the
+		// seek-ahead lead from its residual so the NEXT seek lands ON the clock. err<0
+		// => we still landed behind -> grow the lead; err>0 => overshot -> shrink it.
+		// The grid snap (+-250ms) is zero-mean noise that averages out across seeks, so
+		// the lead converges to the device's true seek latency.
+		if (playback.seekPending) {
+			playback.seekPending = false;
+			playback.seekAheadMs -= errorMs * 0.4;
+			if (playback.seekAheadMs < 0) { playback.seekAheadMs = 0; }
+			if (playback.seekAheadMs > 1200) { playback.seekAheadMs = 1200; }
+		}
 		// Rate-limit hard seeks so a seek can settle before the next one (otherwise a
 		// slow/stalled element is re-seeked every tick and never plays).
 		var nowMs = GoTime.now();
 		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
 		var tgtMs = null;
 		// Off the shared clock by more than the tolerance? Re-align by seeking to the
-		// NEAREST keyframe-grid point. Seeking to a grid-aligned keyframe time makes
-		// iOS-5 (keyframe-accurate seek -> snaps to that keyframe) and modern
-		// (frame-accurate) clients land on the SAME frame, so the wall agrees. We do
-		// NOT chase the exact timestamp between corrections — that seek->rebuffer->fall
-		// behind->seek loop is what stalled the iPad and wrecked sync. playbackRate
-		// trims the small residual on browsers that honor it; on iOS-5 (which ignores
-		// rate) the clip just rides at rate 1 until the next grid re-align.
+		// NEAREST keyframe-grid point to (target + learned latency lead), so that after
+		// the seek settles ~latency later it lands ON the clock. Grid-aligning makes
+		// iOS-5 (keyframe-accurate seek -> snaps to that keyframe) and modern clients
+		// land on the SAME frame, so the wall agrees. We do NOT chase the exact
+		// timestamp between corrections — that seek->rebuffer->fall-behind->seek loop is
+		// what stalled the iPad. playbackRate trims residual on browsers that honor it;
+		// on iOS-5 (which ignores rate) the clip rides at rate 1 until the next align.
 		if (canSeek && (errorMs < -DRIFT_SEEK_MS || errorMs > DRIFT_SEEK_MS)) {
-			tgtMs = Math.round(pos.offsetMs / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
+			tgtMs = Math.round((pos.offsetMs + playback.seekAheadMs) / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
+			playback.seekPending = true;
 		}
 		if (tgtMs !== null) {
 			var maxMs = ((v.duration || (durations[pos.index] / 1000)) * 1000) - 50;
@@ -527,6 +553,7 @@
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
 		clearScript();
 		$('#canvas').empty();
 		var v = playback.pvid;
