@@ -1699,6 +1699,21 @@ def msg_response(msg,session):
         })
         response["PAYLOAD"] = "SUCCESS"
 
+    elif(msg["REQUEST"] == "RELOAD"):
+        # Admin command: tell display clients to hard-reload so they pick up new
+        # client JS/HTML. Scoped to one display group when PAYLOAD.displayID is
+        # given (only that group's members reload), otherwise every connected
+        # client via DEST="ALL". The client reloads only on a RELOAD addressed to
+        # it or to "ALL", so the control console isn't reloaded by a group reload.
+        payload = msg.get("PAYLOAD")
+        display_id = payload.get("displayID") if isinstance(payload, dict) else None
+        if display_id:
+            broadcast_to_display_group(display_id, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
+        else:
+            socketmanager.broadcast(jsonpickle.encode(
+                {"DEST": "ALL", "REQUEST": "RELOAD", "PAYLOAD": "NONE"}))
+        response["PAYLOAD"] = "SUCCESS"
+
     elif(msg["REQUEST"] == "RENDER"):
         display_id = msg["PAYLOAD"]["displayID"]
         display = settings.displays.get(display_id)

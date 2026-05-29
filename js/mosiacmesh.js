@@ -158,7 +158,10 @@ function getUDID() {
 			{
 				GoTime.wsReceived(data_obj.PAYLOAD);
 			}
-			if(data_obj.REQUEST == "RELOAD")
+			// Honor DEST so RELOAD can target one display group (per-client DEST)
+			// or every client (DEST "ALL"); without this it fired on any message.
+			if(data_obj.REQUEST == "RELOAD" &&
+			   (data_obj.DEST == getUDID() || data_obj.DEST == "ALL"))
 		    {
 				location.reload(true);
 			}

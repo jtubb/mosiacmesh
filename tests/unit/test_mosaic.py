@@ -339,6 +339,46 @@ class TestSegmentPlay:
         assert server.socketmanager.broadcast.call_count == 1  # group broadcast, one client
 
 
+class TestReloadCommand:
+    """RELOAD admin command: group-scoped (per-client DEST) or global (DEST=ALL)."""
+
+    def _sess(self):
+        s = MagicMock(); s.id = "s"; s.request = MagicMock()
+        s.request.remote = "127.0.0.1"; s.request.headers = {"User-Agent": "T"}
+        return s
+
+    def test_reload_scoped_to_group_targets_only_its_members(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        a = server.Client(); a.displayID = "Desktop"
+        b = server.Client(); b.displayID = "Desktop"
+        other = server.Client(); other.displayID = "Mobile"
+        mock_settings.clients = {"a": a, "b": b, "other": other}
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "RELOAD",
+               "PAYLOAD": {"displayID": "Desktop"}}
+        ret = server.msg_response(msg, self._sess())
+        assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"
+        # one broadcast per group member, none for the Mobile client
+        assert server.socketmanager.broadcast.call_count == 2
+        dests = set()
+        for call in server.socketmanager.broadcast.call_args_list:
+            sent = jsonpickle.decode(call.args[0])
+            assert sent["REQUEST"] == "RELOAD"
+            dests.add(sent["DEST"])
+        assert dests == {"a", "b"}
+
+    def test_reload_without_group_broadcasts_to_all(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        mock_settings.clients = {"a": server.Client(), "b": server.Client()}
+        msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "RELOAD", "PAYLOAD": "NONE"}
+        ret = server.msg_response(msg, self._sess())
+        assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"
+        assert server.socketmanager.broadcast.call_count == 1
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        assert sent["REQUEST"] == "RELOAD" and sent["DEST"] == "ALL"
+
+
 class TestFfmpegHelpers:
     def test_quad_to_source_points(self):
         # screen quad covers the right half of a 100x100 bbox; source video 200x100
