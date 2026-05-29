@@ -190,7 +190,10 @@ function getUDID() {
 		WhenSynced: updateData, // Is called for the first sync
 		OnSync: goTimeSync, // Calls on ever sync starting with the second sync
 		SyncInitialTimeouts: [500, 3000, 9000, 15000],
-		SyncInterval: 900000 // Set this often for demo purposes only
+		// Re-sync every 60s (was 15min). With the decaying precision threshold this
+		// re-locks the clock offset to fresh low-RTT samples, tracking oscillator
+		// drift over a long wall session and keeping displays mutually aligned.
+		SyncInterval: 60000
 	});
 
 
