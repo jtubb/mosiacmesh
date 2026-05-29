@@ -273,9 +273,12 @@
 			v.removeEventListener('loadedmetadata', afterLoad);
 			holdAtZero();
 			if (VIDEO_MUTED || playback.activated) {
-				// Muted video autoplays (no gesture) — or we're already blessed.
-				// Either way it's buffered + held; release on GO without a tap.
-				playback.activated = true; reportReady();
+				// Muted: don't pre-arm. Report READY so the coordinated start releases
+				// promptly; at GO showItem's play() autoplays on browsers that allow
+				// muted autoplay. iOS 5 (1st-gen iPad) blocks ALL video autoplay, so it
+				// still falls to the showItem/driftTick tap prompt — one unavoidable
+				// tap there, not up front. (Don't set activated until it actually plays.)
+				reportReady();
 			} else {
 				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });   // ask the server to tap us
 				v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
@@ -370,7 +373,7 @@
 		if (v.paused && !playback.paused) {
 			var pr = v.play();
 			if (pr && pr['catch']) { pr['catch'](function () {}); }
-			if (v.paused && !VIDEO_MUTED) { showTapStart(); }   // muted never needs a gesture
+			if (v.paused) { showTapStart(); }   // still blocked (iOS 5): need the tap
 			return;
 		}
 		// Leave the video alone while it is still seeking or lacks playable data
@@ -490,8 +493,11 @@
 				v.addEventListener('loadedmetadata', once2);
 			}
 			startDriftLoop();
-			// Unmuted video needs a gesture to start on iOS; muted autoplays, no tap.
-			if (!VIDEO_MUTED && !playback.activated) { showTapStart(); }
+			// Show the tap prompt if not yet playing. Browsers that allow autoplay
+			// (muted, or modern) start immediately and the 'playing' listener hides it
+			// before it's seen; iOS 5 can't autoplay at all, so the prompt stays for
+			// the one required tap.
+			if (!playback.activated) { showTapStart(); }
 		} else {
 			$('#canvas').html('<img src="' + item.file + '" style="max-width:100%; max-height:100%;">');
 		}
