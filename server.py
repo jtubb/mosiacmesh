@@ -41,6 +41,43 @@ AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devi
 VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"
 
+# --- Device lifecycle automation -----------------------------------------
+# The server runs per-device shell scripts over SSH (login/start/stop/reboot),
+# using the passphrase-less key installed by tools/onboard_devices.ps1 and the
+# same legacy-crypto flags (the iPad-1's OpenSSH only speaks SHA-1-era crypto).
+# Client.{login,start,stop,reboot}Script default to None and are backfilled with
+# DEFAULT_DEVICE_SCRIPTS (editable per device via the discovery configure API).
+SSH_KEY_PATH = os.path.expanduser(os.path.join("~", ".ssh", "mosaic_ipad"))
+SSH_USER = "root"
+SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
+                   "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
+                   "-o", "IdentitiesOnly=yes",           # only -i key; old sshd low MaxAuthTries
+                   "-o", "StrictHostKeyChecking=accept-new",
+                   "-o", "ConnectTimeout=10",
+                   "-o", "BatchMode=yes"]                # never prompt (unattended)
+# The wall's display page each device opens. Edit for your network.
+DISPLAY_URL = "http://192.168.1.60:3000/"
+DEFAULT_DEVICE_SCRIPTS = {
+    # Wake + keep the screen lit: disable SpringBoard auto-lock. Best-effort on
+    # iOS-5 jailbreak (the pref is read on the next lock; respring to force).
+    # Refine the exact wake/unlock for your devices.
+    "loginScript":  "defaults write /var/mobile/Library/Preferences/com.apple.springboard SBAutoLockTime -int 0 2>/dev/null; echo LOGIN_OK",
+    # Open the display page in mobile Safari.
+    "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
+    # Close Safari (the display client).
+    "stopScript":   "killall MobileSafari 2>/dev/null; echo STOP_OK",
+    # Full device reboot.
+    "rebootScript": "echo REBOOTING; reboot",
+}
+
+def _apply_default_scripts(client):
+    """Backfill the lifecycle-script fields with fleet defaults where unset (None),
+    so a freshly-registered/older device isn't left with null scripts. Never
+    overrides a per-device script an operator has set."""
+    for field, default in DEFAULT_DEVICE_SCRIPTS.items():
+        if getattr(client, field, None) is None:
+            setattr(client, field, default)
+
 # Render encode note: segments use plain libx264 Constrained Baseline + CRF (NO VBV
 # -maxrate/-bufsize, which injects HRD into the SPS that iOS-5 / Chrome-29 UIWebView
 # reject with MEDIA_ERR_SRC_NOT_SUPPORTED), plus a REGULAR keyframe grid every
@@ -1162,6 +1199,34 @@ async def _auto_arm_client(client_key):
         logging.warning("auto-arm tap failed for %s: %s", client_key, e)
 
 
+async def _run_device_script(client_key, which):
+    """Run a device's lifecycle script (which in {login,start,stop,reboot}) over
+    SSH, using the per-device field (or the fleet default). Best-effort: missing
+    key / no IP / SSH failure just logs. Returns (rc, output) for the caller/log."""
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        logging.warning("run-script %s %s: no client/ip", client_key, which)
+        return (None, "no-ip")
+    field = which + "Script"
+    script = getattr(client, field, None) or DEFAULT_DEVICE_SCRIPTS.get(field)
+    if not script:
+        logging.warning("run-script %s %s: no script", client_key, which)
+        return (None, "no-script")
+    cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
+           ["%s@%s" % (SSH_USER, client.ip), script])
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        text = (out or b"").decode("utf-8", "replace").strip()
+        logging.warning("run-script %s %s rc=%s: %s", client_key, which,
+                        proc.returncode, text.replace("\n", " ")[:300])
+        return (proc.returncode, text)
+    except Exception as e:  # noqa: BLE001
+        logging.warning("run-script %s %s failed: %s", client_key, which, e)
+        return (None, str(e))
+
+
 def _client_ip(request):
     """Best-effort client IP. Honors the first X-Forwarded-For hop (when the
     client reaches us through a proxy/tunnel that sets it), else the socket peer.
@@ -1576,6 +1641,7 @@ def msg_response(msg,session):
         if is_new_client:
             client.discoveryTime = time.time()
             auto_configure_client(msg["SRC"], client)
+            _apply_default_scripts(client)   # backfill login/start/stop/reboot defaults
 
             # Notify admin interface of new device
             new_device_notification = {
@@ -1748,6 +1814,18 @@ def msg_response(msg,session):
             socketmanager.broadcast(jsonpickle.encode(
                 {"DEST": "ALL", "REQUEST": "RELOAD", "PAYLOAD": "NONE"}))
         response["PAYLOAD"] = "SUCCESS"
+
+    elif(msg["REQUEST"] == "RUN_SCRIPT"):
+        # Admin command: run a device lifecycle script over SSH. PAYLOAD =
+        # {clientKey, script: "login"|"start"|"stop"|"reboot"}.
+        payload = msg.get("PAYLOAD") or {}
+        ck = payload.get("clientKey")
+        which = payload.get("script")
+        if ck and which in ("login", "start", "stop", "reboot"):
+            asyncio.ensure_future(_run_device_script(ck, which))
+            response["PAYLOAD"] = {"status": "SUCCESS", "clientKey": ck, "script": which}
+        else:
+            response["PAYLOAD"] = {"status": "BAD_REQUEST"}
 
     elif(msg["REQUEST"] == "RENDER"):
         display_id = msg["PAYLOAD"]["displayID"]
@@ -2569,6 +2647,11 @@ async def api_discovery_configure(request):
         if "friendlyName" in data:
             client.friendlyName = data["friendlyName"]
             client.nameIsCustom = True   # user-set name: DNS won't override it
+        # Per-device lifecycle scripts (login/start/stop/reboot). "" clears back
+        # to the fleet default on next backfill; a non-empty string overrides it.
+        for sf in ("loginScript", "startScript", "stopScript", "rebootScript"):
+            if sf in data:
+                setattr(client, sf, data[sf] if data[sf] else None)
 
     saveSettings()
     return web.json_response({"success": True})
@@ -2650,6 +2733,9 @@ def migrate_client_objects():
             # so reverse-DNS won't clobber it.
             fn = client.friendlyName or ""
             client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
+        # Backfill lifecycle-script defaults onto devices registered before the
+        # automation existed (their fields are absent/None -> show as null).
+        _apply_default_scripts(client)
         # Re-attempt resolution for clients that never got a hostname (e.g.
         # resolved blank before DNS was fixed / before the mDNS fallback). The
         # 60s retry throttle keeps perpetually-nameless devices from churning.
