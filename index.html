@@ -102,11 +102,14 @@
 	                             // (keyframe-accurate seek) and modern clients land on
 	                             // the same frame -> the wall agrees with itself.
 	// Drift past this triggers a grid re-align seek. iOS-5 IGNORES playbackRate
-	// (verified: rate set to 1.15 but currentTime advances 1.0x), so rate can't trim
-	// the residual — a grid seek is the only lever there. Just above half a grid cell
-	// (250ms) so that after a round-to-grid seek (lands within +-250ms) it doesn't
-	// immediately re-seek. Modern clients rarely exceed this (rate keeps them tight).
-	var DRIFT_SEEK_MS = 300;
+	// (verified: rate set to 1.15 but currentTime advances 1.0x), so a grid seek is
+	// the only lever. Sized to ~half a grid cell + a frame, so it sits JUST above the
+	// keyframe-snap floor: low enough that the iPad keeps re-seeking (and re-tuning
+	// the seek-ahead lead) until the residual converges to the snap floor, but high
+	// enough not to thrash once there. Grid-relative so it tracks KEYFRAME_GRID_MS
+	// (e.g. 90ms for a 100ms grid, 290ms for a 500ms grid). Modern clients rarely
+	// exceed it (playbackRate keeps them tight).
+	var DRIFT_SEEK_MS = (KEYFRAME_GRID_MS / 2) + 40;
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
 	                             // time to settle + establish playback before another,
 	                             // else a slow/stalled element gets re-seeked every tick
@@ -456,7 +459,7 @@
 		// rate fine-correction is a no-op and only seeks move us). sk=1 if we seeked.
 		if (!playback._lastTrace || (nowMs - playback._lastTrace) > 1000) {
 			playback._lastTrace = nowMs;
-			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (tgtMs !== null ? 1 : 0) });
+			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (tgtMs !== null ? 1 : 0), lead: Math.round(playback.seekAheadMs) });
 		}
 	}
 
