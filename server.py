@@ -262,7 +262,9 @@ def sync_new_client_to_group(client_key, client):
     display = settings.displays.get(client.displayID)
     if not display or display.action != PlayState.PLAY or not display.mediaElements:
         return
-    items = [_media_item_payload(me) for me in display.mediaElements]
+    # Per-client URLs (this client's rendered segment), not the generic source —
+    # else a reconnecting renderable client gets the undecodable full source.
+    items = _per_client_items(display, client_key, client)
     broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
     broadcast_to_client(client_key, {
         "REQUEST": "PLAY",
