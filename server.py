@@ -44,10 +44,6 @@ VEENCY_PASSWORD = "mosaic"
 # start already aligns frame 0 exactly (frame 0 is always a keyframe); mid-clip
 # frame-lock isn't achievable on iPad-1 anyway, so we keep the proven plain encode.
 
-# Max bytes returned for a single HTTP range response. Bounds server memory when
-# a browser seeks into a large segment with an open-ended range ("bytes=N-");
-# the client re-requests subsequent chunks as it plays.
-MAX_RANGE_CHUNK = 8 * 1024 * 1024  # 8 MB
 
 # File cache with modification time tracking
 file_cache = {}
@@ -2058,11 +2054,10 @@ async def media_handler(request):
                     start = 0
                 if stop is None or stop > file_size:
                     stop = file_size               # open-ended -> read to EOF
-            # Cap a single range response so an open-ended seek into a large
-            # (all-intra) segment doesn't read the whole remainder into memory;
-            # the client re-requests the next chunk as it plays. Still a valid 206.
-            if stop - start > MAX_RANGE_CHUNK:
-                stop = start + MAX_RANGE_CHUNK
+            # NB: no chunk cap. Returning fewer bytes than an open-ended range
+            # requested makes Chrome-for-iOS (UIWebView) treat the 206 as a
+            # truncated file -> MEDIA_ERR_SRC_NOT_SUPPORTED. Segments are a few MB
+            # to ~80MB (no all-intra), so reading to EOF is acceptable.
             logging.debug(f'Range {start}-{stop-1}/{file_size}')
             customHeaders['Accept-Ranges'] = 'bytes'
             customHeaders['Content-Range'] = f'bytes {start}-{stop-1}/{file_size}'

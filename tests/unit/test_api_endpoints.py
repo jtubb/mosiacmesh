@@ -486,17 +486,16 @@ class TestMediaRange:
         assert 'Content-Range' not in resp.headers
 
     @pytest.mark.asyncio
-    async def test_open_ended_range_is_capped_for_large_files(self):
-        """An open-ended seek into a big file returns at most MAX_RANGE_CHUNK
-        bytes (206), so the server doesn't read the whole remainder into memory."""
-        big = server.MAX_RANGE_CHUNK + 5000
+    async def test_open_ended_range_reads_to_eof(self):
+        """Open-ended range returns through EOF (no chunk cap) -- a truncated 206
+        makes Chrome-for-iOS treat the file as unsupported."""
+        big = 20 * 1024 * 1024
         handle = MagicMock()
-        handle.read.return_value = b'x' * server.MAX_RANGE_CHUNK
+        handle.read.return_value = b'x' * (big - 1000)
         with patch('server.os.path.isfile', return_value=True), \
              patch('server.os.path.getsize', return_value=big), \
              patch('server.get_pooled_file_handle', return_value=handle):
             resp = await server.media_handler(self._request('bytes=1000-'))
         assert resp.status == 206
-        end = 1000 + server.MAX_RANGE_CHUNK - 1
-        assert resp.headers['Content-Range'] == f'bytes 1000-{end}/{big}'
-        handle.read.assert_called_once_with(server.MAX_RANGE_CHUNK)
+        assert resp.headers['Content-Range'] == f'bytes 1000-{big - 1}/{big}'
+        handle.read.assert_called_once_with(big - 1000)
