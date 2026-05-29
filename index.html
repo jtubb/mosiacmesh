@@ -720,6 +720,21 @@
 			else if(data_obj.REQUEST == "CALIBRATE")
 			{
 				blink = false;
+				// Stop playback and clear the persistent <video> out of the way: it is
+				// fixed/full-screen at z-index 1 and (since the muted keep-alive) stays
+				// up between plays, so it would COVER the calibration marker (the screen
+				// reads as solid black). Make it transparent — keep it playing muted so
+				// its iOS gesture-activation survives for the next PLAY — and drop the
+				// blackout cover, tap prompt, and any script canvas.
+				playback.active = false;
+				if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
+				if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+				if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+				clearScript();
+				if (playback.pvid) { playback.pvid.style.opacity = '0'; }
+				hideBlackout();
+				hideTapStart();
 				// The page background is black for video playback, but calibration
 				// needs a WHITE screen field so the <html> 8px black border reads as
 				// the screen-perimeter band against white. Force the page white here;
