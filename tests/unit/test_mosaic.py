@@ -403,14 +403,19 @@ class TestFfmpegHelpers:
     def test_build_ffmpeg_cmds_use_ios5_compatible_plain_encode(self):
         # iPad-1 / iOS-5 (UIWebView) rejects VBV (HRD params land in the SPS ->
         # MEDIA_ERR_SRC_NOT_SUPPORTED) and can't decode all-intra's bitrate. Segments
-        # must be plain Constrained Baseline: no -maxrate/-bufsize and no forced -g.
+        # must be plain Constrained Baseline (no -maxrate/-bufsize) but DO carry a
+        # regular keyframe grid (force_key_frames every KEYFRAME_GRID_SEC + scenecut
+        # off) so iOS-5 keyframe-accurate seeks land on a shared grid for sync.
         pts = [[10.0, 20.0], [110.0, 20.0], [110.0, 220.0], [10.0, 220.0]]
         pcmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 800, 600)
         icmd = server.build_ffmpeg_individual_cmd("in.mp4", "out.mp4", pts, 80, 60, 10, 10, 0, 0, "#000000")
         for cmd in (pcmd, icmd):
             assert "baseline" in cmd and "libx264" in cmd
             assert "-maxrate" not in cmd and "-bufsize" not in cmd
-            assert "-g" not in cmd
+            assert "-force_key_frames" in cmd
+            j = cmd.index("-force_key_frames")
+            assert "n_forced*0.5" in cmd[j + 1]
+            assert "scenecut=0" in cmd[cmd.index("-x264-params") + 1]
 
     def test_is_video_item(self):
         assert server.isVideoItem("/media/server/clip.mp4") is True

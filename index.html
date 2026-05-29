@@ -95,6 +95,10 @@
 	}
 	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
 	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
+	var KEYFRAME_GRID_MS = 500;  // MUST match server KEYFRAME_GRID_SEC (0.5s): drift
+	                             // re-aligns by seeking to this keyframe grid so iOS-5
+	                             // (keyframe-accurate seek) and modern clients land on
+	                             // the same frame -> the wall agrees with itself.
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
 	                             // time to settle + establish playback before another,
 	                             // else a slow/stalled element gets re-seeked every tick
@@ -217,10 +221,10 @@
 
 	// Stream client debug state to the server log (opt-in via ?tdbg) so device
 	// behavior is visible without reading an on-screen HUD. ES5-safe.
-	function dbg(tag) {
+	function dbg(tag, extra) {
 		if (!window._mmDbg) { return; }
 		var v = playback.pvid;
-		sendMsg("CLIENTLOG", {
+		var payload = {
 			tag: tag,
 			activated: playback.activated, active: playback.active,
 			paused: v ? v.paused : null,
@@ -230,7 +234,9 @@
 			src: (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')).split('/').pop() : null,
 			idx: playback.videoIndex,
 			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null
-		});
+		};
+		if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { payload[k] = extra[k]; } } }
+		sendMsg("CLIENTLOG", payload);
 	}
 
 	// Undo the calibrate view's <html> framing (8px border + window-16 sizing) and
@@ -387,30 +393,21 @@
 		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
 		if (pos === null || pos.index !== playback.videoIndex) { return; }
 		var errorMs = v.currentTime * 1000 - pos.offsetMs;   // <0 => BEHIND clock, >0 => AHEAD
-		// A prior catch-up seek just settled: tune the look-ahead from the residual
-		// so the next catch-up lands closer (we only seek-ahead when behind, below).
-		if (playback.seekPending) {
-			playback.seekPending = false;
-			playback.seekAheadMs -= errorMs * 0.5;
-			if (playback.seekAheadMs < 0) { playback.seekAheadMs = 0; }
-			if (playback.seekAheadMs > 1500) { playback.seekAheadMs = 1500; }
-		}
-		// Rate-limit hard seeks so a seek can settle + establish playback before the
-		// next one (otherwise a slow/stalled element is re-seeked every tick and
-		// never plays). Between seeks, playbackRate handles the drift.
+		// Rate-limit hard seeks so a seek can settle before the next one (otherwise a
+		// slow/stalled element is re-seeked every tick and never plays).
 		var nowMs = GoTime.now();
 		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
 		var tgtMs = null;
-		if (canSeek && errorMs < -HARD_SEEK_MS) {
-			// Too far BEHIND: seek ahead by the learned seek latency so we land on
-			// the clock (a slow device's seek takes ~latency to settle).
-			tgtMs = pos.offsetMs + playback.seekAheadMs;
-			playback.seekPending = true;
-		} else if (canSeek && errorMs > HARD_SEEK_MS) {
-			// Too far AHEAD: seek to the EXACT target (no look-ahead). On a slow
-			// device the seek lands ~latency later, i.e. on/behind the clock — never
-			// ahead. Don't tune the look-ahead from this (it's not a catch-up).
-			tgtMs = pos.offsetMs;
+		// Off the shared clock by more than the tolerance? Re-align by seeking to the
+		// NEAREST keyframe-grid point. Seeking to a grid-aligned keyframe time makes
+		// iOS-5 (keyframe-accurate seek -> snaps to that keyframe) and modern
+		// (frame-accurate) clients land on the SAME frame, so the wall agrees. We do
+		// NOT chase the exact timestamp between corrections — that seek->rebuffer->fall
+		// behind->seek loop is what stalled the iPad and wrecked sync. playbackRate
+		// trims the small residual on browsers that honor it; on iOS-5 (which ignores
+		// rate) the clip just rides at rate 1 until the next grid re-align.
+		if (canSeek && (errorMs < -HARD_SEEK_MS || errorMs > HARD_SEEK_MS)) {
+			tgtMs = Math.round(pos.offsetMs / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
 		}
 		if (tgtMs !== null) {
 			var maxMs = ((v.duration || (durations[pos.index] / 1000)) * 1000) - 50;
@@ -426,6 +423,13 @@
 			v.playbackRate = rate;
 		}
 		if (window._tdbg) { window._tdbg(pos, v, errorMs); }
+		// Throttled drift trace (~1/s): err is ms off the shared clock; rateSet is what
+		// we asked for; rateGot is what the element reports (if iOS pins it to 1.0,
+		// rate fine-correction is a no-op and only seeks move us). sk=1 if we seeked.
+		if (!playback._lastTrace || (nowMs - playback._lastTrace) > 1000) {
+			playback._lastTrace = nowMs;
+			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (tgtMs !== null ? 1 : 0) });
+		}
 	}
 
 	function startDriftLoop() {

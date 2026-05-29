@@ -36,13 +36,23 @@ AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devi
 VEENCY_PORT = 5900
 VEENCY_PASSWORD = "mosaic"
 
-# Render encode note: segments use plain libx264 Constrained Baseline + CRF, with
-# NO forced keyframe interval (-g) and NO VBV (-maxrate/-bufsize). Both were tried
-# for frame-accurate iPad seeking but backfired: all-intra (-g 1) blew the bitrate
-# past the iPad-1 decoder, and VBV injects HRD params into the SPS that iOS-5 /
-# Chrome-29 (UIWebView) reject with MEDIA_ERR_SRC_NOT_SUPPORTED. The coordinated
-# start already aligns frame 0 exactly (frame 0 is always a keyframe); mid-clip
-# frame-lock isn't achievable on iPad-1 anyway, so we keep the proven plain encode.
+# Render encode note: segments use plain libx264 Constrained Baseline + CRF (NO VBV
+# -maxrate/-bufsize, which injects HRD into the SPS that iOS-5 / Chrome-29 UIWebView
+# reject with MEDIA_ERR_SRC_NOT_SUPPORTED), plus a REGULAR keyframe grid every
+# KEYFRAME_GRID_SEC. iOS-5 seeks keyframe-accurately (currentTime snaps to a
+# keyframe), so x264's default ragged scene-cut keyframes (1-10s apart) made
+# mid-clip drift-correction snap unpredictably far. A fixed grid lets every client
+# seek to the SAME grid keyframe (shared GoTime clock + shared grid => mutual sync).
+# All-intra (-g 1) is still avoided: it blew the bitrate past the iPad-1 decoder.
+KEYFRAME_GRID_SEC = 0.5
+
+def _keyframe_grid_args():
+    """ffmpeg args for a regular keyframe grid: force a keyframe every
+    KEYFRAME_GRID_SEC of OUTPUT time (fps-independent) and disable scene-cut
+    keyframes, so every 0.5s mark is a seekable keyframe and spacing is uniform.
+    Clients seek to grid-aligned positions (floor/round to the grid) for sync."""
+    return ["-force_key_frames", "expr:gte(t,n_forced*%s)" % KEYFRAME_GRID_SEC,
+            "-x264-params", "scenecut=0"]
 
 
 # File cache with modification time tracking
@@ -500,7 +510,7 @@ def compute_render_token(display_id):
             perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
     # Bump this when the encode settings change, to invalidate stale renders.
-    encode_ver = "plain-cbl-v2"
+    encode_ver = "grid05-cbl-v3"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
@@ -714,6 +724,7 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
+    cmd += _keyframe_grid_args()
     cmd += ["-preset", "veryfast", "-movflags", "+faststart", out_path]
     return cmd
 
@@ -744,6 +755,7 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
            "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
         cmd += ["-af", ",".join(extra_audio_filters)]
+    cmd += _keyframe_grid_args()
     cmd += ["-preset", "veryfast", "-movflags", "+faststart", out_path]
     return cmd
 
