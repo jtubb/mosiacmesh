@@ -9,6 +9,9 @@
   <script src="/js/mosiacmesh.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
   <script>
+    // This is the control console, not a display. Opt out of RELOAD broadcasts so
+    // reloading a display group (or "all") never reloads the operator's console.
+    window._mmNoReload = true;
     function tickcallback(currentTime,currentTarget,drift_correction)
     {
         if(sock == null)
@@ -312,8 +315,13 @@
 			var n = (d.mediaElements || []).length;
 			if (isPlaying) playing.push(id);
 			var calib = d.boundingBox ? '<span class="badge ok">calibrated</span>' : '<span class="badge warn">not calibrated</span>';
-			$('<div class="card">').html('<b>'+id+'</b> '+calib+'<br><span class="size" style="color:var(--text-muted)">'
-				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">▶ playing</span>' : 'idle') + '</span>').appendTo($o);
+			var $card = $('<div class="card">').html('<b>'+id+'</b> '+calib+'<br><span class="size" style="color:var(--text-muted)">'
+				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">▶ playing</span>' : 'idle') + '</span>');
+			$('<button class="btn btn-ghost" type="button" style="margin-top:var(--s2)">⟳ Reload</button>')
+				.attr('title', 'Reload displays in "'+id+'"')
+				.on('click', function(){ adminReloadGroup(id); })
+				.appendTo($card);
+			$card.appendTo($o);
 		});
 		if (!Object.keys(displays || {}).length) $o.html('<div class="empty">No display groups yet.</div>');
 		$('#nowPlaying').text(playing.length ? ('▶ ' + playing.join(', ')) : '');
@@ -359,6 +367,19 @@
 	function refreshClients() {
 		sock.send(generateMessage('SRV','DISPLAYS','null'));
 	    sock.send(generateMessage('SRV','CLIENTS','null'));
+	}
+
+	// Tell display clients to hard-reload (pick up new client JS/HTML). Per-group
+	// targets only that group's members; "all" hits every connected display. The
+	// console opts out via _mmNoReload, so neither reloads this page.
+	function adminReloadGroup(id) {
+		try { sock.send(generateMessage('SRV','RELOAD',{displayID:id})); toast('Reloading "'+id+'"…','ok'); }
+		catch(e){ toast('Not connected','warn'); }
+	}
+	function adminReloadAll() {
+		if (!confirm('Reload every connected display? (This console is not affected.)')) return;
+		try { sock.send(generateMessage('SRV','RELOAD','')); toast('Reloading all displays…','ok'); }
+		catch(e){ toast('Not connected','warn'); }
 	}
 	
 	$(document).ready(function () {
@@ -829,7 +850,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
     <main class="main">
       <section class="section" data-route="overview"><h2>Overview</h2>
         <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>
-        <div class="panel-title">Display groups</div>
+        <div class="panel-title" style="display:flex;align-items:center;gap:var(--s2)">
+          <span>Display groups</span>
+          <button class="btn btn-ghost" type="button" onclick="adminReloadAll()"
+                  title="Reload every connected display (not this console)">⟳ Reload all</button>
+        </div>
         <div id="overviewCards" class="grid"></div>
       </section>
 
