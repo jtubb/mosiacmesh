@@ -381,7 +381,31 @@
 		try { sock.send(generateMessage('SRV','RELOAD','')); toast('Reloading all displays…','ok'); }
 		catch(e){ toast('Not connected','warn'); }
 	}
-	
+
+	// Run a device lifecycle script (login/start/stop/reboot) over SSH. `node` is a
+	// jsTree node: a device (class 'display' -> clientKey) or a group ('display_group'
+	// -> displayID, fans out to the group). Reboot confirms (it takes the device down).
+	function runScript(node, which) {
+		var isGroup = node.li_attr && node.li_attr.class == 'display_group';
+		var label = stripHtml(node.text || node.id);
+		if (which == 'reboot' &&
+		    !confirm('Reboot ' + (isGroup ? 'EVERY device in "' + label + '"' : '"' + label + '"') + '?')) return;
+		var payload = isGroup ? { displayID: node.id, script: which } : { clientKey: node.id, script: which };
+		try {
+			sock.send(generateMessage('SRV', 'RUN_SCRIPT', payload));
+			toast(which.charAt(0).toUpperCase() + which.slice(1) + ' → ' + label, 'ok');
+		} catch (e) { toast('Not connected', 'warn'); }
+	}
+	// Fleet-wide lifecycle (every device). Reboot/Stop confirm.
+	function runScriptAll(which) {
+		if ((which == 'reboot' || which == 'stop') &&
+		    !confirm(which.charAt(0).toUpperCase() + which.slice(1) + ' EVERY device in the fleet?')) return;
+		try {
+			sock.send(generateMessage('SRV', 'RUN_SCRIPT', { all: true, script: which }));
+			toast(which.charAt(0).toUpperCase() + which.slice(1) + ' → all devices', 'ok');
+		} catch (e) { toast('Not connected', 'warn'); }
+	}
+
 	$(document).ready(function () {
 		$("#calImageForm").submit(function (event) {
 
@@ -516,7 +540,14 @@
 							adminScheduleRefresh();
 						}
 					}
-				}
+				},
+				// Lifecycle scripts over SSH. On a device node these target that
+				// device (clientKey); on a group node they fan out to the group
+				// (displayID). The server runs login/start/stop/reboot per device.
+				loginItem:  { label: "Login (wake + unlock)", action: function () { runScript(node, 'login'); } },
+				startItem:  { label: "Start (open display)",  action: function () { runScript(node, 'start'); } },
+				stopItem:   { label: "Stop (close display)",  action: function () { runScript(node, 'stop'); } },
+				rebootItem: { label: "Reboot device",         action: function () { runScript(node, 'reboot'); } }
 			};
 			
 			// Only allow creation of Display groups
@@ -550,6 +581,13 @@
 			// "Remove Device" only applies to device (client) nodes
 			if (node.li_attr.class != 'display') {
 				delete items.removeItem;
+			}
+
+			// Lifecycle scripts apply to a device (-> its clientKey) or a display
+			// group (-> fan out to the group). Not the tree root.
+			if (!(node.li_attr.class == 'display' || node.li_attr.class == 'display_group')) {
+				delete items.loginItem; delete items.startItem;
+				delete items.stopItem;  delete items.rebootItem;
 			}
 
 			return items;
@@ -854,6 +892,12 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
           <span>Display groups</span>
           <button class="btn btn-ghost" type="button" onclick="adminReloadAll()"
                   title="Reload every connected display (not this console)">⟳ Reload all</button>
+          <span style="flex:1"></span>
+          <span class="size" style="color:var(--text-muted)">Fleet:</span>
+          <button class="btn btn-ghost" type="button" onclick="runScriptAll('login')"  title="Wake + unlock every device (SSH)">🔓 Login all</button>
+          <button class="btn btn-ghost" type="button" onclick="runScriptAll('start')"  title="Open the display page on every device (SSH)">▶ Start all</button>
+          <button class="btn btn-ghost" type="button" onclick="runScriptAll('stop')"   title="Close the display on every device (SSH)">⏹ Stop all</button>
+          <button class="btn btn-ghost" type="button" onclick="runScriptAll('reboot')" title="Reboot every device (SSH)">⟲ Reboot all</button>
         </div>
         <div id="overviewCards" class="grid"></div>
       </section>

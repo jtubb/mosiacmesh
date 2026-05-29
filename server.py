@@ -1820,15 +1820,28 @@ def msg_response(msg,session):
 
     elif(msg["REQUEST"] == "RUN_SCRIPT"):
         # Admin command: run a device lifecycle script over SSH. PAYLOAD =
-        # {clientKey, script: "login"|"start"|"stop"|"reboot"}.
+        # {script: "login"|"start"|"stop"|"reboot"} plus a target: {clientKey} for
+        # one device, {displayID} for a whole group, or {all:true} for the fleet.
         payload = msg.get("PAYLOAD") or {}
-        ck = payload.get("clientKey")
         which = payload.get("script")
-        if ck and which in ("login", "start", "stop", "reboot"):
-            asyncio.ensure_future(_run_device_script(ck, which))
-            response["PAYLOAD"] = {"status": "SUCCESS", "clientKey": ck, "script": which}
-        else:
+        if which not in ("login", "start", "stop", "reboot"):
             response["PAYLOAD"] = {"status": "BAD_REQUEST"}
+        else:
+            ck = payload.get("clientKey")
+            did = payload.get("displayID")
+            if ck:
+                keys = [ck] if ck in settings.clients else []
+            elif did:
+                keys = [k for k, c in settings.clients.items()
+                        if getattr(c, "displayID", None) == did]
+            elif payload.get("all"):
+                keys = list(settings.clients.keys())
+            else:
+                keys = []
+            for k in keys:
+                asyncio.ensure_future(_run_device_script(k, which))
+            logging.warning("RUN_SCRIPT %s -> %d device(s)", which, len(keys))
+            response["PAYLOAD"] = {"status": "SUCCESS", "script": which, "count": len(keys)}
 
     elif(msg["REQUEST"] == "RENDER"):
         display_id = msg["PAYLOAD"]["displayID"]
