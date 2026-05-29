@@ -1,7 +1,7 @@
 import sys, time
 from pathlib import Path
 import argparse
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 _orig = argparse.ArgumentParser.parse_args
 argparse.ArgumentParser.parse_args = lambda self, *a, **k: argparse.Namespace(Port=3000, Verbose=False)
@@ -23,6 +23,7 @@ def test_prepare_state_and_constants_exist():
 
 def _display_with_items(server, display_id="g1", n=2):
     server.settings = server.Settings()
+    server.socketmanager = MagicMock()   # PREPARE/PLAY/STOP broadcast through it
     disp = server.Display()
     disp.mediaElements = [server.MediaElement() for _ in range(n)]
     for me in disp.mediaElements:
@@ -30,15 +31,19 @@ def _display_with_items(server, display_id="g1", n=2):
     server.settings.displays[display_id] = disp
     return disp
 
-def test_begin_prepare_broadcasts_prepare_and_sets_state():
+def test_begin_prepare_sends_per_client_prepare_and_sets_state():
     disp = _display_with_items(server)
-    with patch.object(server, "broadcast_to_display_group") as bc:
+    _online_client(server, "a", "g1")
+    with patch.object(server, "broadcast_to_client") as bc:
         server._begin_prepare("g1")
     assert disp.action == server.PlayState.PREPARING
     assert disp.prepareId
     assert disp.readyClients == set()
     assert disp.prepareDeadline > 0
+    # PREPARE goes per-client (so each gets its own rendered URL), not group-wide
+    key = bc.call_args[0][0]
     req = bc.call_args[0][1]
+    assert key == "a"
     assert req["REQUEST"] == "PREPARE"
     assert req["PAYLOAD"]["prepareId"] == disp.prepareId
     assert len(req["PAYLOAD"]["items"]) == 2

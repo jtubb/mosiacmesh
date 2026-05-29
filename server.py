@@ -646,24 +646,31 @@ async def render_group_async(display_id):
         return {"status": "error", "error": str(e)}
 
 
-def _broadcast_per_client_play(display_id, display):
-    """Send each client its own PLAY: renderable items (SEGMENT/INDIVIDUAL) use
-    that client's warped file when calibrated, otherwise the plain source."""
+def _per_client_items(display, key, c):
+    """Per-client playlist items: renderable items (SEGMENT/INDIVIDUAL) resolve to
+    THIS client's warped file when calibrated, else the plain source. Shared by
+    the PLAY (GO) and PREPARE paths so both hand a client the same playable URL."""
     token = display.renderedToken
+    items = []
+    for i, me in enumerate(display.mediaElements):
+        if _is_renderable(me) and c.measuredPerimeter is not None:
+            prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
+            ext = ".mp4" if isVideoItem(me.file) else ".png"
+            f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
+        else:
+            f = me.file  # FULL item, or uncalibrated fallback to full source
+        item = _media_item_payload(me)
+        item["file"] = f
+        items.append(item)
+    return items
+
+
+def _broadcast_per_client_play(display_id, display):
+    """Send each client its own PLAY with its per-client (warped) media URLs."""
     for key, c in _group_clients(display_id):
-        items = []
-        for i, me in enumerate(display.mediaElements):
-            if _is_renderable(me) and c.measuredPerimeter is not None:
-                prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
-                ext = ".mp4" if isVideoItem(me.file) else ".png"
-                f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
-            else:
-                f = me.file  # FULL item, or uncalibrated fallback to full source
-            item = _media_item_payload(me)
-            item["file"] = f
-            items.append(item)
         broadcast_to_client(key, {"REQUEST": "PLAY",
-            "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
+            "PAYLOAD": {"startEpoch": display.playStartEpoch,
+                        "items": _per_client_items(display, key, c), "loop": display.loop}})
 
 
 # Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded
@@ -1060,10 +1067,14 @@ def _begin_prepare(display_id):
     display.readyClients = set()
     display.prepareDeadline = int(time.time() * 1000) + PREPARE_TIMEOUT_MS
     display.action = PlayState.PREPARING
-    items = [_media_item_payload(me) for me in display.mediaElements]
-    broadcast_to_display_group(display_id, {
-        "REQUEST": "PREPARE",
-        "PAYLOAD": {"prepareId": display.prepareId, "items": items, "loop": display.loop}})
+    # Per-client PREPARE: each client must buffer/arm with ITS OWN rendered
+    # segment URL, not the generic source (a renderable client handed the 1080p
+    # source can't decode it -> MEDIA_ERR_SRC_NOT_SUPPORTED). Same URLs as the GO.
+    for key, c in _group_clients(display_id):
+        broadcast_to_client(key, {
+            "REQUEST": "PREPARE",
+            "PAYLOAD": {"prepareId": display.prepareId,
+                        "items": _per_client_items(display, key, c), "loop": display.loop}})
 
 
 def _release_group(display_id):
