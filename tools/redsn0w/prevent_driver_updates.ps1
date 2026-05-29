@@ -32,6 +32,12 @@
     Additional hardware IDs to append to the deny-list, e.g.
         -Extra 'USB\VID_05AC&PID_12AA','USB\VID_05AC&PID_12AB'
 
+.PARAMETER AutoDiscover
+    Scan currently-plugged Apple (VID_05AC) devices and append THEIR exact
+    Hardware IDs to the deny-list (catches device-specific REV / MI_xx variants
+    that the generic entries don't list). Plug each state you care about (normal
+    / recovery / DFU) before running with this switch.
+
 .EXAMPLE
     # Apply (default). Run from an elevated PowerShell.
     .\prevent_driver_updates.ps1
@@ -52,7 +58,8 @@
 param(
     [switch]$Remove,
     [switch]$Status,
-    [string[]]$Extra
+    [string[]]$Extra,
+    [switch]$AutoDiscover
 )
 
 $ErrorActionPreference = "Stop"
@@ -72,21 +79,63 @@ $WUKey   = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
 $DIKey   = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeviceInstall\Restrictions'
 $DenyKey = "$DIKey\DenyDeviceIDs"
 
-# Apple iOS USB IDs to pin. PIDs 1227 (DFU) and 1281 (Recovery) are universal
-# across A4/A5 devices and are the ones redsn0w actually talks to -- the critical
-# pair. Normal-mode PIDs vary by model; the included set covers iPad-1 / iPad-2 /
-# iPhone-4/4S and the common 12A8 line. Add more with -Extra if you also handle
-# newer iOS devices on this box.
-$DeviceIds = @(
-    'USB\VID_05AC&PID_1227',   # Apple Mobile Device - DFU mode (CRITICAL for redsn0w)
-    'USB\VID_05AC&PID_1281',   # Apple Mobile Device - Recovery mode
-    'USB\VID_05AC&PID_1222',   # iBoot / older DFU
-    'USB\VID_05AC&PID_129A',   # iPad (1st gen) - normal mode
-    'USB\VID_05AC&PID_129C',   # iPhone 4 / 4S - normal mode
-    'USB\VID_05AC&PID_129E',   # iPad 2 - normal mode (common variant)
-    'USB\VID_05AC&PID_12A8'    # iPad 3/4 / iPhone 5+ - normal mode
+# Apple iOS USB IDs to pin -- comprehensive coverage. For restore-based flows,
+# Windows binds a separate driver to (a) each boot mode the device passes through,
+# (b) the composite parent in normal mode, AND (c) each interface (MI_xx) child
+# of the composite -- PnP can update any of those independently, so all three
+# layers need to be on the deny-list.
+
+# --- Boot-mode PIDs (universal across iOS devices in these modes) ---
+$BootPids = @(
+    '1222',  # iBoot / older DFU
+    '1227',  # DFU mode (CRITICAL for redsn0w + iTunes restore handoff)
+    '1280',  # WTF / various legacy boot
+    '1281'   # Recovery mode (during iTunes restore)
 )
-if ($Extra) { $DeviceIds += $Extra }
+
+# --- Normal-mode composite parent PIDs across iPad / iPhone / iPod touch ---
+# Spans original iPhone through iPhone 5 / iPad-4 generation; the modern Apple
+# Mobile Device driver also reports under several of these IDs.
+$NormalPids = @(
+    '1290','1291','1292','1293','1294','1296','1297','1299',           # iPhone original-4 / iPod 1-3
+    '129A',                                                            # iPad (1st gen)
+    '129B','129C','129D',                                              # iPod 4 / iPhone 4S
+    '129E','129F',                                                     # iPad 2 / iPad 3
+    '12A0','12A1','12A2','12A3','12A4','12A5','12A6','12A7','12A8',    # iPhone 5 / iPad 4 family + variants
+    '12A9','12AA','12AB','12AC','12AD','12AE','12AF'                   # later iPad / iPod variants
+)
+
+# --- Composite-interface child devices (MI_00 .. MI_03) ---
+# Windows installs/updates a driver per interface on the composite parent
+# (e.g. WUDFWpdMtp for MI_00 camera/MTP, Apple usb-multifunction for others).
+$Interfaces = @('MI_00','MI_01','MI_02','MI_03','MI_04','MI_05')
+
+$DeviceIds = New-Object System.Collections.Generic.List[string]
+foreach ($p in $BootPids)   { $DeviceIds.Add("USB\VID_05AC&PID_$p") }
+foreach ($p in $NormalPids) {
+    $DeviceIds.Add("USB\VID_05AC&PID_$p")
+    foreach ($mi in $Interfaces) { $DeviceIds.Add("USB\VID_05AC&PID_$p&$mi") }
+}
+
+# -AutoDiscover: scan currently-plugged Apple devices and add their EXACT
+# Hardware IDs (catches device-specific REV/MI variants the generic list misses).
+if ($AutoDiscover) {
+    try {
+        Get-PnpDevice -PresentOnly -ErrorAction Stop |
+            Where-Object { $_.InstanceId -match 'VID_05AC' } |
+            ForEach-Object {
+                $hwids = (Get-PnpDeviceProperty -InstanceId $_.InstanceId `
+                    -KeyName DEVPKEY_Device_HardwareIds -ErrorAction SilentlyContinue).Data
+                foreach ($h in $hwids) {
+                    if ($h -and $h.StartsWith('USB\VID_05AC')) { $DeviceIds.Add($h) }
+                }
+            }
+    } catch {
+        Write-Warning "AutoDiscover failed: $($_.Exception.Message)"
+    }
+}
+
+if ($Extra) { foreach ($e in $Extra) { $DeviceIds.Add($e) } }
 $DeviceIds = $DeviceIds | Select-Object -Unique
 
 # --- helpers ---------------------------------------------------------------
