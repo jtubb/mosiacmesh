@@ -51,7 +51,7 @@ VEENCY_PASSWORD = "mosaic"
 # All-intra (-g 1) is still avoided: it blew the bitrate past the iPad-1 decoder.
 # Denser grid => smaller snap: the iPad seek lands within +-KEYFRAME_GRID_SEC/2 of
 # the clock, so a tighter grid both reduces the residual AND its run-to-run spread.
-KEYFRAME_GRID_SEC = 0.1
+KEYFRAME_GRID_SEC = 0.25
 
 def _keyframe_grid_args():
     """ffmpeg args for a regular keyframe grid: force a keyframe every
@@ -517,7 +517,7 @@ def compute_render_token(display_id):
             perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
     # Bump this when the encode settings change, to invalidate stale renders.
-    encode_ver = "grid01-cbl-v4"
+    encode_ver = "grid025-cbl-v5"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
