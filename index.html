@@ -58,12 +58,18 @@
 		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
 		pvid: null, activated: false, videoSrc: null };
 
+	// Play video MUTED. A muted <video> is exempt from autoplay policy on every
+	// browser, so it starts with NO user gesture — no tap-to-start anywhere
+	// (kiosk-friendly), at the cost of audio. Flip to false to restore sound, which
+	// re-enables the arm / tap-to-start gesture path (needed for unmuted playback).
+	var VIDEO_MUTED = true;
+
 	// One persistent video element, created once and reused for every video item
 	// so a single user gesture keeps the whole session playable on iOS.
 	function getPersistentVideo() {
 		if (!playback.pvid) {
 			var v = document.createElement('video');
-			v.muted = false; // audio on every screen once the element is gesture-blessed
+			v.muted = VIDEO_MUTED; // unmuted only when audio is wanted (needs a gesture)
 			v.setAttribute('webkit-playsinline', '');
 			v.setAttribute('playsinline', '');
 			v.preload = 'auto';
@@ -252,7 +258,7 @@
 		}
 		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }  // no video -> nothing to arm
 		var v = getPersistentVideo();
-		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = false;
+		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = VIDEO_MUTED;
 		playback.videoSrc = item.file;
 		var holdAtZero = function () {
 			try { v.pause(); } catch (e) {}
@@ -266,8 +272,10 @@
 		var afterLoad = function () {
 			v.removeEventListener('loadedmetadata', afterLoad);
 			holdAtZero();
-			if (playback.activated) {
-				reportReady();                 // already blessed: buffered + held
+			if (VIDEO_MUTED || playback.activated) {
+				// Muted video autoplays (no gesture) — or we're already blessed.
+				// Either way it's buffered + held; release on GO without a tap.
+				playback.activated = true; reportReady();
 			} else {
 				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });   // ask the server to tap us
 				v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
@@ -362,7 +370,7 @@
 		if (v.paused && !playback.paused) {
 			var pr = v.play();
 			if (pr && pr['catch']) { pr['catch'](function () {}); }
-			if (v.paused) { showTapStart(); }
+			if (v.paused && !VIDEO_MUTED) { showTapStart(); }   // muted never needs a gesture
 			return;
 		}
 		// Leave the video alone while it is still seeking or lacks playable data
@@ -442,7 +450,7 @@
 			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
 			v.style.opacity = '1';       // restore visibility (clearVideo keep-alive set it to 0)
 			v.loop = false;              // playlist advances via renderPlayback, not element loop
-			v.muted = false;             // restore audio (keep-alive muted it); fallback re-mutes if blocked
+			v.muted = VIDEO_MUTED;       // muted (kiosk) unless audio wanted; fallback re-mutes if blocked
 			hideBlackout();              // drop the 'stopped' cover
 			$('#canvas').empty();        // clear any prior image/script content
 			playback.video = v;
@@ -482,7 +490,8 @@
 				v.addEventListener('loadedmetadata', once2);
 			}
 			startDriftLoop();
-			if (!playback.activated) { showTapStart(); }   // need a gesture to start on iOS
+			// Unmuted video needs a gesture to start on iOS; muted autoplays, no tap.
+			if (!VIDEO_MUTED && !playback.activated) { showTapStart(); }
 		} else {
 			$('#canvas').html('<img src="' + item.file + '" style="max-width:100%; max-height:100%;">');
 		}
