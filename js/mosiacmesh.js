@@ -92,14 +92,23 @@ function getUDID() {
 		sock_callback = callback
 		mosiacMeshDisconnect();
 
-		sock = new SockJS('http://' + window.location.host + '/sockjs/', [], {
+		// Capture THIS socket instance in a closure (`s`). All three handlers fire
+		// asynchronously and read the global `sock`; on reconnect the old socket's
+		// late onclose used to run `sock = null` and clobber the NEW socket -> the
+		// watchdog then opened yet another, leaving 2-3 live sessions all delivering
+		// every message (the iPad reloaded its <video> repeatedly -> Chrome 29
+		// MEDIA_ERR_SRC_NOT_SUPPORTED). Guarding each handler with `sock !== s` makes
+		// a superseded socket inert: it neither delivers nor nulls its successor.
+		var s = new SockJS('http://' + window.location.host + '/sockjs/', [], {
 			debug: true,
 			transports: [ "websocket", "xhr-streaming", "iframe-eventsource", "iframe-htmlfile", "xhr-polling", "iframe-xhr-polling", "jsonp-polling" ]
 		});
+		sock = s;
 
 		log('connecting...');
 
-		sock.onopen = function() {
+		s.onopen = function() {
+			if (sock !== s) { return; }   // superseded by a newer connection
 			log('connected.');
 			// ES5-safe touch detection (1st-gen iPad / iOS 5 Safari supports
 			// 'ontouchstart'). Lets the server recover iPads that present a
@@ -141,7 +150,8 @@ function getUDID() {
 			update_ui();
 		};
 
-		sock.onmessage = function(msg) {
+		s.onmessage = function(msg) {
+			if (sock !== s) { return; }   // superseded socket: don't double-deliver
 			log('Received: ' + msg.data);
 			data_obj = JSON.parse(msg.data.replace("'",""));
 			if(data_obj.REQUEST == "SERVERTIME")
@@ -158,10 +168,14 @@ function getUDID() {
 			}
 		};
 
-		sock.onclose = function() {
+		s.onclose = function() {
 			log('Disconnected.');
-			sock = null;
-			update_ui();
+			// Only clear the global if WE are still the current socket; a late
+			// onclose from a superseded socket must not null out its replacement.
+			if (sock === s) {
+				sock = null;
+				update_ui();
+			}
 			//ProgrammableTimer.stop();
 		};
 	}
