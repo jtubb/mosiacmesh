@@ -1596,6 +1596,12 @@ def msg_response(msg,session):
                 and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
             asyncio.ensure_future(_auto_arm_client(msg["SRC"]))
 
+    elif(msg["REQUEST"] == "CLIENTLOG"):
+        # Client-side debug stream (opt-in via ?tdbg). Surfaced in the server log
+        # so device state (video error/readyState/events) is visible without the
+        # operator relaying an on-screen HUD. No state change.
+        logging.warning("CLIENTLOG %s %s", msg.get("SRC"), msg.get("PAYLOAD"))
+
     elif(msg["REQUEST"] == "DISCOVERY_STATUS"):
         # Return discovery information for all clients
         response["PAYLOAD"] = get_discovered_devices()

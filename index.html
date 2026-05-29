@@ -99,6 +99,7 @@
 	// and a tick counter (rapidly climbing # == a re-render/flash loop). Element
 	// is created lazily on first use (the <video> is in <body> by then). ES5-safe.
 	if (/tdbg/.test(location.href)) {
+		window._mmDbg = true;   // also stream debug to the server log (CLIENTLOG)
 		window._tdbg = function(pos, v, errorMs) {
 			var el = document.getElementById('tdbg');
 			if (!el) {
@@ -140,7 +141,7 @@
 			if (v && !v._mmEvtHooked) {
 				v._mmEvtHooked = true;
 				var names = ['playing', 'error', 'stalled', 'waiting', 'pause', 'canplay', 'suspend', 'abort'];
-				var mk = function (n) { return function () { window._mmVidEvt = n + (v.error ? ('/e' + v.error.code) : ''); }; };
+				var mk = function (n) { return function () { window._mmVidEvt = n + (v.error ? ('/e' + v.error.code) : ''); dbg('vid:' + n); }; };
 				var i; for (i = 0; i < names.length; i++) { v.addEventListener(names[i], mk(names[i]), false); }
 			}
 			el2.textContent = 'arm activated=' + playback.activated +
@@ -183,6 +184,7 @@
 	// load()+play() FIRST and nothing else; the 'playing' listener (in
 	// getPersistentVideo) dismisses the overlay, and the drift loop syncs position.
 	function activatePlayback() {
+		dbg("tap");
 		var v = getPersistentVideo();
 		v.style.display = 'block';
 		// iOS-5 Safari needs load()+play() TOGETHER inside the tap gesture to start
@@ -205,6 +207,24 @@
 
 	function sendMsg(request, payload) {
 		try { sock.send(generateMessage("SRV", request, payload)); } catch (e) {}
+	}
+
+	// Stream client debug state to the server log (opt-in via ?tdbg) so device
+	// behavior is visible without reading an on-screen HUD. ES5-safe.
+	function dbg(tag) {
+		if (!window._mmDbg) { return; }
+		var v = playback.pvid;
+		sendMsg("CLIENTLOG", {
+			tag: tag,
+			activated: playback.activated, active: playback.active,
+			paused: v ? v.paused : null,
+			rs: v ? v.readyState : null, ns: v ? v.networkState : null,
+			verr: (v && v.error) ? v.error.code : null,
+			ct: v ? Math.round(v.currentTime * 1000) : null,
+			src: (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')).split('/').pop() : null,
+			idx: playback.videoIndex,
+			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null
+		});
 	}
 
 	// Undo the calibrate view's <html> framing (8px border + window-16 sizing) and
@@ -238,7 +258,7 @@
 			try { v.pause(); } catch (e) {}
 			try { v.currentTime = 0; } catch (e) {}
 		};
-		var reportReady = function () { sendMsg("READY", { prepareId: prepareId }); };
+		var reportReady = function () { dbg("send-READY"); sendMsg("READY", { prepareId: prepareId }); };
 		var onArmed = function () {            // 'playing' fired => gesture consumed
 			playback.activated = true; hideTapStart();
 			holdAtZero(); reportReady();
@@ -249,7 +269,7 @@
 			if (playback.activated) {
 				reportReady();                 // already blessed: buffered + held
 			} else {
-				sendMsg("NEEDS_ARM", { prepareId: prepareId });   // ask the server to tap us
+				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });   // ask the server to tap us
 				v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
 				showTapStart();                // a manual tap also works (activatePlayback -> play())
 			}
@@ -689,6 +709,7 @@
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.active = false;
 				playback.paused = false;
+				dbg("recv-PREPARE");
 				prepareFirstItem(data_obj.PAYLOAD.prepareId);
 			}
 			else if(data_obj.REQUEST == "PLAY")
@@ -701,6 +722,7 @@
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.active = true;
 				playback.paused = false;
+				dbg("recv-PLAY");
 				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 				var _delay = playback.startEpoch - GoTime.now();
 				// Defer ONLY for a plausible coordinated GO (the start epoch is at most
