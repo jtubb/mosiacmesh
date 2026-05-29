@@ -58,7 +58,7 @@
 		// the activation does NOT transfer to a freshly-created element. So we reuse
 		// ONE persistent <video> (pvid) across items and bless it once via a tap
 		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
-		pvid: null, activated: false, videoSrc: null, armTimer: null };
+		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null };
 
 	// Play video MUTED. A muted <video> is exempt from autoplay policy on every
 	// browser, so it starts with NO user gesture — no tap-to-start anywhere
@@ -289,35 +289,31 @@
 			playback.activated = true; hideTapStart();
 			holdAtZero(); reportReady();
 		};
-		var afterLoad = function () {
-			v.removeEventListener('loadedmetadata', afterLoad);
-			holdAtZero();
-			if (playback.activated) { reportReady(); return; }   // blessed already -> GO releases it
-			// Not yet blessed: ARM NOW (during PREPARE) so the GO can start the clip
-			// PROGRAMMATICALLY in sync with displays that autoplay — instead of first
-			// showing a tap prompt at GO (which is why a modern display would start
-			// while the iPad sat on "tap to start"). Attempt muted autoplay: browsers
-			// that allow it (modern) fire 'playing' -> onArmed -> READY with no visible
-			// tap. iOS 5 blocks ALL video autoplay, so after a short grace we show the
-			// tap prompt + NEEDS_ARM; the human tap during PREPARE blesses the element.
-			// The server holds the GO until every client reports READY.
-			v.addEventListener('playing', function once() { v.removeEventListener('playing', once); onArmed(); });
-			if (VIDEO_MUTED) { var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); } }
-			if (playback.armTimer) { clearTimeout(playback.armTimer); }
-			playback.armTimer = setTimeout(function () {
-				if (!playback.activated) {
-					dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });
-					showTapStart();           // human tap (activatePlayback -> play()) blesses it
-				}
-			}, 700);
-		};
-		if (v.getAttribute('src') !== item.file) {
-			v.src = item.file; v.addEventListener('loadedmetadata', afterLoad); try { v.load(); } catch (e) {}
-		} else if (v.readyState >= 1) {
-			afterLoad();
-		} else {
-			v.addEventListener('loadedmetadata', afterLoad);
+		if (v.getAttribute('src') !== item.file) { v.src = item.file; try { v.load(); } catch (e) {} }
+		if (playback.activated) {
+			// Already blessed this session: the element can (re)load + play
+			// programmatically, so just buffer + hold 0 and report READY; GO starts it.
+			holdAtZero(); reportReady(); return;
 		}
+		// Not yet blessed -> ARM NOW, during PREPARE, so GO can start the clip
+		// PROGRAMMATICALLY in sync with displays that autoplay (instead of the iPad
+		// first showing a tap prompt at GO, after the balls). Do NOT wait for
+		// loadedmetadata: iOS 5 won't fetch even metadata without a user gesture, so
+		// that event never fires pre-tap. Instead attempt muted autoplay (modern starts
+		// -> 'playing' -> onArmed -> READY, no visible tap), and on a fixed grace show
+		// the tap prompt + NEEDS_ARM if we still haven't started (iOS 5). The human tap
+		// (activatePlayback -> load()+play() in the gesture) loads + blesses it; the
+		// server holds GO until every display is READY, so the wall starts together.
+		if (playback._armPlaying) { try { v.removeEventListener('playing', playback._armPlaying); } catch (e) {} }
+		playback._armPlaying = function () { v.removeEventListener('playing', playback._armPlaying); playback._armPlaying = null; onArmed(); };
+		v.addEventListener('playing', playback._armPlaying);
+		if (VIDEO_MUTED) { var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); } }
+		playback.armTimer = setTimeout(function () {
+			if (!playback.activated) {
+				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });
+				showTapStart();           // human tap (activatePlayback -> load()+play()) blesses it
+			}
+		}, 700);
 	}
 
 	function clearVideo() {
