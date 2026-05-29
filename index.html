@@ -58,8 +58,7 @@
 		// the activation does NOT transfer to a freshly-created element. So we reuse
 		// ONE persistent <video> (pvid) across items and bless it once via a tap
 		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
-		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null,
-		boundaryTimer: null };
+		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null };
 
 	// Play video MUTED. A muted <video> is exempt from autoplay policy on every
 	// browser, so it starts with NO user gesture — no tap-to-start anywhere
@@ -428,36 +427,26 @@
 		// slow/stalled element is re-seeked every tick and never plays).
 		var nowMs = GoTime.now();
 		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
-		var didSeek = false;
-		// Off the shared clock by more than the tolerance? Re-align with a BOUNDARY-
-		// ALIGNED seek. Seeking NOW lands at an arbitrary phase -> +-grid/2 keyframe
-		// snap (the residual floor). Instead schedule the seek so it SETTLES exactly
-		// when the clock reaches a grid keyframe: seek to the next grid keyframe G (just
-		// past offset+lead) at the wall-instant when offset == G - lead, so after ~lead
-		// of settle it lands as the clock arrives at G -> currentTime == clock target,
-		// snap ~0. Residual collapses to the lead-estimate error + timer/clock jitter.
-		// Seeking to a grid keyframe still keeps iOS-5 (keyframe-accurate) and modern
-		// clients on the SAME frame; seekPending then tunes the lead from the residual.
+		var tgtMs = null;
+		// Off the shared clock by more than the tolerance? Re-align by seeking to the
+		// NEAREST keyframe-grid point to (target + learned latency lead), so that after
+		// the seek settles ~latency later it lands ON the clock. Grid-aligning makes
+		// iOS-5 (keyframe-accurate seek -> snaps to that keyframe) and modern clients
+		// land on the SAME frame, so the wall agrees. We do NOT chase the exact
+		// timestamp between corrections — that seek->rebuffer->fall-behind->seek loop is
+		// what stalled the iPad. playbackRate trims residual on browsers that honor it;
+		// on iOS-5 (which ignores rate) the clip rides at rate 1 until the next align.
 		if (canSeek && (errorMs < -DRIFT_SEEK_MS || errorMs > DRIFT_SEEK_MS)) {
-			var lead = playback.seekAheadMs;
+			tgtMs = Math.round((pos.offsetMs + playback.seekAheadMs) / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
+			playback.seekPending = true;
+		}
+		if (tgtMs !== null) {
 			var maxMs = ((v.duration || (durations[pos.index] / 1000)) * 1000) - 50;
-			var G = Math.ceil((pos.offsetMs + lead + 40) / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
-			var issueDelay = G - pos.offsetMs - lead;   // wall-ms from now until we fire the seek
-			if (issueDelay < 0) { issueDelay = 0; }
-			if (G > maxMs) { G = maxMs; }
-			if (G < 0) { G = 0; }
-			playback.lastSeekAt = nowMs;                 // start cooldown now so we don't re-schedule
-			didSeek = true;
-			if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); }
-			playback.boundaryTimer = setTimeout(function () {
-				playback.boundaryTimer = null;
-				var vv = playback.video;
-				if (!playback.active || playback.paused || !vv) { return; }
-				try { vv.currentTime = G / 1000; } catch (e) {}
-				vv.playbackRate = 1;
-				playback.seekPending = true;             // tune the lead from the residual next tick
-				playback.lastSeekAt = GoTime.now();
-			}, issueDelay);
+			if (tgtMs > maxMs) { tgtMs = maxMs; }
+			if (tgtMs < 0) { tgtMs = 0; }
+			try { v.currentTime = tgtMs / 1000; } catch (e) {}
+			v.playbackRate = 1;
+			playback.lastSeekAt = nowMs;
 		} else {
 			var rate = 1 - errorMs / 2000;
 			if (rate < 0.85) { rate = 0.85; }
@@ -470,7 +459,7 @@
 		// rate fine-correction is a no-op and only seeks move us). sk=1 if we seeked.
 		if (!playback._lastTrace || (nowMs - playback._lastTrace) > 1000) {
 			playback._lastTrace = nowMs;
-			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (didSeek ? 1 : 0), lead: Math.round(playback.seekAheadMs) });
+			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (tgtMs !== null ? 1 : 0), lead: Math.round(playback.seekAheadMs) });
 		}
 	}
 
@@ -519,9 +508,7 @@
 				}
 			};
 			if (item.file !== playback.videoSrc) {
-				// New clip: (re)load, then seek+play once metadata is ready. Cancel any
-				// boundary seek still pending for the previous clip's timeline.
-				if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
+				// New clip: (re)load, then seek+play once metadata is ready.
 				playback.videoSrc = item.file;
 				v.src = item.file;
 				var once = function() { v.removeEventListener('loadedmetadata', once); seekAndPlay(); };
@@ -556,7 +543,6 @@
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
-		if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
 		if (playback.video) { try { playback.video.pause(); } catch (e) {} }
 	}
 
@@ -567,7 +553,6 @@
 		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
-		if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
 		clearScript();
 		$('#canvas').empty();
 		var v = playback.pvid;
