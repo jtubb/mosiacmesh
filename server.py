@@ -49,12 +49,14 @@ VEENCY_PASSWORD = "mosaic"
 # mid-clip drift-correction snap unpredictably far. A fixed grid lets every client
 # seek to the SAME grid keyframe (shared GoTime clock + shared grid => mutual sync).
 # All-intra (-g 1) is still avoided: it blew the bitrate past the iPad-1 decoder.
-KEYFRAME_GRID_SEC = 0.5
+# Denser grid => smaller snap: the iPad seek lands within +-KEYFRAME_GRID_SEC/2 of
+# the clock, so a tighter grid both reduces the residual AND its run-to-run spread.
+KEYFRAME_GRID_SEC = 0.1
 
 def _keyframe_grid_args():
     """ffmpeg args for a regular keyframe grid: force a keyframe every
     KEYFRAME_GRID_SEC of OUTPUT time (fps-independent) and disable scene-cut
-    keyframes, so every 0.5s mark is a seekable keyframe and spacing is uniform.
+    keyframes, so every grid mark is a seekable keyframe and spacing is uniform.
     Clients seek to grid-aligned positions (floor/round to the grid) for sync."""
     return ["-force_key_frames", "expr:gte(t,n_forced*%s)" % KEYFRAME_GRID_SEC,
             "-x264-params", "scenecut=0"]
@@ -515,7 +517,7 @@ def compute_render_token(display_id):
             perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
     # Bump this when the encode settings change, to invalidate stale renders.
-    encode_ver = "grid05-cbl-v3"
+    encode_ver = "grid01-cbl-v4"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 

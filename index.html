@@ -97,7 +97,7 @@
 	}
 	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
 	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
-	var KEYFRAME_GRID_MS = 500;  // MUST match server KEYFRAME_GRID_SEC (0.5s): drift
+	var KEYFRAME_GRID_MS = 100;  // MUST match server KEYFRAME_GRID_SEC (0.1s): drift
 	                             // re-aligns by seeking to this keyframe grid so iOS-5
 	                             // (keyframe-accurate seek) and modern clients land on
 	                             // the same frame -> the wall agrees with itself.

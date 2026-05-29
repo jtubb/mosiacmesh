@@ -414,7 +414,7 @@ class TestFfmpegHelpers:
             assert "-maxrate" not in cmd and "-bufsize" not in cmd
             assert "-force_key_frames" in cmd
             j = cmd.index("-force_key_frames")
-            assert "n_forced*0.5" in cmd[j + 1]
+            assert ("n_forced*" + str(server.KEYFRAME_GRID_SEC)) in cmd[j + 1]
             assert "scenecut=0" in cmd[cmd.index("-x264-params") + 1]
 
     def test_is_video_item(self):
