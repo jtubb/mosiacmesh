@@ -38,6 +38,15 @@
 .EXAMPLE
     # Full fleet bring-up: clean key + correct the clock (cert fix) on each device
     .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -ReplaceKeys -FixClock
+
+.EXAMPLE
+    # Reflashed-via-kit fleet: key + the MosaicMesh tweak set in one shot.
+    # Skips FixClock because the kit-built IPSW + working Cydia gives a sane NTP-set clock.
+    .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -ReplaceKeys -InstallTweaks
+
+.EXAMPLE
+    # Custom package list (e.g. add AppSync to the standard set):
+    .\tools\onboard_devices.ps1 -Hosts 192.168.1.76 -ReplaceKeys -InstallTweaks -Packages 'ai.akemi.appsyncunified'
 #>
 [CmdletBinding()]
 param(
@@ -58,7 +67,28 @@ param(
     [switch]$FixClock,
     # Optional extra shell run on the device after the key is installed
     # (e.g. a password rotation). Runs over the freshly-verified key session.
-    [string]$PostInstall = ""
+    [string]$PostInstall = "",
+    # Install the standard MosaicMesh tweak set via apt over the keyed session.
+    # The default set ($DEFAULT_TWEAKS below) covers the packages our automation
+    # actually depends on (libactivator + skiplock + veency + terminalactivator
+    # + their dependencies). Combine with -Packages to add extras.
+    [switch]$InstallTweaks,
+    # Additional / replacement package list to apt-get install. If -InstallTweaks
+    # is also set, the union of both lists is installed. If only -Packages is set,
+    # only those packages are installed.
+    [string[]]$Packages = @()
+)
+
+# Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
+# tweaks that make manual ops sane. All sourced from BigBoss (HTTP) so no TLS
+# concerns. Edit here if the fleet's needs evolve.
+$DEFAULT_TWEAKS = @(
+    'libactivator',                  # Activator events used by login/start/stop/reboot scripts
+    'com.fb.skiplock',                # passcode bypass for unattended display
+    'veency',                         # VNC fallback (manual remote control)
+    'kr.iolate.terminalactivator',    # uiopen-via-Activator (used by START script)
+    'com.a3tweaks.flipswitch',        # toolkit required by skiplock
+    'com.rpetrich.rocketbootstrap'    # common IPC tweak dep
 )
 
 $ErrorActionPreference = "Stop"
@@ -149,8 +179,17 @@ $clockCmd = (
     ' if command -v curl >/dev/null 2>&1; then curl -sS -m 10 -o /dev/null https://www.apple.com >/dev/null 2>&1 && echo CERT=OK || echo CERT=FAIL; else echo CERT=SKIP_no_curl; fi'
 ) -replace '__ISO__', $isoUtc -replace '__BSD__', $bsdUtc
 
-if ($ReplaceKeys) { Write-Host "Mode: REPLACE (authorized_keys will contain only this key)" -ForegroundColor Magenta }
-if ($FixClock)    { Write-Host "Mode: FIX-CLOCK (set time + cert probe per device)" -ForegroundColor Magenta }
+if ($ReplaceKeys)    { Write-Host "Mode: REPLACE (authorized_keys will contain only this key)" -ForegroundColor Magenta }
+if ($FixClock)       { Write-Host "Mode: FIX-CLOCK (set time + cert probe per device)" -ForegroundColor Magenta }
+
+# Compute the package list once -- union of -Packages and (when -InstallTweaks) $DEFAULT_TWEAKS.
+$pkgsToInstall = @()
+if ($InstallTweaks) { $pkgsToInstall += $DEFAULT_TWEAKS }
+if ($Packages)      { $pkgsToInstall += $Packages }
+$pkgsToInstall = $pkgsToInstall | Select-Object -Unique
+if ($pkgsToInstall) {
+    Write-Host "Mode: INSTALL-PACKAGES ($($pkgsToInstall.Count): $($pkgsToInstall -join ', '))" -ForegroundColor Magenta
+}
 
 $results = @()
 foreach ($h in $targets) {
@@ -209,7 +248,42 @@ foreach ($h in $targets) {
         }
     }
 
-    # 4) optional post-install (e.g. password rotation) over the keyed session
+    # 4) install packages (Activator/Veency/SkipLock/etc.) via apt over the keyed session
+    if ($status -eq "OK" -and $pkgsToInstall) {
+        $pkgArg = $pkgsToInstall -join ' '
+        # Same flags as sync_from_master.ps1 / ipad_apt.ps1: AllowInsecureRepositories
+        # for stale-GPG forgiveness, tight per-repo timeouts so graveyard sources
+        # (ModMyi, ZodTTD) can't hang the run, --force-yes for the same reason.
+        $aptCmd = "apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0 2>/dev/null || true; " +
+                  "apt-get install -y --force-yes $pkgArg; echo APT_RC=`$?"
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        try {
+            $a = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $aptCmd 2>&1) | Out-String
+        } catch {
+            $a = "exception: $($_.Exception.Message)"
+        }
+        $ErrorActionPreference = $prevEAP
+
+        # Surface the meaningful lines + the install RC marker
+        ($a -split "`r?`n" | Where-Object {
+            $_ -match '^(Get:|E:|Unable to locate|Setting up|Need to get|already the newest|newly installed|APT_RC=)'
+        }) | Select-Object -First 20 | ForEach-Object {
+            $line = $_.Trim()
+            $color = if ($line -match '^E:|APT_RC=[^0]') { 'Yellow' } else { 'DarkGray' }
+            Write-Host "  $line" -ForegroundColor $color
+        }
+
+        if ($a -match 'APT_RC=0') {
+            Write-Host "  packages installed" -ForegroundColor Green
+        } else {
+            $rcMatch = [regex]::Match($a, 'APT_RC=\d+')
+            $detail = ($detail + " " + $(if ($rcMatch.Success) { $rcMatch.Value } else { 'apt-failed' })).Trim()
+            Write-Host "  package install non-zero" -ForegroundColor Yellow
+        }
+    }
+
+    # 5) optional post-install (e.g. password rotation) over the keyed session
     if ($status -eq "OK" -and $PostInstall) {
         try {
             $pi = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $PostInstall 2>&1) | Out-String
