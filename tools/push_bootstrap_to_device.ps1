@@ -69,13 +69,21 @@ param(
 $ErrorActionPreference = "Stop"
 
 # --- locate libimobiledevice tools ---------------------------------------
+# Probe PATH first, then fall back to the bundled suite directory
+# (tools/libimobile-suite-latest_w64) alongside this script. That lets the
+# user drop the suite zip into tools/ and skip PATH munging entirely.
+$BundledBin = Join-Path $PSScriptRoot 'libimobile-suite-latest_w64'
+
 function Find-Tool {
     param([string]$Name, [switch]$Required)
     $c = Get-Command $Name -ErrorAction SilentlyContinue
     if ($c) { return $c.Source }
+    foreach ($ext in @('.exe', '')) {
+        $bundled = Join-Path $BundledBin ("$Name$ext")
+        if (Test-Path $bundled) { return $bundled }
+    }
     if ($Required) {
-        throw "Required tool not found on PATH: $Name`n" +
-              "Install libimobiledevice for Windows (e.g. from imobiledevice-net releases) and add its bin/ to PATH."
+        throw "Required tool not found on PATH or in $BundledBin : $Name"
     }
     return $null
 }
@@ -84,14 +92,13 @@ $idevice_id        = Find-Tool 'idevice_id' -Required
 $ideviceinfo       = Find-Tool 'ideviceinfo'                # optional but recommended
 $idevicediagnostics = Find-Tool 'idevicediagnostics'         # required unless -NoRestart
 if (-not $NoRestart -and -not $idevicediagnostics) {
-    throw "idevicediagnostics not on PATH (needed to reboot). Pass -NoRestart to skip the reboot."
+    throw "idevicediagnostics not found (needed to reboot). Pass -NoRestart to skip the reboot."
 }
 
-# AFC push candidates -- different libimobiledevice builds ship different
-# tools, so we probe several and use the first one that exists.
-$pymd3      = Find-Tool 'pymobiledevice3'
-$ideviceafc = Find-Tool 'ideviceafc'
+# AFC push: afcclient is a REPL (drive via stdin, not subcommand args).
+# pymobiledevice3 is the fallback if it's pip-installed.
 $afcclient  = Find-Tool 'afcclient'
+$pymd3      = Find-Tool 'pymobiledevice3'
 
 # --- list devices --------------------------------------------------------
 function Get-ConnectedDevices {
@@ -164,12 +171,55 @@ $debs | ForEach-Object { Write-Host ("  {0,-50} {1,10:N0} bytes" -f $_.Name, $_.
 $afcDir = "/Cydia/AutoInstall"
 
 function Try-AfcPush {
-    <#  Returns $true on full success, $false otherwise. Prints each attempt.  #>
+    <#  Returns $true on full success, $false otherwise. Prints each step.
+
+        afcclient (from current libimobiledevice) is a REPL -- it doesn't
+        take a subcommand as argv, you connect to the device with
+        `-u UDID` and then send mkdir/put/quit on stdin. We batch every
+        operation into one session so we pay the lockdownd handshake once,
+        not once per .deb, and grep the output for errors at the end.
+        #>
     param([string]$Udid, [System.IO.FileInfo[]]$Files)
+
+    if ($afcclient) {
+        Write-Host "Trying: afcclient (REPL via stdin)..." -ForegroundColor DarkGray
+        # Build the command script. mkdir of an already-existing dir errors but
+        # doesn't abort the session -- safe to attempt unconditionally.
+        $script = "mkdir /Cydia`nmkdir /Cydia/AutoInstall`n"
+        foreach ($f in $Files) {
+            # afcclient `put` takes <local> <remote>. Quote the local path
+            # (Windows paths often contain spaces, dots, etc.).
+            $script += "put `"$($f.FullName)`" /Cydia/AutoInstall/$($f.Name)`n"
+        }
+        $script += "ls /Cydia/AutoInstall`nquit`n"
+
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        $out = $script | & $afcclient -u $Udid 2>&1 | Out-String
+        $ErrorActionPreference = $prevEAP
+
+        # Surface every non-blank output line at low intensity so the user
+        # can see what afcclient said (helpful for diagnosing).
+        ($out -split "`r?`n" | Where-Object { $_.Trim() }) |
+            ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+
+        # Heuristic: success = every .deb name appears in the final `ls`
+        # output. If even one is missing, the put silently failed.
+        $missing = @()
+        foreach ($f in $Files) {
+            if ($out -notmatch [regex]::Escape($f.Name)) { $missing += $f.Name }
+        }
+        if ($missing.Count -eq 0) {
+            Write-Host "  afcclient: all $($Files.Count) .deb(s) confirmed in /Cydia/AutoInstall" -ForegroundColor Green
+            return $true
+        } else {
+            Write-Host "  afcclient: missing in final ls -> $($missing -join ', ')" -ForegroundColor Yellow
+        }
+    }
 
     if ($pymd3) {
         Write-Host "Trying: pymobiledevice3 afc ..." -ForegroundColor DarkGray
-        # pymobiledevice3 doesn't always support iOS 5 cleanly, but worth a try.
+        # pymobiledevice3 subcommand style; may or may not work on iOS 5.
         & $pymd3 afc --udid $Udid mkdir $afcDir 2>$null | Out-Null
         $ok = $true
         foreach ($f in $Files) {
@@ -183,37 +233,13 @@ function Try-AfcPush {
         if ($ok) { return $true }
     }
 
-    if ($ideviceafc) {
-        Write-Host "Trying: ideviceafc ..." -ForegroundColor DarkGray
-        & $ideviceafc -u $Udid mkdir $afcDir 2>$null | Out-Null
-        $ok = $true
-        foreach ($f in $Files) {
-            & $ideviceafc -u $Udid put $f.FullName "$afcDir/$($f.Name)" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) { $ok = $false; break }
-            Write-Host "  ideviceafc pushed  $($f.Name)" -ForegroundColor Green
-        }
-        if ($ok) { return $true }
-    }
-
-    if ($afcclient) {
-        Write-Host "Trying: afcclient ..." -ForegroundColor DarkGray
-        & $afcclient -u $Udid mkdir $afcDir 2>$null | Out-Null
-        $ok = $true
-        foreach ($f in $Files) {
-            & $afcclient -u $Udid put $f.FullName "$afcDir/$($f.Name)" 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) { $ok = $false; break }
-            Write-Host "  afcclient pushed  $($f.Name)" -ForegroundColor Green
-        }
-        if ($ok) { return $true }
-    }
-
     return $false
 }
 
 $pushed = $false
 if (-not $NoAutoPush) {
-    if (-not ($pymd3 -or $ideviceafc -or $afcclient)) {
-        Write-Host "`nNo AFC-push CLI found on PATH (tried: pymobiledevice3, ideviceafc, afcclient)." -ForegroundColor Yellow
+    if (-not ($afcclient -or $pymd3)) {
+        Write-Host "`nNo AFC-push CLI found (tried: afcclient, pymobiledevice3)." -ForegroundColor Yellow
     } else {
         $pushed = Try-AfcPush -Udid $UDID -Files $debs
     }
