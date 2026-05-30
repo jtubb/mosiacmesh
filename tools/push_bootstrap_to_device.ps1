@@ -95,10 +95,12 @@ if (-not $NoRestart -and -not $idevicediagnostics) {
     throw "idevicediagnostics not found (needed to reboot). Pass -NoRestart to skip the reboot."
 }
 
-# AFC push: afcclient is a REPL (drive via stdin, not subcommand args).
-# pymobiledevice3 is the fallback if it's pip-installed.
+# AFC push: afcclient accepts positional one-shot commands
+# (afcclient -u UDID <command> [args]). --help doesn't document this, but
+# `afcclient -u UDID help` reveals the command set.
 $afcclient  = Find-Tool 'afcclient'
-$pymd3      = Find-Tool 'pymobiledevice3'
+$idevicepair = Find-Tool 'idevicepair'    # needed for pair validation
+$pymd3      = Find-Tool 'pymobiledevice3' # fallback if afcclient unavailable
 
 # --- list devices --------------------------------------------------------
 function Get-ConnectedDevices {
@@ -157,6 +159,33 @@ Write-Host "  name:      $dn" -ForegroundColor DarkGray
 if ($pt -and $pt -notmatch '^iPad') { Write-Warning "ProductType is '$pt' -- expected iPad. Proceeding anyway." }
 if ($pv -and $pv -notmatch '^5\.')  { Write-Warning "ProductVersion is '$pv' -- this script targets iOS 5.x. AutoInstall path may differ on other versions." }
 
+# --- pair validation -----------------------------------------------------
+# AMDS auto-pairs iOS devices on first plug, and modern libimobiledevice can
+# READ those AMDS-created pair records but generates INCOMPATIBLE ones if you
+# call `idevicepair pair`. So: NEVER auto-pair from this script. Just validate;
+# if validation fails, that means either (a) AMDS hasn't paired yet (e.g.
+# Setup Assistant blocking) or (b) a previous `idevicepair pair` left a bad
+# Windows pair record. The recovery recipe is documented for the user.
+if (-not $idevicepair) {
+    Write-Warning "idevicepair not found -- skipping pair validation. AFC push may fail silently."
+} else {
+    $vOut = (& $idevicepair -u $UDID validate 2>&1) | Out-String
+    if ($vOut -notmatch 'SUCCESS') {
+        Write-Host "`nPair NOT valid:" -ForegroundColor Red
+        Write-Host "  $($vOut.Trim())" -ForegroundColor DarkRed
+        Write-Host "`nRecovery recipe (one-time per device, when this happens):" -ForegroundColor Yellow
+        Write-Host "  1. Check the iPad screen -- if it shows Setup Assistant / 'Connect to iTunes'," -ForegroundColor Yellow
+        Write-Host "     tap through it (or activate via iTunes) until you reach the home screen." -ForegroundColor Yellow
+        Write-Host "  2. Remove the stale Windows pair record:" -ForegroundColor Yellow
+        Write-Host "     Remove-Item `"C:\ProgramData\Apple\Lockdown\$UDID.plist`" -Force" -ForegroundColor Yellow
+        Write-Host "  3. Unplug + replug the iPad -- AMDS will auto-pair with a fresh, compatible record." -ForegroundColor Yellow
+        Write-Host "  4. Re-run this script. DO NOT run 'idevicepair pair' manually -- it writes" -ForegroundColor Yellow
+        Write-Host "     iOS-5-incompatible pair records that break this same flow you're trying to recover." -ForegroundColor Yellow
+        throw "Pair invalid; cannot push via AFC until pair is valid."
+    }
+    Write-Host "  pair:      validated" -ForegroundColor DarkGray
+}
+
 # --- validate DebDir ----------------------------------------------------
 if (-not [System.IO.Path]::IsPathRooted($DebDir)) { $DebDir = Join-Path (Get-Location) $DebDir }
 if (-not (Test-Path $DebDir)) { throw "DebDir not found: $DebDir  (run harvest_bootstrap_debs.ps1 first)" }
@@ -171,50 +200,54 @@ $debs | ForEach-Object { Write-Host ("  {0,-50} {1,10:N0} bytes" -f $_.Name, $_.
 $afcDir = "/Cydia/AutoInstall"
 
 function Try-AfcPush {
-    <#  Returns $true on full success, $false otherwise. Prints each step.
+    <#  Returns $true on full success, $false otherwise.
 
-        afcclient (from current libimobiledevice) is a REPL -- it doesn't
-        take a subcommand as argv, you connect to the device with
-        `-u UDID` and then send mkdir/put/quit on stdin. We batch every
-        operation into one session so we pay the lockdownd handshake once,
-        not once per .deb, and grep the output for errors at the end.
+        afcclient supports a one-shot positional invocation
+        (afcclient -u UDID <cmd> [args]). --help only lists the connection
+        OPTIONS, but `afcclient -u UDID help` reveals the command set --
+        mkdir, put, ls, rm, info, stat, etc. We use that mode: one
+        process per operation, silent success, error text on stderr.
+        We verify with an `ls` afterwards: any .deb missing from the
+        listing means the put silently failed.
         #>
     param([string]$Udid, [System.IO.FileInfo[]]$Files)
 
     if ($afcclient) {
-        Write-Host "Trying: afcclient (REPL via stdin)..." -ForegroundColor DarkGray
-        # Build the command script. mkdir of an already-existing dir errors but
-        # doesn't abort the session -- safe to attempt unconditionally.
-        $script = "mkdir /Cydia`nmkdir /Cydia/AutoInstall`n"
+        Write-Host "Pushing via afcclient (positional one-shot)..." -ForegroundColor DarkGray
+
+        # Ensure /Cydia/AutoInstall exists. Errors here are non-fatal
+        # ("file already exists" is the expected case after the first push).
+        & $afcclient -u $Udid mkdir /Cydia          2>&1 | Out-Null
+        & $afcclient -u $Udid mkdir /Cydia/AutoInstall 2>&1 | Out-Null
+
+        $failed = @()
         foreach ($f in $Files) {
-            # afcclient `put` takes <local> <remote>. Quote the local path
-            # (Windows paths often contain spaces, dots, etc.).
-            $script += "put `"$($f.FullName)`" /Cydia/AutoInstall/$($f.Name)`n"
+            $remote = "/Cydia/AutoInstall/$($f.Name)"
+            $putOut = (& $afcclient -u $Udid put $f.FullName $remote 2>&1) | Out-String
+            if ($LASTEXITCODE -ne 0 -or $putOut -match 'Error|Failed|ERROR') {
+                Write-Host "  FAILED  $($f.Name)  -- $($putOut.Trim())" -ForegroundColor Red
+                $failed += $f.Name
+            } else {
+                Write-Host "  pushed  $($f.Name)" -ForegroundColor Green
+            }
         }
-        $script += "ls /Cydia/AutoInstall`nquit`n"
 
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        $out = $script | & $afcclient -u $Udid 2>&1 | Out-String
-        $ErrorActionPreference = $prevEAP
-
-        # Surface every non-blank output line at low intensity so the user
-        # can see what afcclient said (helpful for diagnosing).
-        ($out -split "`r?`n" | Where-Object { $_.Trim() }) |
-            ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
-
-        # Heuristic: success = every .deb name appears in the final `ls`
-        # output. If even one is missing, the put silently failed.
+        # Verify with ls. `ls -l` doesn't work (the -l is parsed as a global
+        # option, not as an arg to the ls command), so use plain ls and
+        # check names by substring.
+        $lsOut = (& $afcclient -u $Udid ls /Cydia/AutoInstall 2>&1) | Out-String
         $missing = @()
         foreach ($f in $Files) {
-            if ($out -notmatch [regex]::Escape($f.Name)) { $missing += $f.Name }
+            if ($lsOut -notmatch [regex]::Escape($f.Name)) { $missing += $f.Name }
         }
-        if ($missing.Count -eq 0) {
-            Write-Host "  afcclient: all $($Files.Count) .deb(s) confirmed in /Cydia/AutoInstall" -ForegroundColor Green
+        if ($failed.Count -eq 0 -and $missing.Count -eq 0) {
+            Write-Host "  all $($Files.Count) .deb(s) confirmed present in /Cydia/AutoInstall" -ForegroundColor Green
             return $true
-        } else {
-            Write-Host "  afcclient: missing in final ls -> $($missing -join ', ')" -ForegroundColor Yellow
         }
+        if ($missing.Count -gt 0) {
+            Write-Host "  missing from ls: $($missing -join ', ')" -ForegroundColor Yellow
+        }
+        return $false
     }
 
     if ($pymd3) {
