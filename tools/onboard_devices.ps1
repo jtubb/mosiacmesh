@@ -82,7 +82,13 @@ param(
     # writes AppleTimeZone into .GlobalPreferences so the iOS Settings UI
     # reflects it. iPad-1's RTC is correct (NTP) regardless of TZ; this
     # only affects how local time is rendered.
-    [string]$Timezone = ""
+    [string]$Timezone = "",
+    # Local path to apt7 .deb. Reflashed iPads from the Legacy-iOS-Kit IPSW
+    # ship dpkg + apt7-lib but NOT the apt7 CLI front-end (so /usr/bin/apt-get
+    # doesn't exist). If this file is present locally and apt-get is missing
+    # on the target, SCP + dpkg -i it before running -Packages / -InstallTweaks.
+    # Default: auto-discover apt7_*.deb in ..\bootstrap-debs\.
+    [string]$AptDeb = ""
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -111,6 +117,21 @@ if (-not $plink) { throw "plink.exe not found. Install PuTTY or add it to PATH."
 $ssh = (Get-Command ssh -ErrorAction SilentlyContinue).Source
 if (-not $ssh) { $ssh = "C:\Windows\System32\OpenSSH\ssh.exe" }
 if (-not (Test-Path $ssh)) { throw "OpenSSH client (ssh.exe) not found." }
+
+$scp = (Get-Command scp -ErrorAction SilentlyContinue).Source
+if (-not $scp) { $scp = "C:\Windows\System32\OpenSSH\scp.exe" }
+# scp not strictly required (only used by apt7 bootstrap); warn rather than throw.
+if (-not (Test-Path $scp)) { Write-Warning "scp.exe not found; apt7 bootstrap won't be possible." ; $scp = $null }
+
+# Auto-discover apt7 .deb in ..\bootstrap-debs\ if -AptDeb not specified
+if (-not $AptDeb) {
+    $aptCandidates = Get-ChildItem -Path (Join-Path $PSScriptRoot '..\bootstrap-debs\apt7_*.deb') -ErrorAction SilentlyContinue
+    if ($aptCandidates) { $AptDeb = ($aptCandidates | Sort-Object Name -Descending | Select-Object -First 1).FullName }
+}
+if ($AptDeb -and -not (Test-Path $AptDeb)) {
+    Write-Warning "AptDeb path doesn't exist: $AptDeb -- apt7 bootstrap disabled"
+    $AptDeb = ""
+}
 
 $sshKeygen = (Get-Command ssh-keygen -ErrorAction SilentlyContinue).Source
 if (-not $sshKeygen) { $sshKeygen = "C:\Windows\System32\OpenSSH\ssh-keygen.exe" }
@@ -321,6 +342,36 @@ foreach ($h in $targets) {
             }
         } catch {
             Write-Host "  timezone set failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 4.5) bootstrap apt7 if /usr/bin/apt-get is missing (kit-IPSW omission).
+    #      Check first, only install if needed -- avoids unnecessary work on
+    #      iPads that already have it.
+    if ($status -eq "OK" -and $AptDeb -and $scp -and $pkgsToInstall) {
+        $check = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "test -x /usr/bin/apt-get && echo APT_PRESENT || echo APT_MISSING" 2>&1) | Out-String
+        if ($check -match 'APT_MISSING') {
+            Write-Host "  apt-get missing -- bootstrapping apt7 via scp+dpkg" -ForegroundColor Yellow
+            $remoteDeb = "/tmp/" + (Split-Path $AptDeb -Leaf)
+            try {
+                # scp the .deb to /tmp on the device
+                & $scp -i $KeyPath -P $p @sshLegacy $AptDeb "${User}@${hostName}:$remoteDeb" 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "scp returned $LASTEXITCODE" }
+                # dpkg -i it, then rm the staged file
+                $dpkgOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "dpkg -i $remoteDeb 2>&1; echo DPKG_RC=`$?; rm -f $remoteDeb" 2>&1) | Out-String
+                if ($dpkgOut -match 'DPKG_RC=0') {
+                    Write-Host "  apt7 installed (dpkg)" -ForegroundColor Green
+                } else {
+                    $rc = [regex]::Match($dpkgOut, 'DPKG_RC=\d+')
+                    Write-Host "  apt7 install non-zero ($($rc.Value))" -ForegroundColor Yellow
+                    $detail = ($detail + " apt7-bootstrap-failed").Trim()
+                }
+            } catch {
+                Write-Host "  apt7 bootstrap failed: $($_.Exception.Message)" -ForegroundColor Red
+                $detail = ($detail + " apt7-bootstrap-error").Trim()
+            }
+        } else {
+            Write-Host "  apt-get already present" -ForegroundColor DarkGray
         }
     }
 
