@@ -116,7 +116,10 @@ function Get-DeviceInfo {
     return $v.Trim()
 }
 
-$devices = Get-ConnectedDevices
+# @(...) forces an array even when there's one element. Without it, PowerShell
+# auto-unwraps a single-element pipeline into a bare string, so $devices[0]
+# would be the first CHARACTER of the UDID instead of the UDID itself.
+$devices = @(Get-ConnectedDevices)
 if (-not $devices) {
     throw "No iOS devices detected via USB. Plug in the iPad, accept any 'Trust' prompt if shown, and try again."
 }
