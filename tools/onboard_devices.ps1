@@ -88,7 +88,14 @@ param(
     # doesn't exist). If this file is present locally and apt-get is missing
     # on the target, SCP + dpkg -i it before running -Packages / -InstallTweaks.
     # Default: auto-discover apt7_*.deb in ..\bootstrap-debs\.
-    [string]$AptDeb = ""
+    [string]$AptDeb = "",
+    # Suppress the post-install respring. By default we killall SpringBoard
+    # after a successful package install because MobileSubstrate only injects
+    # tweaks at SpringBoard launch -- without a respring, freshly-installed
+    # libactivator/veency/skiplock are inert (.dylibs on disk but not loaded).
+    # Use this only if you're scripting multiple installs and want to defer
+    # the respring to the end.
+    [switch]$NoRespring
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -425,6 +432,20 @@ foreach ($h in $targets) {
             $rcMatch = [regex]::Match($a, 'APT_RC=\d+')
             $detail = ($detail + " " + $(if ($rcMatch.Success) { $rcMatch.Value } else { 'apt-failed' })).Trim()
             Write-Host "  package install non-zero" -ForegroundColor Yellow
+        }
+    }
+
+    # 5.5) respring after successful tweak install -- MobileSubstrate only
+    #      injects tweaks at SpringBoard launch, so without this the .dylibs
+    #      are on disk but inert (activator listeners empty, send returns 255).
+    #      Idempotent: killall returns non-zero if no SpringBoard but that's
+    #      harmless. The screen flashes black for ~3s while SpringBoard restarts.
+    if ($status -eq "OK" -and $pkgsToInstall -and -not $NoRespring) {
+        try {
+            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "killall SpringBoard 2>/dev/null; echo RESPRUNG" 2>&1 | Out-String | Out-Null
+            Write-Host "  respringed (tweaks now loaded)" -ForegroundColor Green
+        } catch {
+            Write-Host "  respring failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
