@@ -95,7 +95,14 @@ param(
     # libactivator/veency/skiplock are inert (.dylibs on disk but not loaded).
     # Use this only if you're scripting multiple installs and want to defer
     # the respring to the end.
-    [switch]$NoRespring
+    [switch]$NoRespring,
+    # Skip the autolock-disable step. By default, when -InstallTweaks is set
+    # we permanently disable autolock (SBAutoLockTime = 0) so iOS 5 doesn't
+    # sleep the screen + WiFi, which would make the iPad unreachable for
+    # lifecycle scripts (login/start/stop/reboot can't deliver if WiFi is off).
+    # Use this if you're onboarding a non-fleet iPad where you want normal
+    # autolock behaviour.
+    [switch]$KeepAutoLock
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -432,6 +439,30 @@ foreach ($h in $targets) {
             $rcMatch = [regex]::Match($a, 'APT_RC=\d+')
             $detail = ($detail + " " + $(if ($rcMatch.Success) { $rcMatch.Value } else { 'apt-failed' })).Trim()
             Write-Host "  package install non-zero" -ForegroundColor Yellow
+        }
+    }
+
+    # 5.4) disable autolock permanently (SBAutoLockTime = 0) so iOS 5 doesn't
+    #      sleep the screen + WiFi, which would make the iPad unreachable for
+    #      lifecycle scripts. SpringBoard reads SBAutoLockTime at respring,
+    #      so this MUST run before step 5.5 (the respring step).
+    #      Done as part of -InstallTweaks (the display-fleet onboarding flag);
+    #      skipped with -KeepAutoLock for non-fleet use.
+    if ($status -eq "OK" -and $pkgsToInstall -and -not $KeepAutoLock) {
+        $alCmd = (
+            'defaults write /var/mobile/Library/Preferences/com.apple.springboard SBAutoLockTime -int 0 2>/dev/null;' +
+            ' chown mobile:mobile /var/mobile/Library/Preferences/com.apple.springboard.plist 2>/dev/null;' +
+            ' echo AUTOLOCK=OFF'
+        )
+        try {
+            $alOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $alCmd 2>&1) | Out-String
+            if ($alOut -match 'AUTOLOCK=OFF') {
+                Write-Host "  autolock disabled (SBAutoLockTime=0; iPad will stay awake)" -ForegroundColor Green
+            } else {
+                Write-Host "  autolock-disable returned unexpected: $($alOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  autolock-disable failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
