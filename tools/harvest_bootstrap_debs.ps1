@@ -143,13 +143,28 @@ if (-not $SkipFetch) {
     }
 
     Write-Host "`nFetching .debs into master's apt cache (download-only)..." -ForegroundColor Cyan
+    # --force-yes overrides apt's safety bail on stale/unauthenticated entries
+    # (the legacy iOS apt 0.7.x equivalent of modern --allow-*). Without it,
+    # any stale signature in the cached indexes makes -y abort with
+    # "There are problems and -y was used without --force-yes". We only
+    # care about downloading -- not installing -- so the safeties don't matter.
     $pkgArg = $PackageSet -join ' '
-    $aptCmd = "apt-get install -y --reinstall --download-only $aptTimeouts $pkgArg"
+    $aptCmd = "apt-get install -y --force-yes --reinstall --download-only $aptTimeouts $pkgArg; echo APT_RC=`$?"
+
+    # Let apt write to stderr without PowerShell killing the run; capture the
+    # full output so we can surface the meaningful lines AND any error reason
+    # if the install bombs out.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $out = (& $ssh @sshOpts -p $Port "$User@$Master" $aptCmd 2>&1) | Out-String
+    $ErrorActionPreference = $prevEAP
+
     ($out -split "`r?`n" | Where-Object {
-        $_ -match '^(Get:|E:|W:|Unable to locate|Reading package|Need to get|already the newest|newly installed)'
-    }) | Select-Object -First 30 | ForEach-Object {
-        Write-Host "  $($_.Trim())" -ForegroundColor DarkGray
+        $_ -match '^(Get:|E:|W:|Unable to locate|Reading package|Need to get|already the newest|newly installed|APT_RC=)'
+    }) | Select-Object -First 40 | ForEach-Object {
+        $line = $_.Trim()
+        $color = if ($line -match '^E:|APT_RC=[^0]') { 'Yellow' } else { 'DarkGray' }
+        Write-Host "  $line" -ForegroundColor $color
     }
 }
 
