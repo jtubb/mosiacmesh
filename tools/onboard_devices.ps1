@@ -92,15 +92,26 @@ param(
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
-# tweaks that make manual ops sane. All sourced from BigBoss (HTTP) so no TLS
-# concerns. Edit here if the fleet's needs evolve.
+# tweaks that make manual ops sane. All sourced from BigBoss/Saurik/ModMyi (HTTP)
+# so no TLS concerns. Edit here if the fleet's needs evolve.
+#
+# Includes explicit dependencies that aren't in the kit's IPSW baseline:
+# apt-get usually auto-resolves these, but on a stripped-down IPSW it needs
+# explicit pinning (otherwise it says "X but it is not going to be installed").
 $DEFAULT_TWEAKS = @(
-    'libactivator',                  # Activator events used by login/start/stop/reboot scripts
+    # --- direct functional dependencies of our scripts ---
+    'libactivator',                  # Activator events for login/start/stop/reboot scripts
     'com.fb.skiplock',                # passcode bypass for unattended display
     'veency',                         # VNC fallback (manual remote control)
     'kr.iolate.terminalactivator',    # uiopen-via-Activator (used by START script)
     'com.a3tweaks.flipswitch',        # toolkit required by skiplock
-    'com.rpetrich.rocketbootstrap'    # common IPC tweak dep
+    'com.rpetrich.rocketbootstrap',   # common IPC tweak dep
+    # --- transitive deps the kit IPSW left out ---
+    'berkeleydb',                    # required by apt7 (the CLI we dpkg-bootstrap)
+    'preferenceloader',              # required by libactivator/veency/terminalactivator
+    'libstatusbar',                  # required by veency on iOS >= 4
+    'jp.ashikase.mousesupport',      # required by veency on iOS >= 3
+    'com.saurik.iphone.ske'          # required by veency on iOS < 7 (the "firmware fallback")
 )
 
 $ErrorActionPreference = "Stop"
@@ -381,7 +392,12 @@ foreach ($h in $targets) {
         # Same flags as sync_from_master.ps1 / ipad_apt.ps1: AllowInsecureRepositories
         # for stale-GPG forgiveness, tight per-repo timeouts so graveyard sources
         # (ModMyi, ZodTTD) can't hang the run, --force-yes for the same reason.
+        #
+        # The `apt-get -f install` step repairs apt7's "installed but unconfigured"
+        # state (left by the dpkg bootstrap when berkeleydb wasn't yet available)
+        # and resolves any other broken deps before the main install.
         $aptCmd = "apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0 2>/dev/null || true; " +
+                  "apt-get -f install -y --force-yes 2>&1; " +
                   "apt-get install -y --force-yes $pkgArg; echo APT_RC=`$?"
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
@@ -392,10 +408,12 @@ foreach ($h in $targets) {
         }
         $ErrorActionPreference = $prevEAP
 
-        # Surface the meaningful lines + the install RC marker
+        # Surface the meaningful lines + the install RC marker.
+        # Include 'Depends:' / 'unmet' / 'not going to be installed' so dep-resolution
+        # failures don't hide -- silent failure here was the bug we just fixed.
         ($a -split "`r?`n" | Where-Object {
-            $_ -match '^(Get:|E:|Unable to locate|Setting up|Need to get|already the newest|newly installed|APT_RC=)'
-        }) | Select-Object -First 20 | ForEach-Object {
+            $_ -match '^(Get:|E:|W:|Unable to locate|Setting up|Need to get|already the newest|newly installed|Depends:|not going to be installed|unmet dependencies|APT_RC=)'
+        }) | Select-Object -First 40 | ForEach-Object {
             $line = $_.Trim()
             $color = if ($line -match '^E:|APT_RC=[^0]') { 'Yellow' } else { 'DarkGray' }
             Write-Host "  $line" -ForegroundColor $color
