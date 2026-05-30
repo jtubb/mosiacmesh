@@ -45,6 +45,14 @@
     Skip the apt-get update + --download-only step entirely; just SCP
     whatever's currently in the master's cache. Faster re-runs.
 
+.PARAMETER Update
+    Run apt-get update on the master before downloading. Off by default
+    because the cached package indexes from Saurik + BigBoss are usually
+    fresh enough, and graveyard repos (ModMyi, ZodTTD, MTMdev -- all
+    still in Sign1Screen1's sources.list) can hang for minutes on dead
+    HTTP servers. Use this only when you really need a refreshed index.
+    Comes with strict per-repo timeouts so a dead source can't hang.
+
 .PARAMETER Clean
     Clear OutDir before pulling (removes any *.deb already there).
 
@@ -67,6 +75,7 @@ param(
     [string]$KeyPath = "",
     [switch]$CleanMaster,
     [switch]$SkipFetch,
+    [switch]$Update,
     [switch]$Clean
 )
 
@@ -119,10 +128,23 @@ if ($CleanMaster -and -not $SkipFetch) {
 # means apt never tries to install/upgrade -- pure cache populate. We tolerate
 # dead repos so one stale source can't fail the whole run.
 if (-not $SkipFetch) {
+    # Tight per-repo timeouts so a single dead source (ModMyi/ZodTTD/MTMdev)
+    # can't make a multi-minute hang look like progress. Acquire::Retries=0
+    # avoids the default 3-attempt loop on each failure.
+    $aptTimeouts = "-o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0 -o Acquire::AllowInsecureRepositories=true"
+
+    if ($Update) {
+        Write-Host "`nRefreshing master's package indexes (apt-get update, 15s per-repo timeout)..." -ForegroundColor Cyan
+        $u = (& $ssh @sshOpts -p $Port "$User@$Master" "apt-get update $aptTimeouts 2>&1 || true" 2>&1) | Out-String
+        ($u -split "`r?`n" | Where-Object { $_ -match '^(Get:|E:|W:|Ign|Hit)' } | Select-Object -First 12) |
+            ForEach-Object { Write-Host "  $($_.Trim())" -ForegroundColor DarkGray }
+    } else {
+        Write-Host "`nSkipping apt-get update (use -Update if you need fresh indexes; default is off to avoid graveyard-repo hangs)." -ForegroundColor DarkGray
+    }
+
     Write-Host "`nFetching .debs into master's apt cache (download-only)..." -ForegroundColor Cyan
     $pkgArg = $PackageSet -join ' '
-    $aptCmd = "apt-get update -o Acquire::AllowInsecureRepositories=true 2>/dev/null || true; " +
-              "apt-get install -y --reinstall --download-only $pkgArg"
+    $aptCmd = "apt-get install -y --reinstall --download-only $aptTimeouts $pkgArg"
     $out = (& $ssh @sshOpts -p $Port "$User@$Master" $aptCmd 2>&1) | Out-String
     ($out -split "`r?`n" | Where-Object {
         $_ -match '^(Get:|E:|W:|Unable to locate|Reading package|Need to get|already the newest|newly installed)'
