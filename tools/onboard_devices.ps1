@@ -112,6 +112,34 @@ $ssh = (Get-Command ssh -ErrorAction SilentlyContinue).Source
 if (-not $ssh) { $ssh = "C:\Windows\System32\OpenSSH\ssh.exe" }
 if (-not (Test-Path $ssh)) { throw "OpenSSH client (ssh.exe) not found." }
 
+$sshKeygen = (Get-Command ssh-keygen -ErrorAction SilentlyContinue).Source
+if (-not $sshKeygen) { $sshKeygen = "C:\Windows\System32\OpenSSH\ssh-keygen.exe" }
+if (-not (Test-Path $sshKeygen)) { Write-Warning "ssh-keygen.exe not found; stale known_hosts entries can't be auto-cleared." ; $sshKeygen = $null }
+
+function Clear-StaleHostKeys {
+    <#  Remove any cached host-key entry for $Host on both clients we use:
+          - OpenSSH known_hosts (consulted by ssh.exe / scp.exe)
+          - PuTTY's registry cache (consulted by plink.exe)
+        Reflashed iPads generate a new RSA host key; without this clear,
+        both clients refuse to connect on the grounds of "potential MITM".
+        Onboarding is explicitly trusted so dropping the old fingerprint
+        is the desired behaviour. Idempotent / no-op if nothing's cached.  #>
+    param([string]$HostName)
+
+    # 1) OpenSSH known_hosts
+    if ($sshKeygen) { & $sshKeygen -R $HostName 2>$null | Out-Null }
+
+    # 2) PuTTY/plink: registry entries look like "rsa2@22:<hostname>",
+    #    "ssh-ed25519@22:<hostname>", etc. Match the trailing :<hostname>.
+    $putty = "HKCU:\Software\SimonTatham\PuTTY\SshHostKeys"
+    if (Test-Path $putty) {
+        $stale = (Get-Item $putty).Property | Where-Object { $_ -match ":${HostName}$" }
+        foreach ($n in $stale) {
+            Remove-ItemProperty -Path $putty -Name $n -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 # --- resolve / generate the key -------------------------------------------
 if (-not $KeyPath) { $KeyPath = Join-Path $env:USERPROFILE ".ssh\$KeyName" }
 $pubPath = "$KeyPath.pub"
@@ -211,6 +239,11 @@ foreach ($h in $targets) {
 
     Write-Host "`n=== $hostName`:$p ===" -ForegroundColor Cyan
     $status = "FAILED"; $detail = ""
+
+    # 0) clear any stale host-key cache for this host (OpenSSH known_hosts +
+    #    PuTTY registry). Reflashed iPads change host keys; without this both
+    #    clients would refuse to connect on MITM grounds.
+    Clear-StaleHostKeys -HostName $hostName
 
     # 1) push key via password (pipe 'y' to auto-cache host key on first contact)
     try {
