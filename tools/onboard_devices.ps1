@@ -40,9 +40,9 @@
     .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -ReplaceKeys -FixClock
 
 .EXAMPLE
-    # Reflashed-via-kit fleet: key + the MosaicMesh tweak set in one shot.
+    # Reflashed-via-kit fleet: key + tweaks + timezone in one shot.
     # Skips FixClock because the kit-built IPSW + working Cydia gives a sane NTP-set clock.
-    .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -ReplaceKeys -InstallTweaks
+    .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt -ReplaceKeys -InstallTweaks -Timezone 'America/New_York'
 
 .EXAMPLE
     # Custom package list (e.g. add AppSync to the standard set):
@@ -76,7 +76,13 @@ param(
     # Additional / replacement package list to apt-get install. If -InstallTweaks
     # is also set, the union of both lists is installed. If only -Packages is set,
     # only those packages are installed.
-    [string[]]$Packages = @()
+    [string[]]$Packages = @(),
+    # IANA timezone name (e.g. "America/New_York", "Europe/London"). If set,
+    # the script symlinks /etc/localtime to the matching zoneinfo file AND
+    # writes AppleTimeZone into .GlobalPreferences so the iOS Settings UI
+    # reflects it. iPad-1's RTC is correct (NTP) regardless of TZ; this
+    # only affects how local time is rendered.
+    [string]$Timezone = ""
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -181,6 +187,13 @@ $clockCmd = (
 
 if ($ReplaceKeys)    { Write-Host "Mode: REPLACE (authorized_keys will contain only this key)" -ForegroundColor Magenta }
 if ($FixClock)       { Write-Host "Mode: FIX-CLOCK (set time + cert probe per device)" -ForegroundColor Magenta }
+if ($Timezone)       { Write-Host "Mode: SET-TIMEZONE ($Timezone)" -ForegroundColor Magenta }
+
+# Switch to Continue from here down: native exes writing warnings to stderr
+# (ssh's "Permanently added to known hosts", apt's stale-repo warnings, etc.)
+# should NOT trigger terminating PowerShell errors. We check exit codes and
+# parse output markers ourselves for actual success/failure.
+$ErrorActionPreference = "Continue"
 
 # Compute the package list once -- union of -Packages and (when -InstallTweaks) $DEFAULT_TWEAKS.
 $pkgsToInstall = @()
@@ -248,7 +261,37 @@ foreach ($h in $targets) {
         }
     }
 
-    # 4) install packages (Activator/Veency/SkipLock/etc.) via apt over the keyed session
+    # 4) set timezone (symlink /etc/localtime + AppleTimeZone preference)
+    if ($status -eq "OK" -and $Timezone) {
+        # Validate the zone file exists on the device, symlink /etc/localtime to
+        # it, AND write AppleTimeZone into .GlobalPreferences so the iOS
+        # Settings UI reflects the change at next respring/boot. `defaults` ships
+        # with iOS so this works without extra tools.
+        $tzCmd = (
+            'ZONE=/usr/share/zoneinfo/__TZ__;' +
+            ' if [ -f "$ZONE" ]; then' +
+            '   ln -sf "$ZONE" /etc/localtime;' +
+            '   defaults write /var/mobile/Library/Preferences/.GlobalPreferences AppleTimeZone -string "__TZ__" 2>/dev/null;' +
+            '   chown mobile:mobile /var/mobile/Library/Preferences/.GlobalPreferences.plist 2>/dev/null;' +
+            '   echo TZ=OK NOW=$(date "+%Y-%m-%dT%H:%M:%S%z");' +
+            ' else echo TZ=NOT_FOUND zone=__TZ__; fi'
+        ) -replace '__TZ__', $Timezone
+        try {
+            $tzOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $tzCmd 2>&1) | Out-String
+            $tzLines = $tzOut -split "`r?`n" | Where-Object { $_ -match '^TZ=' }
+            foreach ($l in $tzLines) {
+                $color = if ($l -match 'TZ=OK') { 'Green' } else { 'Yellow' }
+                Write-Host "  $($l.Trim())" -ForegroundColor $color
+            }
+            if ($tzLines -join '' -notmatch 'TZ=OK') {
+                $detail = ($detail + " tz-failed").Trim()
+            }
+        } catch {
+            Write-Host "  timezone set failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 5) install packages (Activator/Veency/SkipLock/etc.) via apt over the keyed session
     if ($status -eq "OK" -and $pkgsToInstall) {
         $pkgArg = $pkgsToInstall -join ' '
         # Same flags as sync_from_master.ps1 / ipad_apt.ps1: AllowInsecureRepositories
@@ -283,7 +326,7 @@ foreach ($h in $targets) {
         }
     }
 
-    # 5) optional post-install (e.g. password rotation) over the keyed session
+    # 6) optional post-install (e.g. password rotation) over the keyed session
     if ($status -eq "OK" -and $PostInstall) {
         try {
             $pi = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $PostInstall 2>&1) | Out-String
