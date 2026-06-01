@@ -195,6 +195,82 @@ function Clear-StaleHostKeys {
     }
 }
 
+function Cache-PuttyHostKey {
+    <#  Pre-populate PuTTY's host-key registry cache for $HostName so plink
+        doesn't prompt with "Store key in cache? y/n" on first contact.
+
+        Why: modern plink reads that prompt from the Windows console
+        (CONIN$), not stdin -- piping "y" doesn't reach it. Pre-populating
+        the cache means plink finds a known key and never prompts.
+
+        How: ssh-keyscan grabs the host's ssh-rsa public key (no auth needed,
+        same legacy-crypto flags we use elsewhere), we parse the SSH wire
+        format to extract exponent + modulus, convert to PuTTY's
+        `0x<exp>,0x<mod>` registry value, and write it as `rsa2@<port>:<host>`.
+
+        Returns $true on success, $false if ssh-keyscan can't reach the host
+        or the format isn't parseable.  #>
+    param([string]$HostName, [int]$Port = 22)
+
+    $sshKeyscan = (Get-Command ssh-keyscan -ErrorAction SilentlyContinue).Source
+    if (-not $sshKeyscan) { $sshKeyscan = "C:\Windows\System32\OpenSSH\ssh-keyscan.exe" }
+    if (-not (Test-Path $sshKeyscan)) { return $false }
+
+    # Use the same legacy-crypto flags ssh.exe uses for these iPads.
+    $keyOut = (& $sshKeyscan -t ssh-rsa -p $Port `
+        -o "HostKeyAlgorithms=+ssh-rsa" `
+        -o "ConnectTimeout=10" `
+        $HostName 2>$null) | Out-String
+    $line = ($keyOut -split "`r?`n" | Where-Object { $_ -match '\bssh-rsa\s+(\S+)' } | Select-Object -First 1)
+    if (-not $line) { return $false }
+    if ($line -notmatch '\bssh-rsa\s+(\S+)') { return $false }
+    $b64 = $matches[1]
+
+    try { $bytes = [Convert]::FromBase64String($b64) } catch { return $false }
+
+    # SSH wire format for ssh-rsa pubkey:
+    #   uint32 len | "ssh-rsa" | uint32 len | exponent | uint32 len | modulus
+    # All length prefixes are big-endian. mpint values may have a leading 0x00
+    # to indicate positive sign (strip when converting to PuTTY hex).
+    function _be_uint32($b, $off) {
+        return ([uint32]$b[$off] -shl 24) -bor ([uint32]$b[$off+1] -shl 16) `
+            -bor ([uint32]$b[$off+2] -shl 8) -bor [uint32]$b[$off+3]
+    }
+    function _read_field([byte[]]$b, [ref]$off) {
+        $len = _be_uint32 $b $off.Value
+        $off.Value += 4
+        $data = New-Object byte[] $len
+        [Array]::Copy($b, $off.Value, $data, 0, $len)
+        $off.Value += $len
+        return ,$data
+    }
+
+    $off = 0
+    try {
+        $nameField = _read_field $bytes ([ref]$off)
+        $expBytes  = _read_field $bytes ([ref]$off)
+        $modBytes  = _read_field $bytes ([ref]$off)
+    } catch { return $false }
+
+    # Strip leading-zero sign byte from modulus (and exponent, defensively)
+    while ($modBytes.Count -gt 1 -and $modBytes[0] -eq 0) {
+        $modBytes = $modBytes[1..($modBytes.Count - 1)]
+    }
+    while ($expBytes.Count -gt 1 -and $expBytes[0] -eq 0) {
+        $expBytes = $expBytes[1..($expBytes.Count - 1)]
+    }
+
+    $hex = { param($bs) -join ($bs | ForEach-Object { '{0:x2}' -f $_ }) }
+    $expHex = (& $hex $expBytes).TrimStart('0'); if (-not $expHex) { $expHex = '0' }
+    $modHex = (& $hex $modBytes).TrimStart('0'); if (-not $modHex) { $modHex = '0' }
+    $value = "0x$expHex,0x$modHex"
+
+    $puttyKey = "HKCU:\Software\SimonTatham\PuTTY\SshHostKeys"
+    if (-not (Test-Path $puttyKey)) { New-Item -Path $puttyKey -Force | Out-Null }
+    Set-ItemProperty -Path $puttyKey -Name "rsa2@${Port}:${HostName}" -Value $value
+    return $true
+}
+
 # --- resolve / generate the key -------------------------------------------
 if (-not $KeyPath) { $KeyPath = Join-Path $env:USERPROFILE ".ssh\$KeyName" }
 $pubPath = "$KeyPath.pub"
@@ -302,6 +378,17 @@ foreach ($h in $targets) {
     #    PuTTY registry). Reflashed iPads change host keys; without this both
     #    clients would refuse to connect on MITM grounds.
     Clear-StaleHostKeys -HostName $hostName
+
+    # 0.5) pre-populate PuTTY's host-key cache via ssh-keyscan so plink doesn't
+    #      prompt "Store key in cache? y/n" on first contact -- modern plink
+    #      reads that prompt from CONIN$ (Windows console), so stdin pipes can't
+    #      answer it. ssh-keyscan grabs the key without auth, we parse + write
+    #      to the registry, plink finds the key cached and never prompts.
+    if (Cache-PuttyHostKey -HostName $hostName -Port $p) {
+        Write-Host "  host key cached" -ForegroundColor DarkGray
+    } else {
+        Write-Host "  host key cache failed (ssh-keyscan unreachable?) -- plink may prompt" -ForegroundColor DarkYellow
+    }
 
     # 1) push key via password.
     #
