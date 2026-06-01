@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from server import (
     find_screen_quads_bright, _select_per_marker_quads,
     _filter_outlier_area, _drop_overlapping,
-    detect_aruco_markers,
+    detect_aruco_markers, reconcile_screen_quad,
 )
 
 
@@ -32,7 +32,9 @@ def latest_cache_image():
     cache = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cache')
     files = [f for f in glob.glob(os.path.join(cache, '*.jpg')) if os.path.isfile(f)]
     files += [f for f in glob.glob(os.path.join(cache, '*.png')) if os.path.isfile(f)]
-    files = [f for f in files if 'test_result' not in os.path.basename(f)]
+    # Exclude our own generated visualization files so re-runs pick the
+    # actual upload, not the previous test output.
+    files = [f for f in files if 'calibrate_test_' not in os.path.basename(f)]
     if not files: return None
     return max(files, key=os.path.getmtime)
 
@@ -102,7 +104,7 @@ def main():
 
     print(f"\n=== summary: {n_markers} markers -> {len(m2q_4)} final quads ===")
 
-    # Visualization
+    # Visualization: pipeline diagnostic (intermediate stages).
     viz = image.copy()
     # All candidates: faint yellow
     for q in candidates:
@@ -121,7 +123,40 @@ def main():
 
     out = os.path.join(os.path.dirname(img_path), 'calibrate_test_result.png')
     cv.imwrite(out, viz)
-    print(f"\nvisualization: {out}")
+    print(f"\nvisualization (pipeline diagnostic): {out}")
+
+    # Visualization: full calibrate() output preview -- run reconcile_screen_quad
+    # for every marker (band-detected or fiducial fallback) and draw the
+    # reconciled quad. Replicates what calibrate() now writes to
+    # media/displays/images/calibration.png so we can iterate without a re-upload.
+    # Uses iPad-1 canvas dims (1024x768 landscape) since this fleet is uniform;
+    # real calibrate() reads canvasWidth/canvasHeight per client.
+    final_viz = image.copy()
+    cw, ch = 1024, 768
+    all_quads_for_bbox = []
+    for marker_corners, marker_id in marker_list:
+        quad_candidate = m2q_4.get(int(marker_id))
+        border = quad_candidate.reshape(-1, 1, 2) if quad_candidate is not None else None
+        reconciled, source = reconcile_screen_quad(
+            marker_corners, border, cw, ch)
+        qpts = reconciled.reshape(4, 2).astype(int)
+        colour = (0, 255, 255) if source == "fiducial" else (0, 255, 0)
+        for i in range(4):
+            cv.line(final_viz, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
+        all_quads_for_bbox.append(reconciled.reshape(-1, 1, 2).astype(np.int32))
+        # ArUco corner outline (blue)
+        mpts = marker_corners.astype(int)
+        for i in range(4):
+            cv.line(final_viz, tuple(mpts[i]), tuple(mpts[(i+1) % 4]), (255, 0, 0), 2)
+    # Overall bbox in red
+    if all_quads_for_bbox:
+        flat = np.concatenate(all_quads_for_bbox)
+        x, y, w, h = cv.boundingRect(flat)
+        cv.rectangle(final_viz, (x, y), (x + w, y + h), (0, 0, 255), 4)
+
+    out2 = os.path.join(os.path.dirname(img_path), 'calibrate_test_final.png')
+    cv.imwrite(out2, final_viz)
+    print(f"visualization (final calibrate() preview): {out2}")
 
 
 if __name__ == '__main__':

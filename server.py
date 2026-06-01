@@ -2378,7 +2378,7 @@ def angle_cos(p0, p1, p2):
 #      smaller of each overlapping pair.
 # ---------------------------------------------------------------------------
 
-def find_screen_quads_bright(image, min_area=1000):
+def find_screen_quads_bright(image, min_area=1000, max_area_frac=0.3):
     """Find iPad-screen quadrilateral candidates using multiple thresholding
     strategies, then filter to convex 4-point polygons with near-90deg
     corners.
@@ -2396,21 +2396,30 @@ def find_screen_quads_bright(image, min_area=1000):
       - Adaptive threshold with a moderate C value: picks up screens
         whose local-mean-relative brightness varies with lighting.
 
-    Quads from all passes go into one list. Stages 2-4 of the calibrate
-    pipeline (per-marker selection + outlier filter + IoU dedup) will
-    pick one good quad per marker from this combined pool, so over-
-    generation here is desired and benign.
+    Quads are bounded:
+      - Below min_area (pixels): tiny noise polygons (cable crossings,
+        carpet weave knots, marker pattern fragments).
+      - Above max_area_frac * image-area: whole-photo spanning compounds.
+        For a typical fleet shot, each iPad is ~1/24 to 1/8 of frame
+        area; anything past 30% is the find-contours-confused-by-the-
+        whole-cluster artefact we saw poisoning per-marker selection.
+        Stages 2-4 of the pipeline DO catch these later via the area
+        outlier filter, but rejecting them here keeps the candidate
+        pool clean enough that stage 2's smallest-enclosing rule has
+        a real choice for the iPads in dim regions.
 
     Returns convex 4-point polygons (Nx1x2 OpenCV format) with max
     corner-angle-cosine < 0.15 (~81-99deg)."""
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     gray = cv.GaussianBlur(gray, (5, 5), 0)
+    max_area = float(gray.shape[0] * gray.shape[1]) * max_area_frac
 
     def _quads_from_mask(mask):
         out = []
         contours, _ = cv.findContours(mask, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
         for cnt in contours:
-            if cv.contourArea(cnt) < min_area:
+            area = cv.contourArea(cnt)
+            if area < min_area or area > max_area:
                 continue
             peri = cv.arcLength(cnt, True)
             approx = cv.approxPolyDP(cnt, 0.02 * peri, True)
