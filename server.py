@@ -2432,21 +2432,37 @@ def _quad_iou(q1, q2):
     return inter / union if union > 0 else 0.0
 
 
-def _select_per_marker_quads(quads, marker_list):
+def _select_per_marker_quads(quads, marker_list, min_quad_to_marker_area_ratio=5.0):
     """For each (corners, id) in marker_list, find the smallest-area quad
-    from `quads` that encloses the marker's center point. Returns a dict
-    {marker_id: quad}. Smallest-enclosing is the key trick: a compound
-    polygon spanning multiple iPads ALSO encloses the marker (and any other
-    markers nearby), but its area is several iPad-sizes; the actual iPad's
-    own screen-edge quad is smaller and wins."""
+    from `quads` that encloses the marker's center point AND is at least
+    `min_quad_to_marker_area_ratio` times larger than the marker itself.
+
+    Returns a dict {marker_id: quad}.
+
+    Smallest-enclosing is the key trick for rejecting compound polygons that
+    span multiple iPads (those have larger area than the actual iPad screen).
+    But the smallest-enclosing rule has a failure mode the bright-region
+    detector exposes: the ArUco marker's OWN black outline is itself a clean
+    4-point convex quad that encloses the marker's center, and it's smaller
+    than the iPad screen. Without a lower bound on quad area, "smallest
+    enclosing" would always pick the marker's outline -- which then poisons
+    the median used by _filter_outlier_area, making the real screen quads
+    look like over-sized outliers. The fix: require quads to be substantially
+    bigger than the marker before considering them. iPad screens are
+    typically 30-100x the marker area; a 5x floor keeps the iPad's screen
+    quad in the running while reliably rejecting the marker's own quad."""
     result = {}
     for marker_corners, marker_id in marker_list:
+        marker_area = float(cv.contourArea(marker_corners.astype(np.float32)))
+        min_area = marker_area * min_quad_to_marker_area_ratio
         cx = float(np.mean(marker_corners[:, 0]))
         cy = float(np.mean(marker_corners[:, 1]))
-        enclosing = [q for q in quads if _quad_contains_point(q, (cx, cy))]
-        if not enclosing:
+        candidates = [q for q in quads
+                      if cv.contourArea(q) >= min_area
+                      and _quad_contains_point(q, (cx, cy))]
+        if not candidates:
             continue
-        result[int(marker_id)] = min(enclosing, key=cv.contourArea)
+        result[int(marker_id)] = min(candidates, key=cv.contourArea)
     return result
 
 
