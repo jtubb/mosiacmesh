@@ -303,20 +303,32 @@ foreach ($h in $targets) {
     #    clients would refuse to connect on MITM grounds.
     Clear-StaleHostKeys -HostName $hostName
 
-    # 1) push key via password (pipe 'y' to auto-cache host key on first contact)
-    try {
-        $out = ("y" | & $plink -ssh -P $p -pw $Password "$User@$hostName" $remoteInstall 2>&1) | Out-String
-        if ($out -match "KEY_INSTALLED") {
-            Write-Host "  key pushed" -ForegroundColor Green
-        } else {
-            $detail = "push: " + ($out.Trim() -replace "\s+", " ")
-            Write-Host "  push failed: $detail" -ForegroundColor Yellow
-            $results += [pscustomobject]@{ Host = "$hostName`:$p"; Status = $status; Detail = $detail }
-            continue
+    # 1) push key via password (pipe 'y' to auto-cache host key on first contact).
+    #    Retry up to 4 times -- iOS 5's WiFi power-save can drop the SSH banner
+    #    handshake mid-exchange if the radio dozes off between TCP-accept and
+    #    SSH negotiation. Each retry is ~5s pause so the radio gets a chance
+    #    to be in active mode for a heartbeat cycle.
+    $pushed = $false
+    for ($try = 1; $try -le 4; $try++) {
+        try {
+            $out = ("y" | & $plink -ssh -P $p -pw $Password "$User@$hostName" $remoteInstall 2>&1) | Out-String
+            if ($out -match "KEY_INSTALLED") {
+                $marker = if ($try -gt 1) { " (attempt $try)" } else { "" }
+                Write-Host "  key pushed$marker" -ForegroundColor Green
+                $pushed = $true; break
+            } else {
+                $reason = ($out.Trim() -replace "\s+", " ")
+                Write-Host "  push attempt $try failed: $reason" -ForegroundColor DarkYellow
+                $detail = "push: $reason"
+            }
+        } catch {
+            $detail = "push exception: $($_.Exception.Message)"
+            Write-Host "  push attempt $try exception: $($_.Exception.Message)" -ForegroundColor DarkYellow
         }
-    } catch {
-        $detail = "push exception: $($_.Exception.Message)"
-        Write-Host "  $detail" -ForegroundColor Red
+        if ($try -lt 4) { Start-Sleep -Seconds 5 }
+    }
+    if (-not $pushed) {
+        Write-Host "  push failed after 4 attempts: $detail" -ForegroundColor Red
         $results += [pscustomobject]@{ Host = "$hostName`:$p"; Status = $status; Detail = $detail }
         continue
     }
@@ -352,16 +364,18 @@ foreach ($h in $targets) {
         }
     }
 
-    # 4) set timezone (symlink /etc/localtime + AppleTimeZone preference)
+    # 4) set timezone. iOS uses /var/db/timezone/localtime as the PRIMARY tz
+    #    lookup (not /etc/localtime -- standard Unix path is essentially
+    #    ignored). We symlink BOTH so all date/time-aware tools find the right
+    #    zone, AND try to write AppleTimeZone for iOS Settings UI display
+    #    (the latter needs `defaults` which the kit IPSW doesn't ship, so it
+    #    fails gracefully -- system clock is what matters for our use case).
     if ($status -eq "OK" -and $Timezone) {
-        # Validate the zone file exists on the device, symlink /etc/localtime to
-        # it, AND write AppleTimeZone into .GlobalPreferences so the iOS
-        # Settings UI reflects the change at next respring/boot. `defaults` ships
-        # with iOS so this works without extra tools.
         $tzCmd = (
             'ZONE=/usr/share/zoneinfo/__TZ__;' +
             ' if [ -f "$ZONE" ]; then' +
-            '   ln -sf "$ZONE" /etc/localtime;' +
+            '   ln -sf "$ZONE" /var/db/timezone/localtime;' +    # iOS primary tz path
+            '   ln -sf "$ZONE" /etc/localtime;' +                # standard Unix path
             '   defaults write /var/mobile/Library/Preferences/.GlobalPreferences AppleTimeZone -string "__TZ__" 2>/dev/null;' +
             '   chown mobile:mobile /var/mobile/Library/Preferences/.GlobalPreferences.plist 2>/dev/null;' +
             '   echo TZ=OK NOW=$(date "+%Y-%m-%dT%H:%M:%S%z");' +
