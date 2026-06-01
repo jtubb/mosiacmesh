@@ -2658,6 +2658,69 @@ def _filter_outlier_area(marker_to_quad, max_ratio=3.0):
             if low <= cv.contourArea(q) <= high}
 
 
+def _marker_angle(marker_corners):
+    """Angle (radians, -pi..pi) of the marker's TL->TR edge in photo coords.
+    ArUco's detector returns corners in pattern-intrinsic order, so this is
+    always the projection of the canvas's +x axis -- independent of how the
+    marker is photographed. Two iPads with the same physical orientation
+    will have very close angles; an iPad rotated 90deg in software will
+    have an angle ~pi/2 off the others."""
+    pts = np.array(marker_corners, dtype="float32").reshape(4, 2)
+    tl, tr = pts[0], pts[1]
+    return float(np.arctan2(tr[1] - tl[1], tr[0] - tl[0]))
+
+
+def _circular_median(angles):
+    """Median direction of a set of angles (radians). Uses the sum-of-unit-
+    vectors method -- robust to wrap-around (a 179deg vector and a -179deg
+    vector aren't 358deg apart, they're 2deg apart). Returns the angle of
+    the resultant vector."""
+    if not angles:
+        return 0.0
+    s = float(np.sum(np.sin(angles)))
+    c = float(np.sum(np.cos(angles)))
+    return float(np.arctan2(s, c))
+
+
+def detect_fleet_rotations(marker_list, rotation_threshold_deg=45.0):
+    """Per-marker rotation flag based on FLEET-WIDE angle consistency.
+
+    For each marker_corners in marker_list (zip of corners + ids), compute
+    its TL->TR angle. Take the circular median across all markers as the
+    fleet-native orientation. A marker whose angle differs from the median
+    by more than rotation_threshold_deg (default 45deg) is flagged as
+    rotated -- its iPad is in a different physical orientation than the
+    majority.
+
+    This catches the case calibrate's per-iPad band+aspect detector misses:
+    a no-band iPad (band detection failed) whose stale-canvas-dims caused
+    the wrong fiducial orientation. The marker is detected for every iPad
+    that we calibrate, so this signal is always available -- it doesn't
+    depend on band quality.
+
+    Returns dict {marker_id: True/False} where True = rotated relative to
+    fleet. Empty marker_list -> empty dict (no fleet to compare against).
+
+    Threshold notes:
+      - 45deg splits the angle space cleanly into "same orientation as
+        fleet" (within 45deg of median) vs "90deg-rotated" (45-135deg off).
+      - We don't distinguish 90 from 180 from 270deg -- all are "the iPad
+        is sitting differently than the fleet". Any of those misalignments
+        causes the same wrong-aspect problem and needs a canvas dim swap."""
+    if not marker_list:
+        return {}
+    angles = [_marker_angle(c) for c, _ in marker_list]
+    fleet_angle = _circular_median(angles)
+    threshold = np.radians(rotation_threshold_deg)
+    out = {}
+    for (_, mid), ang in zip(marker_list, angles):
+        # Signed wrap-around difference, then take absolute value: how
+        # different is this marker's angle from the fleet median?
+        diff = np.arctan2(np.sin(ang - fleet_angle), np.cos(ang - fleet_angle))
+        out[int(mid)] = abs(diff) > threshold
+    return out
+
+
 def _drop_overlapping(marker_to_quad, iou_threshold=0.3):
     """When two markers' selected quads overlap by >iou_threshold, drop the
     larger one (the compound spanning into the other). Iterates pairs once;
@@ -2737,6 +2800,7 @@ def calibrate(filename):
     # at most one quad per marker, and each surviving quad is reasonably
     # confident to be that iPad's actual screen outline (not a compound).
     marker_to_quad = {}
+    marker_is_rotated = {}
     if len(corners) > 0:
         marker_list = []
         for marker_corners, marker_id in zip(corners, ids.flatten()):
@@ -2744,8 +2808,14 @@ def calibrate(filename):
         marker_to_quad = _select_per_marker_quads(candidate_quads, marker_list)
         marker_to_quad = _filter_outlier_area(marker_to_quad, max_ratio=3.0)
         marker_to_quad = _drop_overlapping(marker_to_quad, iou_threshold=0.3)
-        logging.info("calibrate: %d markers detected, %d quads matched after filtering",
-                     len(marker_list), len(marker_to_quad))
+        # Fleet-wide marker-angle consistency: an iPad whose marker is
+        # rotated >45deg from the fleet median is physically oriented
+        # differently than the rest, so its reported canvas dims are
+        # almost certainly stale and need swapping.
+        marker_is_rotated = detect_fleet_rotations(marker_list)
+        n_rotated = sum(1 for v in marker_is_rotated.values() if v)
+        logging.info("calibrate: %d markers detected, %d quads matched, %d markers flagged rotated by fleet check",
+                     len(marker_list), len(marker_to_quad), n_rotated)
 
     relevantContours = []
 
@@ -2807,10 +2877,32 @@ def calibrate(filename):
                 _cli = settings.clients[clientID]
                 cw = getattr(_cli, "canvasWidth", 0) or _cli.deviceWidth
                 ch = getattr(_cli, "canvasHeight", 0) or _cli.deviceHeight
+                # If the fleet-wide marker-angle check says this iPad is
+                # rotated relative to the rest, pre-swap the canvas dims so
+                # the fiducial extrapolates at the corrected orientation
+                # without needing band-based corroboration. This is the
+                # path that catches no-band rotated iPads (the band-IoU /
+                # aspect tiebreaker inside reconcile_screen_quad can't fire
+                # when there's no band quad to compare against).
+                fleet_rotated = bool(marker_is_rotated.get(int(markerID), False))
+                if fleet_rotated:
+                    cw, ch = ch, cw
                 quad, source = reconcile_screen_quad(markerCorner.reshape(4, 2), border_contour, cw, ch)
-                if source == "rotated":
-                    _cli.canvasWidth, _cli.canvasHeight = ch, cw   # reported orientation was stale
-                    logging.info("calibrate: detected rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
+                # If EITHER signal (band-IoU/aspect inside reconcile, or the
+                # fleet pre-swap above) flipped orientation, persist the swap
+                # to the client's stored canvas dims so subsequent renders
+                # see the corrected orientation.
+                if fleet_rotated and source != "rotated":
+                    # Fleet check fired, reconcile didn't disagree -- the
+                    # pre-swapped dims ARE the corrected ones. Persist them.
+                    _cli.canvasWidth, _cli.canvasHeight = cw, ch
+                    logging.info("calibrate: fleet-marker check rotated %s; canvas now %sx%s", clientID, cw, ch)
+                elif source == "rotated":
+                    # Reconcile-internal swap: the dims we passed in are the
+                    # ORIGINAL orientation, swapped INSIDE reconcile to fid_sw.
+                    # We need to persist the swap relative to the ORIGINAL.
+                    _cli.canvasWidth, _cli.canvasHeight = ch, cw
+                    logging.info("calibrate: band-validated rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
                 elif source == "unverified":
                     logging.warning("calibrate: couldn't validate %s against its black band; using marker fiducial", clientID)
                 _cli.measuredPerimeter = quad
