@@ -2712,7 +2712,7 @@ def _quad_iou(q1, q2):
 
 
 def _band_from_marker_floodfill(image, marker_corners,
-                                 brightness_min=140, fill_tolerance=40,
+                                 brightness_min=140, fill_tolerance=70,
                                  min_quad_to_marker_area_ratio=3.0,
                                  max_quad_to_marker_area_ratio=60.0):
     """Find the screen's bright interior by flood-filling outward from a
@@ -2730,59 +2730,70 @@ def _band_from_marker_floodfill(image, marker_corners,
     iPads in direct light both get found because they're each handled
     by their own local fill, not by a global threshold.
 
-    Seed selection: we pick four candidate seeds in marker-local
-    coordinates -- 0.7 marker-edges above, below, left, and right of
-    the marker centre. These are projected to photo via the marker
-    homography (mapping marker's intrinsic 300x300 frame to its photo
-    corners). For each candidate that lands inside the image AND on a
-    sufficiently bright pixel (>= brightness_min), we run a flood fill
-    and take the largest valid result.
+    Seed selection: walk outward from the marker centre along each of
+    the four canvas axes (via the marker homography) until the first
+    sufficiently-bright pixel. This guarantees seeds land right at the
+    edge of the marker -- on the iPad's own white interior -- even when
+    the canvas's axes project to unexpected photo directions (a
+    physically-rotated iPad). A fixed seed offset would risk landing
+    on a neighbouring iPad's screen in that case.
 
-    Area bounds (relative to marker area) match the threshold pipeline's
-    fallback: [3x, 60x] catches dim/foreshortened screens without
-    admitting multi-screen compounds."""
+    Sanity check: the fill bbox must contain the marker centre.
+    Otherwise the fill leaked from the seed into a neighbour without
+    touching the marker -- a clear failure.
+
+    Area bounds (relative to marker area): [3x, 60x] catches
+    dim/foreshortened screens without admitting multi-screen compounds."""
     mc = np.array(marker_corners, dtype="float32").reshape(4, 2)
     marker_area = float(cv.contourArea(mc))
     if marker_area < 16:
         return None
+    marker_center = mc.mean(axis=0)
     # Homography from marker's intrinsic 300x300 frame (centered at origin)
     # to the marker's detected photo corners.
     h_half = 150.0
     marker_frame = np.array([[-h_half, -h_half], [h_half, -h_half],
                              [h_half, h_half], [-h_half, h_half]], dtype="float32")
     H = cv.getPerspectiveTransform(marker_frame, mc)
-    # Candidate seeds: outside the marker, just inside the screen's white
-    # interior in each of four directions. 0.7 marker-edges from centre
-    # puts us roughly 1.4 * (half marker edge) = ~0.7 marker-edge OUTSIDE
-    # the marker -- still well inside a typical screen.
-    seed_offset = h_half * 1.4
-    seed_local = np.array([
-        [0,            -seed_offset],   # above
-        [0,             seed_offset],   # below
-        [-seed_offset,  0],             # left
-        [ seed_offset,  0],             # right
-    ], dtype="float32").reshape(-1, 1, 2)
-    seeds_photo = cv.perspectiveTransform(seed_local, H).reshape(-1, 2)
 
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     img_h, img_w = gray.shape[:2]
     min_area = marker_area * min_quad_to_marker_area_ratio
     max_area = marker_area * max_quad_to_marker_area_ratio
 
+    # Walk outward from the marker centre along each of the four canvas
+    # axes (via the marker homography) and pick the FIRST sufficiently
+    # bright pixel as a seed. This guarantees seeds land on white pixels
+    # adjacent to the marker -- not on a neighbouring iPad's screen which
+    # happens to lie in the canvas-axis direction for a physically-rotated
+    # iPad. Walk stops at half a marker-edge past the marker boundary; if
+    # no white pixel exists in that span, that direction's seed is skipped.
+    walk_max = h_half * 2.0   # up to 1.0 marker-edge from centre
+    walk_step = max(2.0, h_half * 0.05)
+    seeds_photo = []
+    for direction in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+        for r in np.arange(h_half * 1.05, walk_max, walk_step):
+            local = np.array([[[direction[0] * r, direction[1] * r]]], dtype="float32")
+            photo = cv.perspectiveTransform(local, H).reshape(2)
+            px, py = int(round(photo[0])), int(round(photo[1]))
+            if not (0 <= px < img_w and 0 <= py < img_h):
+                break
+            if int(gray[py, px]) >= brightness_min:
+                seeds_photo.append((px, py))
+                break
+
     best_quad = None
     best_area = 0.0
-    for seed in seeds_photo:
-        sx, sy = int(round(seed[0])), int(round(seed[1]))
-        if not (0 <= sx < img_w and 0 <= sy < img_h):
-            continue
-        if int(gray[sy, sx]) < brightness_min:
-            continue  # seed isn't on the bright screen interior
+    for sx, sy in seeds_photo:
         # Flood-fill writes into mask (mask is +2 in each dim per cv API).
-        # The mask records 1 where the fill spread, 0 elsewhere.
+        # FIXED_RANGE with tolerance ~70 covers the screen interior's
+        # brightness span (typically 140-250 for backlit iPads) from
+        # any seed in that band, while the screen->bezel transition is
+        # a sharp 100+ jump the tolerance doesn't cross. Relative range
+        # was tried but failed on JPEG-noisy screens (adjacent-pixel
+        # diffs can exceed 40-50 on grainy surfaces and stop the fill
+        # mid-screen).
         mask = np.zeros((img_h + 2, img_w + 2), dtype=np.uint8)
-        # Use a copy of the image so the flood doesn't modify gray;
-        # FLOODFILL_MASK_ONLY would skip image writes but requires the
-        # mask flag bits encoded into `flags`.
         flood = gray.copy()
         cv.floodFill(flood, mask, (sx, sy), 200,
                      loDiff=fill_tolerance, upDiff=fill_tolerance,
@@ -2805,7 +2816,7 @@ def _band_from_marker_floodfill(image, marker_corners,
             continue
         rect = cv.minAreaRect(biggest)
         quad = cv.boxPoints(rect).astype(np.int32).reshape(-1, 1, 2)
-        # ALSO reject if the minAreaRect itself blew past the ceiling: the
+        # Reject if the minAreaRect itself blew past the ceiling: the
         # contour may be irregular (L-shape from a partial leak) so its
         # tight bounding rect is much bigger than the contour area.
         quad_area = float(cv.contourArea(quad.reshape(-1, 2)))
@@ -2816,6 +2827,15 @@ def _band_from_marker_floodfill(image, marker_corners,
         # through a corner produces an L-shape with solidity ~0.5, and
         # we should reject those even if their absolute area fits.
         if quad_area > 0 and (contour_area / quad_area) < 0.7:
+            continue
+        # The marker MUST sit inside the band -- the band is the screen's
+        # white interior and the marker is rendered at the screen centre,
+        # so any valid fill encloses the marker. If it doesn't, the seed
+        # was reached the iPad's screen but the fill found a non-marker
+        # neighbouring region instead (leak through a glare gap, dim
+        # bezel that didn't block the fill, etc.).
+        if not _quad_contains_point(quad, (float(marker_center[0]),
+                                            float(marker_center[1]))):
             continue
         if area > best_area:
             best_quad = quad
