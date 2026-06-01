@@ -216,11 +216,12 @@ function Cache-PuttyHostKey {
     if (-not $sshKeyscan) { $sshKeyscan = "C:\Windows\System32\OpenSSH\ssh-keyscan.exe" }
     if (-not (Test-Path $sshKeyscan)) { return $false }
 
-    # Use the same legacy-crypto flags ssh.exe uses for these iPads.
-    $keyOut = (& $sshKeyscan -t ssh-rsa -p $Port `
-        -o "HostKeyAlgorithms=+ssh-rsa" `
-        -o "ConnectTimeout=10" `
-        $HostName 2>$null) | Out-String
+    # Windows OpenSSH ssh-keyscan doesn't support the long `-o option=value`
+    # form (only `-O`, `-T`, `-t`, `-p`). It also doesn't need
+    # HostKeyAlgorithms=+ssh-rsa because asking for `-t ssh-rsa` already
+    # narrows the probe to the algorithm iOS 5 offers. -T is the connect
+    # timeout (seconds).
+    $keyOut = (& $sshKeyscan -t ssh-rsa -p $Port -T 10 $HostName 2>$null) | Out-String
     $line = ($keyOut -split "`r?`n" | Where-Object { $_ -match '\bssh-rsa\s+(\S+)' } | Select-Object -First 1)
     if (-not $line) { return $false }
     if ($line -notmatch '\bssh-rsa\s+(\S+)') { return $false }
