@@ -102,7 +102,16 @@ param(
     # lifecycle scripts (login/start/stop/reboot can't deliver if WiFi is off).
     # Use this if you're onboarding a non-fleet iPad where you want normal
     # autolock behaviour.
-    [switch]$KeepAutoLock
+    [switch]$KeepAutoLock,
+    # The MosaicMesh display URL to open in Safari as the last onboarding
+    # step. The websocket the page opens keeps the iPad's WiFi radio in
+    # active mode (vs power-save) which is what makes the iPad reachable
+    # for lifecycle scripts. Matches server.py's DISPLAY_URL by default.
+    [string]$DisplayUrl = "http://192.168.1.60:3000/",
+    # Skip the final "open Safari to DisplayUrl" step. Use if you want to
+    # onboard without immediately joining the mesh (manual control over
+    # when the device joins).
+    [switch]$NoOpenDisplay
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -262,6 +271,9 @@ $clockCmd = (
 if ($ReplaceKeys)    { Write-Host "Mode: REPLACE (authorized_keys will contain only this key)" -ForegroundColor Magenta }
 if ($FixClock)       { Write-Host "Mode: FIX-CLOCK (set time + cert probe per device)" -ForegroundColor Magenta }
 if ($Timezone)       { Write-Host "Mode: SET-TIMEZONE ($Timezone)" -ForegroundColor Magenta }
+if (-not $NoOpenDisplay -and $InstallTweaks) {
+    Write-Host "Mode: OPEN-DISPLAY ($DisplayUrl) after onboarding" -ForegroundColor Magenta
+}
 
 # Switch to Continue from here down: native exes writing warnings to stderr
 # (ssh's "Permanently added to known hosts", apt's stale-repo warnings, etc.)
@@ -487,6 +499,30 @@ foreach ($h in $targets) {
             Write-Host "  post-install: $($pi.Trim())" -ForegroundColor Green
         } catch {
             Write-Host "  post-install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 7) open Safari to the MosaicMesh display URL -- joins the mesh and,
+    #    importantly, opens a websocket that keeps iPad-1's WiFi radio in
+    #    active mode (vs power-save). Without this final step the iPad has
+    #    everything installed but the radio idles, making it unreachable
+    #    for lifecycle scripts until something else creates outbound traffic.
+    #    Default-on when -InstallTweaks; -NoOpenDisplay opts out.
+    if ($status -eq "OK" -and $pkgsToInstall -and -not $NoOpenDisplay) {
+        # Brief sleep so SpringBoard has time to finish respringing before
+        # uiopen tries to launch Safari -- otherwise uiopen can race the
+        # SpringBoard relaunch and the URL doesn't open.
+        $openCmd = "sleep 4; uiopen '$DisplayUrl'; echo OPEN_RC=`$?"
+        try {
+            $oOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $openCmd 2>&1) | Out-String
+            if ($oOut -match 'OPEN_RC=0') {
+                Write-Host "  Safari opened: $DisplayUrl" -ForegroundColor Green
+            } else {
+                $rc = [regex]::Match($oOut, 'OPEN_RC=\d+').Value
+                Write-Host "  uiopen non-zero ($rc): $($oOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  open-display failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
