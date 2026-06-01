@@ -345,6 +345,39 @@ def order_points(pts):
     ], dtype="float32")
 
 
+def _draw_fitted_label(image, text, quad, color=(255, 0, 0),
+                       width_frac=0.9, font=cv.FONT_HERSHEY_SIMPLEX):
+    """Draw `text` over `quad` (4-corner screen perimeter), sized so it
+    spans ~width_frac of the quad's bbox width. Centered horizontally on
+    the quad; placed just inside the top edge of the bbox so even
+    perspective-tilted quads keep their label inside their footprint.
+
+    Calibration photos vary enormously in screen size in pixels (a far-away
+    iPad at 4080-tall photo might be 200px wide; a near one 700px), so a
+    hardcoded font scale ends up huge for the small ones and microscopic
+    relative to the large ones. Fit-to-bbox keeps the label readable
+    across the whole array without overflowing into adjacent screens.
+
+    Thickness scales with font size (roughly font_scale * 2, clamped to >=2)
+    so very small labels still register as readable strokes."""
+    pts = np.array(quad, dtype="int32").reshape(-1, 2)
+    x, y, w, h = cv.boundingRect(pts)
+    target_w = max(1, int(round(w * width_frac)))
+    # cv.getTextSize at fontScale=1 -> baseline pixel width; scale linearly.
+    (tw1, th1), _ = cv.getTextSize(str(text), font, 1.0, 1)
+    if tw1 <= 0:
+        return
+    scale = float(target_w) / float(tw1)
+    thickness = max(2, int(round(scale * 2.0)))
+    (tw, th), baseline = cv.getTextSize(str(text), font, scale, thickness)
+    tx = int(round(x + (w - tw) / 2.0))
+    # Vertical baseline: position the text just inside the top edge, so it
+    # reads as "this screen's label" not "the label is floating between
+    # screens". One th below the top + a small padding.
+    ty = int(round(y + th + max(4, int(round(scale * 4)))))
+    cv.putText(image, str(text), (tx, ty), font, scale, color, thickness, cv.LINE_AA)
+
+
 def group_bounding_box(quads):
     """Tight axis-aligned [x, y, w, h] enclosing all screen quads (photo coords)."""
     if not quads:
@@ -384,6 +417,16 @@ def _quad_iou(a, b):
     return float(inter / union) if union > 0 else 0.0
 
 
+def _quad_aspect(quad):
+    """Width / height of a quad's axis-aligned bounding rect. Used as an
+    orientation-only signal -- aspect is invariant to translation, scale, and
+    the band's well-known ~10-15% per-side inward shrink, so it's a more
+    robust rotation detector than absolute IoU."""
+    pts = np.array(quad, dtype="float32").reshape(-1, 1, 2)
+    x, y, w, h = cv.boundingRect(pts.astype(np.int32))
+    return float(w) / max(1.0, float(h))
+
+
 def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, min_iou=0.5):
     """Choose the screen quad. The marker-derived fiducial is ALWAYS the output
     geometry; the detected band is used purely to VALIDATE the fiducial and
@@ -398,19 +441,30 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
     element extent = the panel) and is correct by construction; substituting
     band geometry made every screen render too small.
 
-    If the band agrees better with the cw<->ch-swapped fiducial, a
-    stale-orientation rotation is assumed (some iOS web apps cache the
-    pre-rotation viewport dims) and the swapped fiducial is used.
+    Rotation detection: we want to catch the case where the iPad reported its
+    canvas dims in one orientation but was photographed in the other (the
+    canvas-resize event didn't make it to the server before calibration).
+    Two independent signals decide:
+      - IoU comparison: the swapped fiducial (cw<->ch) is closer to the band.
+        High specificity but requires a usable band AND enough orientation
+        difference to push IoU above min_iou.
+      - Aspect comparison: the band's bounding-rect aspect is closer to the
+        swapped fiducial's aspect than to the native fiducial's. This is
+        invariant to the band's ~10-15% inward shrink (shrink affects width
+        and height proportionally), so it works even when band IoU is below
+        min_iou -- which is the common case for one-off rotated screens
+        whose band is partially occluded or poorly thresholded.
 
     Returns (quad (4,1,2) int32, source) where source is one of:
       'fiducial'    -- fiducial, band-validated (high confidence)
-      'rotated'     -- swapped-orientation fiducial (band better matched it)
+      'rotated'     -- swapped-orientation fiducial (band confirmed rotation)
       'unverified'  -- fiducial, band didn't validate either orientation
                        (band may be noisy/degenerate; fiducial still trusted)
       'no-band'     -- fiducial, no band quad was provided to validate against
                        (the bright-region pipeline produced no quad for this
                        marker -- typically dim/glare iPads)"""
     fid = reconstruct_screen_quad(marker_quad, cw, ch, marker_px)
+    fid_sw = reconstruct_screen_quad(marker_quad, ch, cw, marker_px)
     # Need a usable, non-degenerate band box to validate against.
     box = None
     if border_contour is not None and len(np.array(border_contour).reshape(-1, 2)) >= 3:
@@ -420,13 +474,25 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
     if box is None:
         return fid, "no-band"
     iou = _quad_iou(fid, box)
-    fid_sw = reconstruct_screen_quad(marker_quad, ch, cw, marker_px)
     iou_sw = _quad_iou(fid_sw, box)
+    # Aspect tiebreaker. log() makes portrait-vs-landscape symmetric (the
+    # ratio between aspects is what matters, not the absolute difference).
+    ba = _quad_aspect(box)
+    fa = _quad_aspect(fid)
+    fa_sw = _quad_aspect(fid_sw)
+    aspect_prefers_swap = abs(np.log(ba) - np.log(fa_sw)) < abs(np.log(ba) - np.log(fa))
     if iou_sw > iou and iou_sw >= min_iou:
         return fid_sw, "rotated"
     if iou >= min_iou:
+        # IoU favours native, but if aspect strongly disagrees AND the
+        # swapped IoU is at least comparable (within 10%), trust the aspect
+        # -- band is reporting a different orientation than the canvas dims.
+        if aspect_prefers_swap and iou_sw >= iou * 0.9:
+            return fid_sw, "rotated"
         return fid, "fiducial"
-    # Band validated neither orientation -> trust the fiducial, flag for diagnosis.
+    # Neither IoU validated -> use aspect alone to pick orientation.
+    if aspect_prefers_swap:
+        return fid_sw, "rotated"
     return fid, "unverified"
 
 
@@ -2693,7 +2759,8 @@ def calibrate(filename):
                 if clientID is None:
                     continue  # marker for a client we no longer have
                 clientLabel = settings.clients[clientID].friendlyName or clientID
-                cv.putText(image, str(clientLabel),(topLeft[0], topLeft[1] - 15), cv.FONT_HERSHEY_SIMPLEX,5, (255, 0, 0), 10)
+                # Label is drawn AFTER quad reconciliation below (we need the
+                # screen bbox to size the font correctly). See _draw_fitted_label.
                 #Dictionary ordering is deterministic in python 3.7
                 settings.clients[clientID].measuredCenter = [cX,cY]
                 # Look up the per-marker quad selected by the bright/median/IoU
@@ -2745,6 +2812,8 @@ def calibrate(filename):
                 colour = (0, 255, 0) if source in ("fiducial", "rotated") else (0, 255, 255)
                 for i in range(4):
                     cv.line(image, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
+                # Label the screen with its client name, sized to fit the quad.
+                _draw_fitted_label(image, clientLabel, quad)
                 # Ensure the reconciled quad participates in the overall
                 # bounding box too -- it's the iPad's actual screen extent,
                 # whether band-detected or fiducial-extrapolated.
