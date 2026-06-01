@@ -346,35 +346,59 @@ def order_points(pts):
 
 
 def _draw_fitted_label(image, text, quad, color=(255, 0, 0),
-                       width_frac=0.9, font=cv.FONT_HERSHEY_SIMPLEX):
-    """Draw `text` over `quad` (4-corner screen perimeter), sized so it
-    spans ~width_frac of the quad's bbox width. Centered horizontally on
-    the quad; placed just inside the top edge of the bbox so even
-    perspective-tilted quads keep their label inside their footprint.
+                       font=cv.FONT_HERSHEY_SIMPLEX,
+                       width_frac=0.75, height_frac=0.12):
+    """Draw `text` inside `quad` (4-corner screen perimeter [TL,TR,BR,BL]),
+    sized + positioned using the quad's ACTUAL edges, not its axis-aligned
+    bounding rect.
 
-    Calibration photos vary enormously in screen size in pixels (a far-away
-    iPad at 4080-tall photo might be 200px wide; a near one 700px), so a
-    hardcoded font scale ends up huge for the small ones and microscopic
-    relative to the large ones. Fit-to-bbox keeps the label readable
-    across the whole array without overflowing into adjacent screens.
+    Why edges-not-AABB: a perspective-tilted quad has empty space in its
+    AABB above/beside the visible polygon. Anchoring text to the AABB top
+    can land it outside the actual quad (on the iPad's bezel or in the
+    gap between screens). Anchoring to the quad's TL->TR edge keeps the
+    text on the iPad's white interior regardless of perspective.
 
-    Thickness scales with font size (roughly font_scale * 2, clamped to >=2)
-    so very small labels still register as readable strokes."""
-    pts = np.array(quad, dtype="int32").reshape(-1, 2)
-    x, y, w, h = cv.boundingRect(pts)
-    target_w = max(1, int(round(w * width_frac)))
-    # cv.getTextSize at fontScale=1 -> baseline pixel width; scale linearly.
-    (tw1, th1), _ = cv.getTextSize(str(text), font, 1.0, 1)
-    if tw1 <= 0:
+    Size constraints: scale to fit width_frac of the shorter top/bottom
+    edge length AND height_frac of the left edge length, whichever is
+    smaller. The shorter-edge width constraint protects against perspective
+    foreshortening (a quad whose top edge is narrower than its bottom
+    edge in photo coords would otherwise overflow on the narrow side).
+    Thickness ~ scale * 1.5 keeps strokes proportional but a touch thinner
+    than 2x (which renders blocky on small labels).
+
+    Below ~0.3 scale the rasterized text loses legibility; we skip the
+    label entirely rather than draw an unreadable smear."""
+    pts = np.array(quad, dtype="float32").reshape(-1, 2)
+    if pts.shape[0] < 4:
         return
-    scale = float(target_w) / float(tw1)
-    thickness = max(2, int(round(scale * 2.0)))
-    (tw, th), baseline = cv.getTextSize(str(text), font, scale, thickness)
-    tx = int(round(x + (w - tw) / 2.0))
-    # Vertical baseline: position the text just inside the top edge, so it
-    # reads as "this screen's label" not "the label is floating between
-    # screens". One th below the top + a small padding.
-    ty = int(round(y + th + max(4, int(round(scale * 4)))))
+    tl, tr, br, bl = pts[0], pts[1], pts[2], pts[3]
+    top_len = float(np.linalg.norm(tr - tl))
+    bot_len = float(np.linalg.norm(br - bl))
+    left_len = float(np.linalg.norm(bl - tl))
+    right_len = float(np.linalg.norm(br - tr))
+    width_avail = min(top_len, bot_len) * width_frac
+    height_avail = min(left_len, right_len) * height_frac
+    (tw1, th1), _ = cv.getTextSize(str(text), font, 1.0, 1)
+    if tw1 <= 0 or th1 <= 0:
+        return
+    scale = min(width_avail / tw1, height_avail / th1)
+    if scale < 0.3:
+        return  # would be unreadable
+    thickness = max(2, int(round(scale * 1.5)))
+    (tw, th), _ = cv.getTextSize(str(text), font, scale, thickness)
+    # Anchor: midpoint of top edge, then move INWARD (toward centroid) by
+    # a bit more than text height so the text sits cleanly on the white
+    # interior below the polygon's top edge.
+    top_mid = (tl + tr) / 2.0
+    centroid = (tl + tr + br + bl) / 4.0
+    inward = centroid - top_mid
+    inward_norm = float(np.linalg.norm(inward))
+    if inward_norm <= 0:
+        return
+    inward_unit = inward / inward_norm
+    anchor = top_mid + inward_unit * (th + max(6, int(round(scale * 6))))
+    tx = int(round(anchor[0] - tw / 2.0))
+    ty = int(round(anchor[1]))
     cv.putText(image, str(text), (tx, ty), font, scale, color, thickness, cv.LINE_AA)
 
 
@@ -2955,11 +2979,13 @@ async def api_discovery_stats(request):
     })
 
 async def api_discovery_configure(request):
-    """REST: configure client(s). Supports three payload styles:
+    """REST: configure client(s). Supports four payload styles:
 
       - {"clientKey", "displayID"?, "friendlyName"?}      -> update fields
       - {"action": "reconfigure", "clientKey"}            -> re-run auto-config
       - {"action": "bulk_reconfigure", "clientKeys": [...]}-> re-run for many
+      - {"action": "swap_orientation", "clientKey"}        -> swap canvas dims +
+        clear measuredPerimeter (force a re-calibrate at the new orientation)
 
     (The action-based forms preserve the contract that discovery.html uses.)
     """
@@ -2991,6 +3017,20 @@ async def api_discovery_configure(request):
     if action == "reconfigure":
         client.autoConfigured = False
         auto_configure_client(client_key, client)
+    elif action == "swap_orientation":
+        # Manual override for cases where calibrate's auto-rotation detection
+        # got it wrong (e.g. an iPad whose band quad wasn't detected so neither
+        # the IoU nor aspect signal had a chance to fire, or borderline cases
+        # where both signals were noisy). Swaps reported canvas dims AND
+        # clears measuredPerimeter so the next calibration photo re-projects
+        # the screen with the corrected orientation. The user is expected to
+        # re-upload a calibration image after calling this.
+        cw = int(getattr(client, "canvasWidth", 0) or 0)
+        ch = int(getattr(client, "canvasHeight", 0) or 0)
+        client.canvasWidth, client.canvasHeight = ch, cw
+        client.measuredPerimeter = None
+        logging.info("swap_orientation: %s canvas %sx%s -> %sx%s",
+                     client_key, cw, ch, ch, cw)
     else:
         if "displayID" in data:
             client.displayID = data["displayID"]
