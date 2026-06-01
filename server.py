@@ -2379,34 +2379,63 @@ def angle_cos(p0, p1, p2):
 # ---------------------------------------------------------------------------
 
 def find_screen_quads_bright(image, min_area=1000):
-    """Find iPad-screen quadrilateral candidates by isolating bright regions.
-    The white calibration page on each iPad screen contrasts sharply with the
-    dark bezels and room background -- adaptive luminance threshold before
-    the contour pass kills most of the background noise that confuses raw
-    findContours (carpet weave, cable rats-nests, sofa folds). Adaptive
-    handles uneven lighting where perimeter iPads sit in shadow but are
-    still locally bright relative to their immediate surroundings.
+    """Find iPad-screen quadrilateral candidates using multiple thresholding
+    strategies, then filter to convex 4-point polygons with near-90deg
+    corners.
 
-    Returns convex 4-point polygons whose corners are near 90deg
-    (max angle-cosine < 0.15, i.e. ~81-99deg)."""
+    A single thresholding strategy fails on real fleet photos because
+    lighting is uneven across the array: any one threshold value (or even
+    adaptive-with-fixed-block) catches the screens in its operating band
+    and misses the rest. Three passes in parallel cover the range:
+
+      - Canny edge detection: catches faint screen edges in dim/shadow
+        regions where threshold-based methods see uniform local pixels.
+      - Multiple fixed thresholds (60/120/180): each captures screens at
+        a particular brightness band; combined, they cover dim through
+        bright. Same multi-pass idea as the existing find_squares.
+      - Adaptive threshold with a moderate C value: picks up screens
+        whose local-mean-relative brightness varies with lighting.
+
+    Quads from all passes go into one list. Stages 2-4 of the calibrate
+    pipeline (per-marker selection + outlier filter + IoU dedup) will
+    pick one good quad per marker from this combined pool, so over-
+    generation here is desired and benign.
+
+    Returns convex 4-point polygons (Nx1x2 OpenCV format) with max
+    corner-angle-cosine < 0.15 (~81-99deg)."""
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     gray = cv.GaussianBlur(gray, (5, 5), 0)
-    bright = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_MEAN_C,
-                                  cv.THRESH_BINARY, 51, -20)
-    contours, _ = cv.findContours(bright, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+
+    def _quads_from_mask(mask):
+        out = []
+        contours, _ = cv.findContours(mask, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+        for cnt in contours:
+            if cv.contourArea(cnt) < min_area:
+                continue
+            peri = cv.arcLength(cnt, True)
+            approx = cv.approxPolyDP(cnt, 0.02 * peri, True)
+            if len(approx) != 4 or not cv.isContourConvex(approx):
+                continue
+            pts = approx.reshape(-1, 2)
+            max_cos = float(np.max([angle_cos(pts[i], pts[(i+1) % 4], pts[(i+2) % 4])
+                                    for i in range(4)]))
+            if max_cos < 0.15:
+                out.append(approx)
+        return out
+
     quads = []
-    for cnt in contours:
-        if cv.contourArea(cnt) < min_area:
-            continue
-        peri = cv.arcLength(cnt, True)
-        approx = cv.approxPolyDP(cnt, 0.02 * peri, True)
-        if len(approx) != 4 or not cv.isContourConvex(approx):
-            continue
-        pts = approx.reshape(-1, 2)
-        max_cos = float(np.max([angle_cos(pts[i], pts[(i+1) % 4], pts[(i+2) % 4])
-                                for i in range(4)]))
-        if max_cos < 0.15:
-            quads.append(approx)
+    # Pass 1: Canny (catches dim-region edges)
+    edges = cv.Canny(gray, 0, 50, apertureSize=5)
+    edges = cv.dilate(edges, None)
+    quads.extend(_quads_from_mask(edges))
+    # Pass 2: multiple fixed luminance thresholds spanning the brightness range
+    for thrs in (60, 120, 180):
+        _, mask = cv.threshold(gray, thrs, 255, cv.THRESH_BINARY)
+        quads.extend(_quads_from_mask(mask))
+    # Pass 3: adaptive threshold (handles per-region lighting variation)
+    mask = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_MEAN_C,
+                                cv.THRESH_BINARY, 51, -10)
+    quads.extend(_quads_from_mask(mask))
     return quads
 
 
@@ -2466,20 +2495,27 @@ def _select_per_marker_quads(quads, marker_list, min_quad_to_marker_area_ratio=5
     return result
 
 
-def _filter_outlier_area(marker_to_quad, tolerance=0.4):
-    """Reject per-marker quads whose area deviates >tolerance from the median.
-    All iPads in a calibration shot are the same physical size, so a quad
-    that's notably smaller (spurious) or larger (compound that slipped past
-    stage 2) than the median is wrong. tolerance=0.4 means we keep quads
-    whose area is within +/-40% of the median; tighter than that risks
-    rejecting legitimate perspective-distortion outliers."""
+def _filter_outlier_area(marker_to_quad, max_ratio=3.0):
+    """Reject per-marker quads whose area is way off the median.
+
+    All iPads in a calibration shot are the same physical size, but
+    perspective in a single-viewpoint photo of an N x M array can make
+    the apparent area vary 3-4x between the near-camera and far-camera
+    iPads. A symmetric +/-tolerance filter has to be very loose to keep
+    those perspective extremes, which then lets compound polygons slip
+    through. Use a max-ratio bound instead: keep quads with area in
+    [median / max_ratio, median * max_ratio]. max_ratio=3.0 catches the
+    typical perspective range without admitting the obvious compounds
+    (those are usually 10x+ the median -- a whole-array spanning
+    polygon, for example).
+    """
     if not marker_to_quad:
         return marker_to_quad
     areas = [cv.contourArea(q) for q in marker_to_quad.values()]
     median = float(np.median(areas))
     if median <= 0:
         return marker_to_quad
-    low, high = (1.0 - tolerance) * median, (1.0 + tolerance) * median
+    low, high = median / max_ratio, median * max_ratio
     return {mid: q for mid, q in marker_to_quad.items()
             if low <= cv.contourArea(q) <= high}
 
@@ -2568,7 +2604,7 @@ def calibrate(filename):
         for marker_corners, marker_id in zip(corners, ids.flatten()):
             marker_list.append((marker_corners.reshape(4, 2), marker_id))
         marker_to_quad = _select_per_marker_quads(candidate_quads, marker_list)
-        marker_to_quad = _filter_outlier_area(marker_to_quad, tolerance=0.4)
+        marker_to_quad = _filter_outlier_area(marker_to_quad, max_ratio=3.0)
         marker_to_quad = _drop_overlapping(marker_to_quad, iou_threshold=0.3)
         logging.info("calibrate: %d markers detected, %d quads matched after filtering",
                      len(marker_list), len(marker_to_quad))
@@ -2613,25 +2649,18 @@ def calibrate(filename):
                 #Dictionary ordering is deterministic in python 3.7
                 settings.clients[clientID].measuredCenter = [cX,cY]
                 # Look up the per-marker quad selected by the bright/median/IoU
-                # pipeline above. If a quad survived all three filters, use it
-                # as the screen's "band" contour; otherwise pass None to
-                # reconcile_screen_quad and it will rely on the marker fiducial
-                # alone.
-                quad = marker_to_quad.get(int(markerID))
+                # pipeline above. If a quad survived all three filters, hand it
+                # to reconcile_screen_quad as the screen's "band" contour;
+                # otherwise pass None and reconcile_screen_quad will
+                # extrapolate from the marker corners + canvas aspect ratio
+                # (the "fiducial" path). The drawing + relevantContours
+                # accumulation happens BELOW once we have the reconciled
+                # quad -- whichever path it came from -- so we never display
+                # a raw band that the reconcile step later decided was wrong.
+                quad_candidate = marker_to_quad.get(int(markerID))
                 border_contour = None
-                if quad is not None:
-                    # Shape it as a contour (Nx1x2) for downstream consumers.
-                    border_contour = quad.reshape(-1, 1, 2)
-                    if len(relevantContours) == 0:
-                        relevantContours = border_contour
-                    else:
-                        relevantContours = np.concatenate((relevantContours, border_contour))
-                    # Draw the surviving quad green.
-                    for i in range(len(border_contour) - 1):
-                        cv.line(image, tuple(border_contour[i][0]),
-                                tuple(border_contour[i+1][0]), (0, 255, 0), 4)
-                    cv.line(image, tuple(border_contour[-1][0]),
-                            tuple(border_contour[0][0]), (0, 255, 0), 4)
+                if quad_candidate is not None:
+                    border_contour = quad_candidate.reshape(-1, 1, 2)
 
                 # Prefer the fiducial extrapolation of the full screen quad over
                 # the messy band contour; reconcile against the band outline and
@@ -2646,11 +2675,28 @@ def calibrate(filename):
                 elif source == "unverified":
                     logging.warning("calibrate: couldn't validate %s against its black band; using marker fiducial", clientID)
                 _cli.measuredPerimeter = quad
-                # Visualize the reconciled quad when it differs from the raw band.
-                if source != "fiducial":
-                    qpts = quad.reshape(4, 2)
-                    for i in range(4):
-                        cv.line(image, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), (0, 255, 0), 4)
+                # Visualize the reconciled quad for EVERY screen, including the
+                # fiducial-only fallbacks (iPads where the bright-region pipeline
+                # didn't find a band contour and reconcile_screen_quad
+                # extrapolated from the marker corners + canvas aspect ratio).
+                # Previously this was gated on source != "fiducial", which left
+                # the fallbacks visually unbounded -- looking to the operator
+                # like "this iPad didn't get a bounding box" even though the
+                # measuredPerimeter was set correctly. Green for band-detected,
+                # yellow for fiducial-extrapolated (so the operator can see
+                # which iPads needed the fallback, but every iPad is bounded).
+                qpts = quad.reshape(4, 2).astype(int)
+                colour = (0, 255, 255) if source == "fiducial" else (0, 255, 0)
+                for i in range(4):
+                    cv.line(image, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
+                # Ensure the reconciled quad participates in the overall
+                # bounding box too -- it's the iPad's actual screen extent,
+                # whether band-detected or fiducial-extrapolated.
+                quad_contour = quad.reshape(-1, 1, 2).astype(np.int32)
+                if len(relevantContours) == 0:
+                    relevantContours = quad_contour
+                else:
+                    relevantContours = np.concatenate((relevantContours, quad_contour))
 
     # Draw the overall bounding box only if we actually found marker contours.
     # With no detectable ArUco markers, relevantContours stays an empty list and
