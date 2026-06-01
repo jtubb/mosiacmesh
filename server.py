@@ -503,6 +503,42 @@ def _quad_aspect(quad):
     return float(w) / max(1.0, float(h))
 
 
+def _aspect_in_marker_frame(quad, marker_corners):
+    """Aspect ratio (width/height) of `quad` measured in the marker's local
+    coordinate frame, after un-warping the marker's perspective.
+
+    Why this is better than `_quad_aspect`: that function uses the quad's
+    photo-frame AABB, which is *not* invariant to perspective tilt. A 2:1
+    rectangle tilted 45deg in photo has an AABB aspect of 1:1 -- the
+    orientation info has been erased by the bounding-rect operation.
+
+    This function computes the homography from photo coords back to the
+    marker's intrinsic 300x300 frame (centered at origin), applies it to
+    the quad's corners, then measures the quad's extent in that flat
+    rectified frame. The marker is coplanar with the screen (both are
+    rendered on the same canvas), so the rectification that flattens the
+    marker also flattens the screen -- giving the screen's true aspect
+    as if you were looking straight at it.
+
+    Use this for "does the band match the reported canvas aspect?" -- a
+    direct comparison of ratios in the marker frame, no perspective bias."""
+    mp = np.array(marker_corners, dtype="float32").reshape(4, 2)
+    # Marker's intrinsic frame: 300x300 square centered at origin.
+    h = 150.0
+    mc = np.array([[-h, -h], [h, -h], [h, h], [-h, h]], dtype="float32")
+    # Homography from photo back to marker frame.
+    H = cv.getPerspectiveTransform(mp, mc)
+    pts = np.array(quad, dtype="float32").reshape(-1, 1, 2)
+    in_marker = cv.perspectiveTransform(pts, H).reshape(-1, 2)
+    xs = in_marker[:, 0]
+    ys = in_marker[:, 1]
+    width = float(xs.max() - xs.min())
+    height = float(ys.max() - ys.min())
+    if height < 1e-6:
+        return 1.0
+    return width / height
+
+
 def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, min_iou=0.5):
     """Choose the screen quad. The marker-derived fiducial is ALWAYS the output
     geometry; the detected band is used purely to VALIDATE the fiducial and
@@ -551,11 +587,16 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
         return fid, "no-band"
     iou = _quad_iou(fid, box)
     iou_sw = _quad_iou(fid_sw, box)
-    # Aspect tiebreaker. log() makes portrait-vs-landscape symmetric (the
-    # ratio between aspects is what matters, not the absolute difference).
-    ba = _quad_aspect(box)
-    fa = _quad_aspect(fid)
-    fa_sw = _quad_aspect(fid_sw)
+    # Aspect tiebreaker, measured in the MARKER'S frame after perspective
+    # un-warp. The marker is coplanar with the screen, so the rectification
+    # that flattens the marker also flattens the band -- giving the band's
+    # true aspect as if seen straight-on, independent of camera angle.
+    # The fiducials' aspect in marker frame IS the canvas aspect by
+    # construction (fid = canvas-corners projected through the marker
+    # homography), so we compare directly to cw/ch.
+    ba = _aspect_in_marker_frame(box, marker_quad)
+    fa = float(cw) / max(1.0, float(ch))
+    fa_sw = float(ch) / max(1.0, float(cw))
     aspect_prefers_swap = abs(np.log(ba) - np.log(fa_sw)) < abs(np.log(ba) - np.log(fa))
     if iou_sw > iou and iou_sw >= min_iou:
         return fid_sw, "rotated"
@@ -2570,6 +2611,16 @@ def find_screen_quads_bright(image, min_area=1000, max_area_frac=0.3):
     Returns convex 4-point polygons (Nx1x2 OpenCV format) with max
     corner-angle-cosine < 0.15 (~81-99deg)."""
     gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    # CLAHE locally equalizes brightness so dim iPads (against shadow/couch)
+    # get the same intra-screen contrast as bright iPads (under direct
+    # lighting). Without this, threshold passes that work for bright screens
+    # leave dim screens as one solid black blob (no detectable perimeter
+    # contour). CLAHE's tile_size needs to be small enough to operate
+    # locally (per-iPad) but large enough not to amplify noise -- 8x8 is
+    # OpenCV's recommended default and matches well to a 24-iPad photo
+    # where each iPad occupies ~10% of frame width.
+    clahe = cv.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    gray = clahe.apply(gray)
     gray = cv.GaussianBlur(gray, (5, 5), 0)
     max_area = float(gray.shape[0] * gray.shape[1]) * max_area_frac
     # Morphology kernels for bridging faint/broken edges. A 3x3 close fills
@@ -2618,10 +2669,19 @@ def find_screen_quads_bright(image, min_area=1000, max_area_frac=0.3):
         # Close gaps in the perimeter band where lighting glare interrupts it.
         mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, _k3)
         quads.extend(_quads_from_mask(mask))
-    # Pass 3: adaptive threshold at two block sizes -- the small block
+    # Pass 2b: Otsu threshold -- auto-selects a globally optimal threshold
+    # based on the image's bimodal histogram. For shots where the screens
+    # and background are well-separated in brightness, Otsu hits the right
+    # cutoff without needing us to enumerate. Two morphology variants so
+    # subtle gaps (3x3) and big gaps (7x7) both get bridged.
+    _, otsu = cv.threshold(gray, 0, 255, cv.THRESH_BINARY + cv.THRESH_OTSU)
+    quads.extend(_quads_from_mask(cv.morphologyEx(otsu, cv.MORPH_CLOSE, _k3)))
+    _k7 = cv.getStructuringElement(cv.MORPH_RECT, (7, 7))
+    quads.extend(_quads_from_mask(cv.morphologyEx(otsu, cv.MORPH_CLOSE, _k7)))
+    # Pass 3: adaptive threshold at multiple block sizes -- the small block
     # responds to fine-grained per-iPad lighting, the large block tolerates
     # uniform-luminance screens that the small block would chop into noise.
-    for block, C in ((31, -8), (51, -10), (101, -12)):
+    for block, C in ((31, -8), (51, -10), (101, -12), (151, -14)):
         mask = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_MEAN_C,
                                     cv.THRESH_BINARY, block, C)
         mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, _k5)
@@ -2649,6 +2709,71 @@ def _quad_iou(q1, q2):
     inter = float(ix * iy)
     union = float(w1 * h1) + float(w2 * h2) - inter
     return inter / union if union > 0 else 0.0
+
+
+def _per_marker_fallback_search(image, marker_corners, marker_id,
+                                 candidates_radius_mult=8.0,
+                                 min_quad_to_marker_area_ratio=3.0,
+                                 max_quad_to_marker_area_ratio=60.0):
+    """Last-chance band search for an individual marker whose iPad's screen
+    wasn't picked up by the fleet-wide pipeline. Crops the image to a
+    region around the marker (radius = candidates_radius_mult * marker
+    edge length) and runs the same threshold pipeline.
+
+    Why localized: the fleet pipeline filters by 5x-marker-area, which is
+    correct for most iPads but conservatively rejects screens close to
+    that floor (glare-shrunk band quads, partial occlusions). A per-marker
+    fallback with a 3x floor catches those without re-poisoning the
+    fleet's median area filter.
+
+    Area bounds (relative to marker area):
+      - Floor: 3x  (vs fleet's 5x). Catches dim/glare iPads whose visible
+        bright region is smaller than the canonical 5x.
+      - Ceiling: 40x. iPad-1 screens are ~13x marker area in canvas
+        coords; perspective foreshortening at the near rows of a fleet
+        photo can stretch this to ~30x. 40x leaves headroom without
+        admitting multi-screen compound polygons.
+
+    Returns the smallest-area quad in the search region that encloses
+    the marker center, or None."""
+    mc = np.array(marker_corners, dtype="float32").reshape(4, 2)
+    marker_area = float(cv.contourArea(mc))
+    marker_edge = float(np.linalg.norm(mc[1] - mc[0]))
+    if marker_edge < 4:
+        return None
+    cx = float(np.mean(mc[:, 0]))
+    cy = float(np.mean(mc[:, 1]))
+    radius = marker_edge * candidates_radius_mult
+    h, w = image.shape[:2]
+    x0 = max(0, int(cx - radius))
+    y0 = max(0, int(cy - radius))
+    x1 = min(w, int(cx + radius))
+    y1 = min(h, int(cy + radius))
+    if x1 - x0 < 50 or y1 - y0 < 50:
+        return None
+    sub = image[y0:y1, x0:x1]
+    # max_area_frac=0.4 in the sub-image still allows up to ~100x marker
+    # area in pixels, but we filter against an explicit max-multiplier
+    # below to reject multi-screen compounds.
+    sub_quads = find_screen_quads_bright(sub, min_area=int(marker_area),
+                                          max_area_frac=0.5)
+    if not sub_quads:
+        return None
+    # Translate quad coords back to image space.
+    full_quads = []
+    for q in sub_quads:
+        q2 = q.copy()
+        q2[:, 0, 0] += x0
+        q2[:, 0, 1] += y0
+        full_quads.append(q2)
+    min_area = marker_area * min_quad_to_marker_area_ratio
+    max_area = marker_area * max_quad_to_marker_area_ratio
+    enclosing = [q for q in full_quads
+                 if min_area <= cv.contourArea(q) <= max_area
+                 and _quad_contains_point(q, (cx, cy))]
+    if not enclosing:
+        return None
+    return min(enclosing, key=cv.contourArea)
 
 
 def _select_per_marker_quads(quads, marker_list, min_quad_to_marker_area_ratio=5.0):
@@ -2859,8 +2984,20 @@ def calibrate(filename):
         marker_to_quad = _select_per_marker_quads(candidate_quads, marker_list)
         marker_to_quad = _filter_outlier_area(marker_to_quad, max_ratio=3.0)
         marker_to_quad = _drop_overlapping(marker_to_quad, iou_threshold=0.3)
-        logging.info("calibrate: %d markers detected, %d quads matched after filtering",
-                     len(marker_list), len(marker_to_quad))
+        # Fallback pass: for any marker the fleet pipeline didn't match a
+        # quad to, do a localized search in a region around that marker
+        # with relaxed parameters. Picks up screens that were just under
+        # the 5x marker-area floor or that the global pipeline missed.
+        n_first_pass = len(marker_to_quad)
+        for marker_corners, marker_id in marker_list:
+            if int(marker_id) in marker_to_quad:
+                continue
+            q = _per_marker_fallback_search(image, marker_corners, marker_id)
+            if q is not None:
+                marker_to_quad[int(marker_id)] = q
+        n_recovered = len(marker_to_quad) - n_first_pass
+        logging.info("calibrate: %d markers detected, %d quads first-pass + %d recovered by fallback",
+                     len(marker_list), n_first_pass, n_recovered)
 
     relevantContours = []
 
