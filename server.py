@@ -384,81 +384,48 @@ def _quad_iou(a, b):
     return float(inter / union) if union > 0 else 0.0
 
 
-def _reorder_band_to_fiducial(band_quad, fid):
-    """Reorder the 4 corners of band_quad to match the fiducial's TL/TR/BR/BL
-    corner labeling, via nearest-neighbor pairing against the fiducial corners.
-
-    The fiducial's corner order is canonical -- it comes from the marker's
-    detected orientation and a known canvas-space corner sequence, so it
-    carries the screen's true rotational identity (which matters for
-    180°-mounted panels). A purely geometric re-sort (sum/diff of x,y) would
-    erase that and treat an upside-down screen the same as an upright one.
-    Pairing each fiducial corner with its nearest band corner preserves the
-    fiducial's order while substituting band geometry, AS LONG AS the band
-    has at least ~50% IoU with the fiducial (i.e., each fiducial corner is
-    unambiguously closer to its matching band corner than to any other
-    band corner). Caller is responsible for the IoU gate.
-
-    Returns (4,1,2) int32 quad in fiducial corner order."""
-    fid_pts = np.array(fid, dtype="float32").reshape(4, 2)
-    band_pts = np.array(band_quad, dtype="float32").reshape(4, 2)
-    used = [False, False, False, False]
-    out = np.empty((4, 2), dtype="float32")
-    for i in range(4):
-        best_j, best_d = -1, float("inf")
-        for j in range(4):
-            if used[j]:
-                continue
-            d = float(np.linalg.norm(band_pts[j] - fid_pts[i]))
-            if d < best_d:
-                best_d, best_j = d, j
-        used[best_j] = True
-        out[i] = band_pts[best_j]
-    return out.reshape(-1, 1, 2).astype("int32")
-
-
 def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, min_iou=0.5):
-    """Choose the screen quad. Prefer the directly-detected band quad when it
-    validates the marker-derived fiducial -- the band is measured straight from
-    the photo's screen edge, while the fiducial extrapolates from a 300px
-    marker over a ~1000px screen and so amplifies any marker-corner subpixel
-    error by ~3-4x at the screen edge. The fiducial is the *reference frame*
-    (it carries the canonical TL/TR/BR/BL corner ordering, including any
-    180°-mounted orientation), but the band's actual corner positions become
-    the output when available.
+    """Choose the screen quad. The marker-derived fiducial is ALWAYS the output
+    geometry; the detected band is used purely to VALIDATE the fiducial and
+    to detect a stale mobile auto-rotation.
 
-    Auto-rotation: if the band agrees better with the cw<->ch-swapped fiducial,
-    a stale-orientation rotation is assumed (some iOS web apps cache the
-    pre-rotation viewport dims). In that case the band is paired to the
-    swapped fiducial.
+    Why not use the band as output (a previous attempt): on iPad-1 calibrate
+    pages with an 8px CSS border and the iPad's own plastic bezel, the bright-
+    region threshold detects the white *interior* of the screen, not the
+    screen edge -- the bezel + border + JPEG edge blur shrink the detected
+    contour by ~10-15% per side from the true panel edge. The fiducial
+    extrapolates from the marker to the full canvas (which equals the html
+    element extent = the panel) and is correct by construction; substituting
+    band geometry made every screen render too small.
+
+    If the band agrees better with the cw<->ch-swapped fiducial, a
+    stale-orientation rotation is assumed (some iOS web apps cache the
+    pre-rotation viewport dims) and the swapped fiducial is used.
 
     Returns (quad (4,1,2) int32, source) where source is one of:
-      'band' / 'band-rotated' -- measured directly from photo, fiducial-ordered
-      'fiducial' -- marker-extrapolated; no usable band quad provided
-      'unverified' -- band exists but didn't agree with either orientation
-        (typically a noisy/degenerate band detection) -- fiducial used."""
+      'fiducial'    -- fiducial, band-validated (high confidence)
+      'rotated'     -- swapped-orientation fiducial (band better matched it)
+      'unverified'  -- fiducial, band didn't validate either orientation
+                       (band may be noisy/degenerate; fiducial still trusted)
+      'no-band'     -- fiducial, no band quad was provided to validate against
+                       (the bright-region pipeline produced no quad for this
+                       marker -- typically dim/glare iPads)"""
     fid = reconstruct_screen_quad(marker_quad, cw, ch, marker_px)
-    # Need a usable, non-degenerate band quad to validate against.
-    raw_band = None
+    # Need a usable, non-degenerate band box to validate against.
+    box = None
     if border_contour is not None and len(np.array(border_contour).reshape(-1, 2)) >= 3:
-        b = _quad_box(border_contour)  # minAreaRect form, for IoU comparison
+        b = _quad_box(border_contour)
         if cv.contourArea(b.astype("float32").reshape(-1, 1, 2)) > 0:
-            raw_band = np.array(border_contour, dtype="float32").reshape(-1, 2)
-            # If the original quad isn't 4-pointed, fall back to minAreaRect.
-            if raw_band.shape[0] != 4:
-                raw_band = b
-            iou_band = b  # used purely for the IoU validation step below
-    if raw_band is None:
-        return fid, "fiducial"
-    iou = _quad_iou(fid, iou_band)
+            box = b
+    if box is None:
+        return fid, "no-band"
+    iou = _quad_iou(fid, box)
     fid_sw = reconstruct_screen_quad(marker_quad, ch, cw, marker_px)
-    iou_sw = _quad_iou(fid_sw, iou_band)
+    iou_sw = _quad_iou(fid_sw, box)
     if iou_sw > iou and iou_sw >= min_iou:
-        # Stale orientation: trust the swapped fiducial's ordering, but use the
-        # band's measured corners.
-        return _reorder_band_to_fiducial(raw_band, fid_sw), "band-rotated"
+        return fid_sw, "rotated"
     if iou >= min_iou:
-        return _reorder_band_to_fiducial(raw_band, fid), "band"
+        return fid, "fiducial"
     # Band validated neither orientation -> trust the fiducial, flag for diagnosis.
     return fid, "unverified"
 
@@ -2750,7 +2717,7 @@ def calibrate(filename):
                 cw = getattr(_cli, "canvasWidth", 0) or _cli.deviceWidth
                 ch = getattr(_cli, "canvasHeight", 0) or _cli.deviceHeight
                 quad, source = reconcile_screen_quad(markerCorner.reshape(4, 2), border_contour, cw, ch)
-                if source == "band-rotated":
+                if source == "rotated":
                     _cli.canvasWidth, _cli.canvasHeight = ch, cw   # reported orientation was stale
                     logging.info("calibrate: detected rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
                 elif source == "unverified":
@@ -2767,11 +2734,15 @@ def calibrate(filename):
                 # yellow for fiducial-extrapolated (so the operator can see
                 # which iPads needed the fallback, but every iPad is bounded).
                 qpts = quad.reshape(4, 2).astype(int)
-                # Green = band-detected (directly measured screen edge),
-                # Yellow = fiducial-only (marker-extrapolated, no usable band).
-                # 'unverified' (band existed but failed IoU gate) is treated as
-                # fiducial since that's what got returned.
-                colour = (0, 255, 0) if source in ("band", "band-rotated") else (0, 255, 255)
+                # Geometry is the fiducial in all cases (correct by construction
+                # from the marker + canvas dims). The colour reflects how
+                # confident we are about it:
+                #   Green  = band-validated (band matched fiducial >= min_iou)
+                #            -- the iPad's true orientation is also confirmed.
+                #   Yellow = no band found / band didn't validate. Geometry is
+                #            still trusted (marker-anchored), but orientation
+                #            isn't independently confirmed.
+                colour = (0, 255, 0) if source in ("fiducial", "rotated") else (0, 255, 255)
                 for i in range(4):
                     cv.line(image, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
                 # Ensure the reconciled quad participates in the overall

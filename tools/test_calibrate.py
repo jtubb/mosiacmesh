@@ -142,9 +142,9 @@ def main():
             marker_corners, border, cw, ch)
         source_counts[source] = source_counts.get(source, 0) + 1
         qpts = reconciled.reshape(4, 2).astype(int)
-        # Green: band-detected (direct edge measurement). Yellow: fiducial-only
-        # (marker-extrapolated, no band). Other sources (unverified) -> yellow.
-        colour = (0, 255, 0) if source in ("band", "band-rotated") else (0, 255, 255)
+        # Green: fiducial validated by band (high confidence). Yellow: no
+        # band quad / band didn't validate -- geometry is still the fiducial.
+        colour = (0, 255, 0) if source in ("fiducial", "rotated") else (0, 255, 255)
         for i in range(4):
             cv.line(final_viz, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
         all_quads_for_bbox.append(reconciled.reshape(-1, 1, 2).astype(np.int32))
