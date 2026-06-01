@@ -303,15 +303,26 @@ foreach ($h in $targets) {
     #    clients would refuse to connect on MITM grounds.
     Clear-StaleHostKeys -HostName $hostName
 
-    # 1) push key via password (pipe 'y' to auto-cache host key on first contact).
-    #    Retry up to 4 times -- iOS 5's WiFi power-save can drop the SSH banner
-    #    handshake mid-exchange if the radio dozes off between TCP-accept and
-    #    SSH negotiation. Each retry is ~5s pause so the radio gets a chance
-    #    to be in active mode for a heartbeat cycle.
+    # 1) push key via password.
+    #
+    #    The host-key prompt ("Store key in cache? y/n") is answered via
+    #    `echo y | plink` -- piped through cmd.exe rather than PowerShell.
+    #    PowerShell's object-pipe (`"y" | & $plink`) does NOT reliably reach
+    #    plink's stdin in modern PuTTY versions (stricter about
+    #    pipe-vs-tty discrimination), so plink blocks at the prompt. cmd's
+    #    native pipe handles it correctly across plink versions.
+    #
+    #    Retry up to 4 times -- iOS 5's WiFi power-save can drop the SSH
+    #    banner handshake mid-exchange if the radio dozes off between
+    #    TCP-accept and SSH negotiation. Each retry is ~5s pause so the
+    #    radio gets a chance to be in active mode.
     $pushed = $false
+    # Build the plink command line for cmd.exe. Quote the password (may contain
+    # spaces). The remote shell command is the LAST positional arg.
+    $plinkCmd = "echo y | `"$plink`" -ssh -P $p -pw `"$Password`" $User@$hostName `"$($remoteInstall -replace '"','\\""')`""
     for ($try = 1; $try -le 4; $try++) {
         try {
-            $out = ("y" | & $plink -ssh -P $p -pw $Password "$User@$hostName" $remoteInstall 2>&1) | Out-String
+            $out = (& cmd /c "$plinkCmd 2>&1") | Out-String
             if ($out -match "KEY_INSTALLED") {
                 $marker = if ($try -gt 1) { " (attempt $try)" } else { "" }
                 Write-Host "  key pushed$marker" -ForegroundColor Green
