@@ -2654,7 +2654,10 @@ def calibrate(filename):
 
     # Clean up image memory. (No cv.destroyAllWindows() — this is a headless
     # server; that GUI call raises on OpenCV builds without highgui support.)
-    del image, imgray, thresh
+    # imgray/thresh from the old findContours path are gone now; the new
+    # bright-region pipeline (find_screen_quads_bright) does its own
+    # grayscale conversion internally and lets the temp go out of scope.
+    del image, candidate_quads, marker_to_quad
 
     assign_group_bounding_boxes()
     # Return the *URL* (not the disk path): media_handler serves
