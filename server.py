@@ -2358,6 +2358,136 @@ def angle_cos(p0, p1, p2):
     d1, d2 = (p0-p1).astype('float'), (p2-p1).astype('float')
     return abs( np.dot(d1, d2) / np.sqrt( np.dot(d1, d1)*np.dot(d2, d2) ) )
 
+# ---------------------------------------------------------------------------
+# Screen-quad detection: a four-stage pipeline that survives the cluttered,
+# unevenly-lit calibration photos a real installation produces (the previous
+# raw-findContours approach drew long compound polygons across multiple iPads
+# and picked up cables/carpet as miniature screens).
+#
+#   1. find_screen_quads_bright -- adaptive-threshold the image so only iPad
+#      screens (bright interiors against dark bezels/background) survive into
+#      the contour pass. Eliminates background clutter directly.
+#   2. _select_per_marker_quads -- for each ArUco marker, take the SMALLEST
+#      quad that encloses its center. Compound polygons (spanning >1 iPad)
+#      have larger area than the individual iPad screens, so smallest-
+#      enclosing reliably picks the per-iPad outline.
+#   3. _filter_outlier_area -- discard quads whose area is far from the
+#      median (all iPads are the same physical size; outliers are wrong).
+#   4. _drop_overlapping -- discard quad pairs that overlap heavily (the
+#      compound-spanning case that survived stages 2-3 by luck); keep the
+#      smaller of each overlapping pair.
+# ---------------------------------------------------------------------------
+
+def find_screen_quads_bright(image, min_area=1000):
+    """Find iPad-screen quadrilateral candidates by isolating bright regions.
+    The white calibration page on each iPad screen contrasts sharply with the
+    dark bezels and room background -- adaptive luminance threshold before
+    the contour pass kills most of the background noise that confuses raw
+    findContours (carpet weave, cable rats-nests, sofa folds). Adaptive
+    handles uneven lighting where perimeter iPads sit in shadow but are
+    still locally bright relative to their immediate surroundings.
+
+    Returns convex 4-point polygons whose corners are near 90deg
+    (max angle-cosine < 0.15, i.e. ~81-99deg)."""
+    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    gray = cv.GaussianBlur(gray, (5, 5), 0)
+    bright = cv.adaptiveThreshold(gray, 255, cv.ADAPTIVE_THRESH_MEAN_C,
+                                  cv.THRESH_BINARY, 51, -20)
+    contours, _ = cv.findContours(bright, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
+    quads = []
+    for cnt in contours:
+        if cv.contourArea(cnt) < min_area:
+            continue
+        peri = cv.arcLength(cnt, True)
+        approx = cv.approxPolyDP(cnt, 0.02 * peri, True)
+        if len(approx) != 4 or not cv.isContourConvex(approx):
+            continue
+        pts = approx.reshape(-1, 2)
+        max_cos = float(np.max([angle_cos(pts[i], pts[(i+1) % 4], pts[(i+2) % 4])
+                                for i in range(4)]))
+        if max_cos < 0.15:
+            quads.append(approx)
+    return quads
+
+
+def _quad_contains_point(quad, point):
+    """True iff (x,y) lies inside the 4-point quad. Uses OpenCV's
+    pointPolygonTest which is robust to point order and quad orientation."""
+    contour = quad.reshape(-1, 1, 2).astype(np.float32)
+    return cv.pointPolygonTest(contour, tuple(point), False) >= 0
+
+
+def _quad_iou(q1, q2):
+    """Intersection-over-union of two convex quads. Uses the axis-aligned
+    bounding-box approximation -- fast and good enough for the "did these
+    two quads accidentally trace the same compound region?" decision."""
+    x1, y1, w1, h1 = cv.boundingRect(q1)
+    x2, y2, w2, h2 = cv.boundingRect(q2)
+    ix = max(0, min(x1 + w1, x2 + w2) - max(x1, x2))
+    iy = max(0, min(y1 + h1, y2 + h2) - max(y1, y2))
+    if ix == 0 or iy == 0:
+        return 0.0
+    inter = float(ix * iy)
+    union = float(w1 * h1) + float(w2 * h2) - inter
+    return inter / union if union > 0 else 0.0
+
+
+def _select_per_marker_quads(quads, marker_list):
+    """For each (corners, id) in marker_list, find the smallest-area quad
+    from `quads` that encloses the marker's center point. Returns a dict
+    {marker_id: quad}. Smallest-enclosing is the key trick: a compound
+    polygon spanning multiple iPads ALSO encloses the marker (and any other
+    markers nearby), but its area is several iPad-sizes; the actual iPad's
+    own screen-edge quad is smaller and wins."""
+    result = {}
+    for marker_corners, marker_id in marker_list:
+        cx = float(np.mean(marker_corners[:, 0]))
+        cy = float(np.mean(marker_corners[:, 1]))
+        enclosing = [q for q in quads if _quad_contains_point(q, (cx, cy))]
+        if not enclosing:
+            continue
+        result[int(marker_id)] = min(enclosing, key=cv.contourArea)
+    return result
+
+
+def _filter_outlier_area(marker_to_quad, tolerance=0.4):
+    """Reject per-marker quads whose area deviates >tolerance from the median.
+    All iPads in a calibration shot are the same physical size, so a quad
+    that's notably smaller (spurious) or larger (compound that slipped past
+    stage 2) than the median is wrong. tolerance=0.4 means we keep quads
+    whose area is within +/-40% of the median; tighter than that risks
+    rejecting legitimate perspective-distortion outliers."""
+    if not marker_to_quad:
+        return marker_to_quad
+    areas = [cv.contourArea(q) for q in marker_to_quad.values()]
+    median = float(np.median(areas))
+    if median <= 0:
+        return marker_to_quad
+    low, high = (1.0 - tolerance) * median, (1.0 + tolerance) * median
+    return {mid: q for mid, q in marker_to_quad.items()
+            if low <= cv.contourArea(q) <= high}
+
+
+def _drop_overlapping(marker_to_quad, iou_threshold=0.3):
+    """When two markers' selected quads overlap by >iou_threshold, drop the
+    larger one (the compound spanning into the other). Iterates pairs once;
+    O(n^2) in marker count but the fleet is small."""
+    keep = dict(marker_to_quad)
+    items = list(marker_to_quad.items())
+    for i, (mid_a, qa) in enumerate(items):
+        if mid_a not in keep:
+            continue
+        for mid_b, qb in items[i+1:]:
+            if mid_b not in keep:
+                continue
+            if _quad_iou(qa, qb) > iou_threshold:
+                drop = mid_a if cv.contourArea(qa) > cv.contourArea(qb) else mid_b
+                keep.pop(drop, None)
+                if drop == mid_a:
+                    break   # this i is gone, move to next
+    return keep
+
+
 def find_squares(img):
     # Optimize: Convert to grayscale once instead of processing all channels
     gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
@@ -2404,16 +2534,31 @@ def calibrate(filename):
     logging.debug(filename)
     image = cv.imread(filename)
 
-    imgray = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-    ret, thresh = cv.threshold(imgray, 127, 255, 0)
-
     (corners, ids, rejected) = detect_aruco_markers(image)
 
-    contours, hierarchy = cv.findContours(thresh, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE)
-    #cv.drawContours(image, contours, -1, (0, 0, 255), 2)
-    
+    # Find candidate screen quadrilaterals using the bright-region pipeline
+    # (see find_screen_quads_bright). This replaces the previous raw
+    # findContours pass that picked up compound polygons spanning multiple
+    # iPads + cable/carpet noise.
+    candidate_quads = find_screen_quads_bright(image)
+
+    # Pre-compute the best (smallest-enclosing) quad per ArUco marker, then
+    # filter outliers and overlapping pairs. After this, marker_to_quad has
+    # at most one quad per marker, and each surviving quad is reasonably
+    # confident to be that iPad's actual screen outline (not a compound).
+    marker_to_quad = {}
+    if len(corners) > 0:
+        marker_list = []
+        for marker_corners, marker_id in zip(corners, ids.flatten()):
+            marker_list.append((marker_corners.reshape(4, 2), marker_id))
+        marker_to_quad = _select_per_marker_quads(candidate_quads, marker_list)
+        marker_to_quad = _filter_outlier_area(marker_to_quad, tolerance=0.4)
+        marker_to_quad = _drop_overlapping(marker_to_quad, iou_threshold=0.3)
+        logging.info("calibrate: %d markers detected, %d quads matched after filtering",
+                     len(marker_list), len(marker_to_quad))
+
     relevantContours = []
-    
+
     if len(corners) > 0:
         # flatten the ArUco IDs list
         ids = ids.flatten()
@@ -2451,35 +2596,26 @@ def calibrate(filename):
                 cv.putText(image, str(clientLabel),(topLeft[0], topLeft[1] - 15), cv.FONT_HERSHEY_SIMPLEX,5, (255, 0, 0), 10)
                 #Dictionary ordering is deterministic in python 3.7
                 settings.clients[clientID].measuredCenter = [cX,cY]
-                #find contours that enclose a marker - optimized with spatial indexing
-                marker_bbox = (min(topLeft[0], bottomRight[0]), min(topLeft[1], bottomRight[1]),
-                              max(topLeft[0], bottomRight[0]), max(topLeft[1], bottomRight[1]))
-
-                # The enclosing/band contour (screen's black border) validates the
-                # fiducial extrapolation. None if nothing encloses the marker.
+                # Look up the per-marker quad selected by the bright/median/IoU
+                # pipeline above. If a quad survived all three filters, use it
+                # as the screen's "band" contour; otherwise pass None to
+                # reconcile_screen_quad and it will rely on the marker fiducial
+                # alone.
+                quad = marker_to_quad.get(int(markerID))
                 border_contour = None
-                for contour in contours:
-                    # Quick bounding box check before expensive polygon test
-                    x, y, w, h = cv.boundingRect(contour)
-                    if not (x <= marker_bbox[0] and y <= marker_bbox[1] and
-                           x + w >= marker_bbox[2] and y + h >= marker_bbox[3]):
-                        continue
-
-                    # Only do expensive polygon tests on spatially relevant contours
-                    result1 = cv.pointPolygonTest(contour, topLeft, False)
-                    result2 = cv.pointPolygonTest(contour, bottomRight, False)
-                    if(result1 == 1 and result2 == 1):
-                        perimeter = cv.arcLength(contour, True)
-                        approximatedShape = cv.approxPolyDP(contour, 0.01 * perimeter, True)
-                        if(len(relevantContours) == 0):
-                            relevantContours = approximatedShape
-                        else:
-                            relevantContours = np.concatenate((relevantContours,approximatedShape))
-                        for i in range(len(approximatedShape)-1):
-                            cv.line(image, approximatedShape[i][0], approximatedShape[i+1][0], (0, 255, 0), 4)
-                        cv.line(image, approximatedShape[len(approximatedShape)-1][0], approximatedShape[0][0], (0, 255, 0), 4)
-                        border_contour = approximatedShape
-                        break
+                if quad is not None:
+                    # Shape it as a contour (Nx1x2) for downstream consumers.
+                    border_contour = quad.reshape(-1, 1, 2)
+                    if len(relevantContours) == 0:
+                        relevantContours = border_contour
+                    else:
+                        relevantContours = np.concatenate((relevantContours, border_contour))
+                    # Draw the surviving quad green.
+                    for i in range(len(border_contour) - 1):
+                        cv.line(image, tuple(border_contour[i][0]),
+                                tuple(border_contour[i+1][0]), (0, 255, 0), 4)
+                    cv.line(image, tuple(border_contour[-1][0]),
+                            tuple(border_contour[0][0]), (0, 255, 0), 4)
 
                 # Prefer the fiducial extrapolation of the full screen quad over
                 # the messy band contour; reconcile against the band outline and
