@@ -134,13 +134,17 @@ def main():
     final_viz = image.copy()
     cw, ch = 1024, 768
     all_quads_for_bbox = []
+    source_counts = {}
     for marker_corners, marker_id in marker_list:
         quad_candidate = m2q_4.get(int(marker_id))
         border = quad_candidate.reshape(-1, 1, 2) if quad_candidate is not None else None
         reconciled, source = reconcile_screen_quad(
             marker_corners, border, cw, ch)
+        source_counts[source] = source_counts.get(source, 0) + 1
         qpts = reconciled.reshape(4, 2).astype(int)
-        colour = (0, 255, 255) if source == "fiducial" else (0, 255, 0)
+        # Green: band-detected (direct edge measurement). Yellow: fiducial-only
+        # (marker-extrapolated, no band). Other sources (unverified) -> yellow.
+        colour = (0, 255, 0) if source in ("band", "band-rotated") else (0, 255, 255)
         for i in range(4):
             cv.line(final_viz, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
         all_quads_for_bbox.append(reconciled.reshape(-1, 1, 2).astype(np.int32))
@@ -157,6 +161,9 @@ def main():
     out2 = os.path.join(os.path.dirname(img_path), 'calibrate_test_final.png')
     cv.imwrite(out2, final_viz)
     print(f"visualization (final calibrate() preview): {out2}")
+    print(f"\nreconcile_screen_quad source breakdown:")
+    for src, n in sorted(source_counts.items()):
+        print(f"  {src:>14s}: {n}")
 
 
 if __name__ == '__main__':
