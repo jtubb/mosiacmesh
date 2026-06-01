@@ -840,8 +840,11 @@
   </script>
   <style>
 	/* Full-bleed black page: kills the default 8px body margin (white strip at
-	   the top/edges) and any white background behind the video/UI. */
-	html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; }
+	   the top/edges) and any white background behind the video/UI. Default
+	   text color is white so the pre-playback canvas labels (TICK/TOCK,
+	   IDENTIFY, "Synching to time server...") are visible on the black page;
+	   calibrate mode explicitly flips to black-on-white. */
+	html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
 	.canvas {
 		width: 100%;
 		-webkit-transform: translateX(-50%) translateY(-50%);
