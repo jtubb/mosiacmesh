@@ -2711,6 +2711,118 @@ def _quad_iou(q1, q2):
     return inter / union if union > 0 else 0.0
 
 
+def _band_from_marker_floodfill(image, marker_corners,
+                                 brightness_min=140, fill_tolerance=40,
+                                 min_quad_to_marker_area_ratio=3.0,
+                                 max_quad_to_marker_area_ratio=60.0):
+    """Find the screen's bright interior by flood-filling outward from a
+    seed point just outside the marker. Returns a 4-point quad (the
+    minAreaRect of the fill region) anchored to that iPad's screen, or
+    None.
+
+    Why this beats thresholding: the screen interior is GUARANTEED to be
+    a single connected bright region (the calibrate page sets the
+    background to #ffffff and the marker sits on top of it). The
+    boundary to the dark surround (CSS black border + iPad bezel) is
+    sharp. Flood-fill follows pixel connectivity within a brightness
+    tolerance, so it traces the screen's true outline regardless of the
+    absolute brightness level. Dim iPads against dark couches and bright
+    iPads in direct light both get found because they're each handled
+    by their own local fill, not by a global threshold.
+
+    Seed selection: we pick four candidate seeds in marker-local
+    coordinates -- 0.7 marker-edges above, below, left, and right of
+    the marker centre. These are projected to photo via the marker
+    homography (mapping marker's intrinsic 300x300 frame to its photo
+    corners). For each candidate that lands inside the image AND on a
+    sufficiently bright pixel (>= brightness_min), we run a flood fill
+    and take the largest valid result.
+
+    Area bounds (relative to marker area) match the threshold pipeline's
+    fallback: [3x, 60x] catches dim/foreshortened screens without
+    admitting multi-screen compounds."""
+    mc = np.array(marker_corners, dtype="float32").reshape(4, 2)
+    marker_area = float(cv.contourArea(mc))
+    if marker_area < 16:
+        return None
+    # Homography from marker's intrinsic 300x300 frame (centered at origin)
+    # to the marker's detected photo corners.
+    h_half = 150.0
+    marker_frame = np.array([[-h_half, -h_half], [h_half, -h_half],
+                             [h_half, h_half], [-h_half, h_half]], dtype="float32")
+    H = cv.getPerspectiveTransform(marker_frame, mc)
+    # Candidate seeds: outside the marker, just inside the screen's white
+    # interior in each of four directions. 0.7 marker-edges from centre
+    # puts us roughly 1.4 * (half marker edge) = ~0.7 marker-edge OUTSIDE
+    # the marker -- still well inside a typical screen.
+    seed_offset = h_half * 1.4
+    seed_local = np.array([
+        [0,            -seed_offset],   # above
+        [0,             seed_offset],   # below
+        [-seed_offset,  0],             # left
+        [ seed_offset,  0],             # right
+    ], dtype="float32").reshape(-1, 1, 2)
+    seeds_photo = cv.perspectiveTransform(seed_local, H).reshape(-1, 2)
+
+    gray = cv.cvtColor(image, cv.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+    img_h, img_w = gray.shape[:2]
+    min_area = marker_area * min_quad_to_marker_area_ratio
+    max_area = marker_area * max_quad_to_marker_area_ratio
+
+    best_quad = None
+    best_area = 0.0
+    for seed in seeds_photo:
+        sx, sy = int(round(seed[0])), int(round(seed[1]))
+        if not (0 <= sx < img_w and 0 <= sy < img_h):
+            continue
+        if int(gray[sy, sx]) < brightness_min:
+            continue  # seed isn't on the bright screen interior
+        # Flood-fill writes into mask (mask is +2 in each dim per cv API).
+        # The mask records 1 where the fill spread, 0 elsewhere.
+        mask = np.zeros((img_h + 2, img_w + 2), dtype=np.uint8)
+        # Use a copy of the image so the flood doesn't modify gray;
+        # FLOODFILL_MASK_ONLY would skip image writes but requires the
+        # mask flag bits encoded into `flags`.
+        flood = gray.copy()
+        cv.floodFill(flood, mask, (sx, sy), 200,
+                     loDiff=fill_tolerance, upDiff=fill_tolerance,
+                     flags=cv.FLOODFILL_FIXED_RANGE | (255 << 8))
+        fill = mask[1:-1, 1:-1]
+        area = float(fill.sum()) / 255.0   # mask values are 0 or 255
+        if area < min_area or area > max_area:
+            continue
+        # Get the fill region's contour, then a 4-point quad via
+        # minAreaRect (robust to noisy contour edges). Use RETR_EXTERNAL
+        # so an internal hole (the marker pattern's black squares) doesn't
+        # become its own contour.
+        contours, _ = cv.findContours(fill, cv.RETR_EXTERNAL,
+                                       cv.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        biggest = max(contours, key=cv.contourArea)
+        contour_area = float(cv.contourArea(biggest))
+        if contour_area < min_area or contour_area > max_area:
+            continue
+        rect = cv.minAreaRect(biggest)
+        quad = cv.boxPoints(rect).astype(np.int32).reshape(-1, 1, 2)
+        # ALSO reject if the minAreaRect itself blew past the ceiling: the
+        # contour may be irregular (L-shape from a partial leak) so its
+        # tight bounding rect is much bigger than the contour area.
+        quad_area = float(cv.contourArea(quad.reshape(-1, 2)))
+        if quad_area > max_area:
+            continue
+        # Solidity check: contour-area / minAreaRect-area. A clean screen
+        # fill is a near-rectangle so solidity is close to 1. A leak
+        # through a corner produces an L-shape with solidity ~0.5, and
+        # we should reject those even if their absolute area fits.
+        if quad_area > 0 and (contour_area / quad_area) < 0.7:
+            continue
+        if area > best_area:
+            best_quad = quad
+            best_area = area
+    return best_quad
+
+
 def _per_marker_fallback_search(image, marker_corners, marker_id,
                                  candidates_radius_mult=8.0,
                                  min_quad_to_marker_area_ratio=3.0,
@@ -2981,23 +3093,47 @@ def calibrate(filename):
         marker_list = []
         for marker_corners, marker_id in zip(corners, ids.flatten()):
             marker_list.append((marker_corners.reshape(4, 2), marker_id))
-        marker_to_quad = _select_per_marker_quads(candidate_quads, marker_list)
-        marker_to_quad = _filter_outlier_area(marker_to_quad, max_ratio=3.0)
-        marker_to_quad = _drop_overlapping(marker_to_quad, iou_threshold=0.3)
-        # Fallback pass: for any marker the fleet pipeline didn't match a
-        # quad to, do a localized search in a region around that marker
-        # with relaxed parameters. Picks up screens that were just under
-        # the 5x marker-area floor or that the global pipeline missed.
-        n_first_pass = len(marker_to_quad)
+        # PRIMARY band detection: per-marker flood fill from a seed point
+        # just outside the marker, in the screen's white interior. The
+        # screen is GUARANTEED to be a connected bright region in
+        # calibrate mode (page background is forced white), so each
+        # marker has a deterministic "follow this region's pixels"
+        # signal -- no global threshold tuning, no fleet-wide candidate
+        # pool. This handles dim iPads and bright iPads identically
+        # because the fill is local and follows connectivity, not
+        # absolute brightness levels.
+        marker_to_quad = {}
+        for marker_corners, marker_id in marker_list:
+            q = _band_from_marker_floodfill(image, marker_corners)
+            if q is not None:
+                marker_to_quad[int(marker_id)] = q
+        n_floodfill = len(marker_to_quad)
+        # SECONDARY: the threshold-based fleet pipeline as a fallback for
+        # any marker whose flood fill failed (seed landed off-image,
+        # screen interior wasn't bright enough at the seed, etc.).
+        n_threshold = 0
+        if n_floodfill < len(marker_list):
+            from_threshold = _select_per_marker_quads(candidate_quads, marker_list)
+            from_threshold = _filter_outlier_area(from_threshold, max_ratio=3.0)
+            from_threshold = _drop_overlapping(from_threshold, iou_threshold=0.3)
+            for mid, q in from_threshold.items():
+                if mid not in marker_to_quad:
+                    marker_to_quad[mid] = q
+                    n_threshold += 1
+        # TERTIARY: per-marker localized threshold search for any marker
+        # still without a band quad.
+        n_fallback = 0
         for marker_corners, marker_id in marker_list:
             if int(marker_id) in marker_to_quad:
                 continue
             q = _per_marker_fallback_search(image, marker_corners, marker_id)
             if q is not None:
                 marker_to_quad[int(marker_id)] = q
-        n_recovered = len(marker_to_quad) - n_first_pass
-        logging.info("calibrate: %d markers detected, %d quads first-pass + %d recovered by fallback",
-                     len(marker_list), n_first_pass, n_recovered)
+                n_fallback += 1
+        logging.info("calibrate: %d markers detected -> %d band quads "
+                     "(%d flood-fill + %d threshold + %d fallback)",
+                     len(marker_list), len(marker_to_quad),
+                     n_floodfill, n_threshold, n_fallback)
 
     relevantContours = []
 

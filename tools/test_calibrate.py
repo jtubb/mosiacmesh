@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from server import (
     find_screen_quads_bright, _select_per_marker_quads,
     _filter_outlier_area, _drop_overlapping,
-    _per_marker_fallback_search,
+    _per_marker_fallback_search, _band_from_marker_floodfill,
     detect_aruco_markers, reconcile_screen_quad,
 )
 
@@ -103,18 +103,35 @@ def main():
     print(f"\nStage 4 (_drop_overlapping, iou_threshold=0.3): {len(m2q_4)} quads")
     print(f"  areas: {fmt_area_stats(list(m2q_4.values()))}")
 
-    # Stage 5: per-marker fallback search (the same path calibrate() uses
-    # for any marker that survived ArUco detection but didn't get a band
-    # quad from the fleet pipeline). Localized search at relaxed params.
-    n_pre_fallback = len(m2q_4)
+    # Stage 5: PRIMARY band detection -- per-marker flood fill. This is
+    # what calibrate() runs first; if it succeeds we use it, otherwise
+    # the threshold pipeline above is the fallback.
+    floodfill_quads = {}
     for marker_corners, marker_id in marker_list:
-        if int(marker_id) in m2q_4:
+        q = _band_from_marker_floodfill(image, marker_corners)
+        if q is not None:
+            floodfill_quads[int(marker_id)] = q
+    print(f"\nStage 5 (_band_from_marker_floodfill, PRIMARY): {len(floodfill_quads)} quads")
+    print(f"  areas: {fmt_area_stats(list(floodfill_quads.values()))}")
+
+    # Stage 6: per-marker fallback search for any marker still without a band.
+    combined = dict(floodfill_quads)
+    for mid, q in m2q_4.items():
+        if mid not in combined:
+            combined[mid] = q
+    n_pre_fallback = len(combined)
+    for marker_corners, marker_id in marker_list:
+        if int(marker_id) in combined:
             continue
         q = _per_marker_fallback_search(image, marker_corners, marker_id)
         if q is not None:
-            m2q_4[int(marker_id)] = q
-    print(f"\nStage 5 (_per_marker_fallback_search): recovered {len(m2q_4) - n_pre_fallback} additional quads")
-    print(f"  areas: {fmt_area_stats(list(m2q_4.values()))}")
+            combined[int(marker_id)] = q
+    n_floodfill = len(floodfill_quads)
+    n_thresh_only = len(combined) - n_floodfill - (len(combined) - n_pre_fallback)
+    n_fallback = len(combined) - n_pre_fallback
+    print(f"\nStage 6 (combined): {len(combined)} quads "
+          f"({n_floodfill} flood-fill + {n_thresh_only} threshold-only + {n_fallback} fallback)")
+    m2q_4 = combined
 
     print(f"\n=== summary: {n_markers} markers -> {len(m2q_4)} final quads ===")
 
