@@ -3089,9 +3089,23 @@ def find_squares(img):
     return squares
         
 def setup_aruco_detector():
-    """Return (dictionary, parameters) for 6x6 ArUco marker detection."""
+    """Return (dictionary, parameters) for 6x6 ArUco marker detection.
+
+    Subpixel corner refinement is enabled: by default OpenCV's ArUco
+    detector returns corners at integer-pixel precision, which is fine
+    for IDENTIFICATION but bad for the FIDUCIAL EXTRAPOLATION we do --
+    the marker is ~300px (canvas) projected to ~85px (photo), but the
+    screen is ~3-4x larger, so any 1-pixel error in the marker corner
+    becomes a 3-4 px error at the screen edge. CORNER_REFINE_SUBPIX
+    runs cv.cornerSubPix internally, taking corners from integer
+    precision to ~0.1 px which is well below the noise floor of our
+    other measurements. Visible effect: screen polygons sit more
+    squarely on the iPad edges (no more "pitched" appearance on
+    perspective-tilted screens). Cost: a few ms per marker, negligible
+    on a 24-iPad calibration."""
     dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_6X6_50)
     parameters = cv.aruco.DetectorParameters()
+    parameters.cornerRefinementMethod = cv.aruco.CORNER_REFINE_SUBPIX
     return dictionary, parameters
 
 def detect_aruco_markers(image):
