@@ -587,29 +587,42 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
         return fid, "no-band"
     iou = _quad_iou(fid, box)
     iou_sw = _quad_iou(fid_sw, box)
-    # Aspect tiebreaker, measured in the MARKER'S frame after perspective
-    # un-warp. The marker is coplanar with the screen, so the rectification
-    # that flattens the marker also flattens the band -- giving the band's
-    # true aspect as if seen straight-on, independent of camera angle.
-    # The fiducials' aspect in marker frame IS the canvas aspect by
-    # construction (fid = canvas-corners projected through the marker
-    # homography), so we compare directly to cw/ch.
+    # Aspect comparison in the MARKER'S frame after perspective un-warp.
+    # Both the marker and the screen are coplanar (rendered on the same
+    # canvas) so the rectification that flattens the marker also flattens
+    # the band, giving the band's true aspect as if seen straight-on.
+    # The fiducials' aspect in marker frame IS cw/ch by construction.
     ba = _aspect_in_marker_frame(box, marker_quad)
     fa = float(cw) / max(1.0, float(ch))
     fa_sw = float(ch) / max(1.0, float(cw))
-    aspect_prefers_swap = abs(np.log(ba) - np.log(fa_sw)) < abs(np.log(ba) - np.log(fa))
-    if iou_sw > iou and iou_sw >= min_iou:
+
+    # AUTO-SWAP CRITERIA: only swap when evidence is OVERWHELMING. Real
+    # fleet photos have intra-screen brightness gradients that can pull
+    # the band's measured aspect toward 1.0 (square), and a "barely
+    # closer to swap than to native" heuristic over-fires on those.
+    # Tight criteria below default to KEEP (trust the iPad's reported
+    # canvas dims) unless every signal agrees:
+    #   (a) band aspect is within 0.15 log units of the swap aspect
+    #       (i.e., band shape matches swap shape within ~15%)
+    #   (b) band aspect is at least 0.35 log units away from the native
+    #       aspect (i.e., band is decisively NOT the reported shape)
+    #   (c) IoU with the swapped fiducial corroborates: swapped IoU
+    #       beats native IoU by at least 1.5x AND is >= min_iou
+    # If any fails, keep the iPad's reported orientation; the user can
+    # manually swap via the swap_orientation admin action if needed.
+    log_ba = float(np.log(ba))
+    log_native = float(np.log(fa))
+    log_swap = float(np.log(fa_sw))
+    aspect_matches_swap = abs(log_ba - log_swap) < 0.15
+    aspect_far_from_native = abs(log_ba - log_native) > 0.35
+    iou_corroborates_swap = (iou_sw >= min_iou and
+                              iou_sw > iou * 1.5)
+    if aspect_matches_swap and aspect_far_from_native and iou_corroborates_swap:
         return fid_sw, "rotated"
-    if iou >= min_iou:
-        # IoU favours native, but if aspect strongly disagrees AND the
-        # swapped IoU is at least comparable (within 10%), trust the aspect
-        # -- band is reporting a different orientation than the canvas dims.
-        if aspect_prefers_swap and iou_sw >= iou * 0.9:
-            return fid_sw, "rotated"
+    # Distinguish "we checked and it agreed with reported" from "we couldn't
+    # decide". Useful in the visualisation: green = checked, yellow = ambiguous.
+    if iou >= min_iou and abs(log_ba - log_native) < 0.20:
         return fid, "fiducial"
-    # Neither IoU validated -> use aspect alone to pick orientation.
-    if aspect_prefers_swap:
-        return fid_sw, "rotated"
     return fid, "unverified"
 
 
@@ -2785,14 +2798,10 @@ def _band_from_marker_floodfill(image, marker_corners,
     best_quad = None
     best_area = 0.0
     for sx, sy in seeds_photo:
-        # Flood-fill writes into mask (mask is +2 in each dim per cv API).
-        # FIXED_RANGE with tolerance ~70 covers the screen interior's
-        # brightness span (typically 140-250 for backlit iPads) from
-        # any seed in that band, while the screen->bezel transition is
-        # a sharp 100+ jump the tolerance doesn't cross. Relative range
-        # was tried but failed on JPEG-noisy screens (adjacent-pixel
-        # diffs can exceed 40-50 on grainy surfaces and stop the fill
-        # mid-screen).
+        # Try a sweep of fill tolerances and keep the LARGEST valid fill
+        # under that seed. Single tolerance can't satisfy all iPads --
+        # tight tolerances stop at intra-screen gradients, loose ones
+        # leak through bezels.
         mask = np.zeros((img_h + 2, img_w + 2), dtype=np.uint8)
         flood = gray.copy()
         cv.floodFill(flood, mask, (sx, sy), 200,
@@ -2803,9 +2812,9 @@ def _band_from_marker_floodfill(image, marker_corners,
         if area < min_area or area > max_area:
             continue
         # Get the fill region's contour, then a 4-point quad via
-        # minAreaRect (robust to noisy contour edges). Use RETR_EXTERNAL
-        # so an internal hole (the marker pattern's black squares) doesn't
-        # become its own contour.
+        # minAreaRect (robust to noisy contour edges). Use
+        # RETR_EXTERNAL so an internal hole (the marker pattern's
+        # black squares) doesn't become its own contour.
         contours, _ = cv.findContours(fill, cv.RETR_EXTERNAL,
                                        cv.CHAIN_APPROX_SIMPLE)
         if not contours:
@@ -2817,25 +2826,24 @@ def _band_from_marker_floodfill(image, marker_corners,
         rect = cv.minAreaRect(biggest)
         quad = cv.boxPoints(rect).astype(np.int32).reshape(-1, 1, 2)
         # Reject if the minAreaRect itself blew past the ceiling: the
-        # contour may be irregular (L-shape from a partial leak) so its
-        # tight bounding rect is much bigger than the contour area.
+        # contour may be irregular (L-shape from a partial leak) so
+        # its tight bounding rect is much bigger than the contour area.
         quad_area = float(cv.contourArea(quad.reshape(-1, 2)))
         if quad_area > max_area:
             continue
-        # Solidity check: contour-area / minAreaRect-area. A clean screen
-        # fill is a near-rectangle so solidity is close to 1. A leak
-        # through a corner produces an L-shape with solidity ~0.5, and
-        # we should reject those even if their absolute area fits.
+        # Solidity check: contour-area / minAreaRect-area. A clean
+        # screen fill is a near-rectangle so solidity is close to 1. A
+        # leak through a corner produces an L-shape with solidity
+        # ~0.5, and we should reject those even if their absolute area
+        # fits.
         if quad_area > 0 and (contour_area / quad_area) < 0.7:
             continue
-        # The marker MUST sit inside the band -- the band is the screen's
-        # white interior and the marker is rendered at the screen centre,
-        # so any valid fill encloses the marker. If it doesn't, the seed
-        # was reached the iPad's screen but the fill found a non-marker
-        # neighbouring region instead (leak through a glare gap, dim
-        # bezel that didn't block the fill, etc.).
-        if not _quad_contains_point(quad, (float(marker_center[0]),
-                                            float(marker_center[1]))):
+        # The marker MUST sit inside the band -- the band is the
+        # screen's white interior and the marker is rendered at the
+        # screen centre, so any valid fill encloses the marker.
+        if not _quad_contains_point(quad,
+                                     (float(marker_center[0]),
+                                      float(marker_center[1]))):
             continue
         if area > best_area:
             best_quad = quad
