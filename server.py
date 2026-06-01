@@ -58,12 +58,16 @@ SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
 # The wall's display page each device opens. Edit for your network.
 DISPLAY_URL = "http://192.168.1.60:3000/"
 DEFAULT_DEVICE_SCRIPTS = {
-    # Wake + unlock (slide-to-unlock, no passcode) + keep the screen lit, via
-    # Activator (installed on the fleet): homebutton wakes the display,
-    # lockscreen.dismiss skips the slide-to-unlock, and the SBSettings autolock
-    # switch off prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
-    "loginScript":  "activator send libactivator.system.homebutton; sleep 1; "
-                    "activator send libactivator.lockscreen.dismiss; "
+    # Wake + unlock + keep the screen lit, via Activator. State-independent
+    # (safe to call regardless of current iPad state): lockscreen.dismiss
+    # wakes the screen if asleep AND skips slide-to-unlock if locked AND
+    # no-ops if already unlocked. The previous version also pressed the
+    # home button, which had the destructive side effect of minimizing
+    # Safari (kicking the wall display to the home screen) if the iPad
+    # was already foregrounded on MosaicMesh -- removed so login is safe
+    # to fire from any starting state. The SBSettings autolock switch off
+    # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
+    "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
                     "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
     # Open the display page in mobile Safari.
     "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
