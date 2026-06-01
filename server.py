@@ -345,61 +345,113 @@ def order_points(pts):
     ], dtype="float32")
 
 
-def _draw_fitted_label(image, text, quad, color=(255, 0, 0),
+def _draw_fitted_label(image, text, marker_corners, color=(255, 0, 0),
                        font=cv.FONT_HERSHEY_SIMPLEX,
-                       width_frac=0.75, height_frac=0.12):
-    """Draw `text` inside `quad` (4-corner screen perimeter [TL,TR,BR,BL]),
-    sized + positioned using the quad's ACTUAL edges, not its axis-aligned
-    bounding rect.
+                       width_mult=1.5, gap_frac=0.15):
+    """Draw `text` aligned to the marker's TL->TR edge -- i.e. in the same
+    reading direction as the canvas's +x axis, regardless of how the iPad
+    is oriented in the photo.
 
-    Why edges-not-AABB: a perspective-tilted quad has empty space in its
-    AABB above/beside the visible polygon. Anchoring text to the AABB top
-    can land it outside the actual quad (on the iPad's bezel or in the
-    gap between screens). Anchoring to the quad's TL->TR edge keeps the
-    text on the iPad's white interior regardless of perspective.
+    Anchoring to the MARKER (not the screen quad) has two big wins:
+      1. The marker's corners are detected directly from the photo with
+         pattern-defined ordering, so they're robust even when band
+         detection is poor or the screen quad is fiducial-only.
+      2. The marker's TL->TR vector is the canvas's reading direction,
+         so labels read the right way up on rotated panels (a 90deg-
+         rotated iPad's label is rotated 90deg too -- looks correct
+         from the panel's viewpoint).
 
-    Size constraints: scale to fit width_frac of the shorter top/bottom
-    edge length AND height_frac of the left edge length, whichever is
-    smaller. The shorter-edge width constraint protects against perspective
-    foreshortening (a quad whose top edge is narrower than its bottom
-    edge in photo coords would otherwise overflow on the narrow side).
-    Thickness ~ scale * 1.5 keeps strokes proportional but a touch thinner
-    than 2x (which renders blocky on small labels).
+    Position: just above the marker (outside the marker's top edge by
+    gap_frac of the marker's height), centered on the TL->TR midpoint.
+    Text is rotated to align with the TL->TR direction via warpAffine.
 
-    Below ~0.3 scale the rasterized text loses legibility; we skip the
-    label entirely rather than draw an unreadable smear."""
-    pts = np.array(quad, dtype="float32").reshape(-1, 2)
-    if pts.shape[0] < 4:
+    Size: text width matches width_mult * marker edge length (default
+    1.5x). Marker is rendered at 300px in canvas coords; the screen is
+    typically 3-4x that on each side, so 1.5x-marker text reads as
+    proportional without overflowing the screen edges in normal layouts.
+
+    The text is rendered onto a small transparent-style buffer and warped
+    in via cv.warpAffine. We use a single-channel mask to compose: the
+    text writes only where the buffer is non-zero, leaving the photo
+    untouched everywhere else."""
+    mc = np.array(marker_corners, dtype="float32").reshape(4, 2)
+    tl, tr = mc[0], mc[1]
+    edge = tr - tl
+    edge_len = float(np.linalg.norm(edge))
+    if edge_len < 8:
         return
-    tl, tr, br, bl = pts[0], pts[1], pts[2], pts[3]
-    top_len = float(np.linalg.norm(tr - tl))
-    bot_len = float(np.linalg.norm(br - bl))
-    left_len = float(np.linalg.norm(bl - tl))
-    right_len = float(np.linalg.norm(br - tr))
-    width_avail = min(top_len, bot_len) * width_frac
-    height_avail = min(left_len, right_len) * height_frac
+    # Reading direction (along TL->TR) and "up" relative to the marker
+    # (out of the canvas, away from marker's center).
+    dx, dy = edge / edge_len
+    # "up" is perpendicular to edge, pointing away from the marker's
+    # centroid (so text goes ABOVE the marker, not into it).
+    centroid = mc.mean(axis=0)
+    perp_a = np.array([-dy, dx])   # rotate edge 90deg CCW
+    perp_b = np.array([dy, -dx])   # rotate edge 90deg CW
+    # Pick whichever perp points AWAY from the marker centroid.
+    tl_to_centroid = centroid - tl
+    up = perp_a if float(np.dot(perp_a, tl_to_centroid)) < 0 else perp_b
+
+    # Size the text to fit within width_mult * marker edge.
+    target_w = edge_len * width_mult
     (tw1, th1), _ = cv.getTextSize(str(text), font, 1.0, 1)
     if tw1 <= 0 or th1 <= 0:
         return
-    scale = min(width_avail / tw1, height_avail / th1)
+    scale = target_w / tw1
     if scale < 0.3:
-        return  # would be unreadable
-    thickness = max(2, int(round(scale * 1.5)))
-    (tw, th), _ = cv.getTextSize(str(text), font, scale, thickness)
-    # Anchor: midpoint of top edge, then move INWARD (toward centroid) by
-    # a bit more than text height so the text sits cleanly on the white
-    # interior below the polygon's top edge.
-    top_mid = (tl + tr) / 2.0
-    centroid = (tl + tr + br + bl) / 4.0
-    inward = centroid - top_mid
-    inward_norm = float(np.linalg.norm(inward))
-    if inward_norm <= 0:
         return
-    inward_unit = inward / inward_norm
-    anchor = top_mid + inward_unit * (th + max(6, int(round(scale * 6))))
-    tx = int(round(anchor[0] - tw / 2.0))
-    ty = int(round(anchor[1]))
-    cv.putText(image, str(text), (tx, ty), font, scale, color, thickness, cv.LINE_AA)
+    thickness = max(2, int(round(scale * 1.5)))
+    (tw, th), baseline = cv.getTextSize(str(text), font, scale, thickness)
+
+    # Render text into its own small buffer (BGR), then warpAffine it
+    # into the main image at the rotated, translated position.
+    pad = max(2, int(round(scale * 2)))
+    buf_w = tw + 2 * pad
+    buf_h = th + baseline + 2 * pad
+    text_buf = np.zeros((buf_h, buf_w, 3), dtype=np.uint8)
+    text_mask = np.zeros((buf_h, buf_w), dtype=np.uint8)
+    # Baseline at (pad, pad + th); thickness drawn into both buffers.
+    cv.putText(text_buf, str(text), (pad, pad + th), font, scale, color,
+               thickness, cv.LINE_AA)
+    cv.putText(text_mask, str(text), (pad, pad + th), font, scale, 255,
+               thickness, cv.LINE_AA)
+
+    # Place buffer in the image: TL of the BUFFER maps to a photo point
+    # such that the BUFFER'S BOTTOM CENTRE is at the marker's top edge
+    # midpoint, offset upward by gap_frac * edge_len. The buffer is
+    # rotated so its X axis aligns with the marker's TL->TR direction.
+    edge_mid = (tl + tr) / 2.0
+    gap = edge_len * gap_frac
+    # The text's "bottom centre" anchor in the photo (right at the gap
+    # above the marker's TL->TR edge).
+    photo_anchor = edge_mid + up * gap
+    # Buffer-local point that should land at photo_anchor: (buf_w/2, buf_h - pad).
+    # We define the affine M such that
+    #   M @ (buf_w/2, buf_h - pad, 1) = photo_anchor
+    # and M's linear part is rotation by angle theta = atan2(dy, dx).
+    cos_t, sin_t = float(dx), float(dy)
+    # Photo point of an offset (bx, by) from anchor: anchor + bx*[dx,dy] + by*(-up).
+    # We need the affine that maps buffer coords (bx_, by_) -> photo coords.
+    # bx, by relative to anchor = (bx_ - buf_w/2, by_ - (buf_h - pad)).
+    # Photo coord = anchor + (bx_ - buf_w/2)*[dx,dy] + (by_ - (buf_h - pad))*[-up_x,-up_y]
+    # In matrix form:
+    #   [photo_x]   [ dx  -up_x ] [bx_]   [ tx ]
+    #   [photo_y] = [ dy  -up_y ] [by_] + [ ty ]
+    # where (tx, ty) = anchor - (buf_w/2)*[dx,dy] - (buf_h - pad)*(-up).
+    ax, ay = float(photo_anchor[0]), float(photo_anchor[1])
+    bcx, bcy = buf_w / 2.0, buf_h - pad
+    tx_ = ax - bcx * dx - bcy * (-up[0])
+    ty_ = ay - bcx * dy - bcy * (-up[1])
+    M = np.array([[dx, -up[0], tx_],
+                  [dy, -up[1], ty_]], dtype="float32")
+    h, w = image.shape[:2]
+    warped = cv.warpAffine(text_buf, M, (w, h), flags=cv.INTER_LINEAR,
+                           borderValue=(0, 0, 0))
+    warped_mask = cv.warpAffine(text_mask, M, (w, h), flags=cv.INTER_LINEAR,
+                                borderValue=0)
+    # Composite: image[mask>0] = warped[mask>0]. Use np.where on the mask.
+    mask3 = warped_mask[:, :, None] > 0
+    np.copyto(image, warped, where=mask3)
 
 
 def group_bounding_box(quads):
@@ -2800,7 +2852,6 @@ def calibrate(filename):
     # at most one quad per marker, and each surviving quad is reasonably
     # confident to be that iPad's actual screen outline (not a compound).
     marker_to_quad = {}
-    marker_is_rotated = {}
     if len(corners) > 0:
         marker_list = []
         for marker_corners, marker_id in zip(corners, ids.flatten()):
@@ -2808,14 +2859,8 @@ def calibrate(filename):
         marker_to_quad = _select_per_marker_quads(candidate_quads, marker_list)
         marker_to_quad = _filter_outlier_area(marker_to_quad, max_ratio=3.0)
         marker_to_quad = _drop_overlapping(marker_to_quad, iou_threshold=0.3)
-        # Fleet-wide marker-angle consistency: an iPad whose marker is
-        # rotated >45deg from the fleet median is physically oriented
-        # differently than the rest, so its reported canvas dims are
-        # almost certainly stale and need swapping.
-        marker_is_rotated = detect_fleet_rotations(marker_list)
-        n_rotated = sum(1 for v in marker_is_rotated.values() if v)
-        logging.info("calibrate: %d markers detected, %d quads matched, %d markers flagged rotated by fleet check",
-                     len(marker_list), len(marker_to_quad), n_rotated)
+        logging.info("calibrate: %d markers detected, %d quads matched after filtering",
+                     len(marker_list), len(marker_to_quad))
 
     relevantContours = []
 
@@ -2877,32 +2922,10 @@ def calibrate(filename):
                 _cli = settings.clients[clientID]
                 cw = getattr(_cli, "canvasWidth", 0) or _cli.deviceWidth
                 ch = getattr(_cli, "canvasHeight", 0) or _cli.deviceHeight
-                # If the fleet-wide marker-angle check says this iPad is
-                # rotated relative to the rest, pre-swap the canvas dims so
-                # the fiducial extrapolates at the corrected orientation
-                # without needing band-based corroboration. This is the
-                # path that catches no-band rotated iPads (the band-IoU /
-                # aspect tiebreaker inside reconcile_screen_quad can't fire
-                # when there's no band quad to compare against).
-                fleet_rotated = bool(marker_is_rotated.get(int(markerID), False))
-                if fleet_rotated:
-                    cw, ch = ch, cw
                 quad, source = reconcile_screen_quad(markerCorner.reshape(4, 2), border_contour, cw, ch)
-                # If EITHER signal (band-IoU/aspect inside reconcile, or the
-                # fleet pre-swap above) flipped orientation, persist the swap
-                # to the client's stored canvas dims so subsequent renders
-                # see the corrected orientation.
-                if fleet_rotated and source != "rotated":
-                    # Fleet check fired, reconcile didn't disagree -- the
-                    # pre-swapped dims ARE the corrected ones. Persist them.
-                    _cli.canvasWidth, _cli.canvasHeight = cw, ch
-                    logging.info("calibrate: fleet-marker check rotated %s; canvas now %sx%s", clientID, cw, ch)
-                elif source == "rotated":
-                    # Reconcile-internal swap: the dims we passed in are the
-                    # ORIGINAL orientation, swapped INSIDE reconcile to fid_sw.
-                    # We need to persist the swap relative to the ORIGINAL.
-                    _cli.canvasWidth, _cli.canvasHeight = ch, cw
-                    logging.info("calibrate: band-validated rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
+                if source == "rotated":
+                    _cli.canvasWidth, _cli.canvasHeight = ch, cw   # reported orientation was stale
+                    logging.info("calibrate: detected rotation for %s; swapped canvas to %sx%s", clientID, ch, cw)
                 elif source == "unverified":
                     logging.warning("calibrate: couldn't validate %s against its black band; using marker fiducial", clientID)
                 _cli.measuredPerimeter = quad
@@ -2928,8 +2951,9 @@ def calibrate(filename):
                 colour = (0, 255, 0) if source in ("fiducial", "rotated") else (0, 255, 255)
                 for i in range(4):
                     cv.line(image, tuple(qpts[i]), tuple(qpts[(i + 1) % 4]), colour, 4)
-                # Label the screen with its client name, sized to fit the quad.
-                _draw_fitted_label(image, clientLabel, quad)
+                # Label the screen with its client name, oriented along the
+                # marker's TL->TR direction (the canvas's reading direction).
+                _draw_fitted_label(image, clientLabel, markerCorner.reshape(4, 2))
                 # Ensure the reconciled quad participates in the overall
                 # bounding box too -- it's the iPad's actual screen extent,
                 # whether band-detected or fiducial-extrapolated.
