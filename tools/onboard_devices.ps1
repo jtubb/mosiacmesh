@@ -468,27 +468,61 @@ foreach ($h in $targets) {
         }
     }
 
-    # 5.4) disable autolock permanently (SBAutoLockTime = 0) so iOS 5 doesn't
-    #      sleep the screen + WiFi, which would make the iPad unreachable for
-    #      lifecycle scripts. SpringBoard reads SBAutoLockTime at respring,
-    #      so this MUST run before step 5.5 (the respring step).
-    #      Done as part of -InstallTweaks (the display-fleet onboarding flag);
-    #      skipped with -KeepAutoLock for non-fleet use.
+    # 5.4) disable autolock + auto-open MosaicMesh at every boot, via a
+    #      LaunchDaemon that runs `activator send switch-off ... autolock`
+    #      + `uiopen $DisplayUrl` ~30s after each boot.
+    #
+    #      We tried `defaults write SBAutoLockTime -int 0` here originally,
+    #      but `defaults` doesn't ship on the Legacy-iOS-Kit IPSW (only
+    #      `apt7-lib` etc., not the CLI front-end). So the plist write was
+    #      a silent no-op and the only thing setting autolock=Never was
+    #      manual Settings-UI taps -- meaning re-flashed iPads were going
+    #      back to sleep on next reboot.
+    #
+    #      The LaunchDaemon approach uses activator (which IS installed,
+    #      part of libactivator) for the autolock toggle, and uiopen
+    #      (part of uikittools) to re-join the mesh. Both come up on
+    #      every boot, no manual intervention required.
     if ($status -eq "OK" -and $pkgsToInstall -and -not $KeepAutoLock) {
-        $alCmd = (
-            'defaults write /var/mobile/Library/Preferences/com.apple.springboard SBAutoLockTime -int 0 2>/dev/null;' +
-            ' chown mobile:mobile /var/mobile/Library/Preferences/com.apple.springboard.plist 2>/dev/null;' +
-            ' echo AUTOLOCK=OFF'
+        # Heredoc-write the plist, chown root:wheel, set 644 perms. launchctl
+        # load won't work over SSH (Socket-not-connected mach-port issue --
+        # SSH session isn't in the right launchd bootstrap context). That's
+        # fine: launchd reads /Library/LaunchDaemons at every boot, so the
+        # daemon registers automatically on next reboot. We also fire the
+        # commands inline below so the iPad is in the right state NOW too.
+        $plistPath = '/Library/LaunchDaemons/com.mosaicmesh.autolock-off.plist'
+        $daemonScript = "sleep 30; /usr/bin/activator send switch-off.com.a3tweaks.switch.autolock; sleep 2; /usr/bin/uiopen $DisplayUrl"
+        $writeDaemon = (
+            "cat > $plistPath << 'PLIST'`n" +
+            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
+            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
+            "<plist version=`"1.0`">`n" +
+            "<dict>`n" +
+            "    <key>Label</key><string>com.mosaicmesh.autolock-off</string>`n" +
+            "    <key>ProgramArguments</key>`n" +
+            "    <array>`n" +
+            "        <string>/bin/sh</string>`n" +
+            "        <string>-c</string>`n" +
+            "        <string>$daemonScript</string>`n" +
+            "    </array>`n" +
+            "    <key>RunAtLoad</key><true/>`n" +
+            "</dict>`n" +
+            "</plist>`n" +
+            "PLIST`n" +
+            "chown root:wheel $plistPath; chmod 644 $plistPath;" +
+            " ls -la $plistPath 2>&1; " +
+            " /usr/bin/activator send switch-off.com.a3tweaks.switch.autolock 2>&1;" +
+            " echo AUTOLOCK_DAEMON_INSTALLED"
         )
         try {
-            $alOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $alCmd 2>&1) | Out-String
-            if ($alOut -match 'AUTOLOCK=OFF') {
-                Write-Host "  autolock disabled (SBAutoLockTime=0; iPad will stay awake)" -ForegroundColor Green
+            $alOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $writeDaemon 2>&1) | Out-String
+            if ($alOut -match 'AUTOLOCK_DAEMON_INSTALLED') {
+                Write-Host "  autolock-off LaunchDaemon installed (fires every boot)" -ForegroundColor Green
             } else {
-                Write-Host "  autolock-disable returned unexpected: $($alOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                Write-Host "  autolock-daemon write unexpected: $($alOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
             }
         } catch {
-            Write-Host "  autolock-disable failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            Write-Host "  autolock-daemon install failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
