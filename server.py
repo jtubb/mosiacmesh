@@ -258,31 +258,56 @@ def _send_to_session(session_id, encoded_message):
         return False
 
 
+def _deliver(client_id, encoded_message, client):
+    """Try targeted session send; fall back to broadcast on miss.
+
+    Why the fallback: after a Safari restart (post-reboot, ?tdbg switch,
+    or crash) the iPad opens a NEW SockJS session with a fresh session.id,
+    but client.clientID still points to the OLD (dead) session until the
+    new connection's REGISTER message arrives and updates it. During that
+    gap (typically 100-500ms but can be 1-2s under load), targeted send
+    drops every message addressed to that iPad. Observed in the field:
+    19 of 22 reconnected iPads missed PREPARE because the broadcast
+    happened within the gap.
+
+    Fallback: when the targeted lookup fails, call socketmanager.broadcast
+    -- the message goes to all sessions, the iPad's new session receives
+    it, and the client-side DEST filter (matching its UDID) routes it
+    correctly. Worst case is the same N*M fanout we had before, but
+    only for the affected client, not for every group message."""
+    if _send_to_session(getattr(client, "clientID", ""), encoded_message):
+        return
+    # Targeted miss -- fall back to broadcast so the message still reaches
+    # the iPad through its new (post-reconnect) session.
+    if socketmanager is not None:
+        socketmanager.broadcast(encoded_message)
+
+
 def broadcast_to_client(client_id, response_dict):
     """Send a message to a single client (identified by its clientKey, i.e.
     the cookie-based UDID). Routes to the iPad's specific sockjs session
-    instead of broadcasting to all sessions and relying on DEST filtering."""
+    when possible; falls back to broadcast (filtered by client-side DEST)
+    when the session lookup misses -- typically during the reconnect gap."""
     client = settings.clients.get(client_id)
     if not client:
         return
     response_dict["DEST"] = client_id
-    _send_to_session(getattr(client, "clientID", ""),
-                     jsonpickle.encode(response_dict))
+    _deliver(client_id, jsonpickle.encode(response_dict), client)
 
 
 def broadcast_to_display_group(display_id, response_dict):
     """Send a per-client message to every client in a display group. Each
     iPad gets the message addressed to its own DEST (the contract the
-    client-side filter expects). Targeted per-session -- N sends instead
-    of the previous N*M broadcast-fanout."""
+    client-side filter expects). Targeted per-session in the steady state;
+    falls back to broadcast for any iPad whose session is in the reconnect
+    gap."""
     if socketmanager is None:
         return
     for client_id, client in settings.clients.items():
         if client.displayID != display_id:
             continue
         response_dict["DEST"] = client_id
-        _send_to_session(getattr(client, "clientID", ""),
-                         jsonpickle.encode(response_dict))
+        _deliver(client_id, jsonpickle.encode(response_dict), client)
 
 def init_json_cache():
     """Initialize JSON response cache after imports are available"""
