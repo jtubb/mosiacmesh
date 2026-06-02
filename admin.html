@@ -2,6 +2,8 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#13171d">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/themes/default/style.min.css" />
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
@@ -871,6 +873,48 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
   .sidebar { flex:none; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border); }
   .navitem { border-left:0; border-bottom:3px solid transparent; white-space:nowrap; }
   .navitem.active { border-left:0; border-bottom-color:var(--accent); }
+}
+/* ===== Mobile-friendly overrides ===== */
+@media (max-width: 768px) {
+  .main { padding: var(--s2); }
+  .statusbar { padding: var(--s1) var(--s2); gap: var(--s2); flex-wrap: wrap; }
+  .section h2 { font-size: 16px; margin-bottom: var(--s2); }
+  /* Stack the playlist editor 3-column layout vertically */
+  #playlistEditor, #scheduleEditor { width: auto !important; max-width: 100%; }
+  #playlistEditor > div[style*="display:flex"],
+  #playlistEditor > div[style*="display: flex"] { flex-direction: column; }
+  #playlistEditor .panel { flex: 1 1 auto !important; min-width: 0 !important; }
+  /* Fixed em-widths -> fluid on mobile */
+  #canvas { width: 100% !important; max-width: 100%; height: auto !important; min-height: 18em; }
+  #log { width: auto !important; max-width: 100%; height: 50vh !important; }
+  #Media { max-width: 100%; }
+  /* Displays + Calibration section: stack the two panels */
+  section[data-route="displays"] > div[style*="display:flex"],
+  section[data-route="displays"] > div[style*="display: flex"] { flex-direction: column; }
+  section[data-route="displays"] .panel { flex: 1 1 auto !important; min-width: 0 !important; width: 100%; }
+  /* Toolbars: full-width select/input, wrap long button labels */
+  .toolbar { gap: var(--s1); }
+  .toolbar select, .toolbar input[type="text"], .toolbar input[type="search"] { flex: 1 1 12em; min-width: 8em; }
+  /* Touch-friendly buttons (44x44 is the iOS HIG target) */
+  .btn { padding: 9px 12px; min-height: 36px; }
+  input, select, textarea { padding: 9px 8px; min-height: 36px; }
+  /* Form inputs span their container on mobile */
+  input[type="text"], input[type="search"], textarea, select { max-width: 100%; }
+  /* Toasts wider, kept anchored to bottom */
+  .toasts { left: var(--s2); right: var(--s2); bottom: var(--s2); }
+  .toast { max-width: 100%; }
+  /* Thumbnail grid: smaller cells */
+  .thumbs { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+  /* Overview cards: one per row */
+  .grid { grid-template-columns: 1fr; }
+}
+/* Extra-narrow phones: more aggressive compaction */
+@media (max-width: 480px) {
+  .statusbar { font-size: 12px; }
+  .statusbar .brand { font-size: 13px; }
+  .navitem { padding: var(--s2) var(--s3); font-size: 13px; }
+  /* Some "all"-action buttons in the Overview are noise on mobile */
+  .toolbar { flex-wrap: wrap; }
 }
   </style>
 </head>
