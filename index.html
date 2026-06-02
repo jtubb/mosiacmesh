@@ -53,8 +53,16 @@
 				}
 			}
         }
-        else
+        else if (blink)
         {
+            // Only overwrite the canvas with the "syncing..." placeholder
+            // while blink is true (the pre-play TICK/TOCK idle state).
+            // calibrate/identify/play/stop handlers all set blink=false
+            // because they’ve installed their own canvas content
+            // (ArUco marker, identify label, video, etc.) and the tick
+            // callback must not clobber it -- which it WAS doing whenever
+            // ProgrammableTimer’s _synced flapped to false, briefly
+            // replacing the marker with "Synching to time server...".
             $('#canvas').text("Synching to time server...").css('font-size','8vw');
         }
         //console.log(currentTime + "," +currentTarget + "," + drift_correction+"," + (1000-drift_correction)+","+(currentTarget-currentTime));
