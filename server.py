@@ -125,7 +125,31 @@ def _keyframe_grid_args():
 #                        sessions are typically capped at 8, headroom keeps
 #                        other concurrent work from being starved)
 _VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "h264_nvenc"
-_RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
+_RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 12)
+
+
+def _video_input_args():
+    """Hardware-accelerated DECODER args, paired with the configured encoder.
+
+    Decoding the source video on the GPU lets the CPU stay free for orchestration
+    and frees the (single-threaded) software decode bottleneck. Frames still
+    have to come back to CPU memory for our `perspective,scale` filter (no
+    CUDA equivalent of `perspective` in ffmpeg), but the decode itself is no
+    longer a CPU thread per ffmpeg -- which is the dominant cost on high-
+    bitrate 1080p+ sources.
+
+    libx264 stays pure CPU because there's no benefit to GPU decode when the
+    encoder is also CPU (NVENC pipelining wouldn't apply)."""
+    enc = _VIDEO_ENCODER
+    if enc == "h264_nvenc":
+        return ["-hwaccel", "cuda"]
+    if enc == "h264_qsv":
+        return ["-hwaccel", "qsv"]
+    if enc == "h264_amf":
+        # AMF doesn't have a unified "amf" decode hwaccel; d3d11va is the
+        # right Windows-native GPU decoder for AMD GPUs.
+        return ["-hwaccel", "d3d11va"]
+    return []
 
 
 def _video_encoder_args():
@@ -1071,7 +1095,7 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
     vf = persp + ",scale=" + str(out_w) + ":" + str(out_h)
     for f in (extra_video_filters or []):
         vf += "," + f
-    cmd = ["ffmpeg", "-y", "-i", src_path, "-vf", vf]
+    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
     cmd += _video_encoder_args()
     cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k"]
@@ -1102,7 +1126,7 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     vf = pad + "," + persp + ",scale=" + str(out_w) + ":" + str(out_h)
     for f in (extra_video_filters or []):
         vf += "," + f
-    cmd = ["ffmpeg", "-y", "-i", src_path, "-vf", vf]
+    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
     cmd += _video_encoder_args()
     cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k"]
