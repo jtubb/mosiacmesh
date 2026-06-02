@@ -3863,7 +3863,18 @@ if __name__ == '__main__':
             try:
                 runner = web.AppRunner(app)
                 await runner.setup()
-                site = web.TCPSite(runner=runner, host=None, port=args.Port or 3000)
+                # Bind explicitly to BOTH IPv4 and IPv6 wildcards. host=None
+                # delegates the choice to getaddrinfo, which on Windows can
+                # return IPv6-only (LocalAddress "::") -- and Windows IPv6
+                # sockets are NOT dual-stack by default, so IPv4 connections
+                # to the LAN address ("http://192.168.x.y:3000/") get
+                # "actively refused" while ::1 still works. Explicit list
+                # forces aiohttp to bind both wildcards so iPads (IPv4-only)
+                # and modern browsers (often IPv4 first via DNS) can both
+                # reach the server.
+                site = web.TCPSite(runner=runner,
+                                    host=["0.0.0.0", "::"],
+                                    port=args.Port or 3000)
                 await site.start()
                 
                 logging.debug('Started webapp')
