@@ -93,6 +93,11 @@ DEFAULT_DEVICE_SCRIPTS = {
     # sleep ~1 minute after the killall drops the keep-alive socket.
     # Same activator switch the loginScript uses.
     "startScript":  "killall -9 MobileSafari 2>/dev/null; sleep 2; "
+                    # iOS 5 Safari restores previous tabs from SuspendState.plist
+                    # on relaunch. Without removing it, killall + uiopen produces
+                    # (restored tabs) + (new tab) -- often 2+ tabs visible. The
+                    # plist regenerates on next Safari clean-exit.
+                    "rm -f /var/mobile/Library/Safari/SuspendState.plist 2>/dev/null; "
                     "activator send switch-off.com.a3tweaks.switch.autolock 2>/dev/null; "
                     "uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Open the display page with the ?tdbg query flag, which the client JS
@@ -106,6 +111,7 @@ DEFAULT_DEVICE_SCRIPTS = {
     # connection, fresh JS state, fresh ?tdbg flag in location.href). The
     # killall + relaunch is the only way to guarantee that on iOS 5.
     "testScript":   "killall -9 MobileSafari 2>/dev/null; sleep 2; "
+                    "rm -f /var/mobile/Library/Safari/SuspendState.plist 2>/dev/null; "
                     "activator send switch-off.com.a3tweaks.switch.autolock 2>/dev/null; "
                     "uiopen '" + DISPLAY_URL +
                     ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
