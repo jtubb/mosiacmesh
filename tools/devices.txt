@@ -1,8 +1,27 @@
 # MosaicMesh device onboarding list — one device per line.
 # Format: IP  (or)  IP:port   — lines starting with # are ignored.
 # Run:  .\tools\onboard_devices.ps1 -HostFile .\tools\devices.txt
-192.168.1.50
-# 192.168.1.51
-# 192.168.1.52
-# 192.168.1.53
-# ...add the remaining devices...
+sign1screen1.home.lan
+sign1screen2.home.lan
+sign1screen3.home.lan
+sign1screen4.home.lan
+sign1screen5.home.lan
+sign1screen6.home.lan
+sign1screen7.home.lan
+sign1screen8.home.lan
+sign1screen9.home.lan
+sign1screen10.home.lan
+sign1screen11.home.lan
+sign1screen12.home.lan
+sign1screen13.home.lan
+sign1screen14.home.lan
+sign1screen15.home.lan
+sign1screen16.home.lan
+sign1screen17.home.lan
+sign1screen18.home.lan
+sign1screen19.home.lan
+sign1screen20.home.lan
+sign1screen21.home.lan
+sign1screen22.home.lan
+sign1screen23.home.lan
+sign1screen24.home.lan
