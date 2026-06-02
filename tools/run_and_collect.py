@@ -85,11 +85,19 @@ async def trigger(display_id, playlist_name):
 
 
 async def start_testing(display_id):
-    """Fire the 'test' lifecycle script on every iPad in the group, which
-    re-uiopens Safari to <DISPLAY_URL>?tdbg. Needed when iPads have
-    disconnected since the last server restart (no REGISTER, no
-    CLIENTLOG) -- the running pages won't reconnect on their own."""
+    """Fire login -> start -> test lifecycle scripts on every iPad in
+    the group, in sequence with short pauses. The login script wakes
+    the iPad (lockscreen.dismiss + autolock off). The test script kills
+    + relaunches Safari with the ?tdbg URL. If the fleet went silent
+    overnight (WiFi power-save, Safari crashed, LaunchDaemon retry never
+    fired), this sequence is what brings them all back to a known
+    listening state before we try to play."""
     async with SockJSClient(SERVER) as c:
+        # Wake all devices first (state-independent: works on locked,
+        # sleeping, or already-awake iPads). Then test script which
+        # killalls Safari and uiopens ?tdbg.
+        await c.send_msg("RUN_SCRIPT", {"displayID": display_id, "script": "login"})
+        await asyncio.sleep(3.0)
         await c.send_msg("RUN_SCRIPT", {"displayID": display_id, "script": "test"})
 
 
