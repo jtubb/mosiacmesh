@@ -74,32 +74,14 @@ DEFAULT_DEVICE_SCRIPTS = {
     # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
     "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
                     "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
-    # Open the display page in mobile Safari. KILL Safari first then
-    # uiopen: iOS 5 `uiopen` opens a NEW TAB each call instead of
-    # focusing/reloading the existing one. Repeated Start clicks
-    # otherwise stack tabs -- each with its own SockJS session, which
-    # makes the iPad show up as multiple connection counts in
-    # discovery and multiplies broadcast traffic. Killing first
-    # ensures one Safari instance with one tab on the right URL,
-    # making Start idempotent. Brief (~3s) interruption of any
-    # already-running playback is the cost; the alternative is N
-    # tabs after N starts.
-    #
-    # ALSO re-assert autolock-off before uiopen. Without an active
-    # Safari + WebSocket holding the iPad awake, autolock state
-    # decides whether the screen stays lit. The boot-time LaunchDaemon
-    # sets autolock-off but a prior Stop turns it back on -- so a
-    # later Start that doesn't re-assert leaves the iPad eligible to
-    # sleep ~1 minute after the killall drops the keep-alive socket.
-    # Same activator switch the loginScript uses.
-    "startScript":  "killall -9 MobileSafari 2>/dev/null; sleep 2; "
-                    # iOS 5 Safari restores previous tabs from SuspendState.plist
-                    # on relaunch. Without removing it, killall + uiopen produces
-                    # (restored tabs) + (new tab) -- often 2+ tabs visible. The
-                    # plist regenerates on next Safari clean-exit.
-                    "rm -f /var/mobile/Library/Safari/SuspendState.plist 2>/dev/null; "
-                    "activator send switch-off.com.a3tweaks.switch.autolock 2>/dev/null; "
-                    "uiopen '" + DISPLAY_URL + "'; echo START_OK",
+    # Open the display page in mobile Safari. Historical minimal form:
+    # uiopen brings Safari to the foreground; if Safari is already at
+    # this URL, no new tab is created (only different URLs stack as
+    # new tabs). Multiple killall+autolock+rm "improvements" I added
+    # later turned out to revert the iPads' awake state -- the boot
+    # LaunchDaemon's autolock-off + an always-running Safari were what
+    # kept the screens lit. Don't fight that.
+    "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Open the display page with the ?tdbg query flag, which the client JS
     # uses to (1) draw an on-screen timing HUD with current playback frame /
     # offset / drift, and (2) stream debug state back to the server log so
@@ -110,9 +92,13 @@ DEFAULT_DEVICE_SCRIPTS = {
     # reload the page. Tdbg mode needs a fresh page load (new SockJS
     # connection, fresh JS state, fresh ?tdbg flag in location.href). The
     # killall + relaunch is the only way to guarantee that on iOS 5.
-    "testScript":   "killall -9 MobileSafari 2>/dev/null; sleep 2; "
-                    "rm -f /var/mobile/Library/Safari/SuspendState.plist 2>/dev/null; "
-                    "activator send switch-off.com.a3tweaks.switch.autolock 2>/dev/null; "
+    # testScript needs killall because it's changing the URL (regular ->
+    # ?tdbg) and iOS 5 Safari otherwise stacks the new tab on top of
+    # the old. Plain killall (SIGTERM) lets Safari clean up; -9 was
+    # too aggressive. NO autolock toggle or SuspendState rm here --
+    # those were experimental fixes that turned out to interact badly
+    # with the always-awake state.
+    "testScript":   "killall MobileSafari 2>/dev/null; sleep 1; "
                     "uiopen '" + DISPLAY_URL +
                     ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
                     "'; echo TEST_OK",
