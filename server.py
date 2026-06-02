@@ -39,7 +39,12 @@ PREPARE_TIMEOUT_MS = 25000  # Safety-net timeout for SILENT/stuck clients only. 
                             # timeout only releases past clients that never responded.
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
-VEENCY_PASSWORD = "mosaic"
+# MUST match the password baked into the fleet's Veency plist by the
+# onboarding script (tools/onboard_devices.ps1 -VncPassword). Default
+# there is "mosaicmesh" so we match here; an operator who changed the
+# onboarding -VncPassword needs to override this constant too (or set
+# the MMVNCPW env var).
+VEENCY_PASSWORD = os.environ.get("MMVNCPW") or "mosaicmesh"
 
 # --- Device lifecycle automation -----------------------------------------
 # The server runs per-device shell scripts over SSH (login/start/stop/reboot),
@@ -1586,9 +1591,16 @@ def _release_expired_prepares():
 
 
 async def _auto_arm_client(client_key):
-    """Deliver one Veency VNC tap (screen centre) to arm an un-armed iOS device.
-    Best-effort: missing vncdo / no IP / failure just logs — the PREPARE timeout
-    covers a device that can't be armed."""
+    """Deliver one Veency VNC tap (screen centre) to arm an un-armed iOS
+    device. Best-effort: missing vncdo / no IP / failure just logs -- the
+    PREPARE timeout covers a device that can't be armed.
+
+    Captures vncdo stderr and checks the exit code so an auth failure
+    (wrong VEENCY_PASSWORD, veency not running, port closed) is logged
+    as a failure instead of a silent "tapped". The previous version
+    DEVNULL'd stderr and didn't check rc, so a wrong password produced
+    a misleading 'auto-arm: tapped' line in the log even though the
+    iPad never received the click."""
     if not AUTO_ARM:
         return
     client = settings.clients.get(client_key)
@@ -1601,9 +1613,19 @@ async def _auto_arm_client(client_key):
         proc = await asyncio.create_subprocess_exec(
             "vncdo", "-s", target, "-p", VEENCY_PASSWORD,
             "move", str(cx), str(cy), "click", "1",
-            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-        await asyncio.wait_for(proc.wait(), timeout=10)
-        logging.info("auto-arm: tapped %s at %d,%d", client_key, cx, cy)
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            raise
+        if proc.returncode == 0:
+            logging.info("auto-arm: tapped %s at %d,%d", client_key, cx, cy)
+        else:
+            tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
+            logging.warning("auto-arm tap rc=%s for %s (%s) at %d,%d: %s",
+                            proc.returncode, client_key, target, cx, cy,
+                            " | ".join(tail) or "(no stderr)")
     except Exception as e:  # noqa: BLE001
         logging.warning("auto-arm tap failed for %s: %s", client_key, e)
 
