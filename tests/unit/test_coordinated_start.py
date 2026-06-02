@@ -105,30 +105,38 @@ def test_arm_pending_client_holds_timeout_release():
 
 import asyncio
 
-def test_auto_arm_invokes_vncdo_with_center_coords():
+def test_auto_arm_invokes_pooled_vnc_with_center_coords():
+    """_auto_arm_client should call _do_tap via the pooled proxy at the
+    screen centre (width/2, height/2) -- no vncdo subprocess."""
     server.settings = server.Settings()
     c = server.Client()
     c.displayID = "g1"; c.isOnline = True; c.ip = "192.168.1.50"
     c.deviceWidth = 1024; c.deviceHeight = 768
     server.settings.clients["a"] = c
 
-    called = {}
-    async def fake_exec(*args, **kwargs):
-        called["args"] = args
-        class P:
-            async def wait(self): return 0
-        return P()
+    tap_calls = []
+
+    fake_proxy = MagicMock()
+    async def fake_get_pooled_vnc(client_key, ip):
+        return fake_proxy
+
+    def fake_do_tap(proxy, cx, cy):
+        tap_calls.append((proxy, cx, cy))
 
     server.AUTO_ARM = True
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+    with patch.object(server, "_get_pooled_vnc", side_effect=fake_get_pooled_vnc), \
+         patch.object(server, "_do_tap", side_effect=fake_do_tap):
         loop = asyncio.new_event_loop()
         try:
             loop.run_until_complete(server._auto_arm_client("a"))
         finally:
             loop.close()
-    assert "vncdo" in called["args"][0]
-    assert "192.168.1.50::5900" in called["args"]
-    assert "512" in called["args"] and "384" in called["args"]   # center of 1024x768
+
+    assert len(tap_calls) == 1, "expected exactly one tap"
+    proxy, cx, cy = tap_calls[0]
+    assert proxy is fake_proxy
+    assert cx == 512   # centre of 1024
+    assert cy == 384   # centre of 768
 
 
 def test_migrate_backfills_prepare_fields_and_resets_transient_state():
