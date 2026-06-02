@@ -84,7 +84,16 @@ DEFAULT_DEVICE_SCRIPTS = {
     # making Start idempotent. Brief (~3s) interruption of any
     # already-running playback is the cost; the alternative is N
     # tabs after N starts.
+    #
+    # ALSO re-assert autolock-off before uiopen. Without an active
+    # Safari + WebSocket holding the iPad awake, autolock state
+    # decides whether the screen stays lit. The boot-time LaunchDaemon
+    # sets autolock-off but a prior Stop turns it back on -- so a
+    # later Start that doesn't re-assert leaves the iPad eligible to
+    # sleep ~1 minute after the killall drops the keep-alive socket.
+    # Same activator switch the loginScript uses.
     "startScript":  "killall -9 MobileSafari 2>/dev/null; sleep 2; "
+                    "activator send switch-off.com.a3tweaks.switch.autolock 2>/dev/null; "
                     "uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Open the display page with the ?tdbg query flag, which the client JS
     # uses to (1) draw an on-screen timing HUD with current playback frame /
@@ -97,6 +106,7 @@ DEFAULT_DEVICE_SCRIPTS = {
     # connection, fresh JS state, fresh ?tdbg flag in location.href). The
     # killall + relaunch is the only way to guarantee that on iOS 5.
     "testScript":   "killall -9 MobileSafari 2>/dev/null; sleep 2; "
+                    "activator send switch-off.com.a3tweaks.switch.autolock 2>/dev/null; "
                     "uiopen '" + DISPLAY_URL +
                     ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
                     "'; echo TEST_OK",
