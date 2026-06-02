@@ -47,6 +47,16 @@ VEENCY_PORT = 5900
 # the MMVNCPW env var).
 VEENCY_PASSWORD = os.environ.get("MMVNCPW") or "mosaicmesh"
 
+# Persistent VNC connections, keyed by client_key. Created lazily on
+# first auto-arm; dropped from the pool when the client goes offline
+# or on any per-tap failure. Each entry is a ThreadedVNCClientProxy
+# from vncdotool.api -- vncdotool runs Twisted's reactor in a
+# background thread, and proxy methods are thread-safe to call from
+# the asyncio loop via run_in_executor. The lock guards cache
+# read-modify-write; the proxy itself has its own internal queuing.
+_veency_pool = {}
+_veency_lock = asyncio.Lock()
+
 # --- Device lifecycle automation -----------------------------------------
 # The server runs per-device shell scripts over SSH (login/start/stop/reboot),
 # using the passphrase-less key installed by tools/onboard_devices.ps1 and the
@@ -461,6 +471,10 @@ def cleanup_old_clients(max_age_seconds=24 * 3600):
     ]
     for key in stale_keys:
         del settings.clients[key]
+        try:
+            asyncio.get_running_loop().create_task(_drop_pooled_vnc(key))
+        except RuntimeError:
+            pass  # called outside a running loop (e.g. tests); pool cleanup is best-effort
         logging.info(f"Removed stale client {key}")
     if stale_keys:
         saveSettings()
@@ -1716,17 +1730,79 @@ def _release_expired_prepares():
             _release_group(display_id)
 
 
-async def _auto_arm_client(client_key):
-    """Deliver one Veency VNC tap (screen centre) to arm an un-armed iOS
-    device. Best-effort: missing vncdo / no IP / failure just logs -- the
-    PREPARE timeout covers a device that can't be armed.
+def _do_tap(proxy, cx, cy):
+    """Synchronous worker: move pointer + click button 1. Runs in
+    the default ThreadPoolExecutor (offloaded from the asyncio loop
+    by _auto_arm_client) because vncdotool's proxy methods block
+    on the Twisted reactor's queue dispatch."""
+    proxy.mouseMove(cx, cy)
+    proxy.mousePress(1)
 
-    Captures vncdo stderr and checks the exit code so an auth failure
-    (wrong VEENCY_PASSWORD, veency not running, port closed) is logged
-    as a failure instead of a silent "tapped". The previous version
-    DEVNULL'd stderr and didn't check rc, so a wrong password produced
-    a misleading 'auto-arm: tapped' line in the log even though the
-    iPad never received the click."""
+
+async def _get_pooled_vnc(client_key, ip):
+    """Return a connected ThreadedVNCClientProxy for the given iPad,
+    reusing a pooled connection if one exists. First-call cold path:
+    full RFB handshake + auth (~1 s LAN). Subsequent calls: dict
+    lookup (<1 ms)."""
+    async with _veency_lock:
+        proxy = _veency_pool.get(client_key)
+        if proxy is not None:
+            return proxy
+    # Cold connect outside the lock so other clients aren't blocked
+    # by this iPad's handshake.
+    loop = asyncio.get_event_loop()
+    proxy = await loop.run_in_executor(
+        None,
+        lambda: api.connect(f"{ip}::{VEENCY_PORT}",
+                            password=VEENCY_PASSWORD,
+                            timeout=5))
+    async with _veency_lock:
+        # Race: another coroutine may have populated the pool while
+        # we were handshaking. Their proxy wins; discard ours.
+        existing = _veency_pool.get(client_key)
+        if existing is not None:
+            try:
+                await loop.run_in_executor(None, proxy.disconnect)
+            except Exception:
+                pass
+            return existing
+        _veency_pool[client_key] = proxy
+    return proxy
+
+
+async def _drop_pooled_vnc(client_key):
+    """Evict and disconnect a pooled VNC client. Safe to call when
+    the client_key isn't pooled (no-op). Called on per-tap failure
+    (so the next attempt re-handshakes) and on client offline
+    cleanup (so dead iPads don't leak file descriptors)."""
+    async with _veency_lock:
+        proxy = _veency_pool.pop(client_key, None)
+    if proxy is None:
+        return
+    try:
+        await asyncio.get_event_loop().run_in_executor(None, proxy.disconnect)
+    except Exception as e:
+        logging.debug("veency pool disconnect for %s: %s", client_key, e)
+
+
+async def _auto_arm_client(client_key):
+    """Deliver one Veency VNC tap (screen centre) to arm an un-armed
+    iOS device. Holds one persistent VNC connection per iPad in
+    _veency_pool: first tap to an iPad pays the handshake cost
+    (~1 s LAN); subsequent taps reuse the open socket
+    (~5-20 ms -- single PointerEvent write). On any error the
+    pooled connection is dropped and the next attempt
+    re-handshakes.
+
+    Replaces the previous vncdo-subprocess implementation
+    (~1-3 s/tap regardless of pooling). The user-gesture gate on
+    iOS 5 Safari still requires a tap; we just made the tap
+    cheap. See docs/superpowers/plans/2026-06-02-veency-connection-pool.md
+    for the design.
+
+    Best-effort: missing IP / handshake failure / runtime tap
+    failure all just log -- the PREPARE timeout covers a device
+    that can't be armed."""
     if not AUTO_ARM:
         return
     client = settings.clients.get(client_key)
@@ -1734,25 +1810,15 @@ async def _auto_arm_client(client_key):
         return
     cx = int((getattr(client, "deviceWidth", 0) or 1024) / 2)
     cy = int((getattr(client, "deviceHeight", 0) or 768) / 2)
-    target = f"{client.ip}::{VEENCY_PORT}"
+    loop = asyncio.get_event_loop()
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "vncdo", "-s", target, "-p", VEENCY_PASSWORD,
-            "move", str(cx), str(cy), "click", "1",
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=10)
-        except asyncio.TimeoutError:
-            proc.kill()
-            raise
-        if proc.returncode == 0:
-            logging.info("auto-arm: tapped %s at %d,%d", client_key, cx, cy)
-        else:
-            tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
-            logging.warning("auto-arm tap rc=%s for %s (%s) at %d,%d: %s",
-                            proc.returncode, client_key, target, cx, cy,
-                            " | ".join(tail) or "(no stderr)")
+        proxy = await _get_pooled_vnc(client_key, client.ip)
+        await loop.run_in_executor(None, _do_tap, proxy, cx, cy)
+        logging.info("auto-arm: tapped %s at %d,%d (pooled)",
+                     client_key, cx, cy)
     except Exception as e:  # noqa: BLE001
+        # Drop the bad connection so the next attempt re-handshakes.
+        await _drop_pooled_vnc(client_key)
         logging.warning("auto-arm tap failed for %s: %s", client_key, e)
 
 
