@@ -217,12 +217,20 @@
 		}
 		else if(data_obj.REQUEST == "RENDER_STATUS")
 		{
-			var st = data_obj.PAYLOAD.renderStatus || data_obj.PAYLOAD.status;
-			plSetBadge(st === "rendering" ? "⏳ rendering…"
-				: st === "ready" ? "✓ render ready"
-				: st === "error" ? "⚠ render error" : st || "");
-			if (st === "ready") { plSetTransportState({render: true, play: true}); }
-			else if (st === "rendering") { plSetTransportState({render: false, play: false}); }
+			// Only update the badge if THIS status is for the group the
+			// playlist editor is currently bound to. Without this filter,
+			// a render finishing on display A would clobber the badge
+			// while the user is reviewing display B's playlist (the
+			// server broadcasts RENDER_STATUS to all sessions).
+			var statusDid = data_obj.PAYLOAD && data_obj.PAYLOAD.displayID;
+			if (!(statusDid && plAssignedGroup() && statusDid !== plAssignedGroup())) {
+				var st = data_obj.PAYLOAD.renderStatus || data_obj.PAYLOAD.status;
+				plSetBadge(st === "rendering" ? "⏳ rendering…"
+					: st === "ready" ? "✓ render ready"
+					: st === "error" ? "⚠ render error" : st || "");
+				if (st === "ready") { plSetTransportState({render: true, play: true}); }
+				else if (st === "rendering") { plSetTransportState({render: false, play: false}); }
+			}
 		}
 		else if(data_obj.REQUEST == "PLAY")
 		{

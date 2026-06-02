@@ -1340,7 +1340,25 @@ async def ws_handler(manager, session, msg):
         
         # Also send traditional JOIN for backward compatibility
         manager.broadcast(jsonpickle.encode({"REQUEST": "JOIN", "PAYLOAD":session.id}))
-        
+
+        # Replay current renderStatus to the newly-connected session for any
+        # display with a non-empty status. Without this, an admin who
+        # refreshes the playlist page during an in-flight render loses the
+        # "rendering..." badge (the original broadcast happened before they
+        # reconnected). Sent only to this session via session.send() to
+        # avoid pestering already-connected clients.
+        try:
+            if settings is not None and getattr(settings, "displays", None):
+                for _did, _disp in settings.displays.items():
+                    _st = getattr(_disp, "renderStatus", "")
+                    if _st:
+                        session.send(jsonpickle.encode({
+                            "REQUEST": "RENDER_STATUS",
+                            "PAYLOAD": {"displayID": _did, "status": _st}}))
+        except Exception as _e:
+            logging.debug("ws OPEN: render-status replay failed: %s", _e)
+
+
     elif msg.type == sockjs.MsgType.MESSAGE:
         session.send(msg_response(jsonpickle.decode(msg.data),session))
     elif msg.type == sockjs.MsgType.CLOSED:
@@ -1394,11 +1412,18 @@ def _build_media_elements(items):
 
 
 def _apply_playlist(display_id, pl):
-    """Copy a saved Playlist onto a group (mediaElements, loop, reset token, PRELOAD)."""
+    """Copy a saved Playlist onto a group (mediaElements, loop, PRELOAD).
+
+    Does NOT blank renderedToken eagerly: compute_render_token() is a stable
+    hash of items + bounding box + per-client perimeters, so re-assigning
+    the SAME playlist produces the same token and the existing render
+    output is still valid. Blanking unconditionally forced a "needs render"
+    state every time the user re-assigned a playlist they hadn't changed --
+    deeply confusing because they could see the render had just completed.
+    Let the natural token comparison decide."""
     display = settings.displays.setdefault(display_id, Display())
     display.mediaElements = _build_media_elements(pl.items)
     display.loop = bool(pl.loop)
-    display.renderedToken = ""
     broadcast_to_display_group(display_id, {
         "REQUEST": "PRELOAD",
         "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}})
