@@ -557,7 +557,8 @@
 				loginItem:  { label: "Login (wake + unlock)", action: function () { runScript(node, 'login'); } },
 				startItem:  { label: "Start (open display)",  action: function () { runScript(node, 'start'); } },
 				stopItem:   { label: "Stop (close display)",  action: function () { runScript(node, 'stop'); } },
-				rebootItem: { label: "Reboot device",         action: function () { runScript(node, 'reboot'); } }
+				rebootItem: { label: "Reboot device",         action: function () { runScript(node, 'reboot'); } },
+				testItem:   { label: "Start Testing (🐞 diagnostics)", action: function () { runScript(node, 'test'); } }
 			};
 			
 			// Only allow creation of Display groups
@@ -950,6 +951,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
           <button class="btn btn-ghost" type="button" onclick="runScriptAll('start')"  title="Open the display page on every device (SSH)">▶ Start all</button>
           <button class="btn btn-ghost" type="button" onclick="runScriptAll('stop')"   title="Close the display on every device (SSH)">⏹ Stop all</button>
           <button class="btn btn-ghost" type="button" onclick="runScriptAll('reboot')" title="Reboot every device (SSH)">⟲ Reboot all</button>
+          <button class="btn btn-ghost" type="button" onclick="runScriptAll('test')" title="Open the display in diagnostics mode (?tdbg)">🐞 Start Testing all</button>
         </div>
         <div id="overviewCards" class="grid"></div>
       </section>

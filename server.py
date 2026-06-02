@@ -71,6 +71,14 @@ DEFAULT_DEVICE_SCRIPTS = {
                     "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
     # Open the display page in mobile Safari.
     "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
+    # Open the display page with the ?tdbg query flag, which the client JS
+    # uses to (1) draw an on-screen timing HUD with current playback frame /
+    # offset / drift, and (2) stream debug state back to the server log so
+    # operators can collect group-wide diagnostics without per-device touch.
+    # Same wake-and-open path as startScript otherwise.
+    "testScript":   "uiopen '" + DISPLAY_URL +
+                    ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
+                    "'; echo TEST_OK",
     # Close Safari (the display client), re-enable auto-lock (login disabled it to
     # keep the wall lit), and sleep the screen now via the sleep button. Symmetric
     # with login: stop -> screen off + allowed to stay asleep.
@@ -1348,6 +1356,7 @@ class Client():
         self.startScript = None
         self.stopScript = None
         self.rebootScript = None
+        self.testScript = None
         self.ready = False      # ready to display: media cached & client ready
         self.isOnline = False   # alive: connected / recent heartbeat
         self.synced = False     # SYN/SYNACK handshake (clock/group) complete
@@ -1797,7 +1806,7 @@ def _mdns_reverse(ip, wait=1.5):
 # connectionCount) are NOT copied — the new record keeps those.
 _MERGE_FIELDS = ("displayID", "measuredCenter", "measuredPerimeter", "arucoID",
                  "capabilities", "loginScript", "startScript", "stopScript",
-                 "rebootScript")
+                 "rebootScript", "testScript")
 
 
 def _merge_reconnected_client(new_key, new_client):
@@ -2215,7 +2224,7 @@ def msg_response(msg,session):
         # one device, {displayID} for a whole group, or {all:true} for the fleet.
         payload = msg.get("PAYLOAD") or {}
         which = payload.get("script")
-        if which not in ("login", "start", "stop", "reboot"):
+        if which not in ("login", "start", "stop", "reboot", "test"):
             response["PAYLOAD"] = {"status": "BAD_REQUEST"}
         else:
             ck = payload.get("clientKey")
@@ -3638,9 +3647,11 @@ async def api_discovery_configure(request):
         if "friendlyName" in data:
             client.friendlyName = data["friendlyName"]
             client.nameIsCustom = True   # user-set name: DNS won't override it
-        # Per-device lifecycle scripts (login/start/stop/reboot). "" clears back
-        # to the fleet default on next backfill; a non-empty string overrides it.
-        for sf in ("loginScript", "startScript", "stopScript", "rebootScript"):
+        # Per-device lifecycle scripts (login/start/stop/reboot/test). ""
+        # clears back to the fleet default on next backfill; a non-empty
+        # string overrides it.
+        for sf in ("loginScript", "startScript", "stopScript", "rebootScript",
+                   "testScript"):
             if sf in data:
                 setattr(client, sf, data[sf] if data[sf] else None)
 
