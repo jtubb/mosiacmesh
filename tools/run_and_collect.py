@@ -73,8 +73,14 @@ async def trigger(display_id, playlist_name):
     async with SockJSClient(SERVER) as c:
         await c.send_msg("ASSIGN_PLAYLIST",
                          {"name": playlist_name, "displayID": display_id})
-        # Tiny delay so the assign settles before play.
-        await asyncio.sleep(0.5)
+        # Settle delay: ASSIGN_PLAYLIST triggers a PRELOAD broadcast to every
+        # client in the group. Clients need time to process the new playlist
+        # state (set up media element URLs, attach event listeners) before
+        # PREPARE arrives -- otherwise PREPARE can land before the page is
+        # ready and the recv-PREPARE handler bails silently. 3s is generous
+        # for the 24-iPad fleet on iOS 5 (each iPad takes ~200-500ms to
+        # process PRELOAD after a fresh Safari restart).
+        await asyncio.sleep(3.0)
         await c.send_msg("PLAY", {"displayID": display_id})
 
 
