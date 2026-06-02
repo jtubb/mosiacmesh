@@ -9,6 +9,7 @@ opencv-python>=4.8.0.74
 sockjs==0.13.0
 websocket-client==1.6.1
 websockets==11.0.3
+vncdotool>=1.3.0
 zeroconf>=0.100.0          # mDNS/Bonjour reverse-lookup fallback for .local devices
 
 # System dependency (not pip-installable): ffmpeg with libx264 must be on PATH

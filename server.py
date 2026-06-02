@@ -19,6 +19,7 @@ from aiohttp import web
 from device_detector import DeviceDetector
 
 from beeprint import pp
+from vncdotool import api
 
 import sockjs
 
@@ -4114,9 +4115,20 @@ if __name__ == '__main__':
                 # forces aiohttp to bind both wildcards so iPads (IPv4-only)
                 # and modern browsers (often IPv4 first via DNS) can both
                 # reach the server.
+                # backlog=4096: aiohttp's default of 128 is the kernel listen
+                # queue size. During a fleet-wide Start All burst, each iPad's
+                # Safari opens ~6 parallel sockets (HTML + 2 JS files + SockJS
+                # xhr_streaming + xhr_send + /time), so 24 iPads ≈ 144 SYNs
+                # arriving in <1s, plus the admin browser and sockets still
+                # tearing down from the previous load. Overflowing 128 causes
+                # Windows to silently DROP the SYN (not RST) -- Safari then
+                # retransmits with 3s/6s/12s/24s backoff and eventually shows
+                # "server did not respond". 4096 is well beyond any realistic
+                # connect-burst and Windows' SOMAXCONN accepts it.
                 site = web.TCPSite(runner=runner,
                                     host=["0.0.0.0", "::"],
-                                    port=args.Port or 3000)
+                                    port=args.Port or 3000,
+                                    backlog=4096)
                 await site.start()
                 
                 logging.debug('Started webapp')
