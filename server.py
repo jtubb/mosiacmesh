@@ -125,30 +125,25 @@ def _keyframe_grid_args():
 #                        sessions are typically capped at 8, headroom keeps
 #                        other concurrent work from being starved)
 _VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "h264_nvenc"
-_RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 12)
+_RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
+# Default OFF after empirical regression: enabling -hwaccel cuda with 12
+# concurrent NVENC encodes ran the test fleet (24 iPads) at 397s vs 322s
+# without. The PCIe round-trip (GPU decode -> CPU filter chain (no CUDA
+# equivalent of `perspective`) -> GPU encode) + GPU memory contention at
+# high concurrency outweighed the CPU decode savings on iPad-sized
+# output. Worth re-enabling for 4K/high-bitrate sources where CPU decode
+# is the real bottleneck. Override:
+#   $env:MMRENDER_HWACCEL = "cuda"   (or "qsv", "d3d11va")
+_VIDEO_HWACCEL = os.environ.get("MMRENDER_HWACCEL") or ""
 
 
 def _video_input_args():
-    """Hardware-accelerated DECODER args, paired with the configured encoder.
-
-    Decoding the source video on the GPU lets the CPU stay free for orchestration
-    and frees the (single-threaded) software decode bottleneck. Frames still
-    have to come back to CPU memory for our `perspective,scale` filter (no
-    CUDA equivalent of `perspective` in ffmpeg), but the decode itself is no
-    longer a CPU thread per ffmpeg -- which is the dominant cost on high-
-    bitrate 1080p+ sources.
-
-    libx264 stays pure CPU because there's no benefit to GPU decode when the
-    encoder is also CPU (NVENC pipelining wouldn't apply)."""
-    enc = _VIDEO_ENCODER
-    if enc == "h264_nvenc":
-        return ["-hwaccel", "cuda"]
-    if enc == "h264_qsv":
-        return ["-hwaccel", "qsv"]
-    if enc == "h264_amf":
-        # AMF doesn't have a unified "amf" decode hwaccel; d3d11va is the
-        # right Windows-native GPU decoder for AMD GPUs.
-        return ["-hwaccel", "d3d11va"]
+    """ffmpeg input-option args (go BEFORE -i). If MMRENDER_HWACCEL is set,
+    emit `-hwaccel <value>` so the source video is decoded on the GPU.
+    Default is OFF (CPU decode) -- see _VIDEO_HWACCEL comment for the
+    empirical reasoning."""
+    if _VIDEO_HWACCEL:
+        return ["-hwaccel", _VIDEO_HWACCEL]
     return []
 
 
