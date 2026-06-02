@@ -75,8 +75,14 @@ DEFAULT_DEVICE_SCRIPTS = {
     # uses to (1) draw an on-screen timing HUD with current playback frame /
     # offset / drift, and (2) stream debug state back to the server log so
     # operators can collect group-wide diagnostics without per-device touch.
-    # Same wake-and-open path as startScript otherwise.
-    "testScript":   "uiopen '" + DISPLAY_URL +
+    #
+    # KILL Safari first then uiopen: on iOS 5 `uiopen` to a URL Safari is
+    # already showing only brings Safari to the foreground -- it does NOT
+    # reload the page. Tdbg mode needs a fresh page load (new SockJS
+    # connection, fresh JS state, fresh ?tdbg flag in location.href). The
+    # killall + relaunch is the only way to guarantee that on iOS 5.
+    "testScript":   "killall -9 MobileSafari 2>/dev/null; sleep 2; "
+                    "uiopen '" + DISPLAY_URL +
                     ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
                     "'; echo TEST_OK",
     # Close Safari (the display client), re-enable auto-lock (login disabled it to
