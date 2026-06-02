@@ -1770,15 +1770,43 @@ async def _run_device_script(client_key, which):
         return (None, "no-script")
     cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
            ["%s@%s" % (SSH_USER, client.ip), script])
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            # CRITICAL: kill the subprocess on timeout. Without this the
+            # ssh.exe stays alive in the background indefinitely -- on
+            # iOS-5 fleets where SSH connects but the iPad's shell hangs
+            # mid-command (WiFi power-save mid-handshake, slow respring,
+            # etc.), every Start/Login/Test that times out for one
+            # device leaves a leaked ssh.exe on the server. Observed in
+            # production: 87 zombie ssh.exe processes accumulated over
+            # 19-22 hours, saturating the Windows network stack until
+            # iPad GET requests couldn't even reach aiohttp's listener.
+            logging.warning("run-script %s %s: timeout (30s); killing ssh.exe",
+                            client_key, which)
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return (None, "timeout")
         text = (out or b"").decode("utf-8", "replace").strip()
         logging.warning("run-script %s %s rc=%s: %s", client_key, which,
                         proc.returncode, text.replace("\n", " ")[:300])
         return (proc.returncode, text)
     except Exception as e:  # noqa: BLE001
+        # Catch-all: any other error (proc creation failed, etc.) -- still
+        # try to kill if proc was created.
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
         logging.warning("run-script %s %s failed: %s", client_key, which, e)
         return (None, str(e))
 
