@@ -22,3 +22,27 @@ media/
 cache/
 # server logs, e.g. server_run.log from a backgrounded server
 *.log
+# server stdout/stderr from `nohup python server.py ... > server.out 2> server.err`
+server.out
+server.err
+# diagnostic-probe log-offset state file written by tools/start_all_probe.py
+log_offset.txt
+
+# iOS jailbreak / re-root tooling (large binaries, license-restricted,
+# or independently versioned upstream -- not part of this repo's source)
+ipsws/
+bootstrap-debs/
+tools/DeveloperDiskImage.dmg
+tools/DeveloperDiskImage.dmg.signature
+tools/Legacy-iOS-Kit/
+tools/libimobile-suite-latest_w64/
+tools/redsn0w/
+
+# operator scratchpad — manual Veency test artifacts (plist + screenshots)
+tools/veency/
+
+# one-off benchmark exploration (kept locally, not version-tracked)
+tools/bench_variations.py
+
+# test fixture image used ad-hoc by calibrate scripts; large + binary
+tests/calibrationimage.jpg
