@@ -212,17 +212,58 @@ def close_file_pool():
     cache_stats['hits'] = 0
     cache_stats['misses'] = 0
 
+def _send_to_session(session_id, encoded_message):
+    """Look up a sockjs Session by its id and call .send() directly. Returns
+    True if delivered, False if no such session.
+
+    Why we need this: the previous broadcast_to_*() helpers called
+    socketmanager.broadcast() once PER addressed client, which sent each
+    message to ALL connected sessions and relied on the iPad-side DEST
+    filter (index.html line 688: `if DEST == getUDID() || DEST == 'ALL'`).
+    For a 24-iPad group on a 24-iPad fleet (each iPad ~~ 1-2 sockjs
+    sessions due to xhr_streaming fallback), one logical PLAY/STOP/PAUSE
+    command became 24 broadcasts x ~40 sessions = ~960 serialized socket
+    writes through the event loop -- visible to operators as command lag.
+    Targeted send via socketmanager.get(session_id) skips every session
+    that isn't the intended recipient: O(N) instead of O(N*M)."""
+    if socketmanager is None or not session_id:
+        return False
+    sess = socketmanager.get(session_id, default=None)
+    if sess is None:
+        return False  # session has since disconnected/expired
+    try:
+        sess.send(encoded_message)
+        return True
+    except Exception as e:
+        logging.debug("_send_to_session(%s) failed: %s", session_id, e)
+        return False
+
+
 def broadcast_to_client(client_id, response_dict):
-    """Send message to specific client with caching"""
+    """Send a message to a single client (identified by its clientKey, i.e.
+    the cookie-based UDID). Routes to the iPad's specific sockjs session
+    instead of broadcasting to all sessions and relying on DEST filtering."""
+    client = settings.clients.get(client_id)
+    if not client:
+        return
     response_dict["DEST"] = client_id
-    socketmanager.broadcast(jsonpickle.encode(response_dict))
+    _send_to_session(getattr(client, "clientID", ""),
+                     jsonpickle.encode(response_dict))
+
 
 def broadcast_to_display_group(display_id, response_dict):
-    """Send message to all clients in a display group"""
+    """Send a per-client message to every client in a display group. Each
+    iPad gets the message addressed to its own DEST (the contract the
+    client-side filter expects). Targeted per-session -- N sends instead
+    of the previous N*M broadcast-fanout."""
+    if socketmanager is None:
+        return
     for client_id, client in settings.clients.items():
-        if client.displayID == display_id:
-            response_dict["DEST"] = client_id  
-            socketmanager.broadcast(jsonpickle.encode(response_dict))
+        if client.displayID != display_id:
+            continue
+        response_dict["DEST"] = client_id
+        _send_to_session(getattr(client, "clientID", ""),
+                         jsonpickle.encode(response_dict))
 
 def init_json_cache():
     """Initialize JSON response cache after imports are available"""
