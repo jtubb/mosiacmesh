@@ -142,6 +142,17 @@ $DEFAULT_TWEAKS = @(
     'kr.iolate.terminalactivator',    # uiopen-via-Activator (used by START script)
     'com.a3tweaks.flipswitch',        # toolkit required by skiplock
     'com.rpetrich.rocketbootstrap',   # common IPC tweak dep
+    # --- WiFi keepalive (defends against iOS 5 power-save) ---
+    # Insomnia v6 by imalc (BigBoss). MobileSubstrate hook into the
+    # screen-lock handler that prevents the WiFi radio from entering its
+    # power-save state when the screen is off (or the device is idle on
+    # the index page with no recent input). Without this, iPads showing
+    # 50%+ packet loss + 700ms RTT mid-day -- "request timed out" in
+    # Safari, SSH "connect to host : Connection timed out" from the
+    # server -- become unmanageable. Deps already in this list
+    # (mobilesubstrate, preferenceloader, libstatusbar). Confirmed
+    # compatible with iOS 5.x via the package's firmware<<7.0 bound.
+    'com.imalc.insomnia',
     # --- transitive deps the kit IPSW left out ---
     'berkeleydb',                    # required by apt7 (the CLI we dpkg-bootstrap)
     'preferenceloader',              # required by libactivator/veency/terminalactivator
