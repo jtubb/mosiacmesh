@@ -111,7 +111,20 @@ param(
     # Skip the final "open Safari to DisplayUrl" step. Use if you want to
     # onboard without immediately joining the mesh (manual control over
     # when the device joins).
-    [switch]$NoOpenDisplay
+    [switch]$NoOpenDisplay,
+    # Veency (VNC) configuration. By default the kit IPSW installs veency
+    # with Prompt=true and no password -- meaning every incoming VNC
+    # connection pops an "Accept / Reject" dialog on the iPad itself,
+    # which you have to tap. Useless for a video wall. Setting -VncPassword
+    # writes the veency plist with Prompt=false (auto-accept) AND sets
+    # this password as VNC auth, so the prompt is bypassed but unauth'd
+    # connections still can't get in. Empty string = disable the prompt
+    # only, no password (LAN-trusted setup). Use -SkipVncConfig to leave
+    # the defaults alone (you'll see the accept prompt every connection).
+    [string]$VncPassword = "mosaicmesh",
+    # Skip Veency plist write entirely (leave veency defaults: Prompt=true,
+    # no password). Useful if you've already configured it manually.
+    [switch]$SkipVncConfig
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -365,6 +378,11 @@ if ($Packages)      { $pkgsToInstall += $Packages }
 $pkgsToInstall = $pkgsToInstall | Select-Object -Unique
 if ($pkgsToInstall) {
     Write-Host "Mode: INSTALL-PACKAGES ($($pkgsToInstall.Count): $($pkgsToInstall -join ', '))" -ForegroundColor Magenta
+}
+if ($pkgsToInstall -and -not $SkipVncConfig) {
+    $vncSummary = if ($VncPassword) { "veency prompt off + password='$VncPassword'" }
+                  else { "veency prompt off (no password)" }
+    Write-Host "Mode: CONFIGURE-VEENCY ($vncSummary)" -ForegroundColor Magenta
 }
 
 $results = @()
@@ -622,6 +640,64 @@ foreach ($h in $targets) {
             }
         } catch {
             Write-Host "  autolock-daemon install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 5.4b) configure Veency (the VNC tweak) BEFORE the respring so the new
+    #       settings take effect when SpringBoard restarts and reloads
+    #       MobileSubstrate-injected tweaks.
+    #
+    #       Veency's plist lives at
+    #           /var/mobile/Library/Preferences/com.saurik.Veency.plist
+    #       and is owned by mobile:mobile. Keys we care about:
+    #         Enabled (bool)  -- VNC server on/off (default true after install)
+    #         Prompt  (bool)  -- show Accept/Reject dialog on each connection
+    #         Password (string) -- VNC auth password; empty = no auth
+    #
+    #       For a 24-iPad video wall Prompt=true is unusable (you'd have to
+    #       walk over and tap accept on every device every connection). We
+    #       always set Prompt=false here. If $VncPassword is non-empty we
+    #       set the password too so unauth'd LAN clients still can't connect.
+    if ($status -eq "OK" -and $pkgsToInstall -and -not $SkipVncConfig) {
+        $veencyPlistPath = '/var/mobile/Library/Preferences/com.saurik.Veency.plist'
+        # If $VncPassword is empty, we still write the plist but with no
+        # <key>Password</key> entry -- veency reads it as "no password set".
+        $passwordEntry = ''
+        if ($VncPassword) {
+            # Escape any XML-significant chars in the password so the plist
+            # parses. Backslash and single/double quotes are also safe with
+            # XML escaping (we don't shell-interpolate the password value;
+            # it goes straight into the heredoc literally via cat).
+            $pwXml = $VncPassword -replace '&', '&amp;' -replace '<', '&lt;' -replace '>', '&gt;'
+            $passwordEntry = "    <key>Password</key><string>$pwXml</string>`n"
+        }
+        $writeVeency = (
+            "cat > $veencyPlistPath << 'PLIST'`n" +
+            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
+            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
+            "<plist version=`"1.0`">`n" +
+            "<dict>`n" +
+            "    <key>Enabled</key><true/>`n" +
+            "    <key>Prompt</key><false/>`n" +
+            $passwordEntry +
+            "    <key>ShowCursor</key><true/>`n" +
+            "</dict>`n" +
+            "</plist>`n" +
+            "PLIST`n" +
+            "chown mobile:mobile $veencyPlistPath; chmod 644 $veencyPlistPath;" +
+            " echo VEENCY_CONFIGURED"
+        )
+        try {
+            $vOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $writeVeency 2>&1) | Out-String
+            if ($vOut -match 'VEENCY_CONFIGURED') {
+                $detailMsg = if ($VncPassword) { "veency: prompt off, password set" }
+                             else { "veency: prompt off, no password" }
+                Write-Host "  $detailMsg" -ForegroundColor Green
+            } else {
+                Write-Host "  veency config unexpected: $($vOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  veency config failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
