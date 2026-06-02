@@ -1,0 +1,9 @@
+# theos build intermediates
+.theos/
+obj/
+*.o
+*.a
+*.dylib.unsigned
+
+# We DO check in the final .deb (packages/*.deb) so deploy doesn't require the build chain.
+# We DO check in source files (Tweak.xm, Makefile, control, *.plist).
