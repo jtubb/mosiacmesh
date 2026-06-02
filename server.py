@@ -143,7 +143,14 @@ def _keyframe_grid_args():
 #   MMRENDER_CONCURRENCY: max parallel ffmpegs (default 6; NVENC consumer
 #                        sessions are typically capped at 8, headroom keeps
 #                        other concurrent work from being starved)
-_VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "h264_nvenc"
+#
+# Default = libx264 (CPU). Why not h264_nvenc despite the 5-10x perf win:
+# iPad-1's H.264 baseline decoder rejects NVENC's SPS/SEI output (decoder
+# parses ~65KB of the file, sees SEI NAL types it doesn't handle, fires
+# MEDIA_ERR_SRC_NOT_SUPPORTED / vid:abort, and stops fetching). libx264's
+# baseline SPS is iPad-1-compatible. For fleets running iPad-2 or newer,
+# set MMRENDER_ENCODER=h264_nvenc to opt back in to GPU encoding.
+_VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "libx264"
 _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
 # Default OFF after empirical regression: enabling -hwaccel cuda with 12
 # concurrent NVENC encodes ran the test fleet (24 iPads) at 397s vs 322s
@@ -933,7 +940,8 @@ def compute_render_token(display_id):
             perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
     # Bump this when the encode settings change, to invalidate stale renders.
-    encode_ver = "grid025-cbl-v5"
+    # v6: encoder default reverted libx264 (NVENC SPS rejected by iPad-1).
+    encode_ver = "grid025-cbl-v6"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
