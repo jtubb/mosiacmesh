@@ -8,10 +8,18 @@
   <script src="/js/mosiacmesh.js"></script>
   <script>
     var blink = true;
+    // Tracks whether we have already told the server "my
+    // ProgrammableTimer is synced" since our LAST sock-open. Reset to
+    // false on disconnect (when sock becomes null) so the next
+    // converge+connect cycle re-emits SYNACK to the server -- the
+    // server clears client.synced on disconnect, so we have to
+    // re-announce after every reconnect.
+    var _mmSyncedSent = false;
     function tickcallback(currentTime,currentTarget,drift_correction)
     {
         if(sock == null)
         {
+            _mmSyncedSent = false;   // re-emit SYNACK on next reconnect+sync
             reconnectWatchdog();   // guarded reconnect (no overlapping handshakes)
         }
         // The tick fires on the synchronized GoTime second: record its phase and
@@ -21,6 +29,18 @@
         triggerPulse();
         if(ProgrammableTimer.isSynced())
         {
+            // One-shot announce: tell the server our clock has converged
+            // (jitter within tolerance over the rolling drift_history
+            // window). The server's SYNACK handler sets
+            // client.synced=True, which _begin_prepare uses to gate
+            // PREPARE delivery to clients whose clocks are stable.
+            if (!_mmSyncedSent && sock !== null &&
+                typeof SockJS !== "undefined" && sock.readyState === SockJS.OPEN) {
+                try {
+                    sock.send(generateMessage("SRV", "SYNACK", getUDID()));
+                    _mmSyncedSent = true;
+                } catch (e) { /* try again next tick */ }
+            }
 			if(blink && !playback.active)
 			{
 				if((Math.round(currentTime/1000)*1000)%2000 == 0)

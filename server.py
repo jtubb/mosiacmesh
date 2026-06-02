@@ -2127,21 +2127,12 @@ def msg_response(msg,session):
         client.ip = _new_ip
         client.lastSeen = time.time()
         client.isOnline = True
-        # REGISTER is the page-bootstrap signal: the iPad's JS has loaded,
-        # the SockJS connection is established, sock_callback is wired,
-        # and the page is ready to receive coordinated messages (PREPARE/
-        # PLAY/RELOAD). _begin_prepare gates PREPARE delivery on this
-        # flag so it doesn't race a freshly-reconnected client whose
-        # handlers aren't yet listening. Reset to False on disconnect
-        # (handle_client_disconnect).
-        #
-        # NB: this field was originally set by a SYN/SYNACK handshake
-        # message pair that the legacy JS never emits, so `synced` was
-        # a dead signal in practice. Repurposed here to mean "REGISTER
-        # complete on the current session" -- the relevant readiness
-        # signal. The SYN/SYNACK handlers stay in place for any future
-        # use but no client code sends to them.
-        client.synced = True
+        # NB: do NOT set client.synced=True here -- synced means "clock-
+        # sync handshake stable" (GoTime first WhenSynced callback fired),
+        # not "page registered". REGISTER is much earlier than clock
+        # stability. The client emits TIME_SYNCED separately when its
+        # clock is stable; the TIME_SYNCED handler is the one that sets
+        # client.synced=True.
         client.connectionCount += 1
         
         # Device detection and fingerprinting
@@ -2565,7 +2556,9 @@ async def handle_websocket_message(session, message_data):
             client.ip = _client_ip(session.request)
         client.lastSeen = time.time()
         client.isOnline = True
-        client.synced = True   # see REGISTER handler comment for rationale
+        # synced stays False until the client emits TIME_SYNCED (see the
+        # REGISTER handler comment) -- REGISTER is page-bootstrap, not
+        # clock-sync.
         client.connectionCount += 1
         # Best-effort fingerprinting (fields may be methods or plain values)
         try:
