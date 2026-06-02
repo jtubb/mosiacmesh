@@ -1554,7 +1554,16 @@ def _group_online_keys(display_id):
 
 
 def _begin_prepare(display_id):
-    """Phase 1: tell the group to buffer + hold frame 0 (don't start the clock)."""
+    """Phase 1: tell the group to buffer + hold frame 0 (don't start the clock).
+
+    Sends PREPARE only to clients that have completed the SYN/SYNACK
+    handshake (client.synced == True). Un-synced clients (freshly
+    reconnected, mid-handshake) are skipped here -- they'll be picked up
+    by _prepare_unsynced_clients() which polls and sends PREPARE as each
+    finishes its handshake. Without this filter PREPARE would race the
+    page-load on freshly-reconnected iPads and get silently dropped on
+    the client side (the recv-PREPARE handler bails when sock_callback
+    isn't yet wired)."""
     display = settings.displays.get(display_id)
     if not display or not display.mediaElements:
         return
@@ -1563,14 +1572,55 @@ def _begin_prepare(display_id):
     display.armPending = set()
     display.prepareDeadline = int(time.time() * 1000) + PREPARE_TIMEOUT_MS
     display.action = PlayState.PREPARING
-    # Per-client PREPARE: each client must buffer/arm with ITS OWN rendered
-    # segment URL, not the generic source (a renderable client handed the 1080p
-    # source can't decode it -> MEDIA_ERR_SRC_NOT_SUPPORTED). Same URLs as the GO.
+    n_sent = n_skipped = 0
     for key, c in _group_clients(display_id):
+        if not getattr(c, "synced", False):
+            n_skipped += 1
+            continue
+        # Per-client PREPARE: each client must buffer/arm with ITS OWN rendered
+        # segment URL, not the generic source (a renderable client handed the
+        # 1080p source can't decode it -> MEDIA_ERR_SRC_NOT_SUPPORTED). Same
+        # URLs as the GO.
         broadcast_to_client(key, {
             "REQUEST": "PREPARE",
             "PAYLOAD": {"prepareId": display.prepareId,
                         "items": _per_client_items(display, key, c), "loop": display.loop}})
+        n_sent += 1
+    if n_skipped:
+        logging.info("_begin_prepare %s: PREPARE sent to %d synced; %d un-synced "
+                     "will be sent PREPARE when their SYN/SYNACK completes",
+                     display_id, n_sent, n_skipped)
+        asyncio.ensure_future(_prepare_unsynced_clients(display_id,
+                                                         display.prepareId))
+
+
+async def _prepare_unsynced_clients(display_id, prepare_id):
+    """Poll for clients that finish their SYN/SYNACK after _begin_prepare's
+    initial broadcast, and send them PREPARE then. Bounded to the same
+    deadline as the rest of the prepare phase -- after PREPARE_TIMEOUT_MS
+    the release fires and any still-unsynced clients are released along
+    with the rest of the group (they receive the PLAY broadcast and
+    catch up from there)."""
+    sent = set()
+    while True:
+        await asyncio.sleep(0.5)
+        display = settings.displays.get(display_id)
+        if not display:
+            return
+        if display.action != PlayState.PREPARING or display.prepareId != prepare_id:
+            return  # group already released / new prepare started
+        for key, c in _group_clients(display_id):
+            if key in sent:
+                continue
+            if not getattr(c, "synced", False):
+                continue
+            broadcast_to_client(key, {
+                "REQUEST": "PREPARE",
+                "PAYLOAD": {"prepareId": prepare_id,
+                            "items": _per_client_items(display, key, c),
+                            "loop": display.loop}})
+            sent.add(key)
+            logging.info("_prepare_unsynced: late PREPARE sent to %s", key)
 
 
 def _release_group(display_id):

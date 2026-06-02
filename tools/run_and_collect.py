@@ -94,15 +94,20 @@ async def start_testing(display_id):
 
 
 async def wait_for_reconnect(display_id, expected_count, timeout_s):
-    """Poll the discovery API for fresh lastSeen timestamps. The ?tdbg page
-    doesn't emit CLIENTLOG at page-load (dbg() fires at meaningful events,
-    not heartbeats), so we can't watch the log for reconnects directly. We
-    DO get a fresh lastSeen on REGISTER, which the page sends in its first
-    SockJS connection. Returns the count of clients in the group whose
-    lastSeen is newer than when we started waiting."""
+    """Poll the discovery API for clients in the group that have completed
+    the SYN/SYNACK handshake (`synced=True`). This is a stronger readiness
+    signal than fresh `lastSeen` -- lastSeen ticks on any client message
+    including pre-handshake REGISTERs, while `synced=True` means the page
+    has finished its clock-sync round-trip AND is ready to receive
+    coordinated PREPARE/PLAY messages.
+
+    Without this gate, PREPARE can land before some iPads' page handlers
+    are wired up and the broadcast is silently dropped on the iPad side
+    (the recv-PREPARE handler bails when sock_callback isn't yet
+    registered). Empirically dropping PREPARE delivery from ~50% to ~0%."""
     deadline = time.time() + timeout_s
-    started = time.time()
     async with aiohttp.ClientSession() as session:
+        synced = 0
         while time.time() < deadline:
             await asyncio.sleep(2)
             try:
@@ -112,16 +117,18 @@ async def wait_for_reconnect(display_id, expected_count, timeout_s):
             except Exception:
                 continue
             devs = data.get("devices", data) if isinstance(data, dict) else data
-            fresh = [d for d in devs
-                     if d.get("displayID") == display_id
-                     and d.get("lastSeen", 0) > started]
-            print(f"  reconnected (fresh lastSeen): {len(fresh)}/{expected_count}",
+            synced_list = [d for d in devs
+                           if d.get("displayID") == display_id
+                           and d.get("synced", False)
+                           and d.get("isOnline", False)]
+            synced = len(synced_list)
+            print(f"  synced (SYN/SYNACK complete): {synced}/{expected_count}",
                   end="\r")
-            if len(fresh) >= expected_count:
+            if synced >= expected_count:
                 print()
-                return len(fresh)
+                return synced
     print()
-    return len(fresh)
+    return synced
 
 
 # CLIENTLOG line format in server.err:
