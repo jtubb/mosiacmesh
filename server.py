@@ -3794,6 +3794,17 @@ if __name__ == '__main__':
             migrate_client_objects()
             # Remove any HTML-corrupted display group keys (phantom duplicates)
             sanitize_display_groups()
+            # Reset stale renderStatus: a previous server run that was
+            # interrupted mid-render leaves the display with renderStatus
+            # = "rendering" on disk. After restart there's no ffmpeg
+            # actually running, but the render trigger silently returns
+            # "already rendering" (msg_response / RENDER handler) and the
+            # display is permanently stuck. Clearing here lets the next
+            # render request fire normally.
+            for _did, _disp in (settings.displays or {}).items():
+                if getattr(_disp, "renderStatus", "") == "rendering":
+                    logging.info("startup: clearing stale renderStatus='rendering' on %s", _did)
+                    _disp.renderStatus = ""
         else:
             settings.displays.setdefault("Default", Display())
         
