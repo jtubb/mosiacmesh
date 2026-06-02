@@ -74,8 +74,18 @@ DEFAULT_DEVICE_SCRIPTS = {
     # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
     "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
                     "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
-    # Open the display page in mobile Safari.
-    "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
+    # Open the display page in mobile Safari. KILL Safari first then
+    # uiopen: iOS 5 `uiopen` opens a NEW TAB each call instead of
+    # focusing/reloading the existing one. Repeated Start clicks
+    # otherwise stack tabs -- each with its own SockJS session, which
+    # makes the iPad show up as multiple connection counts in
+    # discovery and multiplies broadcast traffic. Killing first
+    # ensures one Safari instance with one tab on the right URL,
+    # making Start idempotent. Brief (~3s) interruption of any
+    # already-running playback is the cost; the alternative is N
+    # tabs after N starts.
+    "startScript":  "killall -9 MobileSafari 2>/dev/null; sleep 2; "
+                    "uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Open the display page with the ?tdbg query flag, which the client JS
     # uses to (1) draw an on-screen timing HUD with current playback frame /
     # offset / drift, and (2) stream debug state back to the server log so
