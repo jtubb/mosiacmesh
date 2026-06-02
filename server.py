@@ -1261,6 +1261,36 @@ def resolve_media_path(file_url):
     subdir = "videos" if isVideoItem(name) else "images"
     return os.path.join("media", client, subdir, name)
 
+def prewarm_static_cache():
+    """Pre-populate file_cache with the static assets every iPad fetches
+    on page load (index.html + js/*). Avoids blocking the asyncio event
+    loop on synchronous open()/read() during a fleet-wide Start burst:
+    24 iPads loading the page simultaneously is ~24*5 = ~120 small file
+    fetches. Without pre-warming, the first fetch of each file blocks
+    the loop while disk I/O happens, serializing the entire burst.
+    After this call, get_cached_file() returns pure-dict hits at request
+    time.
+
+    Logged with hit count so a misconfigured deploy (missing files) is
+    obvious in the startup log."""
+    static_files = []
+    for name in ('index.html', 'admin.html', 'discovery.html'):
+        if os.path.isfile(name):
+            static_files.append(name)
+    if os.path.isdir('js'):
+        for f in os.listdir('js'):
+            full = os.path.join('js', f)
+            if os.path.isfile(full):
+                static_files.append(full)
+    loaded = 0
+    for f in static_files:
+        if get_cached_file(f) is not None:
+            loaded += 1
+    logging.info("prewarm_static_cache: %d files cached (%.0f KiB total)",
+                 loaded,
+                 sum(len(v.get('content', b'')) for v in file_cache.values()) / 1024)
+
+
 def get_cached_file(file_path):
     """Get file content with caching based on modification time.
 
@@ -4068,6 +4098,9 @@ if __name__ == '__main__':
                 
                 # Initialize JSON response cache now that jsonpickle is available
                 init_json_cache()
+                # Pre-warm the static-file cache so a fleet-wide Start burst
+                # doesn't block the event loop on cold disk reads.
+                prewarm_static_cache()
                 
                 oneshot = True
                 save_counter = 0
