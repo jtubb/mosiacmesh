@@ -370,3 +370,178 @@ def test_reconcile_noop_for_non_lighttpd_clients():
         _run(server._reconcile_ipad_cache(c))
     fake.assert_not_called()
     assert c.cachedSegments == {"x_1"}  # unchanged
+
+
+# --- Stall-detection tests (2026-06-03 second cache iteration).
+#     Covers the stall_event path in _push_segment_to_cached_clients:
+#     when the sibling poller signals stall (size unchanged for
+#     _PUSH_STALL_WINDOW_S), the push must kill scp and exit with
+#     status=stalled, leaving cachedSegments unchanged.
+
+def test_push_segment_aborts_on_stall_signal(monkeypatch):
+    """Mock the poller to immediately set stall_event. The push
+    must kill the (otherwise-blocking) scp process and clear
+    cachePushProgress without populating cachedSegments."""
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"
+    server.settings.clients["ipad1"] = c
+
+    # FakeProc.communicate blocks until kill() releases it -- mimics
+    # an scp that's making no progress.
+    forever = asyncio.Event()
+
+    class FakeProc:
+        def __init__(self):
+            self.returncode = None
+            self.killed = False
+        async def communicate(self):
+            await forever.wait()
+            return (b"", b"")
+        def kill(self):
+            self.killed = True
+            self.returncode = -9
+            forever.set()
+
+    fake_proc = FakeProc()
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return fake_proc
+
+    async def immediate_stall_poller(client_key, client, stall_event, proc):
+        stall_event.set()
+
+    monkeypatch.setattr(server, "_poll_push_progress",
+                        immediate_stall_poller)
+
+    with patch("asyncio.create_subprocess_exec",
+               side_effect=fake_create_subprocess_exec):
+        _run(server._push_segment_to_cached_clients("ipad1", "f00d", 1))
+
+    assert c.cachedSegments == set(), \
+        "stalled push must NOT add segment to cachedSegments"
+    assert c.cachePushProgress is None, \
+        "cachePushProgress must be cleared in the finally block"
+    assert fake_proc.killed, "scp.kill() must be called on stall"
+
+
+def test_push_segment_clears_cachePushProgress_on_success(monkeypatch):
+    """Happy path: scp succeeds, cachedSegments populated, the
+    transient cachePushProgress is reset to None in the finally
+    block so subsequent /api/discovery/devices reads show idle."""
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"
+    server.settings.clients["ipad1"] = c
+
+    fake_proc = MagicMock()
+    fake_proc.returncode = 0
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return fake_proc
+
+    # Poller that just sleeps so it doesn't trigger stall before
+    # the scp 'completes' (asyncio.wait will return communicate
+    # first because fake_proc.communicate returns immediately).
+    async def quiet_poller(client_key, client, stall_event, proc):
+        await asyncio.sleep(1)  # any non-instant delay
+
+    monkeypatch.setattr(server, "_poll_push_progress", quiet_poller)
+
+    with patch("asyncio.create_subprocess_exec",
+               side_effect=fake_create_subprocess_exec):
+        _run(server._push_segment_to_cached_clients("ipad1", "f00d", 1))
+
+    assert "f00d_1" in c.cachedSegments
+    assert c.cachePushProgress is None, \
+        "cachePushProgress must be reset after success"
+
+
+# --- Propagation aggregation tests for the new API surface.
+
+def test_propagation_percent_for_client_partial_cache():
+    """A client whose displayID's rendered token has 2 SEGMENT items
+    of which the client has 1 cached should report 50.0."""
+    server.settings = server.Settings()
+    d = server.Display()
+    d.displayID = "G"
+    d.renderedToken = "abc"
+    me1 = server.MediaElement()
+    me1.id = "i1"; me1.playmode = server.PlayMode.SEGMENT
+    me1.file = "/media/server/videos/foo.mp4"
+    me2 = server.MediaElement()
+    me2.id = "i2"; me2.playmode = server.PlayMode.SEGMENT
+    me2.file = "/media/server/videos/bar.mp4"
+    d.mediaElements = [me1, me2]
+    server.settings.displays["G"] = d
+
+    c = server.Client()
+    c.clientKey = "ipad1"
+    c.cacheMode = "lighttpd-localhost"
+    c.displayID = "G"
+    c.cachedSegments = {"abc_0"}  # has item 0 cached, not item 1
+    server.settings.clients["ipad1"] = c
+
+    assert server._propagation_percent_for_client(c) == 50.0
+
+
+def test_propagation_percent_full_cache_returns_100():
+    server.settings = server.Settings()
+    d = server.Display()
+    d.displayID = "G"; d.renderedToken = "abc"
+    me = server.MediaElement()
+    me.id = "i1"; me.playmode = server.PlayMode.SEGMENT
+    me.file = "/media/server/videos/foo.mp4"
+    d.mediaElements = [me]
+    server.settings.displays["G"] = d
+    c = server.Client()
+    c.clientKey = "ipad1"; c.cacheMode = "lighttpd-localhost"
+    c.displayID = "G"; c.cachedSegments = {"abc_0"}
+    server.settings.clients["ipad1"] = c
+    assert server._propagation_percent_for_client(c) == 100.0
+
+
+def test_propagation_percent_non_lighttpd_returns_100():
+    """Non-iPad / non-lighttpd clients are vacuously 'cached' so
+    they don't drag down group aggregates."""
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "modern"; c.cacheMode = "service-worker"
+    c.displayID = "G"; c.cachedSegments = set()
+    server.settings.clients["modern"] = c
+    assert server._propagation_percent_for_client(c) == 100.0
+
+
+def test_propagation_percent_no_renderedToken_returns_100():
+    """A display group whose render hasn't run yet has no expected
+    segments; bar would be meaningless, so vacuously 100%."""
+    server.settings = server.Settings()
+    d = server.Display(); d.displayID = "G"; d.renderedToken = None
+    d.mediaElements = []
+    server.settings.displays["G"] = d
+    c = server.Client()
+    c.clientKey = "ipad1"; c.cacheMode = "lighttpd-localhost"
+    c.displayID = "G"; c.cachedSegments = set()
+    server.settings.clients["ipad1"] = c
+    assert server._propagation_percent_for_client(c) == 100.0
+
+
+def test_expected_seg_keys_only_includes_segment_video_items():
+    """Bouncing-balls SCRIPT items don't render, so the expected
+    set should only contain seg keys for SEGMENT video items."""
+    server.settings = server.Settings()
+    d = server.Display()
+    d.displayID = "G"; d.renderedToken = "abc"
+    bouncing = server.MediaElement()
+    bouncing.id = "b1"; bouncing.playmode = server.PlayMode.SCRIPT
+    bouncing.file = "bouncingBalls"
+    bunny = server.MediaElement()
+    bunny.id = "b2"; bunny.playmode = server.PlayMode.SEGMENT
+    bunny.file = "/media/server/videos/big_buck_bunny_1080p_h264.mov"
+    d.mediaElements = [bouncing, bunny]
+    expected = server._expected_seg_keys_for_display(d)
+    assert expected == {"abc_1"}, \
+        f"expected only the bunny SEGMENT at index 1, got {expected}"
