@@ -281,3 +281,43 @@ class TestClientCacheFields:
         after = server.settings.clients["legacy"]
         assert after.cacheMode == "none"
         assert after.cachedSegments == set()
+
+
+class TestAnnounceCacheMode:
+    """Test ANNOUNCE_CACHE_MODE SockJS message handler"""
+
+    def test_announce_cache_mode_sets_service_worker(self):
+        """A client emitting ANNOUNCE_CACHE_MODE with mode=service-worker
+        should result in client.cacheMode being set to that value."""
+        from unittest.mock import MagicMock
+        server.settings = server.Settings()
+        c = server.Client()
+        c.clientID = "sess123"
+        server.settings.clients["modern_device"] = c
+
+        session = MagicMock()
+        session.id = "sess123"
+        session.request.headers = {"User-Agent": "Mozilla/5.0 (...) Chrome/120"}
+        session.request.remote = "192.168.1.100"
+
+        msg = {"SRC": "modern_device", "DEST": "SRV",
+               "REQUEST": "ANNOUNCE_CACHE_MODE",
+               "PAYLOAD": {"mode": "service-worker"}}
+        server.msg_response(msg, session)
+        assert server.settings.clients["modern_device"].cacheMode == "service-worker"
+
+    def test_announce_cache_mode_rejects_unknown_mode(self):
+        """An unknown mode value must NOT clobber an existing cacheMode."""
+        from unittest.mock import MagicMock
+        server.settings = server.Settings()
+        c = server.Client()
+        c.clientID = "sess123"
+        c.cacheMode = "lighttpd-localhost"
+        server.settings.clients["k"] = c
+        session = MagicMock()
+        session.id = "sess123"
+        session.request.headers = {"User-Agent": "x"}
+        session.request.remote = "1.1.1.1"
+        server.msg_response({"SRC": "k", "DEST": "SRV", "REQUEST": "ANNOUNCE_CACHE_MODE",
+                             "PAYLOAD": {"mode": "hack"}}, session)
+        assert server.settings.clients["k"].cacheMode == "lighttpd-localhost"

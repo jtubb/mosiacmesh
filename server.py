@@ -2236,6 +2236,19 @@ def msg_response(msg,session):
             client.synced = True
         response["PAYLOAD"] = "SYNACK"
 
+    elif(msg["REQUEST"] == "ANNOUNCE_CACHE_MODE"):
+        # Client-announced cache capability. The client side knows whether
+        # it has a working Service Worker, lighttpd, or neither; it tells
+        # us so we can route PLAY payload URLs correctly. The whitelist
+        # below prevents a malicious or bug-induced client from setting
+        # an arbitrary string (which would break _resolve_media_url's
+        # logic in subtle ways).
+        client = settings.clients.get(msg["SRC"])
+        mode = (msg.get("PAYLOAD") or {}).get("mode")
+        if client and mode in ("none", "lighttpd-localhost", "service-worker"):
+            client.cacheMode = mode
+        response["PAYLOAD"] = {"cacheMode": getattr(client, "cacheMode", "none")}
+
     elif(msg["REQUEST"] == "REMOVE_CLIENT"):
         # Admin-initiated removal of a single device. The device re-registers
         # (as new) if it ever reconnects — this only clears the stale record.
