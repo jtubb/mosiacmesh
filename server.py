@@ -4483,6 +4483,33 @@ async def api_discovery_configure(request):
         saveSettings()
         return web.json_response({"success": True, "configured": configured})
 
+    if action == "clear_cache":
+        # Operator/test helper: drop a client's server-side
+        # cachedSegments record so the next force_push (or
+        # subsequent render) re-pushes the segments. Doesn't touch
+        # the actual files on the iPad (lighttpd will keep serving
+        # stale-but-byte-identical content until the push lands a
+        # newer copy). With no clientKey, clears all
+        # lighttpd-localhost clients (handy for re-running an
+        # acceptance test from scratch).
+        ck = data.get("clientKey")
+        cleared = 0
+        if ck:
+            c = settings.clients.get(ck)
+            if not c:
+                return web.json_response(
+                    {"success": False, "error": "Client not found"}, status=404)
+            c.cachedSegments = set()
+            cleared = 1
+        else:
+            for c in settings.clients.values():
+                if getattr(c, "cacheMode", "none") == "lighttpd-localhost":
+                    c.cachedSegments = set()
+                    cleared += 1
+        saveSettings()
+        logging.info("clear_cache: cleared cachedSegments on %d client(s)", cleared)
+        return web.json_response({"success": True, "cleared": cleared})
+
     if action == "force_push":
         # Recovery path: replay the post-render push hook for an
         # already-rendered display, without paying the ffmpeg cost
