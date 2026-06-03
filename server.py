@@ -3042,13 +3042,18 @@ def msg_response(msg,session):
 
     elif(msg["REQUEST"] == "RELOAD"):
         # Admin command: tell display clients to hard-reload so they pick up new
-        # client JS/HTML. Scoped to one display group when PAYLOAD.displayID is
-        # given (only that group's members reload), otherwise every connected
-        # client via DEST="ALL". The client reloads only on a RELOAD addressed to
-        # it or to "ALL", so the control console isn't reloaded by a group reload.
+        # client JS/HTML. Three scopes:
+        #   PAYLOAD.clientKey -> only that one iPad (single-device probe)
+        #   PAYLOAD.displayID -> only that group's members
+        #   otherwise        -> every connected client via DEST="ALL"
+        # The client reloads only on a RELOAD addressed to its own UDID or to
+        # "ALL", so the control console isn't reloaded by a group reload.
         payload = msg.get("PAYLOAD")
+        client_key = payload.get("clientKey") if isinstance(payload, dict) else None
         display_id = payload.get("displayID") if isinstance(payload, dict) else None
-        if display_id:
+        if client_key:
+            broadcast_to_client(client_key, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
+        elif display_id:
             broadcast_to_display_group(display_id, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
         else:
             socketmanager.broadcast(jsonpickle.encode(
