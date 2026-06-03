@@ -1930,6 +1930,62 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
                         client_key, segment_hash, segment_n, e)
 
 
+async def _reconcile_ipad_cache(client):
+    """Remove cached segment files on this iPad that no longer
+    correspond to any current playlist media element on this iPad's
+    display group. Best-effort -- ssh failures just leave orphans
+    on disk (cosmetic concern, recovered next reconciliation).
+
+    Skips non-lighttpd-localhost clients (they have no on-device
+    cache for us to clean)."""
+    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
+        return
+    if not getattr(client, "ip", ""):
+        return
+    # Build set of seg_HASH_N keys currently referenced by this
+    # client's display group's playlist.
+    in_use = set()
+    did = getattr(client, "displayID", None)
+    display = settings.displays.get(did) if did else None
+    if display:
+        for item in (getattr(display, "mediaElements", []) or []):
+            # Handle both PlayMode enum (real ME) and string (wire/test stub)
+            pm = getattr(item, "playmode", None)
+            pm_name = pm.name if hasattr(pm, "name") else (pm if isinstance(pm, str) else None)
+            if pm_name != "SEGMENT":
+                continue
+            h = getattr(item, "seg_hash", None)
+            n = getattr(item, "seg_n", None)
+            if h is None or n is None:
+                # Try to parse from file path (same regex used in
+                # _resolve_media_url; the seg_HASH_N.mp4 pattern).
+                file_str = getattr(item, "file", "") or ""
+                m = _SEG_FILE_RE.search(file_str)
+                if m:
+                    h = m.group(1); n = m.group(2)
+            if h is not None and n is not None:
+                in_use.add(f"{h}_{n}")
+    stale = set(client.cachedSegments) - in_use
+    if not stale:
+        return
+    # Remove from server-side state immediately (the file deletes happen
+    # async). Worst case a stale file lingers on disk after we forget
+    # about it -- next reconciliation will retry the delete.
+    for s in stale:
+        client.cachedSegments.discard(s)
+        cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
+               [f"{SSH_USER}@{client.ip}",
+                f"rm -f /var/mobile/Media/MosaicMeshCache/seg_{s}.mp4"])
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE)
+            await asyncio.wait_for(proc.communicate(), timeout=15)
+        except Exception as e:  # noqa: BLE001
+            logging.debug("cache-reconcile rm failed for %s seg_%s: %s",
+                          client.clientKey, s, e)
+
+
 async def _auto_arm_client(client_key):
     """Deliver one Veency VNC tap (screen centre) to arm an un-armed
     iOS device. Holds one persistent VNC connection per iPad in
@@ -4304,6 +4360,15 @@ async def process():
     if not hasattr(process, 'last_cleanup') or (current_time - process.last_cleanup) > 3600:
         cleanup_old_clients()
         process.last_cleanup = current_time
+
+    # Cache reconciliation: sweep orphans from each cached iPad's local
+    # MosaicMeshCache/ dir. Fires every process() tick (~5s) but the
+    # helper is a no-op for iPads whose cachedSegments already match
+    # the current playlist (the common case), so the cost is just a
+    # set difference per cached client.
+    for _c in list(settings.clients.values()):
+        if getattr(_c, "cacheMode", "none") == "lighttpd-localhost" and getattr(_c, "isOnline", False):
+            asyncio.ensure_future(_reconcile_ipad_cache(_c))
 
     #response = {"DEST":"ALL","REQUEST": "TEST", "PAYLOAD": "NONE"}
     #socketmanager.broadcast(jsonpickle.encode(response))

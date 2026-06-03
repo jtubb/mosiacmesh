@@ -179,3 +179,46 @@ def test_push_segment_skips_clients_not_in_lighttpd_mode():
         _run(server._push_segment_to_cached_clients("modern", "f00d", 1))
 
     fake_create.assert_not_called()
+
+
+def test_reconcile_removes_orphan_hashes_from_cachedSegments():
+    """A hash in cachedSegments that isn't referenced by any current
+    playlist media element on this iPad's display group should be
+    swept out (and a delete-ssh fires)."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey="ipad1"; c.ip="192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"; c.displayID="G1"
+    c.cachedSegments = {"keep_1", "orphan_3"}
+    server.settings.clients["ipad1"] = c
+    d = server.Display(); d.displayID="G1"
+    # Build a fake media element list referencing only "keep_1"
+    class _It:
+        def __init__(self, h, n):
+            self.playmode=server.PlayMode.SEGMENT; self.seg_hash=h; self.seg_n=n
+            self.file = f"/media/ipad1/seg_{h}_{n}.mp4"
+    d.mediaElements = [_It("keep", 1)]
+    server.settings.displays["G1"] = d
+
+    fake_proc = MagicMock(); fake_proc.returncode = 0
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+    async def fake_subproc(*a, **k): return fake_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_subproc):
+        _run(server._reconcile_ipad_cache(c))
+
+    assert c.cachedSegments == {"keep_1"}
+
+
+def test_reconcile_noop_for_non_lighttpd_clients():
+    """Service-worker / none clients have no on-device cache to clean;
+    janitor should skip them entirely (no ssh attempts)."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey="m"; c.ip="1.1.1.1"
+    c.cacheMode = "service-worker"; c.cachedSegments = {"x_1"}
+    server.settings.clients["m"] = c
+
+    fake = AsyncMock()
+    with patch("asyncio.create_subprocess_exec", fake):
+        _run(server._reconcile_ipad_cache(c))
+    fake.assert_not_called()
+    assert c.cachedSegments == {"x_1"}  # unchanged
