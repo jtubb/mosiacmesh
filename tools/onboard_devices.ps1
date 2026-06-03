@@ -1006,6 +1006,36 @@ foreach ($h in $targets) {
             Write-Host "  webclip: source plist missing at $webclipSrc" -ForegroundColor Yellow
         } else {
             try {
+                # First sweep: remove any existing MosaicMesh-titled
+                # webclips. The operator may have manually Added to
+                # Home Screen during initial setup (variant titles
+                # "Mosaicmesh" / "Mosaic Mesh" / "Mosaic mesh", each
+                # with a different random UUID directory), and our
+                # stable-UUID install creates a SEPARATE icon next to
+                # those -- leaving stale duplicates. Match the Title
+                # value (any <string> tag whose content begins with
+                # "Mosaic" case-insensitive) and rm the whole .webclip
+                # dir. Single-quoted bash pattern avoids the
+                # PowerShell -> ssh.exe quote-stripping issue (the
+                # same one that bit us in 5.4c/d/e earlier in the
+                # session). Includes our own stable-UUID webclip so
+                # the subsequent re-create always refreshes the
+                # Info.plist content.
+                $cleanupCmd = 'for d in /var/mobile/Library/WebClips/*.webclip; do' +
+                              ' [ -d $d ] || continue;' +
+                              ' if grep -E -q -i ''<string>[Mm]osaic'' "$d/Info.plist" 2>/dev/null; then' +
+                              '   rm -rf "$d";' +
+                              ' fi;' +
+                              ' done;' +
+                              ' echo CLEANUP_DONE'
+                $cOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $cleanupCmd 2>&1) | Out-String
+                if ($cOut -match 'CLEANUP_DONE') {
+                    # Quiet success; no log line unless something
+                    # was actually removed (visible via ls below).
+                } else {
+                    Write-Host "  webclip cleanup unexpected: $($cOut.Trim() -replace '\s+',' ')" -ForegroundColor DarkYellow
+                }
+
                 # mkdir; scp; sed-substitute URL; chown/chmod.
                 & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
                     "mkdir -p '$webclipDir'" 2>&1 | Out-Null
