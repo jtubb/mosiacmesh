@@ -206,7 +206,14 @@ _PUSH_CONCURRENCY = int(os.environ.get("MMPUSH_CONCURRENCY") or 2)
 # good work (set too tight) or papers over genuine stalls (set too
 # loose). Stall-based detection is strictly better.
 _PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
-_PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 2.0)
+# 2s poll was empirically too aggressive on iPad-1: every poll opens a
+# fresh ssh connection through the legacy SHA-1 handshake, which
+# competes with the scp's own connection. iPad-1 sshd seems to limit
+# concurrent connections enough that the actual scp transfer can stall
+# entirely while the poller keeps eating handshake cycles. 5s gives
+# the scp clear runway between polls; with a 30s stall window that's
+# still 5+ polls of evidence before we declare stall.
+_PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
 
 # Lazy module-level semaphore (created on first use, when an event
 # loop is guaranteed to exist; we don't want to bind it to whatever
@@ -2076,13 +2083,18 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
                 return_when=asyncio.FIRST_COMPLETED)
             if stall_task in done and communicate_task not in done:
                 # Stall path: poller signalled, scp hasn't finished.
-                # Kill scp, drain output (briefly), bail.
+                # Kill scp, then await the ORIGINAL communicate task
+                # (now unblocked by SIGKILL on the child). Crucially
+                # we DO NOT call proc.communicate() a second time here
+                # -- asyncio's Process only allows one pending read at
+                # a time, and a second call collides with
+                # communicate_task with "read() called while another
+                # coroutine is already waiting for incoming data".
                 proc.kill()
                 try:
-                    await asyncio.wait_for(proc.communicate(), timeout=5)
-                except asyncio.TimeoutError:
+                    await asyncio.wait_for(communicate_task, timeout=5)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
-                communicate_task.cancel()
                 sent = client.cachePushProgress.get("bytesSent", 0) \
                     if client.cachePushProgress else 0
                 logging.warning(
@@ -2137,6 +2149,14 @@ async def _poll_push_progress(client_key, client, stall_event, proc):
     prog = client.cachePushProgress
     if prog is None:
         return
+    # Give scp's own ssh connection a clear head-start before we
+    # open any of our own probes -- iPad-1 sshd appears to limit
+    # concurrent connections enough that an immediate poll competes
+    # with the scp's handshake. The "have we made progress" check
+    # is keyed off bytesSent != 0 anyway, so this delay just shifts
+    # the FIRST useful sample later by a few seconds and improves
+    # the chance scp has bytes to count by then.
+    await asyncio.sleep(min(_PUSH_POLL_INTERVAL_S, 5))
     seg_path = ("/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
                 % (prog["token"], prog["n"]))
     # stat returns the size in bytes; redirect stderr to /dev/null +
