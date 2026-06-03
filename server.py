@@ -2270,6 +2270,17 @@ def msg_response(msg,session):
         # stability. The client emits TIME_SYNCED separately when its
         # clock is stable; the TIME_SYNCED handler is the one that sets
         # client.synced=True.
+        #
+        # DO reset synced=False on REGISTER, though: a fresh REGISTER means
+        # a fresh page load, so GoTime is starting its sync probes over,
+        # and any prior synced flag is stale. Symmetric with SYN (which
+        # also flips synced=False as the JS announces its new sync round).
+        # Without this reset, the test harness's wait-for-fresh-sync gate
+        # can't observe the kill+reload cycle because the synced flag
+        # never flips false (handle_client_disconnect runs ~14s late on
+        # the OLD session_id while REGISTER already overwrote clientID
+        # to the NEW one -- the lookup fails, the flag stays True).
+        client.synced = False
         client.connectionCount += 1
         
         # Device detection and fingerprinting
