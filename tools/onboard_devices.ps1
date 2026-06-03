@@ -861,6 +861,41 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4f) mark this client as lighttpd-localhost cacheMode on the
+    #       server side so future PLAY payloads route to the iPad's
+    #       localhost lighttpd. Requires that the iPad has REGISTERed
+    #       with the server at least once (so settings.clients has
+    #       an entry for it). Onboarding usually triggers a REGISTER
+    #       via step 7 (open MosaicMesh page); for fresh-imaged iPads
+    #       you may need a second onboarding pass.
+    if ($status -eq "OK" -and $pkgsToInstall) {
+        try {
+            # Look up the iPad's clientKey via /api/discovery/devices.
+            $devs = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/devices" -TimeoutSec 5
+            $devList = if ($devs.devices) { $devs.devices } else { $devs }
+            $thisDev = $devList | Where-Object { $_.ip -eq $hostName } | Select-Object -First 1
+            if ($thisDev -and $thisDev.clientKey) {
+                $body = @{
+                    action = "set_cache_mode"
+                    clientKey = $thisDev.clientKey
+                    mode = "lighttpd-localhost"
+                } | ConvertTo-Json -Compress
+                $resp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $body -TimeoutSec 5
+                if ($resp.status -eq "SUCCESS") {
+                    Write-Host "  cacheMode: server marked $($thisDev.clientKey) as lighttpd-localhost" -ForegroundColor Green
+                } else {
+                    Write-Host "  cacheMode response unexpected: $($resp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
+            } else {
+                Write-Host "  cacheMode: no clientKey for ip=$hostName in discovery API yet" -ForegroundColor DarkYellow
+                Write-Host "                (run onboarding again after iPad first REGISTERs)" -ForegroundColor DarkYellow
+            }
+        } catch {
+            Write-Host "  cacheMode set failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
