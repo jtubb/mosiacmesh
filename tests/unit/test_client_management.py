@@ -227,27 +227,57 @@ class TestDiscoveryData:
 
 class TestClientHandlers:
     """Test client disconnect and management handlers"""
-    
+
     def test_handle_client_disconnect(self, mock_settings, mock_client):
         """Test client disconnect handler updates client state"""
         session_id = "test_session_123"
         mock_client.clientID = session_id
         mock_settings.clients["test123"] = mock_client
         server.settings = mock_settings
-        
+
         # Mock time.time() to control lastSeen
         with patch('time.time', return_value=12345):
             server.handle_client_disconnect(session_id)
-        
+
         assert mock_client.lastSeen == 12345
         assert mock_client.ready is False
-    
+
     def test_handle_client_disconnect_no_client(self, mock_settings):
         """Test disconnect handler gracefully handles unknown session"""
         server.settings = mock_settings
-        
+
         # Should not raise an exception
         server.handle_client_disconnect("unknown_session")
-        
+
         # Settings should remain unchanged
         assert len(mock_settings.clients) == 0
+
+
+class TestClientCacheFields:
+    """Test cache-state fields added in 2026-06-03"""
+
+    def test_client_cachemode_default_is_none(self):
+        c = server.Client()
+        assert c.cacheMode == "none"
+
+    def test_client_cachedsegments_default_is_empty_set(self):
+        c = server.Client()
+        assert c.cachedSegments == set()
+        # mutating one client's set must not affect another's
+        c.cachedSegments.add("abc_1")
+        c2 = server.Client()
+        assert c2.cachedSegments == set()
+
+    def test_migrate_backfills_cache_fields_on_old_client(self, mock_settings):
+        """A Client pickled before the cache fields were added should get
+        backfilled to defaults by migrate_client_objects()."""
+        server.settings = mock_settings
+        c = server.Client()
+        # Simulate a pre-cache-fields Client by deleting the attributes
+        del c.cacheMode
+        del c.cachedSegments
+        server.settings.clients["legacy"] = c
+        server.migrate_client_objects()
+        after = server.settings.clients["legacy"]
+        assert after.cacheMode == "none"
+        assert after.cachedSegments == set()

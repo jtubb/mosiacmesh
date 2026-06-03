@@ -1468,6 +1468,19 @@ class Client():
         self.capabilities = []
         self.autoConfigured = False
         self.discoverySource = "manual"  # manual, websocket, network
+        # Cache-state model (2026-06-03). cacheMode = "none" by default;
+        # set to "lighttpd-localhost" by onboarding when the iPad has
+        # lighttpd installed and a writable /var/mobile/Media/
+        # MosaicMeshCache/ dir. Set to "service-worker" by the client's
+        # ANNOUNCE_CACHE_MODE message when SW registration succeeds.
+        # See docs/superpowers/specs/2026-06-03-media-cache-design.md.
+        self.cacheMode = "none"
+        # Hashes of segments currently cached on this device, in the
+        # form "<encode_ver_hash>_<segment_index>" (matches the
+        # seg_<HASH>_<N>.mp4 filename convention from the render
+        # pipeline). Populated by _push_segment_to_cached_clients on
+        # successful scp; pruned by _reconcile_ipad_cache.
+        self.cachedSegments = set()
 
 async def ws_handler(manager, session, msg):
     # sockjs >=0.12 handler signature: (manager, session, msg).
@@ -4003,6 +4016,10 @@ def migrate_client_objects():
             # so reverse-DNS won't clobber it.
             fn = client.friendlyName or ""
             client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
+        if not hasattr(client, 'cacheMode'):
+            client.cacheMode = "none"
+        if not hasattr(client, 'cachedSegments'):
+            client.cachedSegments = set()
         # Backfill lifecycle-script defaults onto devices registered before the
         # automation existed (their fields are absent/None -> show as null).
         _apply_default_scripts(client)
