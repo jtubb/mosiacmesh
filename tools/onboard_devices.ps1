@@ -741,31 +741,56 @@ foreach ($h in $targets) {
     #       The single key we need is `Enabled` = bool; extracted from
     #       strings on the dylib + InsomniaSettings prefs binary (2026-06-02).
     #       Owner: mobile:mobile, mode 644 (standard for user-domain prefs).
-    if ($status -eq "OK" -and $pkgsToInstall) {
+    #
+    #       Deployed via scp from tools/com.malcolmhall.Insomnia.plist
+    #       (same fix as 5.4d/5.4e): the earlier inline-heredoc with
+    #       backtick-escaped double quotes intermittently lost quotes
+    #       during PowerShell -> ssh -> bash argv flattening. An
+    #       unquoted-attribute plist parses as nil in
+    #       NSPropertyListSerialization, leaving Enabled=false and
+    #       Insomnia inert. Confirmed on .69 (Jun 3 09:15 onboarding)
+    #       which had a 213-byte plist with no quotes; subsequent
+    #       passes that happened to keep quotes intact landed 223
+    #       bytes correctly. Shipping the file removes the
+    #       non-determinism.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
         $insomniaPlistPath = '/var/mobile/Library/Preferences/com.malcolmhall.Insomnia.plist'
-        $writeInsomnia = (
-            "cat > $insomniaPlistPath << 'PLIST'`n" +
-            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
-            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
-            "<plist version=`"1.0`">`n" +
-            "<dict>`n" +
-            "    <key>Enabled</key>`n" +
-            "    <true/>`n" +
-            "</dict>`n" +
-            "</plist>`n" +
-            "PLIST`n" +
-            "chown mobile:mobile $insomniaPlistPath; chmod 644 $insomniaPlistPath;" +
-            " echo INSOMNIA_CONFIGURED"
-        )
-        try {
-            $iOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $writeInsomnia 2>&1) | Out-String
-            if ($iOut -match 'INSOMNIA_CONFIGURED') {
-                Write-Host "  insomnia: enabled (WiFi stays awake when screen is off)" -ForegroundColor Green
-            } else {
-                Write-Host "  insomnia config unexpected: $($iOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+        $insomniaPlistSrc = Join-Path $PSScriptRoot 'com.malcolmhall.Insomnia.plist'
+        if (-not (Test-Path $insomniaPlistSrc)) {
+            Write-Host "  insomnia plist: source file missing at $insomniaPlistSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                & $scp -i $KeyPath -P $p @sshLegacy $insomniaPlistSrc "${User}@${hostName}:$insomniaPlistPath" 2>&1 | Out-Null
+                # Fix ownership (scp lands files as root:wheel; the
+                # plist needs mobile:mobile so SpringBoard's
+                # preference daemon can read+rewrite it as the
+                # mobile user) and verify the quoted-attribute
+                # signature on disk.
+                # scp preserves byte-identical content, so file
+                # presence + non-empty is a sufficient verify. We
+                # deliberately avoid embedding double quotes in the
+                # ssh command body here -- the whole point of this
+                # refactor is to never send quotes through the
+                # PowerShell -> ssh.exe -> bash pipeline again.
+                $fixOwn = (
+                    "chown mobile:mobile $insomniaPlistPath;" +
+                    " chmod 644 $insomniaPlistPath;" +
+                    " if [ -s $insomniaPlistPath ];" +
+                    " then echo INSOMNIA_CONFIGURED;" +
+                    " else echo INSOMNIA_EMPTY;" +
+                    " fi"
+                )
+                $iOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $fixOwn 2>&1) | Out-String
+                if ($iOut -match 'INSOMNIA_CONFIGURED') {
+                    Write-Host "  insomnia: enabled (WiFi stays awake when screen is off)" -ForegroundColor Green
+                } elseif ($iOut -match 'INSOMNIA_EMPTY') {
+                    Write-Host "  insomnia: file empty after scp -- rerun" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  insomnia config unexpected: $($iOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  insomnia config failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "  insomnia config failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
@@ -885,9 +910,31 @@ foreach ($h in $targets) {
     if ($status -eq "OK" -and $pkgsToInstall) {
         try {
             # Look up the iPad's clientKey via /api/discovery/devices.
+            # The API exposes each client by its registered IP (e.g.
+            # "192.168.1.70"), so we have to translate $hostName ->
+            # IP before the lookup. Without this, -HostFile entries
+            # like "sign1screen4.home.lan" never matched the API's
+            # numeric IP and every device printed a false
+            # "no clientKey ... yet" warning even though it had
+            # registered fine.
+            #
+            # Resolve via .NET DNS (works for mDNS .local/.home.lan
+            # entries on Windows too). If $hostName was already an
+            # IP, GetHostAddresses round-trips it through.
+            $hostIP = $hostName
+            try {
+                $resolved = [System.Net.Dns]::GetHostAddresses($hostName) |
+                    Where-Object { $_.AddressFamily -eq 'InterNetwork' } |
+                    Select-Object -First 1
+                if ($resolved) { $hostIP = $resolved.IPAddressToString }
+            } catch {
+                # Resolution failed; fall through with $hostIP = $hostName
+                # so the API match still works for raw-IP -Hosts callers.
+            }
+
             $devs = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/devices" -TimeoutSec 5
             $devList = if ($devs.devices) { $devs.devices } else { $devs }
-            $thisDev = $devList | Where-Object { $_.ip -eq $hostName } | Select-Object -First 1
+            $thisDev = $devList | Where-Object { $_.ip -eq $hostIP } | Select-Object -First 1
             if ($thisDev -and $thisDev.clientKey) {
                 $body = @{
                     action = "set_cache_mode"
@@ -908,7 +955,7 @@ foreach ($h in $targets) {
                     Write-Host "  cacheMode response unexpected: $($resp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
                 }
             } else {
-                Write-Host "  cacheMode: no clientKey for ip=$hostName in discovery API yet" -ForegroundColor DarkYellow
+                Write-Host "  cacheMode: no clientKey for ip=$hostIP (host=$hostName) in discovery API yet" -ForegroundColor DarkYellow
                 Write-Host "                (run onboarding again after iPad first REGISTERs)" -ForegroundColor DarkYellow
             }
         } catch {

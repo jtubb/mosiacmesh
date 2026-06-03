@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Insomnia (com.malcolmhall.Insomnia) preferences.
+
+    Deployed by tools/onboard_devices.ps1 step 5.4c via scp to
+    /var/mobile/Library/Preferences/com.malcolmhall.Insomnia.plist
+    on each iPad. The earlier inline-heredoc approach (PowerShell ->
+    ssh -> bash with backtick-escaped double quotes) intermittently
+    lost the quotes around XML attribute values, producing a plist
+    that NSPropertyListSerialization silently rejects, which leaves
+    Insomnia in its default-OFF state and our iPads' WiFi enters
+    power-save when the screen blanks. scp-from-local guarantees
+    byte-identical content.
+
+    Note: the Cydia package id is `com.imalc.insomnia` but the
+    CFBundleIdentifier the dylib reads is `com.malcolmhall.Insomnia`
+    -- imalc is the author's alias, malcolmhall is the actual id.
+    Don't be fooled into checking the wrong preferences file.
+
+    Only one key matters: Enabled = true. Without it, the
+    MobileSubstrate hook loads but does nothing.
+-->
+<plist version="1.0">
+<dict>
+    <key>Enabled</key>
+    <true/>
+</dict>
+</plist>
