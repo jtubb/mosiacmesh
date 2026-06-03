@@ -437,11 +437,58 @@ def auto_configure_client(client_key, client):
     
     logging.info(f"Auto-configured client {client.friendlyName} -> {client.displayID}")
 
+def _expected_seg_keys_for_display(display):
+    """Set of seg_KEY strings (token_n) the display CURRENTLY expects
+    to be cached on any lighttpd-localhost iPad in its group. Driven
+    by the display's renderedToken (so a stale cache for a previous
+    render isn't counted as 'have'). Empty set if the display has no
+    renderedToken or no renderable SEGMENT items."""
+    if not display or not getattr(display, "renderedToken", None):
+        return set()
+    token = display.renderedToken
+    keys = set()
+    for i, me in enumerate(getattr(display, "mediaElements", []) or []):
+        if _is_renderable(me) and isVideoItem(me.file) \
+                and me.playmode == PlayMode.SEGMENT:
+            keys.add("%s_%d" % (token, i))
+    return keys
+
+
+def _expected_segments_for_client(client):
+    """Number of seg_ items this client SHOULD have cached given the
+    current rendered token of its display group. Operator-facing
+    convenience; the denominator of propagationPercent."""
+    did = getattr(client, "displayID", None)
+    if not did:
+        return 0
+    return len(_expected_seg_keys_for_display(settings.displays.get(did)))
+
+
+def _propagation_percent_for_client(client):
+    """0-100. Fraction of currently-expected segments this client has
+    in cachedSegments. Returns 100.0 for clients in displays with no
+    renderable segments (vacuously cached -- nothing to propagate).
+    Returns 100.0 for non-iPad / cacheMode=none clients too: the bar
+    is meaningful only for lighttpd-localhost iPads, but we don't want
+    a noisy 0% to drag down aggregates."""
+    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
+        return 100.0
+    did = getattr(client, "displayID", None)
+    if not did:
+        return 100.0
+    expected = _expected_seg_keys_for_display(settings.displays.get(did))
+    if not expected:
+        return 100.0
+    cached = getattr(client, "cachedSegments", set()) or set()
+    have = sum(1 for k in expected if k in cached)
+    return round(100.0 * have / len(expected), 1)
+
+
 def get_discovered_devices():
     """Get all discovered devices with discovery metadata"""
     discovered = []
     current_time = time.time()
-    
+
     for client_key, client in settings.clients.items():
         device_info = {
             "clientKey": client_key,
@@ -475,6 +522,14 @@ def get_discovered_devices():
             # somehow slipped through migrate_client_objects.
             "cacheMode": getattr(client, "cacheMode", "none"),
             "cachedSegments": sorted(list(getattr(client, "cachedSegments", set()) or set())),
+            # Progress-aware fields (2026-06-03 second iteration).
+            # cachePushProgress is None when idle, dict when active --
+            # see Client.cachePushProgress for the schema. The two
+            # derived fields below let dashboards render
+            # "cached N/M (P%)" without computing it themselves.
+            "cachePushProgress": getattr(client, "cachePushProgress", None),
+            "expectedSegments": _expected_segments_for_client(client),
+            "propagationPercent": _propagation_percent_for_client(client),
         }
         discovered.append(device_info)
     
@@ -4299,12 +4354,49 @@ async def api_discovery_stats(request):
         gid = d["displayID"] or "default"
         display_groups[gid] = display_groups.get(gid, 0) + 1
     total = cache_stats['hits'] + cache_stats['misses']
+
+    # Per-display-group cache propagation: counts each lighttpd-
+    # localhost iPad in the group as one of {fullyCached, pushing,
+    # stalled, idle}. Empty for groups without a renderedToken or
+    # without renderable SEGMENT items -- the bar is meaningless
+    # there and the admin UI uses absence to hide the widget.
+    group_prop = {}
+    for did, display in settings.displays.items():
+        expected_keys = _expected_seg_keys_for_display(display)
+        if not expected_keys:
+            continue
+        total_g = 0
+        full = pushing = stalled = idle = 0
+        for k, c in settings.clients.items():
+            if getattr(c, "displayID", None) != did:
+                continue
+            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
+                continue
+            total_g += 1
+            cached = getattr(c, "cachedSegments", set()) or set()
+            if expected_keys.issubset(cached):
+                full += 1
+            elif getattr(c, "cachePushProgress", None):
+                if c.cachePushProgress.get("status") == "stalled":
+                    stalled += 1
+                else:
+                    pushing += 1
+            else:
+                idle += 1
+        if total_g > 0:
+            group_prop[did] = {
+                "total": total_g, "fullyCached": full,
+                "pushing": pushing, "stalled": stalled, "idle": idle,
+                "percent": round(100.0 * full / total_g, 1),
+            }
+
     return web.json_response({
         "success": True,
         "totalDevices": len(devices),
         "onlineDevices": len([d for d in devices if d["isOnline"]]),
         "autoConfiguredDevices": len([d for d in devices if d["autoConfigured"]]),
         "displayGroups": display_groups,
+        "displayGroupPropagation": group_prop,
         "cacheStats": {
             "hits": cache_stats['hits'],
             "misses": cache_stats['misses'],
