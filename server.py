@@ -429,7 +429,14 @@ def get_discovered_devices():
             "capabilities": client.capabilities,
             "autoConfigured": client.autoConfigured,
             "discoverySource": client.discoverySource,
-            "connectionCount": client.connectionCount
+            "connectionCount": client.connectionCount,
+            # Media-cache state (2026-06-03). cachedSegments is a Python
+            # set in memory; serialize as a sorted list for the API so
+            # operators see a stable order. getattr guards against
+            # Clients in settings.dat that pre-dated these fields and
+            # somehow slipped through migrate_client_objects.
+            "cacheMode": getattr(client, "cacheMode", "none"),
+            "cachedSegments": sorted(list(getattr(client, "cachedSegments", set()) or set())),
         }
         discovered.append(device_info)
     
@@ -1944,25 +1951,35 @@ async def _reconcile_ipad_cache(client):
         return
     # Build set of seg_HASH_N keys currently referenced by this
     # client's display group's playlist.
+    #
+    # The cache key produced by _push_segment_to_cached_clients is
+    # "<renderedToken>_<item_index>" -- so in-use entries derive from
+    # the display's current renderedToken + the enumerated index of
+    # each SEGMENT-mode MediaElement. (Older variants of this code
+    # tried to parse seg_HASH from item.file via regex, but item.file
+    # holds the SOURCE path like '/media/server/videos/<...>.mov'
+    # rather than the rendered seg_HASH_N.mp4 filename -- that's set
+    # per-client by _per_client_items at PRELOAD time, not on the
+    # shared MediaElement. So the regex fallback never matched in
+    # production and was deleting ALL cached segments as 'orphans'
+    # right after every successful push.)
     in_use = set()
     did = getattr(client, "displayID", None)
     display = settings.displays.get(did) if did else None
     if display:
+        token = getattr(display, "renderedToken", None)
+        if token:
+            for i, item in enumerate(getattr(display, "mediaElements", []) or []):
+                pm = getattr(item, "playmode", None)
+                pm_name = pm.name if hasattr(pm, "name") else (pm if isinstance(pm, str) else None)
+                if pm_name == "SEGMENT":
+                    in_use.add(f"{token}_{i}")
+        # Test-stub fallback: some unit tests pass items with explicit
+        # seg_hash/seg_n attributes (the _It stub in test_media_cache.py).
+        # Honour those when present so the existing test contract holds.
         for item in (getattr(display, "mediaElements", []) or []):
-            # Handle both PlayMode enum (real ME) and string (wire/test stub)
-            pm = getattr(item, "playmode", None)
-            pm_name = pm.name if hasattr(pm, "name") else (pm if isinstance(pm, str) else None)
-            if pm_name != "SEGMENT":
-                continue
             h = getattr(item, "seg_hash", None)
             n = getattr(item, "seg_n", None)
-            if h is None or n is None:
-                # Try to parse from file path (same regex used in
-                # _resolve_media_url; the seg_HASH_N.mp4 pattern).
-                file_str = getattr(item, "file", "") or ""
-                m = _SEG_FILE_RE.search(file_str)
-                if m:
-                    h = m.group(1); n = m.group(2)
             if h is not None and n is not None:
                 in_use.add(f"{h}_{n}")
     stale = set(client.cachedSegments) - in_use

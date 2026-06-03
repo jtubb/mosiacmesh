@@ -209,6 +209,75 @@ def test_reconcile_removes_orphan_hashes_from_cachedSegments():
     assert c.cachedSegments == {"keep_1"}
 
 
+def test_reconcile_preserves_cached_segment_when_token_matches():
+    """Regression for the 2026-06-03 bug: with real MediaElement objects
+    whose .file is the SOURCE path (not the rendered seg URL), the
+    janitor was building an empty in_use set and deleting EVERY
+    cached segment immediately after push. The fix derives in_use
+    from display.renderedToken + item index, not from parsing
+    item.file. This test uses the production shape (real
+    MediaElement, source-path .file, renderedToken set on display)
+    and asserts the just-pushed hash stays cached."""
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"; c.displayID = "Test Group"
+    c.cachedSegments = {"9a27f533acb6_1"}  # just-pushed segment
+    server.settings.clients["ipad1"] = c
+
+    d = server.Display(); d.displayID = "Test Group"
+    d.renderedToken = "9a27f533acb6"
+    bouncing = server.MediaElement()
+    bouncing.playmode = server.PlayMode.SCRIPT
+    bouncing.file = "bouncingBalls"
+    bunny = server.MediaElement()
+    bunny.playmode = server.PlayMode.SEGMENT
+    bunny.file = "/media/server/videos/big_buck_bunny_1080p_h264.mov"  # SOURCE, not seg
+    d.mediaElements = [bouncing, bunny]
+    server.settings.displays["Test Group"] = d
+
+    fake = AsyncMock()
+    with patch("asyncio.create_subprocess_exec", fake):
+        _run(server._reconcile_ipad_cache(c))
+    assert c.cachedSegments == {"9a27f533acb6_1"}, \
+        f"cachedSegments was wrongly pruned: {c.cachedSegments}"
+    fake.assert_not_called()
+
+
+def test_reconcile_evicts_when_token_changes():
+    """After encode_ver bumps -> new renderedToken -> old cached
+    hashes become orphan -> should be swept."""
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"; c.displayID = "G"
+    c.cachedSegments = {"OLDhash_1", "NEWhash_1"}
+    server.settings.clients["ipad1"] = c
+
+    d = server.Display(); d.displayID = "G"; d.renderedToken = "NEWhash"
+    # bouncing balls at index 0 (SCRIPT) + bunny at index 1 (SEGMENT)
+    # mirrors the production Test playlist shape. Push uses the
+    # enumerated index from display.mediaElements, so the bunny
+    # segment's cache key is <token>_1.
+    bouncing = server.MediaElement()
+    bouncing.playmode = server.PlayMode.SCRIPT
+    bouncing.file = "bouncingBalls"
+    bunny = server.MediaElement()
+    bunny.playmode = server.PlayMode.SEGMENT
+    bunny.file = "/media/server/videos/source.mov"
+    d.mediaElements = [bouncing, bunny]
+    server.settings.displays["G"] = d
+
+    fake_proc = MagicMock(); fake_proc.returncode = 0
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+    async def fake_subproc(*a, **k): return fake_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_subproc):
+        _run(server._reconcile_ipad_cache(c))
+    assert c.cachedSegments == {"NEWhash_1"}, \
+        f"expected only the current-token hash, got {c.cachedSegments}"
+
+
 def test_reconcile_noop_for_non_lighttpd_clients():
     """Service-worker / none clients have no on-device cache to clean;
     janitor should skip them entirely (no ssh attempts)."""
