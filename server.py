@@ -125,10 +125,16 @@ DEFAULT_DEVICE_SCRIPTS = {
                     "uiopen '" + DISPLAY_URL +
                     ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
                     "'; echo TEST_OK",
-    # Close Safari (the display client), re-enable auto-lock (login disabled it to
-    # keep the wall lit), and sleep the screen now via the sleep button. Symmetric
-    # with login: stop -> screen off + allowed to stay asleep.
-    "stopScript":   "killall MobileSafari 2>/dev/null; "
+    # Close the display client (Web.app for the home-screen webclip
+    # since 2026-06-03; MobileSafari for the legacy Safari fallback
+    # path), re-enable auto-lock (start disabled it via the boot
+    # LaunchDaemon's autolock-off), and sleep the screen now via the
+    # sleep button. Killing Web AND MobileSafari is belt-and-suspenders:
+    # whichever was foregrounded gets terminated, and the unused one
+    # is a no-op. Symmetric with start: stop -> screen off + allowed
+    # to stay asleep.
+    "stopScript":   "killall Web 2>/dev/null; "
+                    "killall MobileSafari 2>/dev/null; "
                     "activator send switch-on.com.a3tweaks.switch.autolock; "
                     "activator send libactivator.system.sleepbutton; echo STOP_OK",
     # Full device reboot.

@@ -979,6 +979,12 @@ foreach ($h in $targets) {
                 # PowerShell-side literal (not derived from the server)
                 # so the script is self-contained for fleet migrations
                 # without restarting the server.
+                # startScript is the SSH-exec fallback when the
+                # primary VNC-tap launch path fails (Veency
+                # unreachable, screen unresponsive). The primary path
+                # is server.py's _launch_webapp_via_vnc which taps
+                # the home-screen icon (matches the only working
+                # webclip-launch flow on iOS 5). See commit 5569318.
                 $newStartScript = "sbdidlaunch 'com.apple.webapp-4D6F736169634D6573684B696F736B31' 2>/dev/null" +
                                   " || uiopen '$DisplayUrl'; echo START_OK"
                 $startBody = @{
@@ -991,6 +997,29 @@ foreach ($h in $targets) {
                     Write-Host "  startScript: server-side updated to sbdidlaunch (webapp mode)" -ForegroundColor Green
                 } else {
                     Write-Host "  startScript update unexpected: $($startResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
+
+                # stopScript: kill the Web.app webclip (the display
+                # client since 2026-06-03's webapp-mode rollout) plus
+                # MobileSafari (legacy / Safari-fallback path), then
+                # autolock + sleep. Same belt-and-suspenders kill
+                # pattern as server.py's DEFAULT_DEVICE_SCRIPTS, kept
+                # PowerShell-side so the onboarding script is
+                # self-contained.
+                $newStopScript = "killall Web 2>/dev/null; " +
+                                 "killall MobileSafari 2>/dev/null; " +
+                                 "activator send switch-on.com.a3tweaks.switch.autolock; " +
+                                 "activator send libactivator.system.sleepbutton; echo STOP_OK"
+                $stopBody = @{
+                    clientKey = $thisDev.clientKey
+                    stopScript = $newStopScript
+                } | ConvertTo-Json -Compress
+                $stopResp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $stopBody -TimeoutSec 5
+                if ($stopResp.success -eq $true) {
+                    Write-Host "  stopScript: server-side updated (kills Web + MobileSafari)" -ForegroundColor Green
+                } else {
+                    Write-Host "  stopScript update unexpected: $($stopResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
                 }
             } else {
                 Write-Host "  cacheMode: no clientKey for ip=$hostIP (host=$hostName) in discovery API yet" -ForegroundColor DarkYellow
