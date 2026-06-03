@@ -1021,7 +1021,7 @@ foreach ($h in $targets) {
                           "echo WEBCLIP_OK"
                 $wOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $sedCmd 2>&1) | Out-String
                 if ($wOut -match 'WEBCLIP_OK') {
-                    Write-Host "  webclip: installed (operator: tap the new home-screen icon once)" -ForegroundColor Green
+                    Write-Host "  webclip: installed; step 7 below launches it via sbdidlaunch" -ForegroundColor Green
                 } else {
                     Write-Host "  webclip install unexpected: $($wOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
                 }
