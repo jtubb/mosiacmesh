@@ -172,6 +172,22 @@ SockJS:
 3. Restart server. In-flight pushes from the previous-code period are aborted; their state was best-effort anyway. `force_push` re-queues whatever's still uncached.
 4. Validate visually on `admin.html` with the next render → push cycle.
 
+## Known limitation: iPad-1 byte-level granularity
+
+On iPad-1 / iOS 5.1.1, the long-running ssh poller often shows `bytesSent=0` for the entire push duration even when scp is genuinely making progress in the background. Root cause is some combination of:
+
+- BSD libc block-buffering on iPad's bash when stdout is a pipe (the remote `stat -c%s` output may not flush until the loop iteration exits, but the loop never exits)
+- iPad-1 sshd's tight concurrent-connection limit competing with the actual scp transfer
+- The legacy SHA-1 ssh handshake taking 5-20s per fresh connection
+
+When this hits, the system **degrades gracefully**:
+
+- Stall protection still works (`seen_nonzero` guard prevents premature kills, so pushes complete normally)
+- The cached/pushing/idle count UI still updates correctly (status flips happen on push start/success/stall events, not byte ticks)
+- The push-success log (`cache-push: ... -> ip`) fires, CACHE_PROGRESS with `status=cached` broadcasts, the bar increments
+
+The byte-level percent overlay band on the admin.html bar will simply not animate for those pushes — the bar grows in 24ths as each push completes rather than smoothly. This is acceptable for v1; a future iteration could add ssh ControlMaster multiplexing or replace the polling with a parsed scp -v progress stream.
+
 ## Out of scope (intentionally)
 
 - **Per-device cache column on discovery.html** — operator answered "only admin.html". Per-iPad detail is in `/api/discovery/devices` JSON if needed.
