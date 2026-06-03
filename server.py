@@ -3883,13 +3883,15 @@ async def api_discovery_stats(request):
     })
 
 async def api_discovery_configure(request):
-    """REST: configure client(s). Supports four payload styles:
+    """REST: configure client(s). Supports five payload styles:
 
       - {"clientKey", "displayID"?, "friendlyName"?}      -> update fields
       - {"action": "reconfigure", "clientKey"}            -> re-run auto-config
       - {"action": "bulk_reconfigure", "clientKeys": [...]}-> re-run for many
       - {"action": "swap_orientation", "clientKey"}        -> swap canvas dims +
         clear measuredPerimeter (force a re-calibrate at the new orientation)
+      - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
+        "none", "lighttpd-localhost", or "service-worker"
 
     (The action-based forms preserve the contract that discovery.html uses.)
     """
@@ -3935,6 +3937,14 @@ async def api_discovery_configure(request):
         client.measuredPerimeter = None
         logging.info("swap_orientation: %s canvas %sx%s -> %sx%s",
                      client_key, cw, ch, ch, cw)
+    elif action == "set_cache_mode":
+        mode = data.get("mode")
+        if mode not in ("none", "lighttpd-localhost", "service-worker"):
+            return web.json_response({"success": False,
+                                      "error": f"invalid mode {mode!r}"},
+                                     status=400)
+        client.cacheMode = mode
+        logging.info("set_cache_mode: %s -> %s", client_key, mode)
     else:
         if "displayID" in data:
             client.displayID = data["displayID"]
