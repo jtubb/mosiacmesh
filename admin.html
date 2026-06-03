@@ -287,6 +287,15 @@
 			}
 			adminScheduleRefresh();
 		}
+		else if(data_obj.REQUEST == "CACHE_PROGRESS")
+		{
+			// Per-iPad cache-push progress tick from the server's
+			// _poll_push_progress coroutine. Updates the per-display-
+			// group propagation bar incrementally. iPad clients
+			// receive these too (DEST=ALL); they have no handler so
+			// the message is silently dropped there.
+			onCacheProgress(data_obj.PAYLOAD || {});
+		}
 	}
 
 	// Status badges are rendered as a DOM decoration AFTER each node draws (see
@@ -327,6 +336,22 @@
 			var calib = d.boundingBox ? '<span class="badge ok">calibrated</span>' : '<span class="badge warn">not calibrated</span>';
 			var $card = $('<div class="card">').html('<b>'+id+'</b> '+calib+'<br><span class="size" style="color:var(--text-muted)">'
 				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">▶ playing</span>' : 'idle') + '</span>');
+			// Cache propagation bar (hidden until /api/discovery/stats
+			// reports a non-empty entry for this group). data-display-id
+			// is the addressing key both initPropagationBars and
+			// onCacheProgress use to find the right element.
+			$card.append(
+				'<div class="cache-propagation" data-display-id="' + id + '" style="display:none">' +
+				'  <div class="cache-propagation-label">' +
+				'    <span><strong>Cache</strong> <span class="cache-propagation-counts">—</span></span>' +
+				'    <span class="cache-propagation-percent">0%</span>' +
+				'  </div>' +
+				'  <div class="cache-propagation-bar">' +
+				'    <div class="cache-propagation-fill cache-propagation-fill-inflight" style="width:0%"></div>' +
+				'    <div class="cache-propagation-fill" style="width:0%"></div>' +
+				'  </div>' +
+				'</div>'
+			);
 			$('<button class="btn btn-ghost" type="button" style="margin-top:var(--s2)">⟳ Reload</button>')
 				.attr('title', 'Reload displays in "'+id+'"')
 				.on('click', function(){ adminReloadGroup(id); })
@@ -337,6 +362,104 @@
 		$('#nowPlaying').text(playing.length ? ('▶ ' + playing.join(', ')) : '');
 		window._groupCount = Object.keys(displays || {}).length;
 		adminRenderSummary();
+		// Re-hydrate propagation state from /api/discovery/stats now
+		// that the overview cards (the elements the bar binds to) have
+		// been rebuilt. Without this, a DISPLAYS refresh would wipe
+		// the bar DOM and we'd be stuck at zero until the next push.
+		initPropagationBars();
+	}
+
+	// Per-display-group cache propagation tracking.
+	// Spec: docs/superpowers/specs/2026-06-03-cache-progress-and-
+	// propagation-ui.md. State map is keyed by displayID; each entry
+	// holds the counters we display + a map of in-flight pushes
+	// (clientKey -> percent) so we can sum the in-flight contribution
+	// to the bar's lighter overlay band. Server pushes CACHE_PROGRESS
+	// over SockJS at each poller tick (~2s) plus on push start/end.
+	window._propagationState = window._propagationState || {};
+
+	function renderPropagationBar(displayID) {
+		var $el = $('.cache-propagation[data-display-id="' + displayID + '"]');
+		if (!$el.length) return;
+		var s = window._propagationState[displayID];
+		if (!s) { $el.hide(); return; }
+		var cachedPct = s.total ? (100 * s.fullyCached / s.total) : 0;
+		// In-flight contribution: each iPad currently pushing adds its
+		// own progress percent / total iPads. So a 50%-done push on 1
+		// of 24 iPads adds (50/24)% ≈ 2.1% to the bar's lighter band.
+		var inflightContrib = 0;
+		if (s.total && s.pushing) {
+			var pushVals = Object.keys(s.pushing).map(function(k){ return s.pushing[k] || 0; });
+			inflightContrib = pushVals.reduce(function(a,b){ return a+b; }, 0) / s.total;
+		}
+		$el.find('.cache-propagation-fill').not('.cache-propagation-fill-inflight')
+			.css('width', cachedPct + '%');
+		$el.find('.cache-propagation-fill-inflight')
+			.css('width', Math.min(100, cachedPct + inflightContrib) + '%');
+		var pushingN = s.pushing ? Object.keys(s.pushing).length : 0;
+		var stalledNote = s.stalled > 0 ? (' · <span style="color:#d32f2f">' + s.stalled + ' stalled</span>') : '';
+		$el.find('.cache-propagation-counts').html(
+			s.fullyCached + '/' + s.total + ' cached · ' + pushingN + ' pushing' + stalledNote
+		);
+		$el.find('.cache-propagation-percent').text(Math.round(cachedPct) + '%');
+		$el.toggleClass('stalled', s.stalled > 0);
+		$el.show();
+	}
+
+	function initPropagationBars() {
+		$.ajax({
+			url: '/api/discovery/stats',
+			cache: false,
+			dataType: 'json',
+			success: function(data) {
+				var groups = (data && data.displayGroupPropagation) || {};
+				// Preserve any in-flight push state we've accumulated
+				// from CACHE_PROGRESS broadcasts (the stats endpoint
+				// only knows about server-side counters; live push %
+				// lives client-side in s.pushing).
+				$.each(groups, function(displayID, agg) {
+					var prev = window._propagationState[displayID];
+					window._propagationState[displayID] = {
+						total: agg.total,
+						fullyCached: agg.fullyCached,
+						stalled: agg.stalled || 0,
+						idle: agg.idle || 0,
+						pushing: (prev && prev.pushing) || {}
+					};
+					renderPropagationBar(displayID);
+				});
+			},
+			error: function() {
+				// Stats endpoint unreachable -- bars stay hidden.
+				// Not noisy because this is best-effort UX, not
+				// a critical control path.
+			}
+		});
+	}
+
+	function onCacheProgress(payload) {
+		if (!payload || !payload.displayID) return;
+		var displayID = payload.displayID;
+		var s = window._propagationState[displayID];
+		if (!s) {
+			// Group not yet known on the client -- fetch full stats.
+			initPropagationBars();
+			return;
+		}
+		s.pushing = s.pushing || {};
+		if (payload.status === 'cached') {
+			delete s.pushing[payload.clientKey];
+			// fullyCached is authoritatively recomputed by the next
+			// /api/discovery/stats poll; for instant feedback we
+			// increment here, capped at total.
+			s.fullyCached = Math.min(s.total, (s.fullyCached || 0) + 1);
+		} else if (payload.status === 'stalled') {
+			delete s.pushing[payload.clientKey];
+			s.stalled = (s.stalled || 0) + 1;
+		} else {  // 'pushing' or any unknown active status
+			s.pushing[payload.clientKey] = payload.percent || 0;
+		}
+		renderPropagationBar(displayID);
 	}
 
 	// Aggregate count cards (media / playlists / schedules / groups), from the
@@ -917,6 +1040,23 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
   /* Some "all"-action buttons in the Overview are noise on mobile */
   .toolbar { flex-wrap: wrap; }
 }
+
+/* Cache propagation bar (per display group overview card).
+   Spec: docs/superpowers/specs/2026-06-03-cache-progress-and-
+   propagation-ui.md. Two overlaid fills: the solid green band is
+   the count of iPads with the full segment set cached; the
+   lighter green band on top of it shows in-flight push progress
+   contribution. Stalled iPads color the count chip red. */
+.cache-propagation { margin: 6px 0 2px; font-size: 12px; }
+.cache-propagation-label { display: flex; justify-content: space-between;
+    color: var(--text-muted); margin-bottom: 2px; }
+.cache-propagation-bar { position: relative; width: 100%; height: 6px;
+    background: var(--border); border-radius: 3px; overflow: hidden; }
+.cache-propagation-fill { position: absolute; top: 0; left: 0; height: 100%;
+    background: #2e7d32; transition: width 250ms ease-out; }
+.cache-propagation-fill-inflight { background: #81c784; opacity: 0.55; }
+.cache-propagation.stalled .cache-propagation-counts { color: #d32f2f;
+    font-weight: 600; }
   </style>
 </head>
 <body>
