@@ -113,3 +113,69 @@ def test_resolve_media_url_enum_non_segment_passthrough():
     me.playmode = server.PlayMode.SCRIPT
     me.file = "bouncingBalls"
     assert server._resolve_media_url(client, me) == "bouncingBalls"
+
+
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
+
+def _run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+def test_push_segment_adds_hash_to_cachedSegments_on_success():
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "ipad1"
+    c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"
+    server.settings.clients["ipad1"] = c
+
+    fake_proc = MagicMock()
+    fake_proc.returncode = 0
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return fake_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+        _run(server._push_segment_to_cached_clients("ipad1", "f00d", 1))
+
+    assert "f00d_1" in server.settings.clients["ipad1"].cachedSegments
+
+
+def test_push_segment_does_not_update_on_scp_failure():
+    server.settings = server.Settings()
+    c = server.Client()
+    c.clientKey = "ipad1"; c.ip = "192.168.1.50"; c.cacheMode = "lighttpd-localhost"
+    server.settings.clients["ipad1"] = c
+
+    fake_proc = MagicMock()
+    fake_proc.returncode = 1
+    fake_proc.communicate = AsyncMock(return_value=(b"", b"scp: connection refused\n"))
+
+    async def fake_create_subprocess_exec(*args, **kwargs):
+        return fake_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_create_subprocess_exec):
+        _run(server._push_segment_to_cached_clients("ipad1", "f00d", 1))
+
+    assert "f00d_1" not in server.settings.clients["ipad1"].cachedSegments
+
+
+def test_push_segment_skips_clients_not_in_lighttpd_mode():
+    """A client whose cacheMode is service-worker or none must NOT
+    have an scp attempted (we'd waste bandwidth and time)."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey="modern"; c.ip="192.168.1.100"; c.cacheMode="service-worker"
+    server.settings.clients["modern"] = c
+
+    fake_create = AsyncMock()
+    with patch("asyncio.create_subprocess_exec", fake_create):
+        _run(server._push_segment_to_cached_clients("modern", "f00d", 1))
+
+    fake_create.assert_not_called()

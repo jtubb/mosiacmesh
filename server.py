@@ -1057,7 +1057,8 @@ async def render_group_async(display_id):
         # Pass 1: collect all video render commands. Pass 2: gather them.
         # This lets us see the total job count and parallelise everything
         # in a single batch (across items AND across clients).
-        video_jobs = []   # list of (cmd, label)
+        video_jobs = []        # list of (cmd, label)
+        seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
         for i, me in seg_items:
             src_path = resolve_media_path(me.file)
             if isVideoItem(me.file):
@@ -1098,6 +1099,7 @@ async def render_group_async(display_id):
                         cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
                                                            out_w, out_h,
                                                            extra_video_filters=evf, extra_audio_filters=eaf)
+                        seg_push_targets.append((key, i))
                     video_jobs.append((cmd, key + "/" + str(i)))
             else:
                 img = cv.imread(src_path) if src_path else None
@@ -1135,6 +1137,14 @@ async def render_group_async(display_id):
             await asyncio.gather(*[_run_ffmpeg(cmd, lbl, sem) for cmd, lbl in video_jobs])
             logging.info("render: %d ffmpeg jobs done in %.1fs",
                          len(video_jobs), time.time() - t0)
+            # Cache-push: fire-and-forget scp of each seg_ file to its
+            # iPad's lighttpd cache dir. _push_segment_to_cached_clients
+            # is a no-op for clients not in lighttpd-localhost cacheMode,
+            # so it is safe to call unconditionally for every seg_ target.
+            # See docs/superpowers/specs/2026-06-03-media-cache-design.md
+            for _push_key, _push_n in seg_push_targets:
+                asyncio.ensure_future(
+                    _push_segment_to_cached_clients(_push_key, token, _push_n))
         display.renderedToken = token
         display.renderStatus = "ready"
         _broadcast_render_status(display_id, "ready")
@@ -1868,6 +1878,56 @@ async def _drop_pooled_vnc(client_key):
         await asyncio.get_event_loop().run_in_executor(None, proxy.disconnect)
     except Exception as e:
         logging.debug("veency pool disconnect for %s: %s", client_key, e)
+
+
+async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
+    """Scp a freshly-rendered per-iPad mp4 to the iPad's lighttpd cache
+    directory. Called from the render pipeline's success path for each
+    Client with cacheMode == "lighttpd-localhost".
+
+    Best-effort: a failed scp leaves the segment hash absent from
+    Client.cachedSegments, which means _resolve_media_url will hand
+    out the central-server URL for the next PLAY of this segment on
+    this iPad. Operator sees the failure in server.err and can re-run.
+
+    Spec: docs/superpowers/specs/2026-06-03-media-cache-design.md
+    section 'Render-complete push hook'."""
+    client = settings.clients.get(client_key)
+    if not client:
+        return
+    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
+        return
+    if not getattr(client, "ip", ""):
+        logging.warning("cache-push %s: no IP, skipping", client_key)
+        return
+    src = "media/%s/videos/seg_%s_%d.mp4" % (client_key, segment_hash, segment_n)
+    dst = ("%s@%s:/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
+           % (SSH_USER, client.ip, segment_hash, segment_n))
+    cmd = ["scp", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS + [src, dst]
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        try:
+            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            logging.warning("cache-push %s seg_%s_%d: timeout",
+                            client_key, segment_hash, segment_n)
+            return
+        if proc.returncode == 0:
+            client.cachedSegments.add("%s_%d" % (segment_hash, segment_n))
+            logging.info("cache-push: %s seg_%s_%d -> %s",
+                         client_key, segment_hash, segment_n, client.ip)
+        else:
+            tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
+            logging.warning("cache-push rc=%s for %s seg_%s_%d: %s",
+                            proc.returncode, client_key,
+                            segment_hash, segment_n, " | ".join(tail))
+    except Exception as e:  # noqa: BLE001
+        logging.warning("cache-push exception for %s seg_%s_%d: %s",
+                        client_key, segment_hash, segment_n, e)
 
 
 async def _auto_arm_client(client_key):
