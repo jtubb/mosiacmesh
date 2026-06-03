@@ -769,6 +769,50 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4d) write /etc/lighttpd/lighttpd.conf after tweaks are installed.
+    #       Binds to 127.0.0.1:8080 only (never LAN-accessible), serves
+    #       the cache directory, and sets correct MIME types for .mp4, .m4v,
+    #       .mov, .jpg, .png, etc. Same heredoc pattern as 5.4b (Veency) /
+    #       5.4c (Insomnia). lighttpd is lightweight and runs as mobile:mobile.
+    if ($status -eq "OK" -and $pkgsToInstall) {
+        $lighttpdConfig = (
+            "mkdir -p /etc/lighttpd /var/log /var/run /var/mobile/Media/MosaicMeshCache;`n" +
+            "chown mobile:mobile /var/mobile/Media/MosaicMeshCache;`n" +
+            "cat > /etc/lighttpd/lighttpd.conf << 'CONF'`n" +
+            "server.modules = ( `"mod_indexfile`", `"mod_dirlisting`", `"mod_staticfile`" )`n" +
+            "server.document-root = `"/var/mobile/Media/MosaicMeshCache/`"`n" +
+            "server.bind = `"127.0.0.1`"`n" +
+            "server.port = 8080`n" +
+            "server.errorlog = `"/var/log/lighttpd-error.log`"`n" +
+            "server.pid-file = `"/var/run/lighttpd.pid`"`n" +
+            "dir-listing.activate = `"disable`"`n" +
+            "mimetype.assign = (`n" +
+            "    `".mp4`"  => `"video/mp4`",`n" +
+            "    `".m4v`"  => `"video/x-m4v`",`n" +
+            "    `".mov`"  => `"video/quicktime`",`n" +
+            "    `".jpg`"  => `"image/jpeg`",`n" +
+            "    `".png`"  => `"image/png`",`n" +
+            "    `".html`" => `"text/html`",`n" +
+            "    `".js`"   => `"application/javascript`",`n" +
+            "    `".css`"  => `"text/css`",`n" +
+            "    `"`"      => `"application/octet-stream`"`n" +
+            ")`n" +
+            "index-file.names = ( `"index.html`" )`n" +
+            "CONF`n" +
+            "echo LIGHTTPD_CONF_OK"
+        )
+        try {
+            $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $lighttpdConfig 2>&1) | Out-String
+            if ($lOut -match 'LIGHTTPD_CONF_OK') {
+                Write-Host "  lighttpd config: written to /etc/lighttpd/lighttpd.conf" -ForegroundColor Green
+            } else {
+                Write-Host "  lighttpd config unexpected: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  lighttpd config failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
