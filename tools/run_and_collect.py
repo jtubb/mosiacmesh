@@ -102,17 +102,28 @@ async def start_testing(display_id):
 
 
 async def wait_for_reconnect(display_id, expected_count, timeout_s):
-    """Poll the discovery API for clients in the group that have completed
-    the SYN/SYNACK handshake (`synced=True`). This is a stronger readiness
-    signal than fresh `lastSeen` -- lastSeen ticks on any client message
-    including pre-handshake REGISTERs, while `synced=True` means the page
-    has finished its clock-sync round-trip AND is ready to receive
-    coordinated PREPARE/PLAY messages.
+    """Block until EVERY expected iPad in the group has completed the
+    SYN/SYNACK handshake (`synced=True`). Returns the synced count on
+    success; raises TimeoutError if the deadline is reached without
+    all iPads synced.
 
-    Without this gate, PREPARE can land before some iPads' page handlers
-    are wired up and the broadcast is silently dropped on the iPad side
-    (the recv-PREPARE handler bails when sock_callback isn't yet
-    registered). Empirically dropping PREPARE delivery from ~50% to ~0%."""
+    `synced=True` is a stronger readiness signal than fresh `lastSeen`:
+    lastSeen ticks on any client message including pre-handshake
+    REGISTERs, while `synced=True` only fires after GoTime's clock-sync
+    probe schedule converges and the page emits SYNACK back to the
+    server. Per js/GoTime.js:129, the probe schedule is
+    `[0, 3000, 9000, 18000, 45000]` ms after page load, and isSynced()
+    can only flip true once the rolling drift_history window is stable
+    -- so the physical floor on per-iPad sync is ~18-45 seconds AFTER
+    Safari finishes loading the page.
+
+    Without this gate (or with a too-short timeout), PREPARE/PLAY lands
+    while most iPads are still mid-sync and the broadcast is silently
+    dropped on the iPad side (recv-PREPARE bails when sock_callback
+    isn't yet registered). For the 24-iPad Test fleet, a safe timeout
+    is 120-180s -- timing out before all 24 are synced is treated as
+    test failure rather than "proceed with partial data" because
+    partial-fleet drift measurements are misleading."""
     deadline = time.time() + timeout_s
     async with aiohttp.ClientSession() as session:
         synced = 0
@@ -136,7 +147,15 @@ async def wait_for_reconnect(display_id, expected_count, timeout_s):
                 print()
                 return synced
     print()
-    return synced
+    # Surface the un-synced iPads so the operator knows which devices to
+    # investigate rather than just "timed out at N/M".
+    devs = data.get("devices", data) if isinstance(data, dict) else data
+    unsynced = [d.get("friendlyName") or d.get("ip") for d in devs
+                if d.get("displayID") == display_id
+                and not (d.get("synced", False) and d.get("isOnline", False))]
+    raise TimeoutError(
+        f"only {synced}/{expected_count} iPads reached synced=True within "
+        f"{timeout_s}s. Un-synced: {', '.join(unsynced) or '(none in group)'}")
 
 
 # CLIENTLOG line format in server.err:
@@ -238,10 +257,19 @@ async def main():
     print(f"step 1/4: firing Start Testing (RUN_SCRIPT test) on '{display_id}'")
     await start_testing(display_id)
 
-    print(f"step 2/4: waiting up to 30s for tdbg-mode reconnects "
-          f"(expecting ~{expected_clients} clients)")
-    n_reconnected = await wait_for_reconnect(display_id, expected_clients, 30)
-    print(f"  {n_reconnected} client(s) sending CLIENTLOG before we proceed")
+    print(f"step 2/4: waiting up to 180s for tdbg-mode reconnects "
+          f"(strict gate: all {expected_clients} iPads must reach "
+          f"synced=True; 180s ceiling is well above the GoTime "
+          f"physical floor of ~18-45s per iPad)")
+    try:
+        n_reconnected = await wait_for_reconnect(display_id, expected_clients, 180)
+    except TimeoutError as e:
+        print(f"\n  FAIL: {e}")
+        print(f"\n  Aborting -- partial-fleet PLAY produces misleading drift")
+        print(f"  data. Investigate the un-synced iPads above (likely SSH/WiFi)")
+        print(f"  or wait longer before re-running.")
+        sys.exit(2)
+    print(f"  {n_reconnected}/{expected_clients} client(s) synced; proceeding to PLAY")
 
     start_byte = os.path.getsize(LOG_PATH) if os.path.exists(LOG_PATH) else 0
     print(f"\nstep 3/4: server log mark: {start_byte} bytes; "
