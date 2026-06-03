@@ -1173,6 +1173,23 @@ def _broadcast_per_client_play(display_id, display):
                         "items": _per_client_items(display, key, c), "loop": display.loop}})
 
 
+def _broadcast_per_client_preload(display_id, media_elements):
+    """Send each client in a display group its own PRELOAD with per-client
+    media URLs resolved by _resolve_media_url.  Called instead of the
+    former broadcast_to_display_group(PRELOAD) so that iPad-1 devices in
+    lighttpd-localhost cacheMode receive localhost URLs for any segment
+    they have cached, while every other client gets the central-server URL
+    (identical to the old broadcast payload for those clients)."""
+    for key, c in _group_clients(display_id):
+        per_client_items = []
+        for me in media_elements:
+            d = _media_item_payload(me)
+            d["file"] = _resolve_media_url(c, me)
+            per_client_items.append(d)
+        broadcast_to_client(key, {"REQUEST": "PRELOAD",
+            "PAYLOAD": {"items": per_client_items}})
+
+
 # Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded
 # to .mp4 by ffmpeg regardless of source; FULL items play directly in the
 # browser (.mp4/.webm/.m4v are broadly playable, .mov needs h264/Safari/Chrome).
@@ -1616,9 +1633,7 @@ def _apply_playlist(display_id, pl):
     display = settings.displays.setdefault(display_id, Display())
     display.mediaElements = _build_media_elements(pl.items)
     display.loop = bool(pl.loop)
-    broadcast_to_display_group(display_id, {
-        "REQUEST": "PRELOAD",
-        "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}})
+    _broadcast_per_client_preload(display_id, display.mediaElements)
 
 
 def _start_group_playback(display_id, resume_epoch=None):
@@ -2480,10 +2495,7 @@ def msg_response(msg,session):
         display.mediaElements = _build_media_elements(payload.get("items", []))
         display.loop = bool(payload.get("loop", False))
         display.renderedToken = ""  # playlist changed -> needs (re)render
-        broadcast_to_display_group(display_id, {
-            "REQUEST": "PRELOAD",
-            "PAYLOAD": {"items": [_media_item_payload(me) for me in display.mediaElements]}
-        })
+        _broadcast_per_client_preload(display_id, display.mediaElements)
         response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "PLAY"):
