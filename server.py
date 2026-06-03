@@ -1166,14 +1166,31 @@ async def render_group_async(display_id):
 def _per_client_items(display, key, c):
     """Per-client playlist items: renderable items (SEGMENT/INDIVIDUAL) resolve to
     THIS client's warped file when calibrated, else the plain source. Shared by
-    the PLAY (GO) and PREPARE paths so both hand a client the same playable URL."""
+    the PLAY (GO) and PREPARE paths so both hand a client the same playable URL.
+
+    Media-cache aware (2026-06-03): when this client is in
+    cacheMode='lighttpd-localhost' AND has the segment cached locally
+    (seg_<token>_<i> in client.cachedSegments), the per-iPad URL is
+    rewritten to http://127.0.0.1:8080/seg_<token>_<i>.mp4 so the
+    iPad's Safari fetches from its local lighttpd instead of competing
+    for shared WiFi bandwidth at PLAY time. INDIVIDUAL-mode items are
+    NOT cached by this design (no ind_HASH_N tracking in cachedSegments),
+    so they keep the central-server URL. See spec
+    docs/superpowers/specs/2026-06-03-media-cache-design.md."""
     token = display.renderedToken
     items = []
+    cache_on = (getattr(c, "cacheMode", "none") == "lighttpd-localhost")
+    cached = getattr(c, "cachedSegments", set()) if cache_on else set()
     for i, me in enumerate(display.mediaElements):
         if _is_renderable(me) and c.measuredPerimeter is not None:
             prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
             ext = ".mp4" if isVideoItem(me.file) else ".png"
-            f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
+            seg_key = "%s_%d" % (token, i)
+            if (prefix == "seg_" and cache_on and seg_key in cached):
+                # Cache hit: localhost URL bypasses central server entirely.
+                f = "http://127.0.0.1:8080/seg_" + seg_key + ".mp4"
+            else:
+                f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
         else:
             f = me.file  # FULL item, or uncalibrated fallback to full source
         item = _media_item_payload(me)
@@ -1190,21 +1207,21 @@ def _broadcast_per_client_play(display_id, display):
                         "items": _per_client_items(display, key, c), "loop": display.loop}})
 
 
-def _broadcast_per_client_preload(display_id, media_elements):
+def _broadcast_per_client_preload(display_id, media_elements=None):
     """Send each client in a display group its own PRELOAD with per-client
-    media URLs resolved by _resolve_media_url.  Called instead of the
-    former broadcast_to_display_group(PRELOAD) so that iPad-1 devices in
-    lighttpd-localhost cacheMode receive localhost URLs for any segment
-    they have cached, while every other client gets the central-server URL
-    (identical to the old broadcast payload for those clients)."""
+    media URLs computed by _per_client_items -- the same function PLAY uses,
+    so PRELOAD and PLAY are consistent. iPad-1 devices in lighttpd-localhost
+    cacheMode + cached segment get localhost URLs; everyone else gets the
+    central-server per-client URL (matching legacy behavior). The legacy
+    `media_elements` parameter is accepted for backward compatibility but
+    ignored -- we read display.mediaElements via display_id."""
+    display = settings.displays.get(display_id)
+    if not display:
+        return
     for key, c in _group_clients(display_id):
-        per_client_items = []
-        for me in media_elements:
-            d = _media_item_payload(me)
-            d["file"] = _resolve_media_url(c, me)
-            per_client_items.append(d)
+        items = _per_client_items(display, key, c)
         broadcast_to_client(key, {"REQUEST": "PRELOAD",
-            "PAYLOAD": {"items": per_client_items}})
+                                  "PAYLOAD": {"items": items}})
 
 
 # Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded

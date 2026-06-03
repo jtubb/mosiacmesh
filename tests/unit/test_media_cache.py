@@ -278,6 +278,85 @@ def test_reconcile_evicts_when_token_changes():
         f"expected only the current-token hash, got {c.cachedSegments}"
 
 
+# --- _per_client_items production-path tests (the actual PLAY/PRELOAD
+#     URL routing). These cover the real-world architecture where
+#     URLs are derived from display.renderedToken + item index, not
+#     from item.seg_hash/seg_n attributes.
+
+def _build_test_display():
+    """Test fixture: Test playlist shape (bouncing balls SCRIPT at index 0,
+    big_buck_bunny SEGMENT at index 1)."""
+    d = server.Display()
+    d.displayID = "Test Group"
+    d.renderedToken = "9a27f533acb6"
+    bouncing = server.MediaElement()
+    bouncing.id = "b1"
+    bouncing.playmode = server.PlayMode.SCRIPT
+    bouncing.file = "bouncingBalls"
+    bouncing.duration = 10
+    bunny = server.MediaElement()
+    bunny.id = "b2"
+    bunny.playmode = server.PlayMode.SEGMENT
+    bunny.file = "/media/server/videos/big_buck_bunny_1080p_h264.mov"
+    bunny.duration = 597
+    d.mediaElements = [bouncing, bunny]
+    return d
+
+
+def test_per_client_items_emits_localhost_url_for_cached_lighttpd_client():
+    """The integration test: a real MediaElement playlist + a cached
+    iPad-1 produces a localhost URL for the SEGMENT item."""
+    d = _build_test_display()
+    c = server.Client()
+    c.clientKey = "ipad1"
+    c.cacheMode = "lighttpd-localhost"
+    c.cachedSegments = {"9a27f533acb6_1"}
+    c.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]  # any non-None
+    items = server._per_client_items(d, "ipad1", c)
+    # Item 0 (SCRIPT bouncingBalls) passes through .file unchanged
+    assert items[0]["file"] == "bouncingBalls"
+    # Item 1 (SEGMENT) gets localhost URL because it's cached
+    assert items[1]["file"] == "http://127.0.0.1:8080/seg_9a27f533acb6_1.mp4"
+
+
+def test_per_client_items_emits_central_url_for_uncached_segment():
+    """Same playlist, but the iPad's cachedSegments is empty -> falls
+    back to the central-server per-client URL."""
+    d = _build_test_display()
+    c = server.Client()
+    c.clientKey = "ipad1"
+    c.cacheMode = "lighttpd-localhost"
+    c.cachedSegments = set()  # not yet pushed
+    c.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
+    items = server._per_client_items(d, "ipad1", c)
+    assert items[1]["file"] == "/media/ipad1/seg_9a27f533acb6_1.mp4"
+    assert "127.0.0.1" not in items[1]["file"]
+
+
+def test_per_client_items_emits_central_url_for_service_worker_client():
+    """Modern devices (cacheMode=service-worker) always get central
+    URLs; their SW intercepts transparently. cachedSegments is ignored."""
+    d = _build_test_display()
+    c = server.Client()
+    c.clientKey = "modern"
+    c.cacheMode = "service-worker"
+    c.cachedSegments = {"9a27f533acb6_1"}  # doesn't matter
+    c.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
+    items = server._per_client_items(d, "modern", c)
+    assert items[1]["file"] == "/media/modern/seg_9a27f533acb6_1.mp4"
+
+
+def test_per_client_items_emits_central_url_for_cacheMode_none():
+    """Default-mode iPads (cacheMode=none) keep the legacy central URL."""
+    d = _build_test_display()
+    c = server.Client()
+    c.clientKey = "ipad2"
+    c.cacheMode = "none"
+    c.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
+    items = server._per_client_items(d, "ipad2", c)
+    assert items[1]["file"] == "/media/ipad2/seg_9a27f533acb6_1.mp4"
+
+
 def test_reconcile_noop_for_non_lighttpd_clients():
     """Service-worker / none clients have no on-device cache to clean;
     janitor should skip them entirely (no ssh attempts)."""
