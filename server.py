@@ -1961,9 +1961,21 @@ def _do_tap(proxy, cx, cy):
     """Synchronous worker: move pointer + click button 1. Runs in
     the default ThreadPoolExecutor (offloaded from the asyncio loop
     by _auto_arm_client) because vncdotool's proxy methods block
-    on the Twisted reactor's queue dispatch."""
+    on the Twisted reactor's queue dispatch.
+
+    After the click, park the pointer in the corner so the visible
+    mouse cursor drawn by jp.ashikase.mousesupport (a MobileSubstrate
+    tweak veency depends on) doesn't linger over the displayed video.
+    (0, 0) lands the cursor in the top-left corner -- the least
+    obtrusive on-screen position; full off-screen coords get clamped
+    by Veency to the screen bounds, so this is as hidden as we get
+    without a system-wide mousesupport plist change."""
     proxy.mouseMove(cx, cy)
     proxy.mousePress(1)
+    try:
+        proxy.mouseMove(0, 0)
+    except Exception:
+        pass
 
 
 async def _get_pooled_vnc(client_key, ip):

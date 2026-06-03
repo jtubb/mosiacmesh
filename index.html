@@ -89,11 +89,16 @@
 		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null,
 		boundaryTimer: null };
 
-	// Play video MUTED. A muted <video> is exempt from autoplay policy on every
-	// browser, so it starts with NO user gesture — no tap-to-start anywhere
-	// (kiosk-friendly), at the cost of audio. Flip to false to restore sound, which
-	// re-enables the arm / tap-to-start gesture path (needed for unmuted playback).
-	var VIDEO_MUTED = true;
+	// Play video UNMUTED. Restores sound on every screen, at the cost of needing
+	// a tap-to-start (a muted <video> is exempt from autoplay policy and would
+	// start without a gesture, but iOS+Safari require a real user gesture before
+	// PLAYING with audio). The same tap is used to enter native fullscreen on
+	// iPad (see activatePlayback -> webkitEnterFullscreen). When the playlist
+	// transitions to a non-video item, clearVideo flips v.muted back to true so
+	// the still-running keep-alive element doesn't bleed audio behind the
+	// non-video content. Flip to true to restore the silent-kiosk mode (no tap,
+	// no audio).
+	var VIDEO_MUTED = false;
 
 	// One persistent video element, created once and reused for every video item
 	// so a single user gesture keeps the whole session playable on iOS.
@@ -246,6 +251,15 @@
 				p['catch'](function () { v.muted = true; var q = v.play(); if (q && q['catch']) { q['catch'](function () {}); } });
 			}
 		} catch (e) {}
+		// Enter iOS native fullscreen on the video element. iPad-1 / iOS 5
+		// only exposes webkitEnterFullscreen() on <video> (no Element.
+		// requestFullscreen() until iOS 12), and it MUST be called inside
+		// a real user-gesture handler -- activatePlayback is that handler.
+		// One-shot: subsequent video transitions during the same session
+		// can't re-enter fullscreen without another tap (iOS revokes
+		// gesture-derived permissions on element clear). clearVideo's
+		// webkitExitFullscreen call lets non-video items show through.
+		try { if (v.webkitEnterFullscreen) { v.webkitEnterFullscreen(); } } catch (e) {}
 		// Do NOT optimistically set activated here: a synthetic/blocked tap (e.g. an
 		// auto-arm VNC tap on iOS 5, where play() needs a REAL gesture) would falsely
 		// mark us armed and suppress the prompt while the video stays paused. The
@@ -350,6 +364,12 @@
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		var v = playback.pvid;
 		if (v && playback.activated && v.getAttribute('src')) {
+			// Exit iOS native fullscreen so the next non-video item
+			// (bouncingBalls SCRIPT, image, etc.) is visible. Without
+			// this, the fullscreen video player keeps covering the
+			// screen with the looping muted video. Safe to call when
+			// not in fullscreen -- iOS no-ops it then.
+			try { if (v.webkitExitFullscreen) { v.webkitExitFullscreen(); } } catch (e) {}
 			// Do NOT pause the blessed element between items. iOS-5 drops the
 			// element's user-activation on pause, which re-locks playback so the
 			// NEXT video's play() is blocked again (and, with activated already
@@ -599,6 +619,11 @@
 		$('#canvas').empty();
 		var v = playback.pvid;
 		if (v && playback.activated && v.getAttribute('src')) {
+			// Exit iOS native fullscreen so the blackout cover is visible
+			// (otherwise the looping muted video stays fullscreen and the
+			// operator can't tell playback is actually stopped). Safe to
+			// call when not in fullscreen -- iOS no-ops it then.
+			try { if (v.webkitExitFullscreen) { v.webkitExitFullscreen(); } } catch (e) {}
 			// Keep the blessed element ALIVE — playing, muted, looping, behind a
 			// black cover — instead of pausing it. iOS drops the element's
 			// user-activation on pause, which would force a new tap on the next
