@@ -3354,7 +3354,16 @@ async def index_handler(request):
                 ct = 'text/css'
 
     logging.debug(ct)
-    return web.Response(body=data,content_type=ct)
+    # no-cache so a RELOAD broadcast actually delivers updated HTML/JS
+    # to iPad-1 Safari. Without this header, iPad-1's aggressive disk
+    # cache happily served stale index.html / inline scripts even after
+    # a sock.send(RELOAD) -- a real bug we hit during the 2026-06-03
+    # client-UX rollout (audio + fullscreen edits invisible until
+    # explicitly reloaded again with no-cache). The actual byte cost
+    # is negligible (a fleet RELOAD is rare) and these are small files.
+    headers = {"Cache-Control": "no-cache, no-store, must-revalidate",
+               "Pragma": "no-cache", "Expires": "0"}
+    return web.Response(body=data, content_type=ct, headers=headers)
 
 async def image_handler(request):
     logging.debug("IMAGE_HANDLER")
@@ -3485,8 +3494,15 @@ async def javascript_handler(request):
     if( os.path.isfile(file_path)):
         data = get_cached_file(file_path)
         if data is not None:
-            return web.Response(body=data, content_type='text/javascript')
-    
+            # See index_handler comment: iPad-1 needs explicit no-cache
+            # so a RELOAD actually delivers updated JS (mosiacmesh.js,
+            # GoTime.js). The server-side get_cached_file still caches
+            # the file contents in memory.
+            headers = {"Cache-Control": "no-cache, no-store, must-revalidate",
+                       "Pragma": "no-cache", "Expires": "0"}
+            return web.Response(body=data, content_type='text/javascript',
+                                headers=headers)
+
     return web.Response(status=404, reason='NOT FOUND')
 
 def generateAruco(displayID = None):

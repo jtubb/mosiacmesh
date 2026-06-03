@@ -240,6 +240,20 @@
 		dbg("tap");
 		var v = getPersistentVideo();
 		v.style.display = 'block';
+		// Register a one-shot fullscreen-request listener BEFORE load+play.
+		// iPad-1 / iOS 5 only exposes webkitEnterFullscreen() on <video>
+		// (no Element.requestFullscreen until iOS 12). Calling it
+		// synchronously right after v.play() doesn't reliably fullscreen
+		// because readyState is still 0 at that point. Registering the
+		// listener INSIDE the user gesture and firing webkitEnterFullscreen
+		// on the first 'playing' event lets iOS preserve gesture context
+		// through the short async chain -- the canonical way to defer
+		// fullscreen on iPad-1.
+		var enterFS = function () {
+			v.removeEventListener('playing', enterFS);
+			try { if (v.webkitEnterFullscreen) { v.webkitEnterFullscreen(); } } catch (e) {}
+		};
+		try { v.addEventListener('playing', enterFS); } catch (e) {}
 		// iOS-5 Safari needs load()+play() TOGETHER inside the tap gesture to start
 		// a held/paused element (play() alone won't restart it). The PREPARE
 		// loadedmetadata handler is one-shot (removes itself), so this load() can't
@@ -251,15 +265,6 @@
 				p['catch'](function () { v.muted = true; var q = v.play(); if (q && q['catch']) { q['catch'](function () {}); } });
 			}
 		} catch (e) {}
-		// Enter iOS native fullscreen on the video element. iPad-1 / iOS 5
-		// only exposes webkitEnterFullscreen() on <video> (no Element.
-		// requestFullscreen() until iOS 12), and it MUST be called inside
-		// a real user-gesture handler -- activatePlayback is that handler.
-		// One-shot: subsequent video transitions during the same session
-		// can't re-enter fullscreen without another tap (iOS revokes
-		// gesture-derived permissions on element clear). clearVideo's
-		// webkitExitFullscreen call lets non-video items show through.
-		try { if (v.webkitEnterFullscreen) { v.webkitEnterFullscreen(); } } catch (e) {}
 		// Do NOT optimistically set activated here: a synthetic/blocked tap (e.g. an
 		// auto-arm VNC tap on iOS 5, where play() needs a REAL gesture) would falsely
 		// mark us armed and suppress the prompt while the video stays paused. The
@@ -377,7 +382,11 @@
 			// prompt" bug. Instead keep it playing, muted and looping, but fully
 			// transparent so the non-video item shows through it. showItem's video
 			// branch restores opacity + audio. Mirrors stopPlayback's keep-alive.
-			v.muted = true; v.loop = true; v.style.opacity = '0';
+			// Belt-and-suspenders mute: iPad-1 Safari sometimes ignores a
+			// mid-playback v.muted=true on an already-playing element. Setting
+			// v.volume=0 as well guarantees no audible output regardless of
+			// which iPad-1 quirk applies.
+			v.muted = true; v.volume = 0; v.loop = true; v.style.opacity = '0';
 			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
 		} else if (v) {
 			// Not yet gesture-blessed (nothing to preserve): just hide it.
@@ -547,6 +556,7 @@
 			v.style.opacity = '1';       // restore visibility (clearVideo keep-alive set it to 0)
 			v.loop = false;              // playlist advances via renderPlayback, not element loop
 			v.muted = VIDEO_MUTED;       // muted (kiosk) unless audio wanted; fallback re-mutes if blocked
+			v.volume = 1;                // restore audio (clearVideo set volume=0 for the keep-alive)
 			hideBlackout();              // drop the 'stopped' cover
 			$('#canvas').empty();        // clear any prior image/script content
 			playback.video = v;
@@ -628,8 +638,9 @@
 			// black cover — instead of pausing it. iOS drops the element's
 			// user-activation on pause, which would force a new tap on the next
 			// start; keeping it playing preserves it (audio is muted, screen is
-			// black, so it reads as 'stopped').
-			v.muted = true; v.loop = true; v.style.display = 'block';
+			// black, so it reads as 'stopped'). v.volume=0 belt-and-suspenders --
+			// iPad-1 sometimes ignores mid-playback v.muted=true.
+			v.muted = true; v.volume = 0; v.loop = true; v.style.display = 'block';
 			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
 			showBlackout();
 		} else if (v) {
