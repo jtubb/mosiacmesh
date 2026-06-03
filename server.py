@@ -2468,9 +2468,16 @@ async def _run_device_script(client_key, which):
     # exhausted, etc.) so non-iPad-1 devices and emergency
     # uiopen-to-Safari paths still work.
     if which == "start":
+        # Wake the screen only -- send libactivator.lockscreen.dismiss
+        # (wakes if asleep, no-ops if awake). Do NOT also call the
+        # autolock switch-off here: it produces a transient "Autolock
+        # disabled" popup that intercepts the VNC tap below. Autolock
+        # is already off from the boot LaunchDaemon (5.4a) which fires
+        # the same switch-off command 30s after every boot, so the
+        # autolock state is correct system-wide regardless.
+        wake_script = "activator send libactivator.lockscreen.dismiss"
         login_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
-                     ["%s@%s" % (SSH_USER, client.ip),
-                      DEFAULT_DEVICE_SCRIPTS["loginScript"]])
+                     ["%s@%s" % (SSH_USER, client.ip), wake_script])
         try:
             wake = await asyncio.create_subprocess_exec(
                 *login_cmd, stdout=asyncio.subprocess.DEVNULL,
@@ -2483,6 +2490,10 @@ async def _run_device_script(client_key, which):
         except Exception as e:  # noqa: BLE001
             logging.warning("run-script %s start: wake step failed: %s",
                             client_key, e)
+        # Brief settle delay so SpringBoard has finished the wake
+        # animation before we tap -- otherwise the tap can land
+        # mid-transition and SpringBoard ignores it.
+        await asyncio.sleep(0.8)
         ok = await _launch_webapp_via_vnc(client_key)
         if ok:
             return (0, "VNC_TAP_OK")
