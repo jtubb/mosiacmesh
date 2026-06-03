@@ -712,6 +712,53 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4c) configure Insomnia (the WiFi-keepalive tweak) BEFORE the
+    #       respring so it loads ENABLED on the first SpringBoard launch.
+    #
+    #       Insomnia ships with NO defaults plist; without one the dylib
+    #       loads but treats Enabled as nil (= false) and does nothing.
+    #       Symptom: iPads' WiFi enters power-save when screen is off,
+    #           ping shows 25-33% loss and 300-700ms RTT, GoTime probes
+    #           drop, ProgrammableTimer.isSynced() never converges,
+    #           the client never emits SYNACK, and the server's
+    #           wait_for_reconnect gate times out at N/M iPads.
+    #
+    #       The plist lives at
+    #           /var/mobile/Library/Preferences/com.malcolmhall.Insomnia.plist
+    #       (note: bundle id is com.malcolmhall.Insomnia despite the
+    #       Cydia package being com.imalc.insomnia -- the package author's
+    #       imalc handle is the alias, malcolmhall is the actual identifier).
+    #       The single key we need is `Enabled` = bool; extracted from
+    #       strings on the dylib + InsomniaSettings prefs binary (2026-06-02).
+    #       Owner: mobile:mobile, mode 644 (standard for user-domain prefs).
+    if ($status -eq "OK" -and $pkgsToInstall) {
+        $insomniaPlistPath = '/var/mobile/Library/Preferences/com.malcolmhall.Insomnia.plist'
+        $writeInsomnia = (
+            "cat > $insomniaPlistPath << 'PLIST'`n" +
+            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
+            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
+            "<plist version=`"1.0`">`n" +
+            "<dict>`n" +
+            "    <key>Enabled</key>`n" +
+            "    <true/>`n" +
+            "</dict>`n" +
+            "</plist>`n" +
+            "PLIST`n" +
+            "chown mobile:mobile $insomniaPlistPath; chmod 644 $insomniaPlistPath;" +
+            " echo INSOMNIA_CONFIGURED"
+        )
+        try {
+            $iOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $writeInsomnia 2>&1) | Out-String
+            if ($iOut -match 'INSOMNIA_CONFIGURED') {
+                Write-Host "  insomnia: enabled (WiFi stays awake when screen is off)" -ForegroundColor Green
+            } else {
+                Write-Host "  insomnia config unexpected: $($iOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  insomnia config failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
