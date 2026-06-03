@@ -1553,6 +1553,34 @@ def _media_item_payload(me):
             "endEffect": getattr(me, "endEffect", None)}
 
 
+# Per-client URL routing for media-cache-aware clients. See spec
+# 2026-06-03-media-cache-design.md. For SEGMENT items on an iPad in
+# lighttpd-localhost cache mode that has the segment cached, returns
+# the localhost URL so Safari fetches from local lighttpd (zero LAN
+# bandwidth). For every other case -- non-SEGMENT items, cache miss,
+# different cache mode -- returns the central-server URL.
+def _resolve_media_url(client, item):
+    # Non-SEGMENT items (SCRIPT, IMAGE, etc.) are tiny + uncacheable
+    # by this design; pass through their .file as-is.
+    if getattr(item, "playmode", None) != "SEGMENT":
+        return getattr(item, "file", "")
+    seg_hash = getattr(item, "seg_hash", None)
+    seg_n = getattr(item, "seg_n", None)
+    if seg_hash is None or seg_n is None:
+        # Defensive: a SEGMENT item without hash+n metadata can't be
+        # cached. Return the original file path (existing behavior).
+        return getattr(item, "file", "")
+    seg_key = f"{seg_hash}_{seg_n}"
+    if (getattr(client, "cacheMode", "none") == "lighttpd-localhost"
+            and seg_key in getattr(client, "cachedSegments", set())):
+        return f"http://127.0.0.1:8080/seg_{seg_key}.mp4"
+    # Central-server URL. clientKey is set on the Client by REGISTER;
+    # tests pass it explicitly. Modern (service-worker) clients also
+    # get this central URL -- their SW intercepts transparently.
+    ckey = getattr(client, "clientKey", None) or "unknown"
+    return f"http://192.168.1.60:3000/media/{ckey}/seg_{seg_key}.mp4"
+
+
 def _build_media_elements(items):
     """Build MediaElement objects from a list of item dicts (SETPLAYLIST /
     ASSIGN_PLAYLIST share this). Maps the playmode string to the enum and
