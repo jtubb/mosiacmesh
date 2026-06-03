@@ -158,7 +158,17 @@ $DEFAULT_TWEAKS = @(
     'preferenceloader',              # required by libactivator/veency/terminalactivator
     'libstatusbar',                  # required by veency on iOS >= 4
     'jp.ashikase.mousesupport',      # required by veency on iOS >= 3
-    'com.saurik.iphone.ske'          # required by veency on iOS < 7 (the "firmware fallback")
+    'com.saurik.iphone.ske',         # required by veency on iOS < 7 (the "firmware fallback")
+    # --- per-device media cache (2026-06-03) ---
+    # lighttpd serves /var/mobile/Media/MosaicMeshCache/ at
+    # http://127.0.0.1:8080/ -- per-iPad pre-rendered video segments
+    # play from local disk instead of competing for shared WiFi
+    # bandwidth. Deps (pcre, libxml2, sqlite3, bzip2) all resolve
+    # from Saurik's repo which is already configured on these iPads.
+    # Onboarding steps 5.4d/5.4e/5.4f below write the config plist,
+    # the LaunchDaemon plist, and the server-side cacheMode flag.
+    # See docs/superpowers/specs/2026-06-03-media-cache-design.md.
+    'lighttpd'
 )
 
 $ErrorActionPreference = "Stop"
