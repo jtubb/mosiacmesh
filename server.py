@@ -185,6 +185,44 @@ _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
 #   $env:MMRENDER_HWACCEL = "cuda"   (or "qsv", "d3d11va")
 _VIDEO_HWACCEL = os.environ.get("MMRENDER_HWACCEL") or ""
 
+# Cap on parallel cache-push scps to the iPad fleet. The cache is meant
+# to AVOID WiFi saturation at PLAY time, but if we fire 24 parallel
+# scps right after a render we saturate the same AP and every push
+# times out. With 24 contending streams the per-iPad rate dropped to
+# ~100 KB/s (~2.4 MB/s aggregate, all going to one AP). MMPUSH_
+# CONCURRENCY=2 keeps each push at ~LAN line rate and lets a fresh
+# render's 24x100MB push fan-out complete in ~5-10 min total instead
+# of all timing out.
+_PUSH_CONCURRENCY = int(os.environ.get("MMPUSH_CONCURRENCY") or 2)
+
+# Stall detection: a push is aborted only if no NEW bytes have landed
+# on the iPad's destination file within this window. The poller (see
+# _push_segment_to_cached_clients) ssh's stat -c%s every
+# _PUSH_POLL_INTERVAL_S seconds and signals the push coroutine if the
+# size hasn't increased in _PUSH_STALL_WINDOW_S. This replaces an
+# earlier static 600s per-push timeout, which proved to be the wrong
+# tool: a healthy slow transfer over contended WiFi can legitimately
+# need >10 min for one 100 MB segment; a static ceiling either kills
+# good work (set too tight) or papers over genuine stalls (set too
+# loose). Stall-based detection is strictly better.
+_PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
+_PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 2.0)
+
+# Lazy module-level semaphore (created on first use, when an event
+# loop is guaranteed to exist; we don't want to bind it to whatever
+# loop happened to be current at import time).
+_push_sem = None
+
+
+def _get_push_sem():
+    """Return the module-level push semaphore, creating it on first
+    use inside the running event loop. Safe to call from any
+    coroutine; not safe to call before any loop has started."""
+    global _push_sem
+    if _push_sem is None:
+        _push_sem = asyncio.Semaphore(_PUSH_CONCURRENCY)
+    return _push_sem
+
 
 def _video_input_args():
     """ffmpeg input-option args (go BEFORE -i). If MMRENDER_HWACCEL is set,
@@ -1532,6 +1570,14 @@ class Client():
         # pipeline). Populated by _push_segment_to_cached_clients on
         # successful scp; pruned by _reconcile_ipad_cache.
         self.cachedSegments = set()
+        # In-memory only (does not persist; meaningful only during a
+        # push). Set to a dict by _push_segment_to_cached_clients when
+        # a push starts; cleared to None when the push ends (success
+        # or stall). Shape: {"token", "n", "bytesSent", "totalBytes",
+        # "startedMs", "lastChangeMs", "status", "mbps"}.
+        # See docs/superpowers/specs/2026-06-03-cache-progress-and-
+        # propagation-ui.md.
+        self.cachePushProgress = None
 
 async def ws_handler(manager, session, msg):
     # sockjs >=0.12 handler signature: (manager, session, msg).
@@ -1928,30 +1974,41 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     dst = ("%s@%s:/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
            % (SSH_USER, client.ip, segment_hash, segment_n))
     cmd = ["scp", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS + [src, dst]
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    # Throttle: 2026-06-03 production-load discovery -- firing 24
+    # parallel scps over a single AP saturates the WiFi, all of them
+    # crawl at ~100 KB/s, and they all hit the per-push timeout. The
+    # whole point of the cache is to avoid this exact saturation, so
+    # we serialise (capped at _PUSH_CONCURRENCY) here. Note this
+    # protects ALL callers of this function, including any future
+    # force-push admin endpoint.
+    sem = _get_push_sem()
+    async with sem:
+        proc = None
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            logging.warning("cache-push %s seg_%s_%d: timeout",
-                            client_key, segment_hash, segment_n)
-            return
-        if proc.returncode == 0:
-            client.cachedSegments.add("%s_%d" % (segment_hash, segment_n))
-            logging.info("cache-push: %s seg_%s_%d -> %s",
-                         client_key, segment_hash, segment_n, client.ip)
-        else:
-            tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
-            logging.warning("cache-push rc=%s for %s seg_%s_%d: %s",
-                            proc.returncode, client_key,
-                            segment_hash, segment_n, " | ".join(tail))
-    except Exception as e:  # noqa: BLE001
-        logging.warning("cache-push exception for %s seg_%s_%d: %s",
-                        client_key, segment_hash, segment_n, e)
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            try:
+                out, err = await asyncio.wait_for(proc.communicate(),
+                                                  timeout=_PUSH_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logging.warning("cache-push %s seg_%s_%d: timeout after %ds",
+                                client_key, segment_hash, segment_n,
+                                _PUSH_TIMEOUT_S)
+                return
+            if proc.returncode == 0:
+                client.cachedSegments.add("%s_%d" % (segment_hash, segment_n))
+                logging.info("cache-push: %s seg_%s_%d -> %s",
+                             client_key, segment_hash, segment_n, client.ip)
+            else:
+                tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
+                logging.warning("cache-push rc=%s for %s seg_%s_%d: %s",
+                                proc.returncode, client_key,
+                                segment_hash, segment_n, " | ".join(tail))
+        except Exception as e:  # noqa: BLE001
+            logging.warning("cache-push exception for %s seg_%s_%d: %s",
+                            client_key, segment_hash, segment_n, e)
 
 
 async def _reconcile_ipad_cache(client):
@@ -4111,6 +4168,13 @@ async def api_discovery_configure(request):
         clear measuredPerimeter (force a re-calibrate at the new orientation)
       - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
         "none", "lighttpd-localhost", or "service-worker"
+      - {"action": "force_push", "displayID"} -> re-trigger cache-push
+        scps for the named display's CURRENT renderedToken to every
+        lighttpd-localhost iPad in that group, without re-running
+        ffmpeg. Recovery path for when an earlier render's push fan-out
+        failed (e.g. WiFi saturated, network blip, server crashed
+        mid-push). Pushes are still throttled via _PUSH_CONCURRENCY,
+        so this is safe to call without re-saturating the AP.
 
     (The action-based forms preserve the contract that discovery.html uses.)
     """
@@ -4131,6 +4195,61 @@ async def api_discovery_configure(request):
                 configured += 1
         saveSettings()
         return web.json_response({"success": True, "configured": configured})
+
+    if action == "force_push":
+        # Recovery path: replay the post-render push hook for an
+        # already-rendered display, without paying the ffmpeg cost
+        # again. Walks the current display's mediaElements, finds
+        # SEGMENT items, and queues _push_segment_to_cached_clients
+        # for each (lighttpd-localhost iPad, segment_index) pair that
+        # ISN'T already in client.cachedSegments. Returns the count of
+        # pushes queued; actual completion is logged via the existing
+        # cache-push: INFO lines.
+        display_id = data.get("displayID")
+        if not display_id:
+            return web.json_response(
+                {"success": False, "error": "displayID required"}, status=400)
+        display = settings.displays.get(display_id)
+        if not display:
+            return web.json_response(
+                {"success": False, "error": "display not found"}, status=404)
+        token = getattr(display, "renderedToken", "") or ""
+        if not token:
+            return web.json_response(
+                {"success": False,
+                 "error": "no renderedToken yet -- run RENDER first"},
+                status=409)
+        # Identify segment items by enumerated position (matches what
+        # render_group_async + _per_client_items use as the index).
+        seg_indices = [i for i, me in enumerate(display.mediaElements)
+                       if _is_renderable(me) and isVideoItem(me.file)
+                       and me.playmode == PlayMode.SEGMENT]
+        queued = 0
+        skipped_cached = 0
+        skipped_no_perim = 0
+        for key, c in _group_clients(display_id):
+            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
+                continue
+            if c.measuredPerimeter is None:
+                skipped_no_perim += 1
+                continue
+            cached = getattr(c, "cachedSegments", set()) or set()
+            for n in seg_indices:
+                seg_key = "%s_%d" % (token, n)
+                if seg_key in cached:
+                    skipped_cached += 1
+                    continue
+                asyncio.ensure_future(
+                    _push_segment_to_cached_clients(key, token, n))
+                queued += 1
+        logging.info("force_push: display=%r token=%s queued=%d "
+                     "skipped_cached=%d skipped_no_perim=%d",
+                     display_id, token, queued, skipped_cached,
+                     skipped_no_perim)
+        return web.json_response({"success": True, "queued": queued,
+                                  "skipped_cached": skipped_cached,
+                                  "skipped_no_perim": skipped_no_perim,
+                                  "token": token})
 
     client_key = data.get("clientKey")
     if not client_key:
@@ -4262,6 +4381,10 @@ def migrate_client_objects():
             client.cacheMode = "none"
         if not hasattr(client, 'cachedSegments'):
             client.cachedSegments = set()
+        # cachePushProgress is transient (a push is meaningful only
+        # while the process is live), so unconditionally reset on
+        # startup -- any state in settings.dat is stale.
+        client.cachePushProgress = None
         # Backfill lifecycle-script defaults onto devices registered before the
         # automation existed (their fields are absent/None -> show as null).
         _apply_default_scripts(client)
