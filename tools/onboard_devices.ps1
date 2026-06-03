@@ -769,95 +769,109 @@ foreach ($h in $targets) {
         }
     }
 
-    # 5.4d) write /etc/lighttpd/lighttpd.conf after tweaks are installed.
-    #       Binds to 127.0.0.1:8080 only (never LAN-accessible), serves
-    #       the cache directory, and sets correct MIME types for .mp4, .m4v,
-    #       .mov, .jpg, .png, etc. Same heredoc pattern as 5.4b (Veency) /
-    #       5.4c (Insomnia). lighttpd is lightweight and runs as mobile:mobile.
-    if ($status -eq "OK" -and $pkgsToInstall) {
-        $lighttpdConfig = (
-            "mkdir -p /etc/lighttpd /var/log /var/run /var/mobile/Media/MosaicMeshCache;`n" +
-            "chown mobile:mobile /var/mobile/Media/MosaicMeshCache;`n" +
-            "cat > /etc/lighttpd/lighttpd.conf << 'CONF'`n" +
-            "server.modules = ( `"mod_indexfile`", `"mod_dirlisting`", `"mod_staticfile`" )`n" +
-            "server.document-root = `"/var/mobile/Media/MosaicMeshCache/`"`n" +
-            "server.bind = `"127.0.0.1`"`n" +
-            "server.port = 8080`n" +
-            "server.errorlog = `"/var/log/lighttpd-error.log`"`n" +
-            "server.pid-file = `"/var/run/lighttpd.pid`"`n" +
-            "dir-listing.activate = `"disable`"`n" +
-            "mimetype.assign = (`n" +
-            "    `".mp4`"  => `"video/mp4`",`n" +
-            "    `".m4v`"  => `"video/x-m4v`",`n" +
-            "    `".mov`"  => `"video/quicktime`",`n" +
-            "    `".jpg`"  => `"image/jpeg`",`n" +
-            "    `".png`"  => `"image/png`",`n" +
-            "    `".html`" => `"text/html`",`n" +
-            "    `".js`"   => `"application/javascript`",`n" +
-            "    `".css`"  => `"text/css`",`n" +
-            "    `"`"      => `"application/octet-stream`"`n" +
-            ")`n" +
-            "index-file.names = ( `"index.html`" )`n" +
-            "CONF`n" +
-            "echo LIGHTTPD_CONF_OK"
-        )
-        try {
-            $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $lighttpdConfig 2>&1) | Out-String
-            if ($lOut -match 'LIGHTTPD_CONF_OK') {
-                Write-Host "  lighttpd config: written to /etc/lighttpd/lighttpd.conf" -ForegroundColor Green
-            } else {
-                Write-Host "  lighttpd config unexpected: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+    # 5.4d) deploy /etc/lighttpd/lighttpd.conf via scp from the local
+    #       repo (tools/lighttpd.conf). Earlier version of this step
+    #       built the file via a PowerShell -> ssh -> bash heredoc, but
+    #       PowerShell's backtick-escaping for inner double-quotes was
+    #       stripped during ssh.exe argument parsing, so the file landed
+    #       on the iPad with NO quotes around any string literal -> the
+    #       lighttpd config parser failed -> daemon couldn't start.
+    #       scp-from-local is the bullet-proof path: same content goes
+    #       on disk byte-for-byte as what we ship in the repo.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $confSrc = Join-Path $PSScriptRoot 'lighttpd.conf'
+        if (-not (Test-Path $confSrc)) {
+            Write-Host "  lighttpd config: source file missing at $confSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                # Make the dirs + cache dir on the iPad first; then scp the
+                # config. (lighttpd's config-validate happens at start time,
+                # not at file-arrival time, so order matters only in that
+                # the dirs must exist before lighttpd reads .pid-file etc.)
+                $mkPrep = "mkdir -p /etc/lighttpd /var/log /var/run /var/mobile/Media/MosaicMeshCache; chown mobile:mobile /var/mobile/Media/MosaicMeshCache; echo LIGHTTPD_DIRS_OK"
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $mkPrep 2>&1 | Out-Null
+                # Push the config. -O disables the new sftp-based scp protocol
+                # which OpenSSH 8.x defaults to but the iPad's old sshd may
+                # not implement. (If our ssh build doesn't have -O it'll
+                # silently complain; the fallback to legacy scp still works.)
+                & $scp -i $KeyPath -P $p @sshLegacy $confSrc "${User}@${hostName}:/etc/lighttpd/lighttpd.conf" 2>&1 | Out-Null
+                # Verify by counting expected string-literal lines on the iPad
+                $verifyCmd = 'grep -c "^server\." /etc/lighttpd/lighttpd.conf'
+                $vOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $verifyCmd 2>&1) | Out-String
+                # Expect at least 6 server.* lines (modules, document-root,
+                # bind, port, errorlog, pid-file). If we see them, the file
+                # didn't get mangled.
+                if ($vOut -match '\b([6-9]|[1-9][0-9])\b') {
+                    Write-Host "  lighttpd config: pushed via scp ($confSrc)" -ForegroundColor Green
+                } else {
+                    Write-Host "  lighttpd config verification unexpected: $($vOut.Trim())" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  lighttpd config failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "  lighttpd config failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
-    # 5.4e) write the LaunchDaemon plist so lighttpd starts at every
-    #       boot AND auto-respawns if killed. -D flag keeps lighttpd
-    #       in foreground so launchd's KeepAlive can track it. launchctl
-    #       load fires it immediately (in addition to the boot start).
-    if ($status -eq "OK" -and $pkgsToInstall) {
-        $lighttpdLaunchd = (
-            "mkdir -p /Library/LaunchDaemons;`n" +
-            "cat > /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist << 'PLIST'`n" +
-            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
-            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
-            "<plist version=`"1.0`">`n" +
-            "<dict>`n" +
-            "    <key>Label</key><string>com.mosaicmesh.lighttpd</string>`n" +
-            "    <key>ProgramArguments</key>`n" +
-            "    <array>`n" +
-            "        <string>/usr/sbin/lighttpd</string>`n" +
-            "        <string>-D</string>`n" +
-            "        <string>-f</string>`n" +
-            "        <string>/etc/lighttpd/lighttpd.conf</string>`n" +
-            "    </array>`n" +
-            "    <key>RunAtLoad</key><true/>`n" +
-            "    <key>KeepAlive</key><true/>`n" +
-            "    <key>StandardErrorPath</key><string>/var/log/lighttpd-launchd.log</string>`n" +
-            "</dict>`n" +
-            "</plist>`n" +
-            "PLIST`n" +
-            "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-            "launchctl unload /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist 2>/dev/null;`n" +
-            "launchctl load /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-            "sleep 2;`n" +
-            "if [ -f /var/run/lighttpd.pid ]; then`n" +
-            "  echo LIGHTTPD_LAUNCHD_OK pid=`$(cat /var/run/lighttpd.pid);`n" +
-            "else`n" +
-            "  echo LIGHTTPD_LAUNCHD_NO_PID;`n" +
-            "fi"
-        )
-        try {
-            $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $lighttpdLaunchd 2>&1) | Out-String
-            if ($lOut -match 'LIGHTTPD_LAUNCHD_OK pid=(\d+)') {
-                Write-Host "  lighttpd LaunchDaemon: running pid=$($Matches[1])" -ForegroundColor Green
-            } else {
-                Write-Host "  lighttpd LaunchDaemon: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+    # 5.4e) deploy the LaunchDaemon plist (scp from local) so lighttpd
+    #       starts at every boot AND auto-respawns if killed, then exec
+    #       lighttpd directly to make it available immediately for this
+    #       onboarding pass.
+    #
+    #       Two bugs fixed here vs. the previous version:
+    #
+    #       (1) The plist used to be built with the same heredoc-with-
+    #           backtick-escaped-quotes pattern as 5.4d and suffered
+    #           the same quote-stripping problem (ssh.exe re-flattens
+    #           argv and loses the backticks), so the file landed with
+    #           broken XML. Fixed by shipping tools/com.mosaicmesh.
+    #           lighttpd.plist and scp'ing it byte-for-byte.
+    #
+    #       (2) `launchctl load /Library/LaunchDaemons/...` was used
+    #           to start the daemon immediately, but on iOS 5 launchctl-
+    #           over-SSH fails with "launch_msg(): Socket is not
+    #           connected" because the SSH session isn't connected to
+    #           launchd's bootstrap domain. The plist still lands on
+    #           disk for the boot-time path (launchd reads /Library/
+    #           LaunchDaemons at boot, finds it, RunAtLoad fires it,
+    #           KeepAlive respawns on crash). To start lighttpd RIGHT
+    #           NOW we just exec the daemon directly. Without -D flag
+    #           lighttpd daemonizes itself so the SSH command returns;
+    #           the pid file confirms success.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $plistSrc = Join-Path $PSScriptRoot 'com.mosaicmesh.lighttpd.plist'
+        if (-not (Test-Path $plistSrc)) {
+            Write-Host "  lighttpd plist: source file missing at $plistSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                # /Library/LaunchDaemons always exists on iOS but be
+                # defensive in case anyone forks this for another
+                # Darwin variant.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "mkdir -p /Library/LaunchDaemons" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy $plistSrc "${User}@${hostName}:/Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist" 2>&1 | Out-Null
+                # chmod + kill stale + start fresh + report pid. Kept
+                # as one ssh round-trip to keep onboarding fast on
+                # slow links.
+                $startCmd = (
+                    "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
+                    "killall lighttpd 2>/dev/null;`n" +
+                    "sleep 1;`n" +
+                    "/usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf;`n" +
+                    "sleep 2;`n" +
+                    "if [ -f /var/run/lighttpd.pid ]; then`n" +
+                    "  echo LIGHTTPD_OK pid=`$(cat /var/run/lighttpd.pid);`n" +
+                    "else`n" +
+                    "  echo LIGHTTPD_NO_PID;`n" +
+                    "fi"
+                )
+                $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $startCmd 2>&1) | Out-String
+                if ($lOut -match 'LIGHTTPD_OK pid=(\d+)') {
+                    Write-Host "  lighttpd: running pid=$($Matches[1]); LaunchDaemon plist set for boot" -ForegroundColor Green
+                } else {
+                    Write-Host "  lighttpd start: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  lighttpd LaunchDaemon failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "  lighttpd LaunchDaemon failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
@@ -882,7 +896,13 @@ foreach ($h in $targets) {
                 } | ConvertTo-Json -Compress
                 $resp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
                     -Method POST -ContentType "application/json" -Body $body -TimeoutSec 5
-                if ($resp.status -eq "SUCCESS") {
+                # api_discovery_configure returns {"success": true} on
+                # every success branch (see server.py:4182). An earlier
+                # version of this script checked $resp.status -eq
+                # "SUCCESS" instead, which printed a false "unexpected"
+                # warning even though the server-side mode update was
+                # applied. Check the actual response shape.
+                if ($resp.success -eq $true) {
                     Write-Host "  cacheMode: server marked $($thisDev.clientKey) as lighttpd-localhost" -ForegroundColor Green
                 } else {
                     Write-Host "  cacheMode response unexpected: $($resp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
