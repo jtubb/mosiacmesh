@@ -965,6 +965,33 @@ foreach ($h in $targets) {
                 } else {
                     Write-Host "  cacheMode response unexpected: $($resp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
                 }
+
+                # Also bring the server-side startScript in sync with
+                # the webclip we just installed (step 5.4g). Without
+                # this, existing clients keep whatever startScript was
+                # baked in at their first onboarding -- typically the
+                # old `uiopen ...; echo START_OK` form -- and the admin
+                # "Start" action launches Safari instead of webapp
+                # mode, even though the iPad has the webclip ready to
+                # go. We push the explicit sbdidlaunch+uiopen-fallback
+                # string here, matching server.py's
+                # DEFAULT_DEVICE_SCRIPTS["startScript"]. Keeping it as a
+                # PowerShell-side literal (not derived from the server)
+                # so the script is self-contained for fleet migrations
+                # without restarting the server.
+                $newStartScript = "sbdidlaunch 'com.apple.webapp-4D6F736169634D6573684B696F736B31' 2>/dev/null" +
+                                  " || uiopen '$DisplayUrl'; echo START_OK"
+                $startBody = @{
+                    clientKey = $thisDev.clientKey
+                    startScript = $newStartScript
+                } | ConvertTo-Json -Compress
+                $startResp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $startBody -TimeoutSec 5
+                if ($startResp.success -eq $true) {
+                    Write-Host "  startScript: server-side updated to sbdidlaunch (webapp mode)" -ForegroundColor Green
+                } else {
+                    Write-Host "  startScript update unexpected: $($startResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
             } else {
                 Write-Host "  cacheMode: no clientKey for ip=$hostIP (host=$hostName) in discovery API yet" -ForegroundColor DarkYellow
                 Write-Host "                (run onboarding again after iPad first REGISTERs)" -ForegroundColor DarkYellow
