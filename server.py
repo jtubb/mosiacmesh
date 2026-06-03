@@ -2139,72 +2139,92 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
 
 
 async def _poll_push_progress(client_key, client, stall_event, proc):
-    """Sibling coroutine to _push_segment_to_cached_clients. Every
-    _PUSH_POLL_INTERVAL_S seconds, SSHs to the iPad and reads the
-    destination file's size with `stat -c%s`. Updates
-    client.cachePushProgress in place, emits CACHE_PROGRESS over
-    SockJS when bytesSent changes, and sets stall_event if the size
-    has not increased in _PUSH_STALL_WINDOW_S. Exits when the
-    enclosing push coroutine cancels us (success or stall path)."""
+    """Sibling coroutine to _push_segment_to_cached_clients. Opens
+    ONE long-running ssh connection that emits the destination
+    file's size every _PUSH_POLL_INTERVAL_S seconds (via a shell
+    loop on the iPad). Reads each line of stdout to update
+    client.cachePushProgress, broadcast CACHE_PROGRESS, and detect
+    stalls. Exits + closes its ssh when the enclosing push coroutine
+    cancels us (success or stall path) or when scp finishes.
+
+    Why one long-lived connection rather than per-poll connections:
+    iPad-1 sshd has a tight concurrent-connection limit. Opening a
+    fresh ssh every poll competes for handshake slots with the scp
+    itself, which can starve the very transfer we're watching --
+    bytes never move, the stall window fires erroneously, the
+    push is aborted by us not by reality. One ssh per push keeps
+    the poller's network footprint trivial relative to the
+    transfer."""
     prog = client.cachePushProgress
     if prog is None:
         return
-    # Give scp's own ssh connection a clear head-start before we
-    # open any of our own probes -- iPad-1 sshd appears to limit
-    # concurrent connections enough that an immediate poll competes
-    # with the scp's handshake. The "have we made progress" check
-    # is keyed off bytesSent != 0 anyway, so this delay just shifts
-    # the FIRST useful sample later by a few seconds and improves
-    # the chance scp has bytes to count by then.
-    await asyncio.sleep(min(_PUSH_POLL_INTERVAL_S, 5))
     seg_path = ("/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
                 % (prog["token"], prog["n"]))
-    # stat returns the size in bytes; redirect stderr to /dev/null +
-    # echo 0 fallback so a missing file (the very common case at the
-    # start of a push, before scp has created it) reads as 0 rather
-    # than a nonzero exit.
+    # The remote shell loop: print size (0 if file missing) every
+    # _PUSH_POLL_INTERVAL_S seconds, forever. We rely on ssh process
+    # cancellation (poller.cancel() in the push coroutine's finally
+    # block) to close this when the push ends. The interval lives
+    # on the iPad side so we don't pay handshake cost per sample.
+    poll_script = (
+        "F=%s; while true; do "
+        "if [ -f $F ]; then stat -c%%s $F; else echo 0; fi; "
+        "sleep %d; "
+        "done"
+    ) % (seg_path, int(_PUSH_POLL_INTERVAL_S))
     ssh_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
-               + ["%s@%s" % (SSH_USER, client.ip),
-                  "stat -c%%s %s 2>/dev/null || echo 0" % seg_path])
+               + ["-T",   # disable TTY allocation; we're just streaming bytes
+                  "%s@%s" % (SSH_USER, client.ip),
+                  poll_script])
+    poll_proc = None
     last_broadcast_bytes = -1
-    while proc.returncode is None:
-        await asyncio.sleep(_PUSH_POLL_INTERVAL_S)
-        if proc.returncode is not None:
-            return
-        if client.cachePushProgress is None:
-            return  # push ended underneath us
-        sz = 0
-        try:
-            poll_proc = await asyncio.create_subprocess_exec(
-                *ssh_cmd, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL)
-            out, _ = await asyncio.wait_for(poll_proc.communicate(), timeout=10)
-            sz = int((out or b"0").strip() or 0)
-        except Exception:
-            # Network blip on the poll itself: skip this tick, do NOT
-            # advance the stall clock (we treat poll failures as
-            # unknown, not as evidence of a stall).
-            continue
-        now_ms = int(time.time() * 1000)
-        if client.cachePushProgress is None:
-            return
-        if sz > client.cachePushProgress["bytesSent"]:
-            elapsed_s = max(0.001,
-                            (now_ms - client.cachePushProgress["startedMs"])
-                            / 1000.0)
-            client.cachePushProgress["bytesSent"] = sz
-            client.cachePushProgress["lastChangeMs"] = now_ms
-            client.cachePushProgress["mbps"] = round(
-                sz / 1024.0 / 1024.0 / elapsed_s, 2)
-            if sz != last_broadcast_bytes:
-                _broadcast_cache_progress(client_key, client)
-                last_broadcast_bytes = sz
-        else:
-            # No progress since last lastChangeMs update.
-            stalled_ms = now_ms - client.cachePushProgress["lastChangeMs"]
-            if stalled_ms >= _PUSH_STALL_WINDOW_S * 1000:
-                stall_event.set()
+    try:
+        poll_proc = await asyncio.create_subprocess_exec(
+            *ssh_cmd, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        while proc.returncode is None:
+            try:
+                line = await asyncio.wait_for(
+                    poll_proc.stdout.readline(),
+                    timeout=_PUSH_POLL_INTERVAL_S + 5)
+            except asyncio.TimeoutError:
+                # No size emitted for one full interval + 5s -- the
+                # remote loop or its ssh died, OR the network blipped.
+                # Treat as "no progress observed this tick"; check
+                # stall window and continue.
+                line = b""
+            if proc.returncode is not None:
                 return
+            if client.cachePushProgress is None:
+                return
+            try:
+                sz = int((line or b"0").strip() or 0)
+            except ValueError:
+                sz = 0
+            now_ms = int(time.time() * 1000)
+            if sz > client.cachePushProgress["bytesSent"]:
+                elapsed_s = max(0.001,
+                                (now_ms - client.cachePushProgress["startedMs"])
+                                / 1000.0)
+                client.cachePushProgress["bytesSent"] = sz
+                client.cachePushProgress["lastChangeMs"] = now_ms
+                client.cachePushProgress["mbps"] = round(
+                    sz / 1024.0 / 1024.0 / elapsed_s, 2)
+                if sz != last_broadcast_bytes:
+                    _broadcast_cache_progress(client_key, client)
+                    last_broadcast_bytes = sz
+            else:
+                # No new bytes since last lastChangeMs update.
+                stalled_ms = now_ms - client.cachePushProgress["lastChangeMs"]
+                if stalled_ms >= _PUSH_STALL_WINDOW_S * 1000:
+                    stall_event.set()
+                    return
+    finally:
+        if poll_proc is not None:
+            try:
+                poll_proc.kill()
+                await poll_proc.wait()
+            except Exception:
+                pass
 
 
 def _broadcast_cache_progress(client_key, client):
