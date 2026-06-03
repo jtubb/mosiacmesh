@@ -1974,31 +1974,80 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     dst = ("%s@%s:/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
            % (SSH_USER, client.ip, segment_hash, segment_n))
     cmd = ["scp", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS + [src, dst]
+    try:
+        total_bytes = os.path.getsize(src)
+    except OSError:
+        # Source missing -- scp will fail with a clearer error than
+        # we can produce here, so let it run and surface that via
+        # the existing rc!=0 logging path. Default totalBytes to 0
+        # so cachePushProgress is well-formed; percent will read 0
+        # throughout, which is the truthful signal for a doomed push.
+        total_bytes = 0
+
     # Throttle: 2026-06-03 production-load discovery -- firing 24
     # parallel scps over a single AP saturates the WiFi, all of them
-    # crawl at ~100 KB/s, and they all hit the per-push timeout. The
-    # whole point of the cache is to avoid this exact saturation, so
-    # we serialise (capped at _PUSH_CONCURRENCY) here. Note this
-    # protects ALL callers of this function, including any future
-    # force-push admin endpoint.
+    # crawl at ~100 KB/s, and they all hit a static timeout. We
+    # serialise via _PUSH_CONCURRENCY, AND we now detect stalls by
+    # polling the iPad-side destination file size (see
+    # _poll_push_progress). A push that's making forward progress,
+    # however slowly, runs to completion. Only a transfer that
+    # genuinely stops moving bytes for _PUSH_STALL_WINDOW_S aborts.
     sem = _get_push_sem()
+    seg_key = "%s_%d" % (segment_hash, segment_n)
     async with sem:
-        proc = None
+        now_ms = int(time.time() * 1000)
+        client.cachePushProgress = {
+            "token": segment_hash,
+            "n": segment_n,
+            "bytesSent": 0,
+            "totalBytes": total_bytes,
+            "startedMs": now_ms,
+            "lastChangeMs": now_ms,
+            "status": "pushing",
+            "mbps": 0.0,
+        }
+        _broadcast_cache_progress(client_key, client)
+
+        stall_event = asyncio.Event()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        poller = asyncio.ensure_future(
+            _poll_push_progress(client_key, client, stall_event, proc))
+        communicate_task = asyncio.ensure_future(proc.communicate())
+        stall_task = asyncio.ensure_future(stall_event.wait())
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            try:
-                out, err = await asyncio.wait_for(proc.communicate(),
-                                                  timeout=_PUSH_TIMEOUT_S)
-            except asyncio.TimeoutError:
+            done, pending = await asyncio.wait(
+                {communicate_task, stall_task},
+                return_when=asyncio.FIRST_COMPLETED)
+            if stall_task in done and communicate_task not in done:
+                # Stall path: poller signalled, scp hasn't finished.
+                # Kill scp, drain output (briefly), bail.
                 proc.kill()
-                await proc.wait()
-                logging.warning("cache-push %s seg_%s_%d: timeout after %ds",
-                                client_key, segment_hash, segment_n,
-                                _PUSH_TIMEOUT_S)
+                try:
+                    await asyncio.wait_for(proc.communicate(), timeout=5)
+                except asyncio.TimeoutError:
+                    pass
+                communicate_task.cancel()
+                sent = client.cachePushProgress.get("bytesSent", 0) \
+                    if client.cachePushProgress else 0
+                logging.warning(
+                    "cache-push %s seg_%s_%d: stalled (no progress for %ds, "
+                    "%d/%d bytes)",
+                    client_key, segment_hash, segment_n,
+                    _PUSH_STALL_WINDOW_S, sent, total_bytes)
+                if client.cachePushProgress is not None:
+                    client.cachePushProgress["status"] = "stalled"
+                    _broadcast_cache_progress(client_key, client)
                 return
+            # scp finished first
+            stall_task.cancel()
+            _out, err = await communicate_task
             if proc.returncode == 0:
-                client.cachedSegments.add("%s_%d" % (segment_hash, segment_n))
+                client.cachedSegments.add(seg_key)
+                if client.cachePushProgress is not None:
+                    client.cachePushProgress["bytesSent"] = total_bytes
+                    client.cachePushProgress["status"] = "cached"
+                    _broadcast_cache_progress(client_key, client)
                 logging.info("cache-push: %s seg_%s_%d -> %s",
                              client_key, segment_hash, segment_n, client.ip)
             else:
@@ -2009,6 +2058,112 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
         except Exception as e:  # noqa: BLE001
             logging.warning("cache-push exception for %s seg_%s_%d: %s",
                             client_key, segment_hash, segment_n, e)
+        finally:
+            poller.cancel()
+            try:
+                await poller
+            except (asyncio.CancelledError, Exception):
+                pass
+            # Clear transient progress state. The cached-status broadcast
+            # above (if applicable) is what consumers see; the in-memory
+            # dict is reset to None so subsequent /api/discovery/devices
+            # reads show idle.
+            client.cachePushProgress = None
+
+
+async def _poll_push_progress(client_key, client, stall_event, proc):
+    """Sibling coroutine to _push_segment_to_cached_clients. Every
+    _PUSH_POLL_INTERVAL_S seconds, SSHs to the iPad and reads the
+    destination file's size with `stat -c%s`. Updates
+    client.cachePushProgress in place, emits CACHE_PROGRESS over
+    SockJS when bytesSent changes, and sets stall_event if the size
+    has not increased in _PUSH_STALL_WINDOW_S. Exits when the
+    enclosing push coroutine cancels us (success or stall path)."""
+    prog = client.cachePushProgress
+    if prog is None:
+        return
+    seg_path = ("/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
+                % (prog["token"], prog["n"]))
+    # stat returns the size in bytes; redirect stderr to /dev/null +
+    # echo 0 fallback so a missing file (the very common case at the
+    # start of a push, before scp has created it) reads as 0 rather
+    # than a nonzero exit.
+    ssh_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
+               + ["%s@%s" % (SSH_USER, client.ip),
+                  "stat -c%%s %s 2>/dev/null || echo 0" % seg_path])
+    last_broadcast_bytes = -1
+    while proc.returncode is None:
+        await asyncio.sleep(_PUSH_POLL_INTERVAL_S)
+        if proc.returncode is not None:
+            return
+        if client.cachePushProgress is None:
+            return  # push ended underneath us
+        sz = 0
+        try:
+            poll_proc = await asyncio.create_subprocess_exec(
+                *ssh_cmd, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(poll_proc.communicate(), timeout=10)
+            sz = int((out or b"0").strip() or 0)
+        except Exception:
+            # Network blip on the poll itself: skip this tick, do NOT
+            # advance the stall clock (we treat poll failures as
+            # unknown, not as evidence of a stall).
+            continue
+        now_ms = int(time.time() * 1000)
+        if client.cachePushProgress is None:
+            return
+        if sz > client.cachePushProgress["bytesSent"]:
+            elapsed_s = max(0.001,
+                            (now_ms - client.cachePushProgress["startedMs"])
+                            / 1000.0)
+            client.cachePushProgress["bytesSent"] = sz
+            client.cachePushProgress["lastChangeMs"] = now_ms
+            client.cachePushProgress["mbps"] = round(
+                sz / 1024.0 / 1024.0 / elapsed_s, 2)
+            if sz != last_broadcast_bytes:
+                _broadcast_cache_progress(client_key, client)
+                last_broadcast_bytes = sz
+        else:
+            # No progress since last lastChangeMs update.
+            stalled_ms = now_ms - client.cachePushProgress["lastChangeMs"]
+            if stalled_ms >= _PUSH_STALL_WINDOW_S * 1000:
+                stall_event.set()
+                return
+
+
+def _broadcast_cache_progress(client_key, client):
+    """Emit a SockJS CACHE_PROGRESS message reflecting
+    client.cachePushProgress. Broadcast DEST=ALL; admin.html listens
+    for it, iPads have no handler and silently drop it. Safe to call
+    when cachePushProgress is None (used as a clear/no-op ping)."""
+    prog = client.cachePushProgress or {}
+    total = prog.get("totalBytes", 0) or 0
+    sent = prog.get("bytesSent", 0) or 0
+    percent = (100.0 * sent / total) if total else 0.0
+    payload = {
+        "clientKey": client_key,
+        "ip": getattr(client, "ip", ""),
+        "displayID": getattr(client, "displayID", None),
+        "token": prog.get("token"),
+        "n": prog.get("n"),
+        "bytesSent": sent,
+        "totalBytes": total,
+        "percent": round(percent, 1),
+        "mbps": prog.get("mbps", 0.0),
+        "status": prog.get("status", "cached"),
+    }
+    try:
+        socketmanager.broadcast(jsonpickle.encode({
+            "DEST": "ALL",
+            "REQUEST": "CACHE_PROGRESS",
+            "PAYLOAD": payload,
+        }))
+    except Exception as e:  # noqa: BLE001
+        # SockJS broadcast errors are noisy and non-fatal -- we don't
+        # want a misbehaving consumer to spam logs at poll rate.
+        logging.debug("CACHE_PROGRESS broadcast failed for %s: %s",
+                      client_key, e)
 
 
 async def _reconcile_ipad_cache(client):
