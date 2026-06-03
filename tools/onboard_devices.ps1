@@ -813,6 +813,54 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4e) write the LaunchDaemon plist so lighttpd starts at every
+    #       boot AND auto-respawns if killed. -D flag keeps lighttpd
+    #       in foreground so launchd's KeepAlive can track it. launchctl
+    #       load fires it immediately (in addition to the boot start).
+    if ($status -eq "OK" -and $pkgsToInstall) {
+        $lighttpdLaunchd = (
+            "mkdir -p /Library/LaunchDaemons;`n" +
+            "cat > /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist << 'PLIST'`n" +
+            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
+            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
+            "<plist version=`"1.0`">`n" +
+            "<dict>`n" +
+            "    <key>Label</key><string>com.mosaicmesh.lighttpd</string>`n" +
+            "    <key>ProgramArguments</key>`n" +
+            "    <array>`n" +
+            "        <string>/usr/sbin/lighttpd</string>`n" +
+            "        <string>-D</string>`n" +
+            "        <string>-f</string>`n" +
+            "        <string>/etc/lighttpd/lighttpd.conf</string>`n" +
+            "    </array>`n" +
+            "    <key>RunAtLoad</key><true/>`n" +
+            "    <key>KeepAlive</key><true/>`n" +
+            "    <key>StandardErrorPath</key><string>/var/log/lighttpd-launchd.log</string>`n" +
+            "</dict>`n" +
+            "</plist>`n" +
+            "PLIST`n" +
+            "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
+            "launchctl unload /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist 2>/dev/null;`n" +
+            "launchctl load /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
+            "sleep 2;`n" +
+            "if [ -f /var/run/lighttpd.pid ]; then`n" +
+            "  echo LIGHTTPD_LAUNCHD_OK pid=`$(cat /var/run/lighttpd.pid);`n" +
+            "else`n" +
+            "  echo LIGHTTPD_LAUNCHD_NO_PID;`n" +
+            "fi"
+        )
+        try {
+            $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $lighttpdLaunchd 2>&1) | Out-String
+            if ($lOut -match 'LIGHTTPD_LAUNCHD_OK pid=(\d+)') {
+                Write-Host "  lighttpd LaunchDaemon: running pid=$($Matches[1])" -ForegroundColor Green
+            } else {
+                Write-Host "  lighttpd LaunchDaemon: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+            }
+        } catch {
+            Write-Host "  lighttpd LaunchDaemon failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
