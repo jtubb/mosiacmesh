@@ -73,6 +73,14 @@ SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
                    "-o", "BatchMode=yes"]                # never prompt (unattended)
 # The wall's display page each device opens. Edit for your network.
 DISPLAY_URL = "http://192.168.1.60:3000/"
+# Bundle id of the MosaicMesh home-screen webclip, used by startScript
+# to launch the display in WEBAPP MODE (chrome-less, fullscreen across
+# script + video transitions). The webclip is installed by tools/
+# onboard_devices.ps1 step 5.4g with a stable UUID across the fleet.
+# Falls back to uiopen (Safari) on iPads where the webclip isn't
+# installed yet. Hex spells "MosaicMeshKiosk1" in ASCII for grep-
+# friendliness in `activator listeners` output.
+WEBCLIP_BUNDLE_ID = "com.apple.webapp-4D6F736169634D6573684B696F736B31"
 DEFAULT_DEVICE_SCRIPTS = {
     # Wake + unlock + keep the screen lit, via Activator. State-independent
     # (safe to call regardless of current iPad state): lockscreen.dismiss
@@ -85,14 +93,18 @@ DEFAULT_DEVICE_SCRIPTS = {
     # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
     "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
                     "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
-    # Open the display page in mobile Safari. Historical minimal form:
-    # uiopen brings Safari to the foreground; if Safari is already at
-    # this URL, no new tab is created (only different URLs stack as
-    # new tabs). Multiple killall+autolock+rm "improvements" I added
-    # later turned out to revert the iPads' awake state -- the boot
-    # LaunchDaemon's autolock-off + an always-running Safari were what
-    # kept the screens lit. Don't fight that.
-    "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
+    # Open the display page in WEBAPP MODE via the home-screen webclip
+    # (sbdidlaunch on the webclip's bundle id), falling back to mobile
+    # Safari (uiopen) if the webclip isn't installed on this iPad yet.
+    # Webapp mode gives chrome-less fullscreen across script+video
+    # transitions; Safari mode keeps the URL bar visible and re-enters
+    # iOS native fullscreen per video. See docs/superpowers/specs/
+    # 2026-06-03-cache-progress-and-propagation-ui.md for context.
+    # Like the old uiopen-only form: brings the app to the foreground
+    # without forcing a reload, so a Safari/webapp instance that's
+    # already at this URL just gets refocused.
+    "startScript":  "sbdidlaunch '" + WEBCLIP_BUNDLE_ID + "' 2>/dev/null"
+                    " || uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Open the display page with the ?tdbg query flag, which the client JS
     # uses to (1) draw an on-screen timing HUD with current playback frame /
     # offset / drift, and (2) stream debug state back to the server log so

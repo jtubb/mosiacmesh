@@ -629,7 +629,18 @@ foreach ($h in $targets) {
         # daemon registers automatically on next reboot. We also fire the
         # commands inline below so the iPad is in the right state NOW too.
         $plistPath = '/Library/LaunchDaemons/com.mosaicmesh.autolock-off.plist'
-        $daemonScript = "sleep 30; /usr/bin/activator send switch-off.com.a3tweaks.switch.autolock; sleep 2; /usr/bin/uiopen $DisplayUrl"
+        # Prefer sbdidlaunch (launches the MosaicMesh webclip in WEBAPP
+        # MODE -- chrome-less, fullscreen, no Safari URL bar) and fall
+        # back to uiopen (Safari) if the webclip isn't installed or
+        # sbdidlaunch isn't available on this device. The webclip's
+        # bundle id is com.apple.webapp-<32-hex UUID>, and our
+        # tools/mosaicmesh.webclip.Info.plist + step 5.4g pin a stable
+        # UUID across the fleet so the daemon's command is identical
+        # everywhere. See docs/superpowers/specs/2026-06-03-cache-
+        # progress-and-propagation-ui.md "Known limitation" for why
+        # webapp-mode matters for kiosk operation.
+        $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
+        $daemonScript = "sleep 30; /usr/bin/activator send switch-off.com.a3tweaks.switch.autolock; sleep 2; /usr/bin/sbdidlaunch $webclipBid 2>/dev/null || /usr/bin/uiopen $DisplayUrl"
         $writeDaemon = (
             "cat > $plistPath << 'PLIST'`n" +
             "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
@@ -963,6 +974,63 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4g) install MosaicMesh as a home-screen webclip so the iPad
+    #       can launch the display page in WEBAPP MODE (no Safari
+    #       chrome, fullscreen across script + video transitions).
+    #       SpringBoard auto-discovers webclips in /var/mobile/Library/
+    #       WebClips on its next launch; step 5.5's killall SpringBoard
+    #       below makes the new icon appear without an extra restart.
+    #
+    #       The Info.plist template (tools/mosaicmesh.webclip.Info.plist)
+    #       has a __URL__ placeholder that we sed-substitute with the
+    #       $DisplayUrl parameter on the iPad after scp -- same idiom
+    #       as the lighttpd config (avoid the bash-heredoc quote-loss
+    #       bug from earlier in the session).
+    #
+    #       Once installed, the icon appears but iOS does NOT auto-
+    #       launch webclips; the operator (or end user) has to tap the
+    #       home-screen icon once to enter webapp mode. Subsequent
+    #       launches from the icon all use webapp mode. iOS 5's
+    #       uiopen $DisplayUrl (used by 5.6 + the boot LaunchDaemon)
+    #       launches Safari -- a separate code path from the webclip.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        # Stable identifier so re-running the script overwrites the
+        # existing webclip instead of creating duplicate icons.
+        # iOS-5 webclip UUIDs are 32-hex-no-hyphens (confirmed from a
+        # real Add-to-Home-Screen result on .70). Using a recognisable
+        # ASCII pattern ("MosaicMeshKiosk1") so the resulting activator
+        # listener id (com.apple.webapp-4D6F...3031) is grep-friendly.
+        $webclipDir = "/var/mobile/Library/WebClips/4D6F736169634D6573684B696F736B31.webclip"
+        $webclipSrc = Join-Path $PSScriptRoot 'mosaicmesh.webclip.Info.plist'
+        if (-not (Test-Path $webclipSrc)) {
+            Write-Host "  webclip: source plist missing at $webclipSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                # mkdir; scp; sed-substitute URL; chown/chmod.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    "mkdir -p '$webclipDir'" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy $webclipSrc `
+                    "${User}@${hostName}:$webclipDir/Info.plist" 2>&1 | Out-Null
+                # Pipe-delimited sed so the URL's / characters don't
+                # collide with sed's default delimiter. $DisplayUrl
+                # doesn't contain pipes for any sane HTTP URL.
+                $sedCmd = "sed -i 's|__URL__|$DisplayUrl|' '$webclipDir/Info.plist' && " +
+                          "chown -R mobile:mobile '$webclipDir' && " +
+                          "chmod 755 '$webclipDir' && " +
+                          "chmod 644 '$webclipDir/Info.plist' && " +
+                          "echo WEBCLIP_OK"
+                $wOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $sedCmd 2>&1) | Out-String
+                if ($wOut -match 'WEBCLIP_OK') {
+                    Write-Host "  webclip: installed (operator: tap the new home-screen icon once)" -ForegroundColor Green
+                } else {
+                    Write-Host "  webclip install unexpected: $($wOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  webclip install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
@@ -987,24 +1055,42 @@ foreach ($h in $targets) {
         }
     }
 
-    # 7) open Safari to the MosaicMesh display URL -- joins the mesh and,
-    #    importantly, opens a websocket that keeps iPad-1's WiFi radio in
-    #    active mode (vs power-save). Without this final step the iPad has
-    #    everything installed but the radio idles, making it unreachable
-    #    for lifecycle scripts until something else creates outbound traffic.
+    # 7) launch the MosaicMesh display in WEBAPP MODE via the home-
+    #    screen webclip we installed in step 5.4g. sbdidlaunch takes
+    #    the webclip's bundle id (com.apple.webapp-<UUID>) and asks
+    #    SpringBoard to launch it -- same result as the operator
+    #    tapping the home-screen icon, but no physical interaction
+    #    required. Falls back to uiopen (Safari) if sbdidlaunch fails,
+    #    so iPads that somehow ended up without the webclip still
+    #    join the mesh.
+    #
+    #    Why we need to launch at all: opens a websocket that keeps
+    #    iPad-1's WiFi radio in active mode (vs power-save). Without
+    #    this the iPad has everything installed but the radio idles,
+    #    making it unreachable for lifecycle scripts until something
+    #    else creates outbound traffic.
+    #
     #    Default-on when -InstallTweaks; -NoOpenDisplay opts out.
     if ($status -eq "OK" -and $pkgsToInstall -and -not $NoOpenDisplay) {
-        # Brief sleep so SpringBoard has time to finish respringing before
-        # uiopen tries to launch Safari -- otherwise uiopen can race the
-        # SpringBoard relaunch and the URL doesn't open.
-        $openCmd = "sleep 4; uiopen '$DisplayUrl'; echo OPEN_RC=`$?"
+        # Brief sleep so SpringBoard has time to finish respringing
+        # before sbdidlaunch tries to launch the webclip; otherwise the
+        # launch can race the SpringBoard relaunch and silently no-op.
+        $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
+        $openCmd = "sleep 4; " +
+                   "if /usr/bin/sbdidlaunch '$webclipBid' 2>/dev/null; then " +
+                   "  echo OPEN_RC=0 OPEN_MODE=webclip; " +
+                   "else " +
+                   "  uiopen '$DisplayUrl'; echo OPEN_RC=`$? OPEN_MODE=safari; " +
+                   "fi"
         try {
             $oOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $openCmd 2>&1) | Out-String
-            if ($oOut -match 'OPEN_RC=0') {
-                Write-Host "  Safari opened: $DisplayUrl" -ForegroundColor Green
+            if ($oOut -match 'OPEN_RC=0 OPEN_MODE=webclip') {
+                Write-Host "  display opened (webapp mode): $DisplayUrl" -ForegroundColor Green
+            } elseif ($oOut -match 'OPEN_RC=0 OPEN_MODE=safari') {
+                Write-Host "  display opened (Safari fallback): $DisplayUrl" -ForegroundColor DarkGreen
             } else {
-                $rc = [regex]::Match($oOut, 'OPEN_RC=\d+').Value
-                Write-Host "  uiopen non-zero ($rc): $($oOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                $rc = [regex]::Match($oOut, 'OPEN_RC=\S+').Value
+                Write-Host "  display launch non-zero ($rc): $($oOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
             }
         } catch {
             Write-Host "  open-display failed: $($_.Exception.Message)" -ForegroundColor Yellow
