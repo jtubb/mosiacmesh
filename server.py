@@ -2359,6 +2359,54 @@ async def _reconcile_ipad_cache(client):
                           client.clientKey, s, e)
 
 
+# Veency-side framebuffer coordinate of the MosaicMesh home-screen
+# webclip icon when the iPad is in portrait orientation and the
+# operator has dragged the icon to the LEFTMOST dock slot. The
+# framebuffer is always landscape 1024x768 regardless of iPad
+# orientation, rotated 90 CCW from the portrait user view -- so the
+# user's portrait (96, 945) lands at framebuffer (945, 671). This
+# pair was empirically verified on .50 (sign1screen1) in this
+# session. If you reposition the icon, update this constant.
+# See docs/superpowers/specs/ for the rationale: iOS 5 doesn't
+# expose a CLI launcher that includes a webclip's URL context, so
+# the only reliable "launch the webclip" path is to drive
+# SpringBoard's own tap-handler via VNC.
+WEBAPP_ICON_FBX = 945
+WEBAPP_ICON_FBY = 671
+
+
+async def _launch_webapp_via_vnc(client_key):
+    """Launch the MosaicMesh home-screen webclip by sending a VNC
+    tap at the icon's framebuffer coordinate. The iPad's SpringBoard
+    receives the tap, reads the webclip's Info.plist (including its
+    URL context), and launches Web.app with that URL -- the same
+    code path a human finger triggers. Best-effort: a missing pool
+    entry / handshake failure just logs.
+
+    Requires the operator to have dragged the MosaicMesh icon to the
+    LEFTMOST dock slot on each iPad (in portrait orientation). The
+    onboarding script's webclip install (step 5.4g) creates the icon
+    but does not pin its position; that's a one-time per-iPad
+    manual step."""
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        logging.warning("launch-webapp %s: no client/ip", client_key)
+        return False
+    loop = asyncio.get_event_loop()
+    try:
+        proxy = await _get_pooled_vnc(client_key, client.ip)
+        await loop.run_in_executor(None, _do_tap, proxy,
+                                   WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
+        logging.info("launch-webapp: VNC-tapped %s at fb(%d,%d)",
+                     client_key, WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
+        return True
+    except Exception as e:  # noqa: BLE001
+        await _drop_pooled_vnc(client_key)
+        logging.warning("launch-webapp tap failed for %s: %s",
+                        client_key, e)
+        return False
+
+
 async def _auto_arm_client(client_key):
     """Deliver one Veency VNC tap (screen centre) to arm an un-armed
     iOS device. Holds one persistent VNC connection per iPad in
@@ -2404,6 +2452,45 @@ async def _run_device_script(client_key, which):
     if not client or not getattr(client, "ip", ""):
         logging.warning("run-script %s %s: no client/ip", client_key, which)
         return (None, "no-ip")
+
+    # Special-case "start": iOS 5 / iPad-1 has no CLI launcher that
+    # passes a webclip's URL context to Web.app, so neither sbdidlaunch
+    # nor `open <bundle-id>` nor `activator send` actually launch the
+    # MosaicMesh webapp foreground with content (we tried all of them
+    # in the 2026-06-03 session). The only working "launch the
+    # webclip" path is SpringBoard's own tap handler. So for "start"
+    # we (a) SSH-run the loginScript first to wake the screen +
+    # disable autolock, then (b) VNC-tap the icon's framebuffer
+    # coordinate (WEBAPP_ICON_FBX, WEBAPP_ICON_FBY) -- which requires
+    # the operator to have dragged the icon to the leftmost dock slot
+    # in portrait orientation on each iPad. Falls back to SSH-exec of
+    # startScript if the VNC tap fails (Veency unreachable, pool
+    # exhausted, etc.) so non-iPad-1 devices and emergency
+    # uiopen-to-Safari paths still work.
+    if which == "start":
+        login_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
+                     ["%s@%s" % (SSH_USER, client.ip),
+                      DEFAULT_DEVICE_SCRIPTS["loginScript"]])
+        try:
+            wake = await asyncio.create_subprocess_exec(
+                *login_cmd, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                try: wake.kill(); await wake.wait()
+                except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            logging.warning("run-script %s start: wake step failed: %s",
+                            client_key, e)
+        ok = await _launch_webapp_via_vnc(client_key)
+        if ok:
+            return (0, "VNC_TAP_OK")
+        logging.warning("run-script %s start: VNC tap failed, "
+                        "falling back to startScript SSH exec",
+                        client_key)
+        # Fall through to the generic SSH path below.
+
     field = which + "Script"
     script = getattr(client, field, None) or DEFAULT_DEVICE_SCRIPTS.get(field)
     if not script:
