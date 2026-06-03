@@ -383,12 +383,21 @@
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		var v = playback.pvid;
 		if (v && playback.activated && v.getAttribute('src')) {
-			// Exit iOS native fullscreen so the next non-video item
-			// (bouncingBalls SCRIPT, image, etc.) is visible. Without
-			// this, the fullscreen video player keeps covering the
-			// screen with the looping muted video. Safe to call when
-			// not in fullscreen -- iOS no-ops it then.
-			try { if (v.webkitExitFullscreen) { v.webkitExitFullscreen(); } } catch (e) {}
+			// Do NOT exit iOS native fullscreen between items. iPad-1
+			// can only re-enter fullscreen via a fresh user gesture, so
+			// exiting here would leave subsequent video transitions
+			// windowed -- breaking the "stay fullscreen across the
+			// session" expectation. Trade-off: the iOS native player
+			// covers script items with the paused last-frame of the
+			// previous video. Operators who want script items visible
+			// AND continuous fullscreen should use the home-screen
+			// webapp mode (apple-mobile-web-app-capable meta tag, see
+			// <head>): one-time Add to Home Screen per iPad, then the
+			// page runs chrome-less and both video and script render
+			// in the full screen real estate without native-fullscreen
+			// handoff. stopPlayback still calls webkitExitFullscreen
+			// because STOP is a deliberate operator action where the
+			// blackout cover should be visible.
 			// PAUSE the video to definitively stop audio. The previous
 			// keep-alive design (play it muted+looping+transparent) was
 			// chosen to preserve iOS-5 user-activation so subsequent
