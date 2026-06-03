@@ -102,31 +102,45 @@ async def start_testing(display_id):
 
 
 async def wait_for_reconnect(display_id, expected_count, timeout_s):
-    """Block until EVERY expected iPad in the group has completed the
-    SYN/SYNACK handshake (`synced=True`). Returns the synced count on
-    success; raises TimeoutError if the deadline is reached without
-    all iPads synced.
+    """Block until EVERY expected iPad in the group has *transitioned
+    through* an un-synced state and back to synced=True. Returns the
+    synced count on success; raises TimeoutError if the deadline is
+    reached without all iPads having completed a fresh sync cycle.
 
-    `synced=True` is a stronger readiness signal than fresh `lastSeen`:
-    lastSeen ticks on any client message including pre-handshake
-    REGISTERs, while `synced=True` only fires after GoTime's clock-sync
-    probe schedule converges and the page emits SYNACK back to the
-    server. Per js/GoTime.js:129, the probe schedule is
-    `[0, 3000, 9000, 18000, 45000]` ms after page load, and isSynced()
-    can only flip true once the rolling drift_history window is stable
-    -- so the physical floor on per-iPad sync is ~18-45 seconds AFTER
-    Safari finishes loading the page.
+    The transition requirement matters because the caller (start_testing)
+    has just dispatched a kill+reload via SSH, but the server's view of
+    `synced` doesn't update until SockJS notices the iPad's session went
+    away. SockJS xhr_polling keep-alive timeout is ~14s, so for the first
+    ~14s after a kill, the server still reports every iPad as
+    `synced=True` (the stale flag from before the kill). A naive "is the
+    count == expected?" loop would see those stale True flags on its
+    first poll and return immediately, before the actual disconnect+
+    relaunch+resync cycle has begun. PREPARE/PLAY would then land on
+    iPads that are mid-Safari-relaunch and get silently dropped.
+
+    The fix: per iPad, track three states: PRE (its initial state when
+    we started polling), DOWN (we have observed it as un-synced), READY
+    (we have observed it as synced AFTER seeing it un-synced). Only
+    READY iPads count toward the expected_count target.
+
+    `synced=True` is the SYN/SYNACK handshake completion -- per
+    js/GoTime.js:129 the probe schedule is [0, 3000, 9000, 18000, 45000]
+    ms after page load, so isSynced() can only flip true after
+    ~18-45 seconds per iPad. Plus the SockJS keep-alive timeout
+    (~14s) before the prior synced flag gets cleared. So per-iPad
+    end-to-end takes ~30-60s; a 180s timeout is well above what a
+    healthy fleet should need.
 
     Without this gate (or with a too-short timeout), PREPARE/PLAY lands
     while most iPads are still mid-sync and the broadcast is silently
-    dropped on the iPad side (recv-PREPARE bails when sock_callback
-    isn't yet registered). For the 24-iPad Test fleet, a safe timeout
-    is 120-180s -- timing out before all 24 are synced is treated as
-    test failure rather than "proceed with partial data" because
-    partial-fleet drift measurements are misleading."""
+    dropped. Timing out is treated as test failure rather than "proceed
+    with partial data" because partial-fleet drift measurements are
+    misleading."""
     deadline = time.time() + timeout_s
+    # Per-iPad state: 'PRE' (haven't seen un-synced yet), 'DOWN' (saw
+    # un-synced; waiting to see synced again), 'READY' (cycle complete).
+    state = {}
     async with aiohttp.ClientSession() as session:
-        synced = 0
         while time.time() < deadline:
             await asyncio.sleep(2)
             try:
@@ -136,26 +150,32 @@ async def wait_for_reconnect(display_id, expected_count, timeout_s):
             except Exception:
                 continue
             devs = data.get("devices", data) if isinstance(data, dict) else data
-            synced_list = [d for d in devs
-                           if d.get("displayID") == display_id
-                           and d.get("synced", False)
-                           and d.get("isOnline", False)]
-            synced = len(synced_list)
-            print(f"  synced (SYN/SYNACK complete): {synced}/{expected_count}",
+            group_devs = [d for d in devs if d.get("displayID") == display_id]
+            for d in group_devs:
+                k = d.get("clientKey")
+                is_synced_now = bool(d.get("synced", False) and d.get("isOnline", False))
+                if k not in state:
+                    state[k] = "PRE"
+                if state[k] == "PRE" and not is_synced_now:
+                    state[k] = "DOWN"
+                elif state[k] == "DOWN" and is_synced_now:
+                    state[k] = "READY"
+            ready_n = sum(1 for s in state.values() if s == "READY")
+            down_n = sum(1 for s in state.values() if s == "DOWN")
+            pre_n = sum(1 for s in state.values() if s == "PRE")
+            print(f"  fresh-sync cycle: ready={ready_n}/{expected_count} "
+                  f"down={down_n} pre={pre_n}     ",
                   end="\r")
-            if synced >= expected_count:
+            if ready_n >= expected_count:
                 print()
-                return synced
+                return ready_n
     print()
-    # Surface the un-synced iPads so the operator knows which devices to
-    # investigate rather than just "timed out at N/M".
-    devs = data.get("devices", data) if isinstance(data, dict) else data
-    unsynced = [d.get("friendlyName") or d.get("ip") for d in devs
-                if d.get("displayID") == display_id
-                and not (d.get("synced", False) and d.get("isOnline", False))]
+    not_ready = [d.get("friendlyName") or d.get("ip") for d in group_devs
+                 if state.get(d.get("clientKey")) != "READY"]
     raise TimeoutError(
-        f"only {synced}/{expected_count} iPads reached synced=True within "
-        f"{timeout_s}s. Un-synced: {', '.join(unsynced) or '(none in group)'}")
+        f"only {sum(1 for s in state.values() if s == 'READY')}/{expected_count} "
+        f"iPads completed a fresh sync cycle within {timeout_s}s. Not ready: "
+        f"{', '.join(not_ready) or '(none in group)'}")
 
 
 # CLIENTLOG line format in server.err:
