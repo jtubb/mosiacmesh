@@ -2,6 +2,20 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <!-- Webapp mode for iPad kiosk operation. When the operator
+       adds this page to the home screen (Safari -> Share ->
+       Add to Home Screen), launching from that icon runs the
+       page CHROME-LESS: no URL bar, no tab bar, no status bar
+       (with apple-mobile-web-app-status-bar-style=black-translucent).
+       The video element at position:fixed 100%/100% then fills the
+       iPad screen permanently, no native-fullscreen handoff
+       needed. Solves the "fullscreen lost on second video"
+       iOS-5 limitation (webkitEnterFullscreen can't be called
+       again without a new user gesture). Standard kiosk
+       deployment pattern; no effect if launched via Safari URL. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, minimum-scale=1, maximum-scale=1">
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script> 
@@ -375,19 +389,23 @@
 			// screen with the looping muted video. Safe to call when
 			// not in fullscreen -- iOS no-ops it then.
 			try { if (v.webkitExitFullscreen) { v.webkitExitFullscreen(); } } catch (e) {}
-			// Do NOT pause the blessed element between items. iOS-5 drops the
-			// element's user-activation on pause, which re-locks playback so the
-			// NEXT video's play() is blocked again (and, with activated already
-			// true, showItem won't re-prompt) — the "video didn't start, no tap
-			// prompt" bug. Instead keep it playing, muted and looping, but fully
-			// transparent so the non-video item shows through it. showItem's video
-			// branch restores opacity + audio. Mirrors stopPlayback's keep-alive.
-			// Belt-and-suspenders mute: iPad-1 Safari sometimes ignores a
-			// mid-playback v.muted=true on an already-playing element. Setting
-			// v.volume=0 as well guarantees no audible output regardless of
-			// which iPad-1 quirk applies.
-			v.muted = true; v.volume = 0; v.loop = true; v.style.opacity = '0';
-			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
+			// PAUSE the video to definitively stop audio. The previous
+			// keep-alive design (play it muted+looping+transparent) was
+			// chosen to preserve iOS-5 user-activation so subsequent
+			// play() calls would work programmatically -- BUT iPad-1's
+			// HTMLMediaElement does NOT reliably honor a mid-playback
+			// v.muted=true on the element, so audio kept bleeding into
+			// non-video items. Pause is the only reliable mute on
+			// iPad-1. If the next video's play() turns out to be blocked
+			// without a fresh gesture, the existing showTapStart() path
+			// in showItem (the !activated branch) re-prompts.
+			v.muted = true; v.volume = 0;
+			try { v.pause(); } catch (e) {}
+			v.style.opacity = '0';
+			// Force the audio decoder to release: setting currentTime
+			// without a subsequent play() leaves the element paused
+			// AND seeks to the requested position so the next play()
+			// resumes cleanly (or shows the tap prompt if blocked).
 		} else if (v) {
 			// Not yet gesture-blessed (nothing to preserve): just hide it.
 			try { v.pause(); } catch (e) {}
@@ -603,6 +621,22 @@
 			// before it's seen; iOS 5 can't autoplay at all, so the prompt stays for
 			// the one required tap.
 			if (!playback.activated) { showTapStart(); }
+			// Gesture-lost fallback: clearVideo's v.pause() drops iPad-1's
+			// user-activation, so the v.play() inside seekAndPlay above may
+			// not actually start playback (silently, no error). If v.paused
+			// is still true after a brief grace, re-prompt for tap so the
+			// next gesture re-blesses the element. The 'playing' listener in
+			// getPersistentVideo will hide the overlay once playback resumes.
+			(function () {
+				var checkTimer = setTimeout(function () {
+					if (v.paused) { showTapStart(); }
+				}, 1500);
+				var onP = function () {
+					v.removeEventListener('playing', onP);
+					clearTimeout(checkTimer);
+				};
+				v.addEventListener('playing', onP);
+			}());
 		} else {
 			$('#canvas').html('<img src="' + item.file + '" style="max-width:100%; max-height:100%;">');
 		}
@@ -630,18 +664,17 @@
 		var v = playback.pvid;
 		if (v && playback.activated && v.getAttribute('src')) {
 			// Exit iOS native fullscreen so the blackout cover is visible
-			// (otherwise the looping muted video stays fullscreen and the
-			// operator can't tell playback is actually stopped). Safe to
-			// call when not in fullscreen -- iOS no-ops it then.
+			// (otherwise the fullscreen video player keeps showing the
+			// looping muted video and the operator can't tell playback
+			// is stopped). Safe to call when not in fullscreen.
 			try { if (v.webkitExitFullscreen) { v.webkitExitFullscreen(); } } catch (e) {}
-			// Keep the blessed element ALIVE — playing, muted, looping, behind a
-			// black cover — instead of pausing it. iOS drops the element's
-			// user-activation on pause, which would force a new tap on the next
-			// start; keeping it playing preserves it (audio is muted, screen is
-			// black, so it reads as 'stopped'). v.volume=0 belt-and-suspenders --
-			// iPad-1 sometimes ignores mid-playback v.muted=true.
-			v.muted = true; v.volume = 0; v.loop = true; v.style.display = 'block';
-			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
+			// Pause to definitively stop audio (iPad-1's mid-playback
+			// v.muted=true is unreliable). The keep-alive-loop pattern
+			// the previous version used left audio bleeding into the
+			// blackout cover, defeating the "stopped" UX.
+			v.muted = true; v.volume = 0;
+			try { v.pause(); } catch (e) {}
+			v.style.display = 'block';
 			showBlackout();
 		} else if (v) {
 			try { v.pause(); } catch (e) {}
