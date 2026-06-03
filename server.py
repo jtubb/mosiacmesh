@@ -1570,22 +1570,51 @@ def _media_item_payload(me):
             "endEffect": getattr(me, "endEffect", None)}
 
 
+# seg_<HASH>_<N>.mp4 filename pattern (from render-pipeline line 1097
+# / per-client URL construction at line 1159). seg_hash is hex; seg_n
+# is a decimal integer. The pattern is anchored on basename so it
+# matches whether item.file is a bare filename or a /media/<key>/...
+# path or a full http://server/media/... URL.
+import re as _re_seg
+_SEG_FILE_RE = _re_seg.compile(r"seg_([a-f0-9]+)_(\d+)\.mp4$")
+
+
 # Per-client URL routing for media-cache-aware clients. See spec
 # 2026-06-03-media-cache-design.md. For SEGMENT items on an iPad in
 # lighttpd-localhost cache mode that has the segment cached, returns
 # the localhost URL so Safari fetches from local lighttpd (zero LAN
 # bandwidth). For every other case -- non-SEGMENT items, cache miss,
 # different cache mode -- returns the central-server URL.
+#
+# Accepts both real `MediaElement` instances (whose .playmode is a
+# `PlayMode` enum) and dict-like / stub items (whose .playmode may
+# be the string "SEGMENT" -- e.g., post-`_media_item_payload` wire
+# dicts, or test stubs). Both forms work.
 def _resolve_media_url(client, item):
-    # Non-SEGMENT items (SCRIPT, IMAGE, etc.) are tiny + uncacheable
-    # by this design; pass through their .file as-is.
-    if getattr(item, "playmode", None) != "SEGMENT":
+    # Normalise playmode to its string name. PlayMode is an Enum on
+    # real MediaElement instances; on wire-dicts / test stubs it's
+    # already a string.
+    pm = getattr(item, "playmode", None)
+    pm_name = pm.name if hasattr(pm, "name") else (pm if isinstance(pm, str) else None)
+    # Non-SEGMENT items (SCRIPT, IMAGE, INDIVIDUAL, etc.) are either
+    # tiny or per-iPad-uncached by this design; pass through .file
+    # unchanged so existing behavior is preserved.
+    if pm_name != "SEGMENT":
         return getattr(item, "file", "")
+    # Look for explicit seg_hash/seg_n attributes first (test stubs);
+    # otherwise parse from the file path / URL using the canonical
+    # seg_<HASH>_<N>.mp4 basename pattern set by the render pipeline.
     seg_hash = getattr(item, "seg_hash", None)
     seg_n = getattr(item, "seg_n", None)
     if seg_hash is None or seg_n is None:
-        # Defensive: a SEGMENT item without hash+n metadata can't be
-        # cached. Return the original file path (existing behavior).
+        file_str = getattr(item, "file", "") or ""
+        m = _SEG_FILE_RE.search(file_str)
+        if m:
+            seg_hash = m.group(1)
+            seg_n = m.group(2)
+    if seg_hash is None or seg_n is None:
+        # Defensive: a SEGMENT item we can't extract hash+n from
+        # can't be cached. Return the original file path.
         return getattr(item, "file", "")
     seg_key = f"{seg_hash}_{seg_n}"
     if (getattr(client, "cacheMode", "none") == "lighttpd-localhost"
