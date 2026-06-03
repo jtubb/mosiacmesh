@@ -1117,6 +1117,49 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4h) pin the MosaicMesh webclip icon to the LEFTMOST dock slot
+    #       in portrait orientation. The admin "Start" action drives
+    #       a VNC tap at the framebuffer coordinate (945, 671) -- the
+    #       only working webclip-launch path on iOS 5 (see commit
+    #       5569318). That coordinate ONLY hits the icon if the icon
+    #       is in dock slot 0 in portrait. Without this step, Start
+    #       would tap an empty area on iPads where SpringBoard
+    #       happened to place the icon elsewhere on the home screen.
+    #
+    #       Approach: scp IconState.plist down, edit with the local
+    #       Python helper (handles dock-overflow + folder traversal),
+    #       scp back. The next step's killall SpringBoard picks up
+    #       the new icon layout.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
+        $remotePath = '/var/mobile/Library/SpringBoard/IconState.plist'
+        $localPlist = Join-Path ([System.IO.Path]::GetTempPath()) "mm-iconstate-$($hostName -replace '\.', '-').plist"
+        $dockHelper = Join-Path $PSScriptRoot '_dock_webapp_icon.py'
+        if (-not (Test-Path $dockHelper)) {
+            Write-Host "  dock pin: helper script missing at $dockHelper" -ForegroundColor Yellow
+        } else {
+            try {
+                # Pull, edit, push back, fix ownership.
+                & $scp -i $KeyPath -P $p @sshLegacy "${User}@${hostName}:$remotePath" $localPlist 2>&1 | Out-Null
+                $dockOut = (& python $dockHelper $localPlist $webclipBid 2>&1) | Out-String
+                & $scp -i $KeyPath -P $p @sshLegacy $localPlist "${User}@${hostName}:$remotePath" 2>&1 | Out-Null
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    "chown mobile:mobile '$remotePath'; chmod 600 '$remotePath'" 2>&1 | Out-Null
+                Remove-Item $localPlist -Force -ErrorAction SilentlyContinue
+                $dockTrim = $dockOut.Trim() -replace '\s+', ' '
+                if ($dockTrim -match 'already at dock slot 0') {
+                    Write-Host "  dock pin: icon already at slot 0 (no change)" -ForegroundColor DarkGreen
+                } elseif ($dockTrim -match 'moved to dock slot 0') {
+                    Write-Host "  dock pin: moved icon to leftmost dock slot" -ForegroundColor Green
+                } else {
+                    Write-Host "  dock pin unexpected: $dockTrim" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  dock pin failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
