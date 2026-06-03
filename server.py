@@ -2177,6 +2177,7 @@ async def _poll_push_progress(client_key, client, stall_event, proc):
                   poll_script])
     poll_proc = None
     last_broadcast_bytes = -1
+    seen_nonzero = False
     try:
         poll_proc = await asyncio.create_subprocess_exec(
             *ssh_cmd, stdout=asyncio.subprocess.PIPE,
@@ -2187,10 +2188,6 @@ async def _poll_push_progress(client_key, client, stall_event, proc):
                     poll_proc.stdout.readline(),
                     timeout=_PUSH_POLL_INTERVAL_S + 5)
             except asyncio.TimeoutError:
-                # No size emitted for one full interval + 5s -- the
-                # remote loop or its ssh died, OR the network blipped.
-                # Treat as "no progress observed this tick"; check
-                # stall window and continue.
                 line = b""
             if proc.returncode is not None:
                 return
@@ -2202,6 +2199,8 @@ async def _poll_push_progress(client_key, client, stall_event, proc):
                 sz = 0
             now_ms = int(time.time() * 1000)
             if sz > client.cachePushProgress["bytesSent"]:
+                if not seen_nonzero and sz > 0:
+                    seen_nonzero = True
                 elapsed_s = max(0.001,
                                 (now_ms - client.cachePushProgress["startedMs"])
                                 / 1000.0)
@@ -2213,7 +2212,16 @@ async def _poll_push_progress(client_key, client, stall_event, proc):
                     _broadcast_cache_progress(client_key, client)
                     last_broadcast_bytes = sz
             else:
-                # No new bytes since last lastChangeMs update.
+                # No new bytes since last lastChangeMs update. Only
+                # treat this as a stall AFTER we've observed at least
+                # one non-zero size -- before that, scp is legitimately
+                # in setup (ssh handshake, key exchange, remote file
+                # open). On iPad-1's SHA-1 sshd this can take 30s+ on
+                # contended WiFi. Killing a transfer that hasn't
+                # had a chance to start writing yet is a regression
+                # vs. the static-timeout approach we replaced.
+                if not seen_nonzero:
+                    continue
                 stalled_ms = now_ms - client.cachePushProgress["lastChangeMs"]
                 if stalled_ms >= _PUSH_STALL_WINDOW_S * 1000:
                     stall_event.set()
