@@ -1264,19 +1264,36 @@ foreach ($h in $targets) {
     #       would tap an empty area on iPads where SpringBoard
     #       happened to place the icon elsewhere on the home screen.
     #
-    #       MUST RUN AFTER 5.5's respring. See the long note above 5.5
-    #       for why -- TL;DR: SpringBoard rewrites IconState.plist on
-    #       launch to include newly-discovered webclips in default
-    #       (non-dock) positions, so any pre-respring edit gets stomped.
+    #       MUST RUN AFTER 5.5's respring. SpringBoard rewrites
+    #       IconState.plist on launch to include newly-discovered
+    #       webclips, so we need the post-respring state before we edit.
     #       The brief sleep gives SpringBoard time to scan WebClips/,
     #       discover MosaicMesh.webclip, and flush the new IconState
-    #       to disk before we pull it down to edit. 5s was empirically
-    #       sufficient on iPad-1 / iOS 5.1.1; step 7's second respring
-    #       below picks up the dock-positioned bid we write here.
+    #       to disk before we pull it down. 5s is empirically sufficient
+    #       on iPad-1 / iOS 5.1.1; step 7's second respring picks up
+    #       the dock-positioned bid we write here.
     #
-    #       Approach: scp IconState.plist down, edit with the local
-    #       Python helper (handles dock-overflow + folder traversal),
-    #       scp back. step 7's killall SpringBoard then re-reads it.
+    #       Critical: DesiredIconState.plist must be deleted too.
+    #       That file is iOS-5 SpringBoard's "target layout" -- it gets
+    #       written when the user (or Add-to-Home-Screen) commits a
+    #       layout change, and on every subsequent launch SpringBoard
+    #       reconciles IconState against DesiredIconState, with
+    #       DesiredIconState winning. Every device in the fleet had
+    #       a stale DesiredIconState from a previously-deleted webclip
+    #       (com.apple.webapp-545D...), and SpringBoard was substituting
+    #       our newly-installed webclip into that orphaned slot on
+    #       every respring -- which is why our IconState edit kept
+    #       getting reverted to iconLists[1][3] (page 2, top-right).
+    #       Removing DesiredIconState makes IconState authoritative
+    #       again. SpringBoard does NOT regenerate DesiredIconState
+    #       automatically on respring -- only when the user makes a
+    #       deliberate layout change, at which point it'll reflect
+    #       the (now-correct) dock placement.
+    #
+    #       Approach: scp IconState down, edit with the local Python
+    #       helper (handles dock-overflow + folder traversal), scp
+    #       back, then rm DesiredIconState. step 7's killall SpringBoard
+    #       re-reads IconState with no DesiredIconState to override.
     if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
         # Let SpringBoard finish its post-respring WebClips scan + IconState write.
         Start-Sleep -Seconds 5
@@ -1288,12 +1305,18 @@ foreach ($h in $targets) {
             Write-Host "  dock pin: helper script missing at $dockHelper" -ForegroundColor Yellow
         } else {
             try {
-                # Pull, edit, push back, fix ownership.
+                # Pull, edit, push back, fix ownership, delete DesiredIconState.
+                # The chmod is 644 (not 600) so the file matches what
+                # SpringBoard itself writes -- a 600 file is still
+                # readable by the owner (mobile) but matching the
+                # native perms avoids any defensive-rewrite edge case.
                 & $scp -i $KeyPath -P $p @sshLegacy "${User}@${hostName}:$remotePath" $localPlist 2>&1 | Out-Null
                 $dockOut = (& python $dockHelper $localPlist $webclipBid 2>&1) | Out-String
                 & $scp -i $KeyPath -P $p @sshLegacy $localPlist "${User}@${hostName}:$remotePath" 2>&1 | Out-Null
                 & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
-                    "chown mobile:mobile '$remotePath'; chmod 600 '$remotePath'" 2>&1 | Out-Null
+                    ("chown mobile:mobile '$remotePath'; chmod 644 '$remotePath'; " +
+                     "rm -f /var/mobile/Library/SpringBoard/DesiredIconState.plist; " +
+                     "sync; echo dock_pin_ok") 2>&1 | Out-Null
                 Remove-Item $localPlist -Force -ErrorAction SilentlyContinue
                 $dockTrim = $dockOut.Trim() -replace '\s+', ' '
                 if ($dockTrim -match 'already at dock slot 0') {
