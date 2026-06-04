@@ -40,7 +40,7 @@ from mosaicmesh.persistence import (
     save_settings_incremental, saveSettings, cleanup_old_clients,
 )
 from mosaicmesh.cache import (
-    init_json_cache, get_pooled_file_handle, close_file_pool,
+    get_pooled_file_handle, close_file_pool,
     prewarm_static_cache, get_cached_file,
     file_cache, cache_stats,
 )
@@ -4740,9 +4740,7 @@ if __name__ == '__main__':
                 
                 # Set up socket manager
                 socketmanager = sockjs.get_manager(app=app,name='mosiacmesh')
-                
-                # Initialize JSON response cache now that jsonpickle is available
-                init_json_cache()
+
                 # Pre-warm the static-file cache so a fleet-wide Start burst
                 # doesn't block the event loop on cold disk reads.
                 prewarm_static_cache()

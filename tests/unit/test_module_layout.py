@@ -28,14 +28,45 @@ def test_persistence_helpers_importable():
 
 def test_cache_helpers_importable():
     from mosaicmesh.cache import (
-        init_json_cache, get_pooled_file_handle, close_file_pool,
+        get_pooled_file_handle, close_file_pool,
         prewarm_static_cache, get_cached_file,
     )
     assert callable(get_cached_file)
-    assert callable(init_json_cache)
     assert callable(get_pooled_file_handle)
     assert callable(close_file_pool)
     assert callable(prewarm_static_cache)
+
+
+def test_cache_behavior_smoke():
+    """Real behavior check: cache miss → hit, cache_stats updates correctly.
+    This catches a future regression where the re-import in server.py shadows
+    a broken implementation in mosaicmesh.cache."""
+    import os
+    import tempfile
+    from mosaicmesh.cache import get_cached_file, cache_stats, file_cache
+    # Reset state for a clean reading
+    baseline_misses = cache_stats['misses']
+    baseline_hits = cache_stats['hits']
+    fd, path = tempfile.mkstemp(suffix='.tmp')
+    try:
+        os.write(fd, b"hello")
+        os.close(fd)
+        # First call: miss
+        data1 = get_cached_file(path)
+        assert data1 == b"hello"
+        assert cache_stats['misses'] == baseline_misses + 1
+        # Second call: hit
+        data2 = get_cached_file(path)
+        assert data2 == b"hello"
+        assert cache_stats['hits'] == baseline_hits + 1
+    finally:
+        # Evict from cache + remove temp file
+        if path in file_cache:
+            del file_cache[path]
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests

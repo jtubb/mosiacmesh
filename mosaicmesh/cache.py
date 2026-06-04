@@ -7,14 +7,9 @@ filesystem paths — they don't reference server.settings, so no lazy
 """
 import os
 import logging
-import jsonpickle
-
 # File cache with modification time tracking
 file_cache = {}
 cache_stats = {'hits': 0, 'misses': 0}
-
-# JSON response cache for common responses (will be initialized after jsonpickle import)
-json_response_cache = {}
 
 # File handle pool for range requests
 file_handle_pool = {}
@@ -42,16 +37,6 @@ def close_file_pool():
     file_cache.clear()
     cache_stats['hits'] = 0
     cache_stats['misses'] = 0
-
-
-def init_json_cache():
-    """Initialize JSON response cache after imports are available"""
-    global json_response_cache
-    json_response_cache = {
-        'success': jsonpickle.encode({"PAYLOAD": "SUCCESS"}),
-        'ack': jsonpickle.encode({"PAYLOAD": "ACK"}),
-        'synack': jsonpickle.encode({"PAYLOAD": "SYNACK"})
-    }
 
 
 def prewarm_static_cache():
