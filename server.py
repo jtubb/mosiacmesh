@@ -319,7 +319,6 @@ def _video_encoder_args():
             "-x264-params", "scenecut=0"]
 
 
-
 def handle_client_disconnect(session_id):
     """Enhanced client disconnect handling"""
     # Find and update client last seen time

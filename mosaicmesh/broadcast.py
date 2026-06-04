@@ -3,7 +3,6 @@ global settings via the server module (lazy at call time) so the
 circular import between server.py and mosaicmesh.broadcast resolves
 cleanly."""
 import logging
-import json
 
 
 def _send_to_session(session_id, encoded_message):

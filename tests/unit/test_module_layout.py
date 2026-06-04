@@ -78,6 +78,34 @@ def test_broadcast_helpers_importable():
     assert callable(_send_to_session)
     assert callable(_deliver)
 
+
+def test_send_to_session_targeted():
+    """Steady-state targeted path: _send_to_session looks up the session
+    via socketmanager.get(sid), calls sess.send(msg) directly, and returns
+    True. socketmanager.broadcast() is NOT called — that's the fallback
+    path covered by test_broadcast_to_display_group in test_websocket_handlers.py.
+
+    This is the optimization path that makes broadcast O(1) per recipient
+    instead of O(N) over all clients. A future regression breaking
+    socketmanager.get() lookup would otherwise be invisible to the suite."""
+    import server
+    from unittest.mock import MagicMock
+    from mosaicmesh.broadcast import _send_to_session
+
+    prev_mgr = getattr(server, 'socketmanager', None)
+    try:
+        mock_sess = MagicMock()
+        server.socketmanager = MagicMock()
+        server.socketmanager.get.return_value = mock_sess
+
+        result = _send_to_session("sess-abc", "encoded-msg")
+
+        assert result is True
+        mock_sess.send.assert_called_once_with("encoded-msg")
+        server.socketmanager.broadcast.assert_not_called()
+    finally:
+        server.socketmanager = prev_mgr
+
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests
     that do `from server import Client, Settings, etc.`
