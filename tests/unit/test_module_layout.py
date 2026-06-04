@@ -68,6 +68,16 @@ def test_cache_behavior_smoke():
         except OSError:
             pass
 
+def test_broadcast_helpers_importable():
+    from mosaicmesh.broadcast import (
+        _send_to_session, _deliver,
+        broadcast_to_client, broadcast_to_display_group,
+    )
+    assert callable(broadcast_to_client)
+    assert callable(broadcast_to_display_group)
+    assert callable(_send_to_session)
+    assert callable(_deliver)
+
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests
     that do `from server import Client, Settings, etc.`
