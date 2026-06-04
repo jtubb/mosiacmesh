@@ -136,3 +136,21 @@ def test_calibration_helpers_importable():
     assert callable(assign_group_bounding_boxes)
     assert callable(group_bounding_box)
     assert callable(letterbox_to_aspect)
+
+
+def test_calibration_order_points_behavior():
+    """Pure-math behavior check: order_points returns [TL, TR, BR, BL] for a
+    rectangle whose vertices are given in arbitrary order. Catches a future
+    regression where the function gets accidentally reordered or its sort
+    logic changes — easy mistake to make during a refactor and hard to
+    notice from import-only tests."""
+    import numpy as np
+    from mosaicmesh.calibration import order_points
+    # Rectangle vertices given out-of-order
+    pts = np.array([[3, 2], [1, 1], [3, 1], [1, 2]], dtype="float32")
+    result = order_points(pts)
+    # Expected order: top-left, top-right, bottom-right, bottom-left
+    assert result[0].tolist() == [1.0, 1.0], f"TL wrong: {result[0]}"
+    assert result[1].tolist() == [3.0, 1.0], f"TR wrong: {result[1]}"
+    assert result[2].tolist() == [3.0, 2.0], f"BR wrong: {result[2]}"
+    assert result[3].tolist() == [1.0, 2.0], f"BL wrong: {result[3]}"

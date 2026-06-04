@@ -5,9 +5,6 @@ bounding boxes for perspective rendering.
 The HTTP route handlers (generateAruco, calibrate) stay in server.py and
 call into this module for the pure-math/CV operations.
 """
-import math
-import os
-import logging
 import numpy as np
 import cv2 as cv
 
@@ -165,7 +162,17 @@ def _quad_box(contour):
 
 
 def _quad_iou(a, b):
-    """Intersection-over-union of two convex quads (each (4,2) or (4,1,2))."""
+    """Intersection-over-union of two convex quads (each (4,2) or (4,1,2)).
+
+    PRECISE convex intersection via cv.intersectConvexConvex. Used by
+    reconcile_screen_quad to decide whether a detected outer contour
+    overlaps the marker quad well enough to trust as the screen border.
+
+    NOTE: server.py defines a separate _quad_iou that uses an axis-aligned
+    bounding-box approximation (fast path for _drop_overlapping). The two
+    are intentionally different algorithms for different call sites; do
+    not merge them.
+    """
     a = np.array(a, dtype="float32").reshape(-1, 2)
     b = np.array(b, dtype="float32").reshape(-1, 2)
     inter, _ = cv.intersectConvexConvex(a, b)

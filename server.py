@@ -3162,7 +3162,16 @@ def _quad_contains_point(quad, point):
 def _quad_iou(q1, q2):
     """Intersection-over-union of two convex quads. Uses the axis-aligned
     bounding-box approximation -- fast and good enough for the "did these
-    two quads accidentally trace the same compound region?" decision."""
+    two quads accidentally trace the same compound region?" decision.
+
+    NOTE: mosaicmesh.calibration also defines _quad_iou, but with the
+    PRECISE convex intersection (cv.intersectConvexConvex) for the
+    marker/border reconciliation pipeline. The two are intentionally
+    different algorithms for different call sites; do not merge them.
+    This AABB version is local to server.py because it's only used by
+    the _drop_overlapping helper in the screen-quad detection pipeline,
+    where it shadows the calibration import in server.py's namespace.
+    """
     x1, y1, w1, h1 = cv.boundingRect(q1)
     x2, y2, w2, h2 = cv.boundingRect(q2)
     ix = max(0, min(x1 + w1, x2 + w2) - max(x1, x2))
