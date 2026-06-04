@@ -1208,25 +1208,63 @@ foreach ($h in $targets) {
     #
     #    Default-on when -InstallTweaks; -NoOpenDisplay opts out.
     if ($status -eq "OK" -and $pkgsToInstall -and -not $NoOpenDisplay) {
-        # Brief sleep so SpringBoard has time to finish respringing
-        # before sbdidlaunch tries to launch the webclip; otherwise the
-        # launch can race the SpringBoard relaunch and silently no-op.
-        $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
-        $openCmd = "sleep 4; " +
-                   "if /usr/bin/sbdidlaunch '$webclipBid' 2>/dev/null; then " +
-                   "  echo OPEN_RC=0 OPEN_MODE=webclip; " +
-                   "else " +
-                   "  uiopen '$DisplayUrl'; echo OPEN_RC=`$? OPEN_MODE=safari; " +
-                   "fi"
+        # Final launch: respring SpringBoard a SECOND time, wake the
+        # screen, then VNC-tap the MosaicMesh icon at framebuffer
+        # (945, 671). This mimics the admin "Start" path that we
+        # know works (commit 5569318).
+        #
+        # Why we don't use sbdidlaunch here (the prior version did):
+        # sbdidlaunch returns rc=0 but doesn't actually keep the
+        # webclip in foreground -- iOS suspends + reclaims the
+        # launched app within ~1 sec. Worse, that failed-launch
+        # sequence leaves SpringBoard / Veency / mousesupport in a
+        # state where subsequent VNC taps misfire (tap goes through
+        # but hits the wrong icon). Empirically verified: on .50 and
+        # .79, after onboarding + sbdidlaunch, the next VNC tap at
+        # (945, 671) opened Game Center instead of MosaicMesh. After
+        # a fresh respring, the same coordinate launched MosaicMesh
+        # correctly.
+        #
+        # The VNC tap is sent from the SERVER (not the iPad) via
+        # vncdotool through Python. WEBAPP_ICON_FBX/FBY constants
+        # in server.py document the chosen coordinate.
+        $vncTapPy = @"
+from vncdotool import api
+import sys, time
+try:
+    proxy = api.connect('${hostName}::5900', password='mosaicmesh', timeout=10)
+    proxy.mouseMove(945, 671)
+    time.sleep(0.3)
+    proxy.mouseDown(1)
+    time.sleep(0.1)
+    proxy.mouseUp(1)
+    proxy.disconnect()
+    print('VNC_TAP_OK', flush=True)
+except Exception as e:
+    print(f'VNC_TAP_FAIL {e}', flush=True)
+    sys.exit(1)
+"@
         try {
-            $oOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $openCmd 2>&1) | Out-String
-            if ($oOut -match 'OPEN_RC=0 OPEN_MODE=webclip') {
-                Write-Host "  display opened (webapp mode): $DisplayUrl" -ForegroundColor Green
-            } elseif ($oOut -match 'OPEN_RC=0 OPEN_MODE=safari') {
-                Write-Host "  display opened (Safari fallback): $DisplayUrl" -ForegroundColor DarkGreen
+            # 1) Second respring (clears post-sbdidlaunch corrupt state)
+            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                "killall SpringBoard 2>/dev/null; echo OK" 2>&1 | Out-Null
+            Start-Sleep -Seconds 8
+            # 2) Wake screen (so VNC tap lands on a live screen)
+            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                "activator send libactivator.lockscreen.dismiss" 2>&1 | Out-Null
+            Start-Sleep -Seconds 1
+            # 3) VNC tap on dock-leftmost MosaicMesh icon
+            $tapOut = ($vncTapPy | & python -u - 2>&1) | Out-String
+            if ($tapOut -match 'VNC_TAP_OK') {
+                Write-Host "  display opened (webapp mode via VNC tap): $DisplayUrl" -ForegroundColor Green
             } else {
-                $rc = [regex]::Match($oOut, 'OPEN_RC=\S+').Value
-                Write-Host "  display launch non-zero ($rc): $($oOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                Write-Host "  VNC tap launch failed: $($tapOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                # Fallback: uiopen Safari so the iPad still joins the
+                # mesh (keeps WiFi radio active). Operator can switch
+                # to webapp mode later by tapping the home-screen icon.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    "uiopen '$DisplayUrl'; echo OK" 2>&1 | Out-Null
+                Write-Host "  Safari opened (fallback): $DisplayUrl" -ForegroundColor DarkYellow
             }
         } catch {
             Write-Host "  open-display failed: $($_.Exception.Message)" -ForegroundColor Yellow
