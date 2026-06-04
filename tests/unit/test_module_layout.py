@@ -240,3 +240,18 @@ def test_scheduling_helpers_importable():
     assert _hhmm_to_min("09:30") == 9 * 60 + 30
     assert _hhmm_to_min("00:00") == 0
     assert _hhmm_to_min("23:59") == 23 * 60 + 59
+
+def test_api_discovery_importable():
+    from mosaicmesh.api.discovery import (
+        auto_configure_client, get_discovered_devices,
+        sync_new_client_to_group,
+        _expected_seg_keys_for_display, _expected_segments_for_client,
+        _propagation_percent_for_client,
+        api_discovery_devices, api_discovery_stats, api_discovery_configure,
+    )
+    assert callable(auto_configure_client)
+    assert callable(get_discovered_devices)
+    assert callable(sync_new_client_to_group)
+    assert callable(api_discovery_devices)
+    assert callable(api_discovery_stats)
+    assert callable(api_discovery_configure)

@@ -110,7 +110,7 @@ class TestDiscoveryAPI:
         request = make_mocked_request('POST', '/api/discovery/configure')
         request.json = AsyncMock(return_value=config_data)
 
-        with patch('server.saveSettings') as mock_save:
+        with patch('mosaicmesh.api.discovery.saveSettings') as mock_save:
             response = await server.api_discovery_configure(request)
         
         assert response.status == 200
