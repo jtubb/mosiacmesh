@@ -192,3 +192,19 @@ def test_render_keyframe_grid_args_behavior():
     from mosaicmesh.render import _keyframe_grid_args
     result = _keyframe_grid_args()
     assert result == ["-force_key_frames", "expr:gte(t,n_forced*0.25)"], result
+
+
+def test_device_scripts_importable():
+    from mosaicmesh.device_scripts import (
+        DEFAULT_DEVICE_SCRIPTS, WEBCLIP_BUNDLE_ID,
+        WEBAPP_ICON_FBX, WEBAPP_ICON_FBY,
+        _run_device_script, _launch_webapp_via_vnc,
+    )
+    assert isinstance(DEFAULT_DEVICE_SCRIPTS, dict)
+    assert 'loginScript' in DEFAULT_DEVICE_SCRIPTS
+    assert 'startScript' in DEFAULT_DEVICE_SCRIPTS
+    assert 'stopScript' in DEFAULT_DEVICE_SCRIPTS
+    assert isinstance(WEBAPP_ICON_FBX, int)
+    assert isinstance(WEBAPP_ICON_FBY, int)
+    assert callable(_run_device_script)
+    assert callable(_launch_webapp_via_vnc)
