@@ -122,3 +122,17 @@ def test_server_reexports_state_classes():
             f"server.{name} is not the same object as mosaicmesh.state.{name} "
             "— a duplicate local definition may have crept back into server.py"
         )
+
+def test_calibration_helpers_importable():
+    from mosaicmesh.calibration import (
+        order_points, reconstruct_screen_quad, reconcile_screen_quad,
+        warp_image_for_screen, assign_group_bounding_boxes,
+        group_bounding_box, letterbox_to_aspect,
+    )
+    assert callable(order_points)
+    assert callable(reconstruct_screen_quad)
+    assert callable(reconcile_screen_quad)
+    assert callable(warp_image_for_screen)
+    assert callable(assign_group_bounding_boxes)
+    assert callable(group_bounding_box)
+    assert callable(letterbox_to_aspect)
