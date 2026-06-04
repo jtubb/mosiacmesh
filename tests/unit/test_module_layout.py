@@ -165,7 +165,30 @@ def test_render_pipeline_importable():
         _broadcast_per_client_play, _broadcast_per_client_preload,
         isVideoItem,
     )
+    # Assert every imported callable. A future task that accidentally
+    # shadows or deletes one would still allow the import (the name is
+    # bound), so verify each is actually a function.
     assert callable(render_group_async)
     assert callable(compute_render_token)
+    assert callable(build_ffmpeg_perspective_cmd)
+    assert callable(build_ffmpeg_individual_cmd)
+    assert callable(get_video_dimensions)
+    assert callable(resolve_media_path)
     assert callable(_apply_playlist)
     assert callable(_start_group_playback)
+    assert callable(_stop_group_playback)
+    assert callable(_broadcast_per_client_play)
+    assert callable(_broadcast_per_client_preload)
+    assert callable(isVideoItem)
+
+
+def test_render_keyframe_grid_args_behavior():
+    """Pure-function behavior check: _keyframe_grid_args returns the
+    canonical 0.25s ffmpeg keyframe-grid args. iPad-1 seeks to grid
+    keyframes, so a future commit accidentally changing the grid step
+    would silently de-sync multi-client mosaic playback. The expression
+    'expr:gte(t,n_forced*0.25)' embeds KEYFRAME_GRID_SEC, so this also
+    catches an accidental change to that constant."""
+    from mosaicmesh.render import _keyframe_grid_args
+    result = _keyframe_grid_args()
+    assert result == ["-force_key_frames", "expr:gte(t,n_forced*0.25)"], result

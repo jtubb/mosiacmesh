@@ -203,6 +203,18 @@ DEFAULT_DEVICE_SCRIPTS = {
 # Render pipeline constants + functions live in mosaicmesh.render (imported above).
 # _PUSH_STALL_WINDOW_S and _PUSH_POLL_INTERVAL_S remain here because they are only
 # used by _push_segment_to_cached_clients / _poll_push_progress which stay in server.py.
+#
+# Why STALL-based abort rather than a static timeout: legitimate cache pushes to
+# iPad-1 over WiFi can run for many minutes on a fresh segment; a fixed timeout
+# either over-aborts (kills slow but progressing transfers) or under-aborts (lets
+# zombie SSH sessions hang for hours). Polling the iPad's destination file size
+# every _PUSH_POLL_INTERVAL_S seconds and aborting only when no bytes flow for
+# _PUSH_STALL_WINDOW_S seconds gives us "as long as it takes, but no longer."
+# Empirically tuned: 30s stall window catches genuinely-dead transfers without
+# spurious-aborting healthy-but-slow ones; 5s poll interval is the sweet spot
+# between "responsive to stalls" and "not aggressively over-polling sshd on a
+# resource-constrained iPad-1." Override via MMPUSH_STALL_S / MMPUSH_POLL_S
+# env vars for tuning per-fleet without code changes.
 _PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
 _PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
 

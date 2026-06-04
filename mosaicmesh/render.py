@@ -13,7 +13,6 @@ stay in server.py and call into this module.
 """
 import os
 import re as _re_seg
-import json
 import asyncio
 import logging
 import hashlib
@@ -314,6 +313,10 @@ def compute_render_token(display_id):
 
 
 def _broadcast_render_status(display_id, status):
+    """Fan a RENDER_STATUS notification out to every connected client so
+    the admin UI's render-progress indicators (and any other listeners)
+    can update. No-ops if socketmanager hasn't been wired yet — happens
+    during module import in tests."""
     import server
     if server.socketmanager is not None:
         server.socketmanager.broadcast(jsonpickle.encode(
@@ -708,6 +711,11 @@ def _start_group_playback(display_id, resume_epoch=None):
 
 
 def _stop_group_playback(display_id):
+    """Tear down playback for a display group: set STOP, zero the playhead,
+    and cancel any in-flight coordinated-start prepare (clearing prepareId,
+    readyClients, armPending, prepareDeadline) so the group's next PLAY
+    starts from a clean slate. Then broadcast STOP to every client in the
+    group so they hide their video element."""
     import server
     display = server.settings.displays.get(display_id)
     if display:
@@ -726,6 +734,10 @@ def _stop_group_playback(display_id):
 # ---------------------------------------------------------------------------
 
 def _group_online_keys(display_id):
+    """Return the set of client keys belonging to display_id that are
+    currently online. 'Online' = client.displayID matches AND client.isOnline
+    is True (the latter is maintained by the websocket connect/disconnect
+    handlers and the discovery heartbeat loop)."""
     import server
     return {k for k, c in server.settings.clients.items()
             if getattr(c, "displayID", None) == display_id and getattr(c, "isOnline", False)}
