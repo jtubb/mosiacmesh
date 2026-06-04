@@ -15,6 +15,14 @@ def test_state_classes_importable():
     assert hasattr(s, 'schedules')
     assert hasattr(s, 'scripts')
 
+def test_persistence_helpers_importable():
+    from mosaicmesh.persistence import (
+        save_settings_incremental, saveSettings, cleanup_old_clients,
+    )
+    assert callable(save_settings_incremental)
+    assert callable(saveSettings)
+    assert callable(cleanup_old_clients)
+
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests
     that do `from server import Client, Settings, etc.`
