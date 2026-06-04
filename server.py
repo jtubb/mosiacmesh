@@ -91,8 +91,24 @@ DEFAULT_DEVICE_SCRIPTS = {
     # was already foregrounded on MosaicMesh -- removed so login is safe
     # to fire from any starting state. The SBSettings autolock switch off
     # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
+    # Also locks rotation to PORTRAIT on every login: a wall of iPads
+    # has a fixed physical orientation, so any user-induced rotation
+    # away from portrait (accidental, or by Veency input quirks) must
+    # be reverted before the display layer renders. SBOrientationLocked*
+    # are the prefs SpringBoard reads; `defaults write` routes through
+    # cfprefsd which fires the CFPreferences-change notification that
+    # SpringBoard's observer applies without a respring. Writing as
+    # mobile via `su -c` is mandatory -- root's defaults land in
+    # /var/root/Library/Preferences (wrong place); SpringBoard reads
+    # /var/mobile/Library/Preferences/com.apple.springboard.plist.
+    # Orientation enum is UIInterfaceOrientation: 1 = portrait.
+    # The `2>/dev/null`s keep the loginScript output clean for the
+    # admin UI; the LOGIN_OK terminator is what the server matches on.
     "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
-                    "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
+                    "activator send switch-off.com.a3tweaks.switch.autolock; "
+                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedActive -bool YES' 2>/dev/null; "
+                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedOrientation -int 1' 2>/dev/null; "
+                    "echo LOGIN_OK",
     # Open the display page in WEBAPP MODE via the home-screen webclip
     # (sbdidlaunch on the webclip's bundle id), falling back to mobile
     # Safari (uiopen) if the webclip isn't installed on this iPad yet.

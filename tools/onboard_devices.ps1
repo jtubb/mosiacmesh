@@ -913,45 +913,56 @@ foreach ($h in $targets) {
                 # over SSH fails on iOS 5 -- see comment below).
                 $startCmd = (
                     "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-                    # Probe by PROCESS, not by netstat output or pidfile.
-                    #   - iOS 5's BSD netstat output didn't match the
-                    #     `127.0.0.1[.:]8080 ... LISTEN` regex I first tried
-                    #     (different field layout / lo0 handling), so a live
-                    #     listener was missed and we fell through to /usr/
-                    #     sbin/lighttpd which then failed with 'Address
-                    #     already in use'.
-                    #   - The pidfile is also unreliable: lighttpd O_TRUNCs
-                    #     /var/run/lighttpd.pid BEFORE binding and only
-                    #     writes its pid after the bind succeeds, so a
-                    #     failed start leaves a 0-byte pidfile that looks
-                    #     like 'running but pid empty' to any caller.
-                    # `ps ax | grep [l]ighttpd` checks the actual fact we
-                    # care about (is a lighttpd process alive?) without
-                    # depending on either byproduct.
+                    # Probe by PORT BIND, not by process or by pidfile.
+                    # The question we actually want answered is `is port
+                    # 8080 already serving?` -- not `does ps show a
+                    # process named lighttpd?`. Empirically the process-
+                    # probe missed the listener on 17 of 18 devices in
+                    # the fleet rollout: apt's lighttpd postinst spawns
+                    # the daemon in a way that doesn't surface to `ps
+                    # ax | grep [l]ighttpd` from our SSH session (likely
+                    # session-visibility quirk on iOS 5), even though
+                    # something IS bound to 8080 (we know because our
+                    # subsequent /usr/sbin/lighttpd start fails with
+                    # `Address already in use`).
+                    #
+                    # bash's /dev/tcp/<host>/<port> virtual file is the
+                    # right tool: opens a real TCP connection, exits 0
+                    # iff the port accepts. iOS-5 Cydia ships bash 4.x,
+                    # which has /dev/tcp since 2.05, and root's SSH
+                    # login shell on these devices is bash.
+                    #
                     # PID extraction note: `awk` AND `head` are both
                     # missing from the minimal iOS-5 jailbreak rootfs
                     # (they live in Cydia's coreutils-bin which we don't
                     # depend on). Also, our LaunchDaemon plist runs
                     # lighttpd with -D (foreground) so the daemon does
                     # NOT write /var/run/lighttpd.pid -- launchd tracks
-                    # the pid via fork instead. Net effect: in the
-                    # LaunchDaemon-managed case the pidfile is empty/
-                    # missing and we MUST fall back to ps. The POSIX
-                    # shell builtin `read` consumes exactly one line
-                    # then exits (SIGPIPE to upstream grep is harmless),
-                    # giving us both `head -1` and `awk '{print $1}'`
-                    # without depending on either binary.
-                    "if ps ax 2>/dev/null | grep -q '[l]ighttpd'; then`n" +
+                    # the pid via fork instead. So in the LaunchDaemon-
+                    # managed case the pidfile is empty/missing. The
+                    # POSIX shell builtin `read` consumes exactly one
+                    # line then exits (SIGPIPE to upstream grep is
+                    # harmless), giving us both `head -1` and
+                    # `awk '{print $1}'` without depending on either.
+                    # When `ps` returns no match (the iOS-5 quirk
+                    # above), pid is reported as `?` -- the actual
+                    # status (`already_running` / `started`) is still
+                    # truthful and the LaunchDaemon plist takes over
+                    # at next boot regardless.
+                    "if ( exec 3<>/dev/tcp/127.0.0.1/8080 ) 2>/dev/null; then`n" +
+                    "  exec 3<&-;`n" +
                     "  PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
                     "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
+                    "  [ -z `"`$PID`" ] && PID='?';`n" +
                     "  echo LIGHTTPD_OK pid=`$PID already_running=1;`n" +
                     "else`n" +
                     "  /usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf;`n" +
                     "  sleep 2;`n" +
-                    # Verify start by process, not by pidfile (see above).
-                    "  PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
-                    "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
-                    "  if [ -n `"`$PID`" ]; then`n" +
+                    "  if ( exec 3<>/dev/tcp/127.0.0.1/8080 ) 2>/dev/null; then`n" +
+                    "    exec 3<&-;`n" +
+                    "    PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
+                    "    if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
+                    "    [ -z `"`$PID`" ] && PID='?';`n" +
                     "    echo LIGHTTPD_OK pid=`$PID started=1;`n" +
                     "  else`n" +
                     "    echo LIGHTTPD_NO_PID;`n" +
@@ -1084,6 +1095,35 @@ foreach ($h in $targets) {
                 } else {
                     Write-Host "  stopScript update unexpected: $($stopResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
                 }
+
+                # loginScript: wake + unlock + autolock-off PLUS lock
+                # rotation to portrait. The wall is physically mounted
+                # in portrait orientation; any landscape flip (accidental,
+                # or via Veency input quirks) breaks the layout. Writing
+                # SBOrientationLockedActive + SBOrientationLockedOrientation
+                # through cfprefsd (via `defaults write`) makes SpringBoard
+                # apply the lock without a respring -- see server.py's
+                # DEFAULT_DEVICE_SCRIPTS["loginScript"] for the full
+                # rationale on why we use `su mobile -c` instead of
+                # writing as root. Re-pushing the exact server-side
+                # string from PowerShell keeps onboarding self-contained
+                # for fleet migrations without a server restart.
+                $newLoginScript = "activator send libactivator.lockscreen.dismiss; sleep 1; " +
+                                  "activator send switch-off.com.a3tweaks.switch.autolock; " +
+                                  "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedActive -bool YES' 2>/dev/null; " +
+                                  "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedOrientation -int 1' 2>/dev/null; " +
+                                  "echo LOGIN_OK"
+                $loginBody = @{
+                    clientKey = $thisDev.clientKey
+                    loginScript = $newLoginScript
+                } | ConvertTo-Json -Compress
+                $loginResp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $loginBody -TimeoutSec 5
+                if ($loginResp.success -eq $true) {
+                    Write-Host "  loginScript: server-side updated (rotation lock on wake)" -ForegroundColor Green
+                } else {
+                    Write-Host "  loginScript update unexpected: $($loginResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
             } else {
                 Write-Host "  cacheMode: no clientKey for ip=$hostIP (host=$hostName) in discovery API yet" -ForegroundColor DarkYellow
                 Write-Host "                (run onboarding again after iPad first REGISTERs)" -ForegroundColor DarkYellow
@@ -1187,6 +1227,34 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.5) respring after successful tweak install -- MobileSubstrate only
+    #      injects tweaks at SpringBoard launch, so without this the .dylibs
+    #      are on disk but inert (activator listeners empty, send returns 255).
+    #      Idempotent: killall returns non-zero if no SpringBoard but that's
+    #      harmless. The screen flashes black for ~3s while SpringBoard restarts.
+    #
+    #      NOTE: The dock-pin step (5.4h, below) used to run BEFORE this
+    #      respring. That was wrong: iOS-5 SpringBoard treats /var/mobile/
+    #      Library/WebClips/ as authoritative for which icons should exist
+    #      and on launch RECONCILES IconState.plist against the WebClips
+    #      directory, writing a fresh IconState with newly-discovered
+    #      webclips placed in default positions (NOT the dock). Our
+    #      pre-respring edit was getting stomped on every fresh device --
+    #      verified across the 23 fresh devices in the first fleet rollout
+    #      (none had MosaicMesh on the dock after onboarding completed,
+    #      even though the dock-pin Python helper reported success on each).
+    #      The fix is the reorder below: respring first so SpringBoard
+    #      registers the webclip, then edit IconState, then let step 7's
+    #      second respring pick up the dock position.
+    if ($status -eq "OK" -and $pkgsToInstall -and -not $NoRespring) {
+        try {
+            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "killall SpringBoard 2>/dev/null; echo RESPRUNG" 2>&1 | Out-String | Out-Null
+            Write-Host "  respringed (tweaks now loaded)" -ForegroundColor Green
+        } catch {
+            Write-Host "  respring failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
     # 5.4h) pin the MosaicMesh webclip icon to the LEFTMOST dock slot
     #       in portrait orientation. The admin "Start" action drives
     #       a VNC tap at the framebuffer coordinate (945, 671) -- the
@@ -1196,11 +1264,22 @@ foreach ($h in $targets) {
     #       would tap an empty area on iPads where SpringBoard
     #       happened to place the icon elsewhere on the home screen.
     #
+    #       MUST RUN AFTER 5.5's respring. See the long note above 5.5
+    #       for why -- TL;DR: SpringBoard rewrites IconState.plist on
+    #       launch to include newly-discovered webclips in default
+    #       (non-dock) positions, so any pre-respring edit gets stomped.
+    #       The brief sleep gives SpringBoard time to scan WebClips/,
+    #       discover MosaicMesh.webclip, and flush the new IconState
+    #       to disk before we pull it down to edit. 5s was empirically
+    #       sufficient on iPad-1 / iOS 5.1.1; step 7's second respring
+    #       below picks up the dock-positioned bid we write here.
+    #
     #       Approach: scp IconState.plist down, edit with the local
     #       Python helper (handles dock-overflow + folder traversal),
-    #       scp back. The next step's killall SpringBoard picks up
-    #       the new icon layout.
+    #       scp back. step 7's killall SpringBoard then re-reads it.
     if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        # Let SpringBoard finish its post-respring WebClips scan + IconState write.
+        Start-Sleep -Seconds 5
         $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
         $remotePath = '/var/mobile/Library/SpringBoard/IconState.plist'
         $localPlist = Join-Path ([System.IO.Path]::GetTempPath()) "mm-iconstate-$($hostName -replace '\.', '-').plist"
@@ -1227,20 +1306,6 @@ foreach ($h in $targets) {
             } catch {
                 Write-Host "  dock pin failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        }
-    }
-
-    # 5.5) respring after successful tweak install -- MobileSubstrate only
-    #      injects tweaks at SpringBoard launch, so without this the .dylibs
-    #      are on disk but inert (activator listeners empty, send returns 255).
-    #      Idempotent: killall returns non-zero if no SpringBoard but that's
-    #      harmless. The screen flashes black for ~3s while SpringBoard restarts.
-    if ($status -eq "OK" -and $pkgsToInstall -and -not $NoRespring) {
-        try {
-            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "killall SpringBoard 2>/dev/null; echo RESPRUNG" 2>&1 | Out-String | Out-Null
-            Write-Host "  respringed (tweaks now loaded)" -ForegroundColor Green
-        } catch {
-            Write-Host "  respring failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
