@@ -129,6 +129,16 @@ WEBAPP_ICON_FBX = 945
 WEBAPP_ICON_FBY = 671
 
 
+# TODO(PR-3): the next two functions reach back into server.py for the
+# Veency connection pool (_veency_pool, _veency_lock, _get_pooled_vnc, _do_tap).
+# That cross-module dependency is the most awkward boundary in PR-1's split
+# — it exists because _auto_arm_client (still in server.py) also needs the
+# pool. When PR-3 of the admin-timeline-redesign spec replaces this module
+# with the ScriptingProfile dispatcher, the pool itself + its lock + the
+# tap primitive should migrate into the dispatcher's launch-method layer,
+# and _auto_arm_client should be updated to call through the dispatcher
+# instead of reaching directly. Removing the cross-import is a PR-3
+# follow-up; for PR-1 the smell is bounded and documented.
 async def _drop_pooled_vnc(client_key):
     """Evict and disconnect a pooled VNC client. Safe to call when
     the client_key isn't pooled (no-op). Called on per-tap failure

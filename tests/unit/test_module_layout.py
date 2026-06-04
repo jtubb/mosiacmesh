@@ -198,7 +198,8 @@ def test_device_scripts_importable():
     from mosaicmesh.device_scripts import (
         DEFAULT_DEVICE_SCRIPTS, WEBCLIP_BUNDLE_ID,
         WEBAPP_ICON_FBX, WEBAPP_ICON_FBY,
-        _run_device_script, _launch_webapp_via_vnc,
+        SSH_LEGACY_OPTS,
+        _run_device_script, _launch_webapp_via_vnc, _drop_pooled_vnc,
     )
     assert isinstance(DEFAULT_DEVICE_SCRIPTS, dict)
     assert 'loginScript' in DEFAULT_DEVICE_SCRIPTS
@@ -208,3 +209,14 @@ def test_device_scripts_importable():
     assert isinstance(WEBAPP_ICON_FBY, int)
     assert callable(_run_device_script)
     assert callable(_launch_webapp_via_vnc)
+    assert callable(_drop_pooled_vnc)
+    # Constant composition check: the startScript embeds WEBCLIP_BUNDLE_ID.
+    # If either constant silently changes, the webclip-launch shell command
+    # breaks fleet-wide. Cheap regression bait that will be retired when
+    # PR-3 replaces this module with the ScriptingProfile dispatcher.
+    assert WEBCLIP_BUNDLE_ID in DEFAULT_DEVICE_SCRIPTS['startScript']
+    # SSH options must keep IdentitiesOnly=yes — required for the iPad-1 fleet
+    # (low MaxAuthTries; dropping this flag causes auth lockouts). Documented
+    # in onboard_devices.ps1's sshLegacy. Catches a silent regression that
+    # would break SSH-driven script execution on the production fleet.
+    assert 'IdentitiesOnly=yes' in SSH_LEGACY_OPTS
