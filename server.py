@@ -1,6 +1,5 @@
 import logging
 import json
-from enum import Enum
 import os
 import cv2 as cv
 import numpy as np
@@ -29,6 +28,14 @@ from functools import lru_cache
 import uuid
 import datetime
 from dateutil import rrule as _rrule
+
+# Data classes live in mosaicmesh.state; re-imported here so existing code
+# (and tests that do `from server import Client`) keeps working.
+from mosaicmesh.state import (
+    Settings, Scripts, Display, PlayState, MediaElement,
+    Playlist, Schedule, PlayMode, Client,
+    _apply_default_scripts, migrate_client_objects,
+)
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
@@ -1523,13 +1530,6 @@ def parse_args():
     parser.add_argument("-v", "--Verbose", action='store_true', help="Verbose output")
     return parser.parse_args()
 
-# Data classes live in mosaicmesh.state; re-imported here so existing code
-# (and tests that do `from server import Client`) keeps working.
-from mosaicmesh.state import (
-    Settings, Scripts, Display, PlayState, MediaElement,
-    Playlist, Schedule, PlayMode, Client,
-    _apply_default_scripts, migrate_client_objects,
-)
 
 async def ws_handler(manager, session, msg):
     # sockjs >=0.12 handler signature: (manager, session, msg).

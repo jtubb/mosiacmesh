@@ -17,10 +17,17 @@ def test_state_classes_importable():
 
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests
-    that do `from server import Client, Settings, etc.`"""
+    that do `from server import Client, Settings, etc.`
+
+    Covers all nine classes (not just the five commonly-imported ones) so
+    a future commit that accidentally re-introduces a local definition of
+    Scripts / Display / PlayState / MediaElement in server.py would be
+    caught by this test failing the `is` identity check."""
+    import mosaicmesh.state as _state
     import server
-    assert server.Settings is __import__('mosaicmesh.state', fromlist=['Settings']).Settings
-    assert server.Client is __import__('mosaicmesh.state', fromlist=['Client']).Client
-    assert server.Playlist is __import__('mosaicmesh.state', fromlist=['Playlist']).Playlist
-    assert server.Schedule is __import__('mosaicmesh.state', fromlist=['Schedule']).Schedule
-    assert server.PlayMode is __import__('mosaicmesh.state', fromlist=['PlayMode']).PlayMode
+    for name in ('Settings', 'Scripts', 'Display', 'PlayState', 'MediaElement',
+                 'Playlist', 'Schedule', 'PlayMode', 'Client'):
+        assert getattr(server, name) is getattr(_state, name), (
+            f"server.{name} is not the same object as mosaicmesh.state.{name} "
+            "— a duplicate local definition may have crept back into server.py"
+        )
