@@ -16,7 +16,9 @@ from pathlib import Path
 # import time, so circular import between server.py and mosaicmesh.persistence
 # resolves cleanly.
 
-# Module-level hash tracker (mirrors the old server.py module-level global).
+# Hash of the last successfully written encoding; None means no write
+# has occurred yet. save_settings_incremental compares against this to
+# skip writes when the encoded payload hasn't changed since the last save.
 last_settings_hash = None
 
 
@@ -41,7 +43,6 @@ def save_settings_incremental():
 
 def saveSettings():
     """Persist settings to disk (wrapper around save_settings_incremental)."""
-    import server  # noqa: F401 — ensures late-binding consistency
     save_settings_incremental()
 
 

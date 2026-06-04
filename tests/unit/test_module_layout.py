@@ -22,6 +22,9 @@ def test_persistence_helpers_importable():
     assert callable(save_settings_incremental)
     assert callable(saveSettings)
     assert callable(cleanup_old_clients)
+    # cleanup_old_clients has a default max-age — confirm it's the canonical
+    # 24-hour value so a future commit accidentally shortening it would be caught.
+    assert cleanup_old_clients.__defaults__ == (24 * 3600,)
 
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests
