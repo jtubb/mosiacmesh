@@ -39,6 +39,11 @@ from mosaicmesh.state import (
 from mosaicmesh.persistence import (
     save_settings_incremental, saveSettings, cleanup_old_clients,
 )
+from mosaicmesh.cache import (
+    init_json_cache, get_pooled_file_handle, close_file_pool,
+    prewarm_static_cache, get_cached_file,
+    file_cache, cache_stats,
+)
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
@@ -310,38 +315,6 @@ def _video_encoder_args():
             "-x264-params", "scenecut=0"]
 
 
-# File cache with modification time tracking
-file_cache = {}
-cache_stats = {'hits': 0, 'misses': 0}
-
-# JSON response cache for common responses (will be initialized after jsonpickle import)
-json_response_cache = {}
-
-# File handle pool for range requests
-file_handle_pool = {}
-pool_max_size = 50
-
-def get_pooled_file_handle(file_path, mode='rb'):
-    """Get cached file handle from pool"""
-    key = f"{file_path}:{mode}"
-    if key not in file_handle_pool:
-        if len(file_handle_pool) >= pool_max_size:
-            # Close oldest handle
-            oldest_key = next(iter(file_handle_pool))
-            file_handle_pool[oldest_key].close()
-            del file_handle_pool[oldest_key]
-        file_handle_pool[key] = open(file_path, mode)
-    return file_handle_pool[key]
-
-def close_file_pool():
-    """Close all pooled file handles and clear the file cache"""
-    for handle in file_handle_pool.values():
-        handle.close()
-    file_handle_pool.clear()
-    file_cache.clear()
-    cache_stats['hits'] = 0
-    cache_stats['misses'] = 0
-
 def _send_to_session(session_id, encoded_message):
     """Look up a sockjs Session by its id and call .send() directly. Returns
     True if delivered, False if no such session.
@@ -419,15 +392,6 @@ def broadcast_to_display_group(display_id, response_dict):
             continue
         response_dict["DEST"] = client_id
         _deliver(client_id, jsonpickle.encode(response_dict), client)
-
-def init_json_cache():
-    """Initialize JSON response cache after imports are available"""
-    global json_response_cache
-    json_response_cache = {
-        'success': jsonpickle.encode({"PAYLOAD": "SUCCESS"}),
-        'ack': jsonpickle.encode({"PAYLOAD": "ACK"}),
-        'synack': jsonpickle.encode({"PAYLOAD": "SYNACK"})
-    }
 
 def handle_client_disconnect(session_id):
     """Enhanced client disconnect handling"""
@@ -1419,68 +1383,6 @@ def resolve_media_path(file_url):
     name = parts[-1]
     subdir = "videos" if isVideoItem(name) else "images"
     return os.path.join("media", client, subdir, name)
-
-def prewarm_static_cache():
-    """Pre-populate file_cache with the static assets every iPad fetches
-    on page load (index.html + js/*). Avoids blocking the asyncio event
-    loop on synchronous open()/read() during a fleet-wide Start burst:
-    24 iPads loading the page simultaneously is ~24*5 = ~120 small file
-    fetches. Without pre-warming, the first fetch of each file blocks
-    the loop while disk I/O happens, serializing the entire burst.
-    After this call, get_cached_file() returns pure-dict hits at request
-    time.
-
-    Logged with hit count so a misconfigured deploy (missing files) is
-    obvious in the startup log."""
-    static_files = []
-    for name in ('index.html', 'admin.html', 'discovery.html'):
-        if os.path.isfile(name):
-            static_files.append(name)
-    if os.path.isdir('js'):
-        for f in os.listdir('js'):
-            full = os.path.join('js', f)
-            if os.path.isfile(full):
-                static_files.append(full)
-    loaded = 0
-    for f in static_files:
-        if get_cached_file(f) is not None:
-            loaded += 1
-    logging.info("prewarm_static_cache: %d files cached (%.0f KiB total)",
-                 loaded,
-                 sum(len(v.get('content', b'')) for v in file_cache.values()) / 1024)
-
-
-def get_cached_file(file_path):
-    """Get file content with caching based on modification time.
-
-    Cache entries are stored as {'content': bytes, 'mtime': float}. This
-    function is the only reader/writer of that value format.
-    """
-    if not os.path.exists(file_path):
-        return None
-    try:
-        mod_time = os.path.getmtime(file_path)
-
-        # Check if file is in cache and not modified
-        cached = file_cache.get(file_path)
-        if cached is not None and cached['mtime'] == mod_time:
-            cache_stats['hits'] += 1
-            return cached['content']
-
-        # File not cached or modified - read from disk
-        with open(file_path, 'rb') as f:
-            data = f.read()
-        cache_stats['misses'] += 1
-        file_cache[file_path] = {'content': data, 'mtime': mod_time}
-
-        # Limit cache size to prevent memory issues (simple FIFO)
-        if len(file_cache) > 100:
-            oldest_key = next(iter(file_cache))
-            del file_cache[oldest_key]
-
-        return data
-    except (OSError, IOError):
-        return None
 
 def parse_args():
     """Parse CLI args. Called only from __main__ so that importing this module

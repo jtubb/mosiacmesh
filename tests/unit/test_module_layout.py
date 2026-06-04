@@ -26,6 +26,17 @@ def test_persistence_helpers_importable():
     # 24-hour value so a future commit accidentally shortening it would be caught.
     assert cleanup_old_clients.__defaults__ == (24 * 3600,)
 
+def test_cache_helpers_importable():
+    from mosaicmesh.cache import (
+        init_json_cache, get_pooled_file_handle, close_file_pool,
+        prewarm_static_cache, get_cached_file,
+    )
+    assert callable(get_cached_file)
+    assert callable(init_json_cache)
+    assert callable(get_pooled_file_handle)
+    assert callable(close_file_pool)
+    assert callable(prewarm_static_cache)
+
 def test_server_reexports_state_classes():
     """server.py still exposes the classes for backward compat with tests
     that do `from server import Client, Settings, etc.`
