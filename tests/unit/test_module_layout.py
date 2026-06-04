@@ -224,11 +224,18 @@ def test_device_scripts_importable():
 def test_scheduling_helpers_importable():
     from mosaicmesh.scheduling import (
         playlist_index, _parse_date, _hhmm_to_min, schedule_active_at,
+        _FREQ_MAP,
     )
     assert callable(playlist_index)
     assert callable(_parse_date)
     assert callable(_hhmm_to_min)
     assert callable(schedule_active_at)
+    # _FREQ_MAP is the recurrence-frequency table referenced by
+    # msg_response's schedule-CRUD validation. It was almost forgotten
+    # during the Task 8 move (the spec listed only function definitions),
+    # so explicitly assert its presence here to catch a future recurrence.
+    assert isinstance(_FREQ_MAP, dict)
+    assert {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}.issubset(_FREQ_MAP.keys())
     # Smoke checks on the trivial pure helpers
     assert _hhmm_to_min("09:30") == 9 * 60 + 30
     assert _hhmm_to_min("00:00") == 0

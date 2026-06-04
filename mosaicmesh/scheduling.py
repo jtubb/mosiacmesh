@@ -9,6 +9,14 @@ end, exdates, startTime, endTime).
 import datetime
 from dateutil import rrule as _rrule
 
+__all__ = [
+    "playlist_index",
+    "schedule_active_at",
+    "_FREQ_MAP",
+    "_parse_date",
+    "_hhmm_to_min",
+]
+
 _FREQ_MAP = {"DAILY": _rrule.DAILY, "WEEKLY": _rrule.WEEKLY,
              "MONTHLY": _rrule.MONTHLY, "YEARLY": _rrule.YEARLY}
 
