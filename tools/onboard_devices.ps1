@@ -1077,9 +1077,16 @@ foreach ($h in $targets) {
                 # session). Includes our own stable-UUID webclip so
                 # the subsequent re-create always refreshes the
                 # Info.plist content.
+                # The project name is actually "mosiacmesh" (i-before-a) per
+                # the repo + CLAUDE.md, but the page's <title>MosaicMesh</title>
+                # is spelled correctly (a-before-i). Manual Add-to-Home-
+                # Screen by an operator might capture either spelling
+                # depending on whether they typed it themselves or copied
+                # the page title. Match BOTH "Mosaic" and "Mosiac" so the
+                # cleanup catches all variants.
                 $cleanupCmd = 'for d in /var/mobile/Library/WebClips/*.webclip; do' +
                               ' [ -d $d ] || continue;' +
-                              ' if grep -E -q -i ''<string>[Mm]osaic'' "$d/Info.plist" 2>/dev/null; then' +
+                              ' if grep -E -q -i ''<string>[Mm]os[ai][ai]c'' "$d/Info.plist" 2>/dev/null; then' +
                               '   rm -rf "$d";' +
                               ' fi;' +
                               ' done;' +
