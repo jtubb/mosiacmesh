@@ -277,3 +277,7 @@ def test_propagation_percent_short_circuits():
     assert _propagation_percent_for_client(c2) == 100.0
     c3 = SimpleNamespace(cacheMode="lighttpd-localhost", displayID="")
     assert _propagation_percent_for_client(c3) == 100.0
+
+def test_websocket_legacy_importable():
+    from mosaicmesh.websocket.legacy import msg_response
+    assert callable(msg_response)
