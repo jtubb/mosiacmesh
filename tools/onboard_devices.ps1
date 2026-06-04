@@ -367,7 +367,21 @@ $sshLegacy = @(
     # in the onboarding output even though the command actually succeeded.
     # Silencing at the ssh client (LogLevel=ERROR) keeps real errors visible
     # without forcing every call site to scrub `2>$null` around the invocation.
-    "-o", "LogLevel=ERROR"
+    "-o", "LogLevel=ERROR",
+    # Per-session keepalive: send a no-op probe every 15s; disconnect after
+    # 4 unanswered probes (~60s). Without these, a session against an
+    # iPad-1 that drops into deep WiFi power-save (2s+ round trips, packets
+    # serviced on the radio's wake schedule) can hang indefinitely --
+    # there's no per-session timeout besides TCP's multi-minute retransmit
+    # default. Observed in the fleet rollout when screen10 stalled the
+    # whole script between "key pushed" and "key auth verified" because
+    # its WiFi went to sleep before Insomnia took effect (Insomnia only
+    # activates after the post-install respring). 60s is short enough to
+    # keep the rollout moving but long enough to absorb a normal LAN
+    # hiccup; the per-device push-key step's existing 4-attempt retry
+    # loop still gets a chance to recover before we mark the host failed.
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4"
 )
 
 # --- clock / cert fix command ---------------------------------------------
