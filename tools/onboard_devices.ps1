@@ -360,7 +360,14 @@ $sshLegacy = @(
     "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
     "-o", "IdentitiesOnly=yes",          # only the -i key; old sshd has low MaxAuthTries
     "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ConnectTimeout=10"
+    "-o", "ConnectTimeout=10",
+    # Suppress ssh.exe's "Warning: Permanently added '<host>' (RSA) to the
+    # list of known hosts." chatter. PowerShell renders any ssh.exe stderr
+    # as NativeCommandError (red block + stack trace) which looks alarming
+    # in the onboarding output even though the command actually succeeded.
+    # Silencing at the ssh client (LogLevel=ERROR) keeps real errors visible
+    # without forcing every call site to scrub `2>$null` around the invocation.
+    "-o", "LogLevel=ERROR"
 )
 
 # --- clock / cert fix command ---------------------------------------------
@@ -884,23 +891,50 @@ foreach ($h in $targets) {
                 # Darwin variant.
                 & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "mkdir -p /Library/LaunchDaemons" 2>&1 | Out-Null
                 & $scp -i $KeyPath -P $p @sshLegacy $plistSrc "${User}@${hostName}:/Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist" 2>&1 | Out-Null
-                # chmod + kill stale + start fresh + report pid. Kept
-                # as one ssh round-trip to keep onboarding fast on
+                # chmod + probe-before-act + start if needed + report pid.
+                # Kept as one ssh round-trip to keep onboarding fast on
                 # slow links.
+                #
+                # Probe-before-act fixes a race with the LaunchDaemon's
+                # KeepAlive=true: previously we unconditionally `killall
+                # lighttpd` then exec'd /usr/sbin/lighttpd, but launchd
+                # respawns the daemon within a few hundred ms of kill --
+                # often beating our manual start to the bind() on
+                # 127.0.0.1:8080, producing "Address already in use" and
+                # an empty pid in our output (because the LaunchDaemon
+                # rewrites /var/run/lighttpd.pid during the race).
+                #
+                # The new flow: if port 8080 is already LISTEN'd on, the
+                # LaunchDaemon (or a previous run) already owns it -- skip
+                # the kill, just report the pid. Only do a manual start
+                # when nothing is bound (first install before reboot;
+                # launchd doesn't pick up new plists in /Library/Launch-
+                # Daemons until it re-reads them, and `launchctl load`
+                # over SSH fails on iOS 5 -- see comment below).
                 $startCmd = (
                     "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-                    "killall lighttpd 2>/dev/null;`n" +
-                    "sleep 1;`n" +
-                    "/usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf;`n" +
-                    "sleep 2;`n" +
-                    "if [ -f /var/run/lighttpd.pid ]; then`n" +
-                    "  echo LIGHTTPD_OK pid=`$(cat /var/run/lighttpd.pid);`n" +
+                    # BSD netstat on iOS 5 prints `tcp4  0  0  127.0.0.1.8080  *.*  LISTEN`.
+                    # Match either `.8080` or `:8080` to be tool-agnostic.
+                    "if netstat -an 2>/dev/null | grep -E '127\.0\.0\.1[.:]8080' | grep -q LISTEN; then`n" +
+                    "  PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
+                    "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | awk '/[l]ighttpd/{print `$1; exit}'); fi;`n" +
+                    "  echo LIGHTTPD_OK pid=`$PID already_running=1;`n" +
                     "else`n" +
-                    "  echo LIGHTTPD_NO_PID;`n" +
+                    "  /usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf;`n" +
+                    "  sleep 2;`n" +
+                    "  if [ -f /var/run/lighttpd.pid ]; then`n" +
+                    "    echo LIGHTTPD_OK pid=`$(cat /var/run/lighttpd.pid) started=1;`n" +
+                    "  else`n" +
+                    "    echo LIGHTTPD_NO_PID;`n" +
+                    "  fi;`n" +
                     "fi"
                 )
                 $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $startCmd 2>&1) | Out-String
-                if ($lOut -match 'LIGHTTPD_OK pid=(\d+)') {
+                if ($lOut -match 'LIGHTTPD_OK pid=(\d+)\s+(already_running|started)=1') {
+                    $how = if ($Matches[2] -eq 'already_running') { 'already serving' } else { 'started' }
+                    Write-Host "  lighttpd: $how pid=$($Matches[1]); LaunchDaemon plist set for boot" -ForegroundColor Green
+                } elseif ($lOut -match 'LIGHTTPD_OK pid=(\d+)') {
+                    # Defensive: pid line without the marker (older format).
                     Write-Host "  lighttpd: running pid=$($Matches[1]); LaunchDaemon plist set for boot" -ForegroundColor Green
                 } else {
                     Write-Host "  lighttpd start: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
