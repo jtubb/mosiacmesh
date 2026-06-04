@@ -154,3 +154,18 @@ def test_calibration_order_points_behavior():
     assert result[1].tolist() == [3.0, 1.0], f"TR wrong: {result[1]}"
     assert result[2].tolist() == [3.0, 2.0], f"BR wrong: {result[2]}"
     assert result[3].tolist() == [1.0, 2.0], f"BL wrong: {result[3]}"
+
+
+def test_render_pipeline_importable():
+    from mosaicmesh.render import (
+        render_group_async, compute_render_token,
+        build_ffmpeg_perspective_cmd, build_ffmpeg_individual_cmd,
+        get_video_dimensions, resolve_media_path,
+        _apply_playlist, _start_group_playback, _stop_group_playback,
+        _broadcast_per_client_play, _broadcast_per_client_preload,
+        isVideoItem,
+    )
+    assert callable(render_group_async)
+    assert callable(compute_render_token)
+    assert callable(_apply_playlist)
+    assert callable(_start_group_playback)

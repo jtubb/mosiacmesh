@@ -218,10 +218,11 @@ class TestRender:
         assert server._render_output_dims(c2) == (1278, 1260)
 
     async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (1920, 1080))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (1920, 1080))
 
         calls = []
         class _Proc:
@@ -242,10 +243,11 @@ class TestRender:
         assert server.socketmanager.broadcast.call_count >= 2
 
     async def test_render_video_ffmpeg_failure_sets_error(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (1920, 1080))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (1920, 1080))
         class _Proc:
             returncode = 1
             async def communicate(self): return (b"", b"boom")
@@ -670,6 +672,7 @@ class TestIndividualFfmpeg:
         assert "color=0x000000" in vf   # malformed 3-digit hex falls back to black
 
     async def test_individual_video_invokes_ffmpeg_with_pad(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings; server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
@@ -678,7 +681,7 @@ class TestIndividualFfmpeg:
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
         mock_settings.clients = {"c1": c}
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (200, 100))
         calls = []
         class _Proc:
             returncode = 0
@@ -697,6 +700,7 @@ class TestIndividualFfmpeg:
 
 class TestIndividualDegenerateQuad:
     async def test_zero_area_quad_raises_clear_error(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings; server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
@@ -706,7 +710,7 @@ class TestIndividualDegenerateQuad:
         # all four corners identical -> zero-area quad
         c.measuredPerimeter = np.array([[[10, 10]], [[10, 10]], [[10, 10]], [[10, 10]]])
         mock_settings.clients = {"c1": c}
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (200, 100))
         result = await server.render_group_async("Default")
         assert result["status"] == "error"
         assert "degenerate" in result.get("error", "").lower()
@@ -781,6 +785,7 @@ class TestEffectRenderHook:
         return disp
 
     async def _run_capture(self, monkeypatch):
+        import mosaicmesh.render as _render
         calls = []
         class _Proc:
             returncode = 0
@@ -788,7 +793,7 @@ class TestEffectRenderHook:
         async def _fake_exec(*args, **kwargs):
             calls.append(list(args)); return _Proc()
         monkeypatch.setattr(server.asyncio, "create_subprocess_exec", _fake_exec)
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (200, 100))
         await server.render_group_async("Default")
         return calls
 
