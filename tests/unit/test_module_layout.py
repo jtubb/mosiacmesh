@@ -252,6 +252,28 @@ def test_api_discovery_importable():
     assert callable(auto_configure_client)
     assert callable(get_discovered_devices)
     assert callable(sync_new_client_to_group)
+    assert callable(_expected_seg_keys_for_display)
+    assert callable(_expected_segments_for_client)
+    assert callable(_propagation_percent_for_client)
     assert callable(api_discovery_devices)
     assert callable(api_discovery_stats)
     assert callable(api_discovery_configure)
+
+
+def test_propagation_percent_short_circuits():
+    """Behavior smoke check for the two early-exit paths in
+    _propagation_percent_for_client:
+      - cacheMode != 'lighttpd-localhost' -> 100.0 (vacuously caught up)
+      - displayID is None / empty       -> 100.0 (no group, nothing expected)
+    Catches a future regression that would silently drag aggregate
+    propagation stats down when non-caching clients are present."""
+    from types import SimpleNamespace
+    from mosaicmesh.api.discovery import _propagation_percent_for_client
+    # Non-caching client (default cacheMode 'none')
+    c1 = SimpleNamespace(cacheMode="none", displayID="Group1")
+    assert _propagation_percent_for_client(c1) == 100.0
+    # Caching client but no displayID
+    c2 = SimpleNamespace(cacheMode="lighttpd-localhost", displayID=None)
+    assert _propagation_percent_for_client(c2) == 100.0
+    c3 = SimpleNamespace(cacheMode="lighttpd-localhost", displayID="")
+    assert _propagation_percent_for_client(c3) == 100.0
