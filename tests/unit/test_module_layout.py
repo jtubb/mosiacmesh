@@ -220,3 +220,16 @@ def test_device_scripts_importable():
     # in onboard_devices.ps1's sshLegacy. Catches a silent regression that
     # would break SSH-driven script execution on the production fleet.
     assert 'IdentitiesOnly=yes' in SSH_LEGACY_OPTS
+
+def test_scheduling_helpers_importable():
+    from mosaicmesh.scheduling import (
+        playlist_index, _parse_date, _hhmm_to_min, schedule_active_at,
+    )
+    assert callable(playlist_index)
+    assert callable(_parse_date)
+    assert callable(_hhmm_to_min)
+    assert callable(schedule_active_at)
+    # Smoke checks on the trivial pure helpers
+    assert _hhmm_to_min("09:30") == 9 * 60 + 30
+    assert _hhmm_to_min("00:00") == 0
+    assert _hhmm_to_min("23:59") == 23 * 60 + 59
