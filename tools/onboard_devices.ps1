@@ -913,17 +913,46 @@ foreach ($h in $targets) {
                 # over SSH fails on iOS 5 -- see comment below).
                 $startCmd = (
                     "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-                    # BSD netstat on iOS 5 prints `tcp4  0  0  127.0.0.1.8080  *.*  LISTEN`.
-                    # Match either `.8080` or `:8080` to be tool-agnostic.
-                    "if netstat -an 2>/dev/null | grep -E '127\.0\.0\.1[.:]8080' | grep -q LISTEN; then`n" +
+                    # Probe by PROCESS, not by netstat output or pidfile.
+                    #   - iOS 5's BSD netstat output didn't match the
+                    #     `127.0.0.1[.:]8080 ... LISTEN` regex I first tried
+                    #     (different field layout / lo0 handling), so a live
+                    #     listener was missed and we fell through to /usr/
+                    #     sbin/lighttpd which then failed with 'Address
+                    #     already in use'.
+                    #   - The pidfile is also unreliable: lighttpd O_TRUNCs
+                    #     /var/run/lighttpd.pid BEFORE binding and only
+                    #     writes its pid after the bind succeeds, so a
+                    #     failed start leaves a 0-byte pidfile that looks
+                    #     like 'running but pid empty' to any caller.
+                    # `ps ax | grep [l]ighttpd` checks the actual fact we
+                    # care about (is a lighttpd process alive?) without
+                    # depending on either byproduct.
+                    # PID extraction note: `awk` AND `head` are both
+                    # missing from the minimal iOS-5 jailbreak rootfs
+                    # (they live in Cydia's coreutils-bin which we don't
+                    # depend on). Also, our LaunchDaemon plist runs
+                    # lighttpd with -D (foreground) so the daemon does
+                    # NOT write /var/run/lighttpd.pid -- launchd tracks
+                    # the pid via fork instead. Net effect: in the
+                    # LaunchDaemon-managed case the pidfile is empty/
+                    # missing and we MUST fall back to ps. The POSIX
+                    # shell builtin `read` consumes exactly one line
+                    # then exits (SIGPIPE to upstream grep is harmless),
+                    # giving us both `head -1` and `awk '{print $1}'`
+                    # without depending on either binary.
+                    "if ps ax 2>/dev/null | grep -q '[l]ighttpd'; then`n" +
                     "  PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
-                    "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | awk '/[l]ighttpd/{print `$1; exit}'); fi;`n" +
+                    "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
                     "  echo LIGHTTPD_OK pid=`$PID already_running=1;`n" +
                     "else`n" +
                     "  /usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf;`n" +
                     "  sleep 2;`n" +
-                    "  if [ -f /var/run/lighttpd.pid ]; then`n" +
-                    "    echo LIGHTTPD_OK pid=`$(cat /var/run/lighttpd.pid) started=1;`n" +
+                    # Verify start by process, not by pidfile (see above).
+                    "  PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
+                    "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
+                    "  if [ -n `"`$PID`" ]; then`n" +
+                    "    echo LIGHTTPD_OK pid=`$PID started=1;`n" +
                     "  else`n" +
                     "    echo LIGHTTPD_NO_PID;`n" +
                     "  fi;`n" +
@@ -1262,6 +1291,16 @@ foreach ($h in $targets) {
         # The VNC tap is sent from the SERVER (not the iPad) via
         # vncdotool through Python. WEBAPP_ICON_FBX/FBY constants
         # in server.py document the chosen coordinate.
+        # NOTE: api.shutdown() is mandatory after disconnect (and on any
+        # except path). vncdotool builds on Twisted, which spins up a
+        # reactor thread the moment api.connect() runs. proxy.disconnect()
+        # closes the VNC socket but leaves the reactor alive, so the
+        # interpreter never reaches exit -- the print() flushes, but the
+        # Python process keeps running and the parent PowerShell pipeline
+        # blocks forever on Out-String waiting for stdout EOF. Empirical:
+        # step 7 hung indefinitely after a successful tap on the first
+        # dry-run of this device because the prior heredoc lacked the
+        # shutdown call.
         $vncTapPy = @"
 from vncdotool import api
 import sys, time
@@ -1276,7 +1315,9 @@ try:
     print('VNC_TAP_OK', flush=True)
 except Exception as e:
     print(f'VNC_TAP_FAIL {e}', flush=True)
+    api.shutdown()
     sys.exit(1)
+api.shutdown()
 "@
         try {
             # 1) Second respring (clears post-sbdidlaunch corrupt state)
