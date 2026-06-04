@@ -157,14 +157,6 @@ DEFAULT_DEVICE_SCRIPTS = {
     "rebootScript": "echo REBOOTING; reboot",
 }
 
-def _apply_default_scripts(client):
-    """Backfill the lifecycle-script fields with fleet defaults where unset (None),
-    so a freshly-registered/older device isn't left with null scripts. Never
-    overrides a per-device script an operator has set."""
-    for field, default in DEFAULT_DEVICE_SCRIPTS.items():
-        if getattr(client, field, None) is None:
-            setattr(client, field, default)
-
 # Render encode note: segments use plain libx264 Constrained Baseline + CRF (NO VBV
 # -maxrate/-bufsize, which injects HRD into the SPS that iOS-5 / Chrome-29 UIWebView
 # reject with MEDIA_ERR_SRC_NOT_SUPPORTED), plus a REGULAR keyframe grid every
@@ -1531,149 +1523,13 @@ def parse_args():
     parser.add_argument("-v", "--Verbose", action='store_true', help="Verbose output")
     return parser.parse_args()
 
-class Settings():
-    def __init__(self):
-        self.displays = {}
-        self.scripts = {}
-        self.clients = {}
-        self.playlists = {}
-        self.schedules = {}
-
-class Scripts():
-    def __init__(self):
-        self.name = ''
-        self.description = ''
-        self.value = None
-        self.status = None
-
-class Display():
-    def __init__(self):
-        self.boundingBox = None
-        self.boundingBoxCenter = None
-        self.mediaElements = []
-        self.loop = False
-        self.currentFrame = 0
-        self.action = PlayState.NOACTION
-        self.playStartEpoch = 0   # server-time ms when playback last (re)started
-        self.pauseOffset = 0      # ms into the playlist when paused
-        self.renderedToken = ""   # token of the last successful SEGMENT render
-        self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
-        self.defaultPlaylistName = None   # fallback playlist when no schedule is active
-        self.scheduledEntryId = None      # transient: which schedule/"__default__" currently drives this group
-        self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
-        self.prepareId = None
-        self.readyClients = set()
-        self.armPending = set()   # clients that sent NEEDS_ARM, awaiting a human tap
-        self.prepareDeadline = 0
-
-class PlayState(Enum):
-    NOACTION = 0
-    STOP = 1
-    PLAY = 2
-    PAUSE = 3
-    PREPARING = 4
-
-class MediaElement():
-    def __init__(self):
-        self.id = None
-        self.file = None
-        self.duration = None
-        self.playmode = PlayMode.DEFAULT
-        self.backgroundColor = "#000000"
-        self.startEffect = None
-        self.endEffect = None
-
-
-class Playlist():
-    def __init__(self):
-        self.name = ""
-        self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect
-        self.loop = False
-
-class Schedule():
-    def __init__(self):
-        self.id = ""
-        self.name = ""
-        self.playlistName = ""
-        self.displayID = ""
-        self.priority = 0
-        self.enabled = True
-        self.freq = "DAILY"          # DAILY | WEEKLY | MONTHLY | YEARLY
-        self.interval = 1
-        self.byweekday = []          # ints 0=Mon..6=Sun (WEEKLY)
-        self.dtstart = ""            # "YYYY-MM-DD"
-        self.end = {"type": "never"} # or {"type":"until","untilDate":...} / {"type":"count","count":N}
-        self.exdates = []            # ["YYYY-MM-DD", ...]
-        self.startTime = "00:00"
-        self.endTime = "23:59"
-
-class PlayMode(Enum):
-    DEFAULT = 0
-    FULL = 1
-    SEGMENT = 2
-    SCRIPT = 3
-    INDIVIDUAL = 4
-
-class Client():
-    def __init__(self):
-        self.friendlyName = None
-        self.clientID = ""
-        self.displayID = None
-        self.arucoID = None
-        self.deviceHeight = 0
-        self.deviceWidth = 0
-        self.canvasWidth = 0    # rendered viewport (innerWidth) — reflects actual
-        self.canvasHeight = 0   # orientation; device* is the raw screen resolution
-        self.measuredCenter = None
-        self.measuredPerimeter = None
-        self.userAgent = None
-        self.ip = ""
-        self.hostname = ""              # reverse-DNS (PTR) of ip, when resolvable
-        self.hostnameResolved = False   # PTR lookup attempted (don't retry per ip)
-        self.nameIsCustom = False       # user set friendlyName -> DNS won't override
-        self.touch = False              # client reported touch support at REGISTER
-        self.osName=""
-        self.osVersion=""
-        self.engine=""
-        self.deviceBrand=""
-        self.deviceModel=""
-        self.deviceType=""
-        self.loginScript = None
-        self.startScript = None
-        self.stopScript = None
-        self.rebootScript = None
-        self.testScript = None
-        self.ready = False      # ready to display: media cached & client ready
-        self.isOnline = False   # alive: connected / recent heartbeat
-        self.synced = False     # SYN/SYNACK handshake (clock/group) complete
-        # Enhanced discovery fields
-        self.discoveryTime = time.time()
-        self.lastSeen = time.time()
-        self.connectionCount = 0
-        self.capabilities = []
-        self.autoConfigured = False
-        self.discoverySource = "manual"  # manual, websocket, network
-        # Cache-state model (2026-06-03). cacheMode = "none" by default;
-        # set to "lighttpd-localhost" by onboarding when the iPad has
-        # lighttpd installed and a writable /var/mobile/Media/
-        # MosaicMeshCache/ dir. Set to "service-worker" by the client's
-        # ANNOUNCE_CACHE_MODE message when SW registration succeeds.
-        # See docs/superpowers/specs/2026-06-03-media-cache-design.md.
-        self.cacheMode = "none"
-        # Hashes of segments currently cached on this device, in the
-        # form "<encode_ver_hash>_<segment_index>" (matches the
-        # seg_<HASH>_<N>.mp4 filename convention from the render
-        # pipeline). Populated by _push_segment_to_cached_clients on
-        # successful scp; pruned by _reconcile_ipad_cache.
-        self.cachedSegments = set()
-        # In-memory only (does not persist; meaningful only during a
-        # push). Set to a dict by _push_segment_to_cached_clients when
-        # a push starts; cleared to None when the push ends (success
-        # or stall). Shape: {"token", "n", "bytesSent", "totalBytes",
-        # "startedMs", "lastChangeMs", "status", "mbps"}.
-        # See docs/superpowers/specs/2026-06-03-cache-progress-and-
-        # propagation-ui.md.
-        self.cachePushProgress = None
+# Data classes live in mosaicmesh.state; re-imported here so existing code
+# (and tests that do `from server import Client`) keeps working.
+from mosaicmesh.state import (
+    Settings, Scripts, Display, PlayState, MediaElement,
+    Playlist, Schedule, PlayMode, Client,
+    _apply_default_scripts, migrate_client_objects,
+)
 
 async def ws_handler(manager, session, msg):
     # sockjs >=0.12 handler signature: (manager, session, msg).
@@ -4812,74 +4668,6 @@ def sanitize_display_groups():
         logging.info(f"Sanitized {fixed} display group key(s) containing HTML")
     return fixed
 
-
-def migrate_client_objects():
-    """Migrate old client objects to include new discovery fields"""
-    if not hasattr(settings, 'playlists'):
-        settings.playlists = {}
-    if not hasattr(settings, 'schedules'):
-        settings.schedules = {}
-    for _disp in settings.displays.values():
-        if not hasattr(_disp, 'defaultPlaylistName'):
-            _disp.defaultPlaylistName = None
-        _disp.scheduledEntryId = None      # transient — reset on startup
-        _disp.scheduledPlaying = False
-        # coordinated-start fields: backfill onto older Displays AND reset the
-        # transient prepare state (a restart cancels any in-flight prepare).
-        _disp.prepareId = None
-        _disp.readyClients = set()
-        _disp.armPending = set()
-        _disp.prepareDeadline = 0
-    current_time = time.time()
-    for client_key, client in settings.clients.items():
-        if not hasattr(client, 'discoveryTime'):
-            client.discoveryTime = current_time
-        if not hasattr(client, 'lastSeen'):
-            client.lastSeen = current_time
-        if not hasattr(client, 'connectionCount'):
-            client.connectionCount = 1
-        if not hasattr(client, 'capabilities'):
-            client.capabilities = []
-        if not hasattr(client, 'autoConfigured'):
-            client.autoConfigured = False
-        if not hasattr(client, 'discoverySource'):
-            client.discoverySource = "existing"
-        if not hasattr(client, 'isOnline'):
-            client.isOnline = False
-        if not hasattr(client, 'synced'):
-            client.synced = False
-        if not hasattr(client, 'hostname'):
-            client.hostname = ""
-        if not hasattr(client, 'hostnameResolved'):
-            client.hostnameResolved = False
-        if not hasattr(client, 'touch'):
-            client.touch = False
-        if not hasattr(client, 'canvasWidth'):
-            client.canvasWidth = getattr(client, 'deviceWidth', 0)
-        if not hasattr(client, 'canvasHeight'):
-            client.canvasHeight = getattr(client, 'deviceHeight', 0)
-        if not hasattr(client, 'nameIsCustom'):
-            # Protect pre-existing custom names: a name that is NOT the
-            # auto-generated '<device>_<key[:8]>' form is treated as user-set,
-            # so reverse-DNS won't clobber it.
-            fn = client.friendlyName or ""
-            client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
-        if not hasattr(client, 'cacheMode'):
-            client.cacheMode = "none"
-        if not hasattr(client, 'cachedSegments'):
-            client.cachedSegments = set()
-        # cachePushProgress is transient (a push is meaningful only
-        # while the process is live), so unconditionally reset on
-        # startup -- any state in settings.dat is stale.
-        client.cachePushProgress = None
-        # Backfill lifecycle-script defaults onto devices registered before the
-        # automation existed (their fields are absent/None -> show as null).
-        _apply_default_scripts(client)
-        # Re-attempt resolution for clients that never got a hostname (e.g.
-        # resolved blank before DNS was fixed / before the mDNS fallback). The
-        # 60s retry throttle keeps perpetually-nameless devices from churning.
-        if not getattr(client, 'hostname', ''):
-            client.hostnameResolved = False
 
 def evaluate_schedules(now=None):
     """Per group with a schedule or a default playlist: pick the effective target
