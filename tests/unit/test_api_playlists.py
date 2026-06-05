@@ -157,6 +157,22 @@ class TestPlaylistsUpdate:
         resp = await api_playlists_update(self._req("nope", {"loop": True}, if_match=1))
         assert resp.status == 404
 
+    @pytest.mark.asyncio
+    async def test_update_replaces_items(self, fresh_settings):
+        p = Playlist()
+        p.name = "x"
+        p.items = [{"file": "/m/old.mp4"}]
+        p._serverVersion = 2
+        fresh_settings.playlists["x"] = p
+        new_items = [{"file": "/m/a.mp4"}, {"file": "/m/b.mp4"}]
+        resp = await api_playlists_update(
+            self._req("x", {"items": new_items}, if_match=2))
+        assert resp.status == 200
+        data = json.loads(resp.text)
+        assert data['playlist']['items'] == new_items
+        assert data['playlist']['_serverVersion'] == 3
+        assert fresh_settings.playlists["x"].items == new_items
+
 
 class TestPlaylistsDelete:
     @pytest.mark.asyncio

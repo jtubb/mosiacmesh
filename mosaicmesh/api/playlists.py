@@ -89,8 +89,9 @@ async def api_playlists_update(request):
     if_match = parse_if_match(request)
     if if_match is None:
         return precondition_required_response("playlist")
-    if if_match != p._serverVersion:
-        return precondition_failed_response("playlist", p._serverVersion)
+    current_version = int(getattr(p, "_serverVersion", 0))
+    if if_match != current_version:
+        return precondition_failed_response("playlist", current_version)
     try:
         body = await request.json()
     except Exception as e:
