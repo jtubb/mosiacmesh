@@ -5,7 +5,7 @@ import pytest
 def test_state_classes_importable():
     from mosaicmesh.state import (
         Settings, Scripts, Display, PlayState, MediaElement,
-        Playlist, Schedule, PlayMode, Client,
+        Playlist, Schedule, PlayMode, Client, ScriptingProfile,
         migrate_client_objects, _apply_default_scripts,
     )
     s = Settings()
@@ -14,6 +14,25 @@ def test_state_classes_importable():
     assert hasattr(s, 'playlists')
     assert hasattr(s, 'schedules')
     assert hasattr(s, 'scripts')
+    assert hasattr(s, 'profiles')              # NEW
+    # New _serverVersion fields:
+    p = Playlist()
+    assert hasattr(p, '_serverVersion')
+    assert p._serverVersion == 0               # 0 means "not yet persisted"
+    sc = Schedule()
+    assert hasattr(sc, '_serverVersion')
+    assert sc._serverVersion == 0
+    # ScriptingProfile shape:
+    prof = ScriptingProfile()
+    assert hasattr(prof, 'name')
+    assert hasattr(prof, 'label')
+    assert hasattr(prof, 'matchDeviceType')
+    assert hasattr(prof, 'scripts')
+    assert hasattr(prof, 'launch')
+    assert hasattr(prof, 'webclip')
+    assert hasattr(prof, 'ssh')
+    assert hasattr(prof, '_serverVersion')
+    assert prof._serverVersion == 0
 
 def test_persistence_helpers_importable():
     from mosaicmesh.persistence import (

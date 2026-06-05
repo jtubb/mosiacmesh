@@ -16,6 +16,8 @@ class Settings():
         self.clients = {}
         self.playlists = {}
         self.schedules = {}
+        self.profiles = {}     # {name: ScriptingProfile} — populated by REST or
+                               # PR-3's bootstrap; empty dict on first ever start
 
 class Scripts():
     def __init__(self):
@@ -67,6 +69,11 @@ class Playlist():
         self.name = ""
         self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect
         self.loop = False
+        # Monotonic version bumped on each PUT via the REST API. 0 = never persisted
+        # via the REST surface (e.g. instances created in pre-PR-2 code paths or
+        # loaded from older settings.dat). Used for If-Match optimistic
+        # concurrency in mosaicmesh/api/playlists.py.
+        self._serverVersion = 0
 
 class Schedule():
     def __init__(self):
@@ -84,6 +91,50 @@ class Schedule():
         self.exdates = []            # ["YYYY-MM-DD", ...]
         self.startTime = "00:00"
         self.endTime = "23:59"
+        # Monotonic version bumped on each PUT via the REST API. See Playlist
+        # for rationale.
+        self._serverVersion = 0
+
+
+class ScriptingProfile():
+    """Per-device-type bundle of lifecycle scripts + launch configuration +
+    webclip identity + SSH options. Auto-matched to clients by deviceType
+    on REGISTER (matchDeviceType field). Template variables in script
+    strings (e.g. {webclipBundleId}, {displayUrl}, {ip}) are substituted
+    at run time via SafeDict.
+
+    PR-2 ships the class shape + REST CRUD + Settings.profiles dict.
+    PR-3 ships the launch dispatcher (_exec_ssh / _vnc_tap_sequence /
+    _ssh_then_vnc in mosaicmesh.device_scripts) + the bootstrap migration
+    that seeds the ipad1-ios5 default profile and removes the hardcoded
+    DEFAULT_DEVICE_SCRIPTS from server.py.
+    """
+    def __init__(self):
+        self.name = ""                # unique key (e.g. "ipad1-ios5")
+        self.label = ""               # human label ("iPad 1 — iOS 5.1.1")
+        self.matchDeviceType = ""     # auto-assign on REGISTER (e.g. "Tablet"); "" = manual only
+        self.scripts = {              # template-variable shell commands
+            "login": "",
+            "start": "",
+            "stop":  "",
+            "test":  "",
+            "reboot": "",
+        }
+        self.launch = {               # how to actually launch the display
+            "method": "shell",        # "shell" | "vnc-tap" | "ssh-then-vnc"
+        }
+        self.webclip = {              # iOS-5 webclip metadata
+            "bundleId": "",
+            "title":    "",
+        }
+        self.ssh = {                  # SSH connection options
+            "legacyCrypto": False,
+            "user": "root",
+            "keyPath": "",
+        }
+        # Monotonic version bumped on each PUT via the REST API.
+        self._serverVersion = 0
+
 
 class PlayMode(Enum):
     DEFAULT = 0
