@@ -298,3 +298,12 @@ def migrate_client_objects():
         # 60s retry throttle keeps perpetually-nameless devices from churning.
         if not getattr(client, 'hostname', ''):
             client.hostnameResolved = False
+
+    # PR-3 bootstrap: seed the ipad1-ios5 default profile on a settings.dat
+    # that pre-dates Settings.profiles, AND migrate every Client object's
+    # legacy script fields to the new profileName indirection.
+    from mosaicmesh.profile_bootstrap import (
+        seed_default_profile_if_empty, migrate_client_script_fields,
+    )
+    seed_default_profile_if_empty(settings)
+    migrate_client_script_fields(settings)
