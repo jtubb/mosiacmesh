@@ -86,6 +86,10 @@ from mosaicmesh.api.discovery import (
     _propagation_percent_for_client, sync_new_client_to_group,
     api_discovery_devices, api_discovery_stats, api_discovery_configure,
 )
+from mosaicmesh.api.playlists import (
+    api_playlists_list, api_playlists_create,
+    api_playlists_update, api_playlists_delete,
+)
 from mosaicmesh.websocket.legacy import msg_response
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
@@ -2265,6 +2269,10 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/api/discovery/devices', api_discovery_devices)
         app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)
         app.router.add_route('POST', '/api/discovery/configure', api_discovery_configure)
+        app.router.add_get('/api/playlists', api_playlists_list)
+        app.router.add_post('/api/playlists', api_playlists_create)
+        app.router.add_put('/api/playlists/{name}', api_playlists_update)
+        app.router.add_delete('/api/playlists/{name}', api_playlists_delete)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         
         asyncio.run(run_server())
