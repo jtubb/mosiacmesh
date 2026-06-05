@@ -337,6 +337,9 @@ def test_parse_if_match_returns_int_or_none():
     # Non-integer (return None so the handler can decide 428/400)
     req = make_mocked_request('PUT', '/x', headers={'If-Match': 'bad'})
     assert parse_if_match(req) is None
+    # RFC 9110 quoted form
+    req = make_mocked_request('PUT', '/x', headers={'If-Match': '"42"'})
+    assert parse_if_match(req) == 42
 
 
 def test_bump_version_increments_monotonically():
@@ -347,3 +350,9 @@ def test_bump_version_increments_monotonically():
     assert obj._serverVersion == 1
     bump_version(obj)
     assert obj._serverVersion == 2
+    # Defensive path: object without _serverVersion attribute (legacy
+    # objects loaded from a pre-PR-2 settings.dat). The getattr fallback
+    # to 0 means the first bump initialises the field to 1.
+    legacy = SimpleNamespace()
+    bump_version(legacy)
+    assert legacy._serverVersion == 1
