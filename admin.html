@@ -10,6 +10,11 @@
   <script src="/js/GoTime.js"></script> 
   <script src="/js/mosiacmesh.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
+  <script defer
+          src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.10/dist/cdn.min.js"
+          integrity="sha384-XBJ5+bq4ga1+0s+J4sl6njqQ9C/YIfKeQw18HypSuGEaPm1g/VWaNdsQ5d3sE1qi"
+          crossorigin="anonymous"></script>
+  <script type="module" src="/js/timeline/index.js"></script>
   <script>
     // This is the control console, not a display. Opt out of RELOAD broadcasts so
     // reloading a display group (or "all") never reloads the operator's console.
@@ -1071,6 +1076,7 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
   </div>
   <div class="shell">
     <nav class="sidebar" id="sidebar">
+      <button class="navitem" data-nav="timeline">Timeline</button>
       <button class="navitem" data-nav="overview">Overview</button>
       <button class="navitem" data-nav="displays">Displays</button>
       <button class="navitem" data-nav="media">Media</button>
@@ -1079,6 +1085,14 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
       <button class="navitem" data-nav="console">Console</button>
     </nav>
     <main class="main">
+      <section class="section" data-route="timeline" x-data="{ ready: false }" x-init="ready = true">
+        <h2>Timeline</h2>
+        <div x-show="!ready" style="color:var(--text-muted)">Loading…</div>
+        <div x-show="ready" id="timelineRoot">
+          <!-- Filled in by subsequent tasks. -->
+          <p style="color:var(--text-muted)">Timeline view will render here (PR-4a scaffolding).</p>
+        </div>
+      </section>
       <section class="section" data-route="overview"><h2>Overview</h2>
         <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>
         <div class="panel-title" style="display:flex;align-items:center;gap:var(--s2)">
@@ -1645,7 +1659,7 @@ function adminRoute() {
   var r = (location.hash || "#overview").slice(1);
   var found = false;
   $('.section').each(function(){ var on = $(this).data('route') === r; $(this).toggleClass('active', on); if(on) found=true; });
-  if (!found) { $('.section[data-route=overview]').addClass('active'); r = "overview"; }
+  if (!found) { $('.section[data-route=timeline]').addClass('active'); r = "timeline"; }
   $('.navitem').each(function(){ $(this).toggleClass('active', $(this).data('nav') === r); });
 }
 $(function(){

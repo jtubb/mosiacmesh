@@ -2220,7 +2220,7 @@ if __name__ == '__main__':
         app = web.Application()
         app.router.add_route('GET', '/', index_handler)
         app.router.add_route('GET', '/{page:[^{}/]+}', index_handler) #[^sockjs/]+
-        app.router.add_route('GET', '/js/{src}', javascript_handler)
+        app.router.add_route('GET', '/js/{src:.+}', javascript_handler)
         app.router.add_route('GET', '/images/{src}', image_handler)
         app.router.add_route('GET', '/media/{file}', media_handler),
         app.router.add_route('GET', '/media/{client}/{file}', media_handler),
