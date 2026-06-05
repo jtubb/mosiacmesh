@@ -30,6 +30,7 @@ __all__ = [
 ]
 
 _VALID_FREQ = {"DAILY", "WEEKLY", "MONTHLY", "YEARLY"}
+_VALID_END_TYPES = {"never", "until", "count"}
 
 
 def _serialize(s):
@@ -65,10 +66,35 @@ def _validate_time_str(s):
     return True, None
 
 
+def _validate_end_dict(end):
+    """The Schedule.end dict has three shapes: {"type":"never"},
+    {"type":"until","untilDate":"YYYY-MM-DD"}, or {"type":"count","count":N}.
+    Reject early so dateutil.rrule (used by mosaicmesh.scheduling at evaluation
+    time) doesn't blow up on partially-formed input. Returns (ok, error_msg)."""
+    if not isinstance(end, dict):
+        return False, "end must be an object"
+    et = end.get("type")
+    if et not in _VALID_END_TYPES:
+        return False, f"end.type must be one of {sorted(_VALID_END_TYPES)}"
+    if et == "until":
+        ud = end.get("untilDate")
+        if not isinstance(ud, str) or not ud:
+            return False, "end.untilDate is required when end.type='until'"
+    elif et == "count":
+        c = end.get("count")
+        try:
+            if int(c) < 1:
+                return False, "end.count must be >= 1"
+        except (TypeError, ValueError):
+            return False, "end.count must be an integer"
+    return True, None
+
+
 def _validate_fields(body, settings, partial=False):
     """Validate body fields against Schedule's contract.
-    partial=True (PUT) skips presence checks; partial=False (POST) requires
-    playlistName + displayID. Returns (ok, error_msg)."""
+    partial=True (PUT) skips presence checks for playlistName/displayID, but
+    still validates foreign-key existence whenever those fields appear in the
+    body. partial=False (POST) requires both. Returns (ok, error_msg)."""
     if not partial:
         if not body.get("playlistName"):
             return False, "playlistName is required"
@@ -100,17 +126,32 @@ def _validate_fields(body, settings, partial=False):
         ok, err = _validate_time_str(body["endTime"])
         if not ok:
             return False, err
+    if "end" in body:
+        ok, err = _validate_end_dict(body["end"])
+        if not ok:
+            return False, err
     return True, None
 
 
 def _apply_fields(s, body):
     """Copy provided fields from body to the Schedule object. Skips id and
-    _serverVersion (those are managed server-side)."""
+    _serverVersion (those are managed server-side).
+
+    list/dict fields are shallow-copied so that subsequent mutations of the
+    request body (or future PUTs sharing a reused dict) don't alias the
+    stored Schedule's collections."""
     for field in ("name", "playlistName", "displayID", "priority",
                   "enabled", "freq", "interval", "byweekday",
                   "dtstart", "end", "exdates", "startTime", "endTime"):
-        if field in body:
-            setattr(s, field, body[field])
+        if field not in body:
+            continue
+        v = body[field]
+        if field in ("byweekday", "exdates"):
+            setattr(s, field, list(v))
+        elif field == "end":
+            setattr(s, field, dict(v))
+        else:
+            setattr(s, field, v)
 
 
 async def api_schedules_list(request):
@@ -136,6 +177,8 @@ async def api_schedules_create(request):
         return web.json_response({"success": False, "error": err}, status=400)
     s = Schedule()
     s.id = uuid.uuid4().hex[:16]
+    while s.id in server.settings.schedules:   # 64-bit hex; collision guard is paranoia
+        s.id = uuid.uuid4().hex[:16]
     _apply_fields(s, body)
     s._serverVersion = 1
     server.settings.schedules[s.id] = s

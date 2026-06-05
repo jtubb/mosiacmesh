@@ -127,6 +127,62 @@ class TestSchedulesCreate:
              "freq": "WEEKLY", "byweekday": [0, 7]}))
         assert resp.status == 400
 
+    @pytest.mark.asyncio
+    async def test_end_until_roundtrip(self, fresh_settings):
+        end = {"type": "until", "untilDate": "2026-12-31"}
+        resp = await api_schedules_create(self._post(
+            {"playlistName": "Morning", "displayID": "Lobby", "end": end}))
+        assert resp.status == 201
+        data = json.loads(resp.text)
+        assert data['schedule']['end'] == end
+
+    @pytest.mark.asyncio
+    async def test_end_count_roundtrip(self, fresh_settings):
+        end = {"type": "count", "count": 5}
+        resp = await api_schedules_create(self._post(
+            {"playlistName": "Morning", "displayID": "Lobby", "end": end}))
+        assert resp.status == 201
+        data = json.loads(resp.text)
+        assert data['schedule']['end'] == end
+
+    @pytest.mark.asyncio
+    async def test_end_until_missing_date_400(self, fresh_settings):
+        resp = await api_schedules_create(self._post(
+            {"playlistName": "Morning", "displayID": "Lobby",
+             "end": {"type": "until"}}))
+        assert resp.status == 400
+        assert "untilDate" in json.loads(resp.text)['error']
+
+    @pytest.mark.asyncio
+    async def test_end_count_missing_count_400(self, fresh_settings):
+        resp = await api_schedules_create(self._post(
+            {"playlistName": "Morning", "displayID": "Lobby",
+             "end": {"type": "count"}}))
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_end_unknown_type_400(self, fresh_settings):
+        resp = await api_schedules_create(self._post(
+            {"playlistName": "Morning", "displayID": "Lobby",
+             "end": {"type": "forever"}}))
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_apply_fields_does_not_alias_end_or_byweekday(self, fresh_settings):
+        end_in = {"type": "count", "count": 3}
+        bwd_in = [0, 2, 4]
+        resp = await api_schedules_create(self._post(
+            {"playlistName": "Morning", "displayID": "Lobby",
+             "freq": "WEEKLY", "byweekday": bwd_in, "end": end_in}))
+        assert resp.status == 201
+        sid = json.loads(resp.text)['schedule']['id']
+        s = fresh_settings.schedules[sid]
+        # mutate the caller's dict/list; the stored Schedule must be unaffected
+        end_in["count"] = 999
+        bwd_in.append(6)
+        assert s.end == {"type": "count", "count": 3}
+        assert s.byweekday == [0, 2, 4]
+
 
 class TestSchedulesUpdate:
     def _put(self, sid, body, if_match=None):
