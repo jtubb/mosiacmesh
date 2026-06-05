@@ -926,20 +926,35 @@ def _device_field(value):
 async def index_handler(request):
     logging.debug("INDEX_HANDLER")
     fileName = request.match_info.get('page', "index.html")
-    
+
     data = '404 Not Found'
-    
+
     if(fileName == "time"):
         return web.Response(body=str(int(time.time()*1000)), content_type='text/html')
-    
+
     root, ext = os.path.splitext(fileName)
     if not ext:
         fileName = fileName+'.html'
 
     logging.debug(fileName)
 
+    # Path traversal + extension containment. The route regex blocks `/`
+    # so multi-segment paths can't reach here, but a single-segment hit
+    # like /server.py used to serve the Python source file straight from
+    # CWD. Restrict to a small whitelist of extensions that admins
+    # legitimately load top-level (HTML pages + their inline assets) and
+    # require the resolved path to stay inside the repo root.
+    ALLOWED_EXT = ('.html', '.js', '.css', '.ico')
+    if not fileName.endswith(ALLOWED_EXT):
+        return web.Response(status=404, reason='NOT FOUND')
+    repo_root = os.path.realpath('.')
+    target = os.path.realpath(fileName)
+    if not (target == repo_root or target.startswith(repo_root + os.sep)):
+        return web.Response(status=404, reason='NOT FOUND')
+    fileName = target
+
     ct = 'application/octet-stream'
-    
+
     if( os.path.isfile(fileName)):
         cached_data = get_cached_file(fileName)
         if cached_data is not None:
@@ -1087,9 +1102,18 @@ async def javascript_handler(request):
     logging.debug("JAVASCRIPT_HANDLER")
     fileName = request.match_info.get('src')
     logging.debug(fileName)
-    file_path = 'js/' + fileName
-    
-    if( os.path.isfile(file_path)):
+    # Path traversal containment: realpath both the base and the joined
+    # target, then assert target is still under base. PR-4a widened the
+    # route from /js/{src} (single-segment) to /js/{src:.+} so subdirs
+    # like /js/timeline/index.js resolve — that widening also lets
+    # `../server.py` slip through the route matcher, so the handler
+    # MUST do its own containment check.
+    base = os.path.realpath('js')
+    target = os.path.realpath(os.path.join('js', fileName or ''))
+    if not (target == base or target.startswith(base + os.sep)):
+        return web.Response(status=404, reason='NOT FOUND')
+    file_path = target
+    if os.path.isfile(file_path):
         data = get_cached_file(file_path)
         if data is not None:
             # See index_handler comment: iPad-1 needs explicit no-cache
