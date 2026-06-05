@@ -65,16 +65,33 @@ export function makeStore() {
           api.listMedia(),
           api.listDevices(),
         ]);
-        // Re-shape playlists + profiles to lookup dicts (server returns arrays)
-        this.playlists = Object.fromEntries((pl ?? []).map(p => [p.name, p]));
-        this.profiles  = Object.fromEntries((pr ?? []).map(p => [p.name, p]));
+        // Re-shape playlists + profiles to lookup dicts (server returns arrays).
+        // Warn (don't crash) on duplicate-name anomalies — the server's POST
+        // 409 prevents new dupes but an older settings.dat could carry them.
+        this.playlists = {};
+        for (const p of (pl ?? [])) {
+          if (p.name in this.playlists) {
+            console.warn('[timeline] duplicate playlist name:', p.name);
+          }
+          this.playlists[p.name] = p;
+        }
+        this.profiles = {};
+        for (const p of (pr ?? [])) {
+          if (p.name in this.profiles) {
+            console.warn('[timeline] duplicate profile name:', p.name);
+          }
+          this.profiles[p.name] = p;
+        }
         this.schedules = sc ?? [];
         this.media     = me ?? { images: [], videos: [], videoDurations: {} };
         this.displays  = (dv?.devices) ?? [];
-        // Default Week-view display = first display
+        // Default Week-view display = first display. Trailing `?? null` keeps
+        // the field typed as string|null (never undefined) even when the
+        // first device has neither displayID nor clientKey — anomaly state.
         if (this.selectedDisplay == null && this.displays.length > 0) {
           this.selectedDisplay = this.displays[0].displayID
-                              ?? this.displays[0].clientKey;
+                              ?? this.displays[0].clientKey
+                              ?? null;
         }
         this.hydrated = true;
       } catch (e) {
