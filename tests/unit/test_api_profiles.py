@@ -192,3 +192,60 @@ class TestClientsAssignProfile:
         resp = await api_clients_assign_profile(
             self._post("c1", {"profileName": "ghost"}))
         assert resp.status == 404
+
+    @pytest.mark.asyncio
+    async def test_empty_string_profile_400(self, fresh_settings):
+        fresh_settings.clients["c1"] = Client()
+        resp = await api_clients_assign_profile(
+            self._post("c1", {"profileName": ""}))
+        assert resp.status == 400
+        assert "null" in json.loads(resp.text)['error']
+
+    @pytest.mark.asyncio
+    async def test_non_string_profile_400(self, fresh_settings):
+        fresh_settings.clients["c1"] = Client()
+        resp = await api_clients_assign_profile(
+            self._post("c1", {"profileName": 42}))
+        assert resp.status == 400
+
+
+class TestProfilesValidation:
+    """Validation edge cases on POST/PUT bodies."""
+
+    def _post(self, body):
+        req = make_mocked_request('POST', '/api/profiles')
+        async def _json(): return body
+        req.json = _json
+        return req
+
+    def _put(self, name, body, if_match=None):
+        headers = {'If-Match': str(if_match)} if if_match is not None else {}
+        req = make_mocked_request('PUT', f'/api/profiles/{name}',
+                                  headers=headers,
+                                  match_info={"name": name})
+        async def _json(): return body
+        req.json = _json
+        return req
+
+    @pytest.mark.asyncio
+    async def test_update_missing_if_match_428(self, fresh_settings):
+        fresh_settings.profiles["x"] = ScriptingProfile()
+        resp = await api_profiles_update(self._put("x", {"label": "nope"}))
+        assert resp.status == 428
+
+    @pytest.mark.asyncio
+    async def test_create_rejects_non_dict_scripts(self, fresh_settings):
+        resp = await api_profiles_create(
+            self._post({"name": "p1", "scripts": "rm -rf /"}))
+        assert resp.status == 400
+        assert "scripts" in json.loads(resp.text)['error']
+
+    @pytest.mark.asyncio
+    async def test_update_rejects_non_dict_launch(self, fresh_settings):
+        p = ScriptingProfile(); p.name = "x"; p._serverVersion = 1
+        fresh_settings.profiles["x"] = p
+        resp = await api_profiles_update(
+            self._put("x", {"launch": "ssh"}, if_match=1))
+        assert resp.status == 400
+        # Profile should not have been mutated
+        assert fresh_settings.profiles["x"]._serverVersion == 1

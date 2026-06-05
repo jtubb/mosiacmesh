@@ -10,8 +10,6 @@ A ScriptingProfile is referenced by Clients via Client.profileName.
 DELETE returns 409 with a refs list (clientKeys) when the profile is
 assigned to any client.
 """
-import logging
-
 from aiohttp import web
 
 from mosaicmesh.state import ScriptingProfile
@@ -30,6 +28,17 @@ __all__ = [
     "api_profiles_delete",
     "api_clients_assign_profile",
 ]
+
+_DICT_FIELDS = ("scripts", "launch", "webclip", "ssh")
+
+
+def _validate_dict_fields(body):
+    """Reject non-dict values for the four object-shaped fields up front so
+    they don't silently no-op in _apply_fields. Returns (ok, error_msg)."""
+    for field in _DICT_FIELDS:
+        if field in body and not isinstance(body[field], dict):
+            return False, f"{field} must be an object"
+    return True, None
 
 
 def _serialize(p):
@@ -86,6 +95,9 @@ async def api_profiles_create(request):
         return web.json_response({"success": False,
                                   "error": f"profile '{name}' already exists"},
                                  status=409)
+    ok, err = _validate_dict_fields(body)
+    if not ok:
+        return web.json_response({"success": False, "error": err}, status=400)
     p = ScriptingProfile()
     p.name = name
     _apply_fields(p, body)
@@ -116,6 +128,9 @@ async def api_profiles_update(request):
     except Exception as e:
         return web.json_response({"success": False,
                                   "error": f"Invalid JSON: {e}"}, status=400)
+    ok, err = _validate_dict_fields(body)
+    if not ok:
+        return web.json_response({"success": False, "error": err}, status=400)
     _apply_fields(p, body)
     bump_version(p)
     saveSettings()
@@ -161,10 +176,19 @@ async def api_clients_assign_profile(request):
         return web.json_response({"success": False,
                                   "error": f"Invalid JSON: {e}"}, status=400)
     pname = body.get("profileName")
-    if pname is not None and pname not in server.settings.profiles:
-        return web.json_response({"success": False,
-                                  "error": f"profile '{pname}' not found"},
-                                 status=404)
+    if pname is not None:
+        if not isinstance(pname, str):
+            return web.json_response({"success": False,
+                                      "error": "profileName must be a string or null"},
+                                     status=400)
+        if pname == "":
+            return web.json_response({"success": False,
+                                      "error": "use null to clear the profile"},
+                                     status=400)
+        if pname not in server.settings.profiles:
+            return web.json_response({"success": False,
+                                      "error": f"profile '{pname}' not found"},
+                                     status=404)
     client.profileName = pname   # may be None to clear
     saveSettings()
     return web.json_response({
