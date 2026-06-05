@@ -310,3 +310,40 @@ def test_websocket_dispatch_importable():
     from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
     assert callable(ws_handler)
     assert callable(handle_client_disconnect)
+
+
+def test_api_concurrency_importable():
+    from mosaicmesh.api._concurrency import (
+        parse_if_match,
+        precondition_required_response,
+        precondition_failed_response,
+        bump_version,
+    )
+    assert callable(parse_if_match)
+    assert callable(precondition_required_response)
+    assert callable(precondition_failed_response)
+    assert callable(bump_version)
+
+
+def test_parse_if_match_returns_int_or_none():
+    from aiohttp.test_utils import make_mocked_request
+    from mosaicmesh.api._concurrency import parse_if_match
+    # Missing header
+    req = make_mocked_request('PUT', '/x')
+    assert parse_if_match(req) is None
+    # Valid integer
+    req = make_mocked_request('PUT', '/x', headers={'If-Match': '42'})
+    assert parse_if_match(req) == 42
+    # Non-integer (return None so the handler can decide 428/400)
+    req = make_mocked_request('PUT', '/x', headers={'If-Match': 'bad'})
+    assert parse_if_match(req) is None
+
+
+def test_bump_version_increments_monotonically():
+    from types import SimpleNamespace
+    from mosaicmesh.api._concurrency import bump_version
+    obj = SimpleNamespace(_serverVersion=0)
+    bump_version(obj)
+    assert obj._serverVersion == 1
+    bump_version(obj)
+    assert obj._serverVersion == 2
