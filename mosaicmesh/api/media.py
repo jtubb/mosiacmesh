@@ -13,6 +13,7 @@ Both accesses use lazy `import server` as the first body line
 (established pattern from earlier Task moves).
 """
 import json
+import logging
 import os
 
 from aiohttp import web
@@ -53,7 +54,6 @@ async def upload_handler(request):
     URL dest segment. All three processors live in server.py; we lazy-import
     server and call them as server.<name>(path, filename)."""
     import server
-    import logging
     logging.debug("UPLOAD_HANDLER")
     uploadDest = request.match_info.get('dest')
     logging.debug(uploadDest)

@@ -67,3 +67,42 @@ class TestApiMediaResponseShape:
         assert "/media/server/images/a.png" in data['images']
         assert "/media/server/images/b.jpg" in data['images']
         assert data['videos'] == []
+
+    @pytest.mark.asyncio
+    async def test_lists_videos_with_durations(self, tmp_path, monkeypatch):
+        """Populated videos dir + stubbed get_video_duration → videoDurations
+        is keyed by URL and rounded to 1 decimal."""
+        d = tmp_path / "media" / "server" / "videos"
+        d.mkdir(parents=True)
+        (d / "intro.mp4").write_bytes(b"\x00\x00\x00\x20ftyp")
+        (d / "outro.mp4").write_bytes(b"\x00\x00\x00\x20ftyp")
+        monkeypatch.chdir(tmp_path)
+
+        async def fake_duration(disk_path):
+            return 12.345 if disk_path.endswith("intro.mp4") else 8.0
+        monkeypatch.setattr(server, "get_video_duration", fake_duration)
+
+        resp = await api_media(make_mocked_request('GET', '/api/media'))
+        data = json.loads(resp.text)
+        assert "/media/server/videos/intro.mp4" in data['videos']
+        assert "/media/server/videos/outro.mp4" in data['videos']
+        assert data['videoDurations']["/media/server/videos/intro.mp4"] == 12.3
+        assert data['videoDurations']["/media/server/videos/outro.mp4"] == 8.0
+
+    @pytest.mark.asyncio
+    async def test_skips_videos_with_unknown_duration(self, tmp_path, monkeypatch):
+        """get_video_duration returning None (e.g. ffprobe missing) → that
+        video appears in `videos` but not in `videoDurations`."""
+        d = tmp_path / "media" / "server" / "videos"
+        d.mkdir(parents=True)
+        (d / "bad.mp4").write_bytes(b"not-a-video")
+        monkeypatch.chdir(tmp_path)
+
+        async def fake_duration(disk_path):
+            return None
+        monkeypatch.setattr(server, "get_video_duration", fake_duration)
+
+        resp = await api_media(make_mocked_request('GET', '/api/media'))
+        data = json.loads(resp.text)
+        assert "/media/server/videos/bad.mp4" in data['videos']
+        assert data['videoDurations'] == {}
