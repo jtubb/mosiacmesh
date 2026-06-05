@@ -13,7 +13,7 @@ import os
 import logging
 import asyncio
 
-from mosaicmesh.template_vars import SafeDict
+from mosaicmesh.template_vars import SafeDict, build_vars
 
 # --- Device lifecycle automation -----------------------------------------
 # The server runs per-device shell scripts over SSH (login/start/stop/reboot),
@@ -437,3 +437,45 @@ LAUNCH_METHODS = {
     "vnc-tap":      lambda c, p, v: _vnc_tap_sequence(c, p.launch, v),
     "ssh-then-vnc": lambda c, p, v: _ssh_then_vnc(c, p, v),
 }
+
+
+async def run_profile_action(client_key, which):
+    """Run a single profile action ('login'|'start'|'stop'|'test'|'reboot')
+    on a single client. Resolves the profile via client.profileName, builds
+    the template-variable substitution map, then either:
+      - routes 'start' through LAUNCH_METHODS[profile.launch['method']]
+        (so 'ssh-then-vnc' / 'vnc-tap' / 'shell' all work uniformly), or
+      - SSH-execs profile.scripts[which] for the other lifecycle actions
+        (login/stop/test/reboot always go through plain SSH).
+
+    Robust to missing profile (profileName=None or profile not in
+    settings.profiles): logs a warning and returns (None, "no-profile").
+    The dispatcher never raises into the caller — this is fleet-management
+    code where one bad client must not break the loop.
+
+    Returns the (rc, output) tuple from the underlying primitive (or
+    True/False for VNC-only methods, which the caller treats as truthy
+    success / falsy failure)."""
+    import server as _server
+    client = _server.settings.clients.get(client_key)
+    if not client:
+        logging.warning("run_profile_action %s %s: no client", client_key, which)
+        return (None, "no-client")
+    profile_name = getattr(client, "profileName", None)
+    profile = (_server.settings.profiles.get(profile_name)
+               if profile_name else None)
+    if not profile:
+        logging.warning("run_profile_action %s %s: no profile assigned "
+                        "(profileName=%r)", client_key, which, profile_name)
+        return (None, "no-profile")
+    vars_ = build_vars(client, profile, displayUrl=_server.DISPLAY_URL)
+    if which == "start":
+        method = profile.launch.get("method", "shell")
+        fn = LAUNCH_METHODS.get(method) or LAUNCH_METHODS["shell"]
+        result = await fn(client, profile, vars_)
+        # Normalize bool returns from VNC-only methods to (rc, out)-ish
+        if isinstance(result, bool):
+            return (0 if result else None, "VNC_TAP_OK" if result else "vnc-tap-failed")
+        return result
+    # login / stop / test / reboot — always SSH
+    return await _exec_ssh(client, profile.scripts.get(which, ""), vars_)
