@@ -18,6 +18,7 @@ const ROOT = path.resolve(__dirname, '../../..');
 
 const MODULES = [
   'js/timeline/api.js',
+  'js/timeline/store.js',
 ];
 
 for (const rel of MODULES) {

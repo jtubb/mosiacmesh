@@ -10,8 +10,14 @@
  * (4b interactivity, 4c modals) extend store.js + add component
  * modules, but this file stays small.
  */
+import { makeStore } from './store.js';
 
 document.addEventListener('alpine:init', () => {
-  // Subsequent tasks register Alpine.store('mm') and components here.
-  console.log('[timeline] alpine:init fired');
+  // eslint-disable-next-line no-undef
+  Alpine.store('mm', makeStore());
+
+  // Kick off hydration — the section's x-init can also call this, but
+  // doing it here means the timeline is ready as soon as Alpine is.
+  // eslint-disable-next-line no-undef
+  Alpine.store('mm').hydrate();
 });
