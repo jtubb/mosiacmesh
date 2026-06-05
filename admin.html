@@ -1062,6 +1062,22 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .cache-propagation-fill-inflight { background: #81c784; opacity: 0.55; }
 .cache-propagation.stalled .cache-propagation-counts { color: #d32f2f;
     font-weight: 600; }
+/* ===== Timeline Day-view grid ===== */
+.mm-day-grid { font-size: 12px; }
+.mm-axis-cell { color: var(--text-muted); padding: 2px 4px; }
+.mm-track-row .mm-track-header { padding: 4px; }
+.mm-track-name { font-weight: 600; }
+.mm-track-status { color: var(--text-muted); font-size: 11px; }
+.mm-status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; vertical-align:middle; margin-right:4px; }
+.mm-render-badge { color: var(--warn); font-size: 10px; margin-left: 6px; }
+.mm-clip { background: var(--accent, #345); color: white; border-radius: 4px; padding: 4px 6px; position: relative; overflow: hidden; }
+.mm-clip-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-clip-time { font-size: 10px; opacity: 0.8; }
+.mm-clip-stripe {
+  position: absolute; top:0; bottom:0;
+  background: repeating-linear-gradient(45deg, rgba(255,0,0,0.2) 0 6px, transparent 6px 12px);
+  pointer-events: none;
+}
   </style>
 </head>
 <body>
@@ -1085,13 +1101,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
       <button class="navitem" data-nav="console">Console</button>
     </nav>
     <main class="main">
-      <section class="section" data-route="timeline" x-data="{ ready: false }" x-init="ready = true">
+      <section class="section" data-route="timeline" x-data="{}">
         <h2>Timeline</h2>
-        <div x-show="!ready" style="color:var(--text-muted)">Loading…</div>
-        <div x-show="ready" id="timelineRoot">
-          <!-- Filled in by subsequent tasks. -->
-          <p style="color:var(--text-muted)">Timeline view will render here (PR-4a scaffolding).</p>
-        </div>
+        <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
+        <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
+        <div x-show="$store.mm.hydrated" x-data="mmTimeline" x-html="render()"></div>
       </section>
       <section class="section" data-route="overview"><h2>Overview</h2>
         <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>

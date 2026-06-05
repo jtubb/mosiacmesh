@@ -11,13 +11,15 @@
  * modules, but this file stays small.
  */
 import { makeStore } from './store.js';
+import { mmTimelineComponent } from './timeline/timeline.js';
 
 document.addEventListener('alpine:init', () => {
   // eslint-disable-next-line no-undef
   Alpine.store('mm', makeStore());
+  // eslint-disable-next-line no-undef
+  Alpine.data('mmTimeline', mmTimelineComponent);
 
-  // Kick off hydration — the section's x-init can also call this, but
-  // doing it here means the timeline is ready as soon as Alpine is.
+  // Kick off hydration immediately.
   // eslint-disable-next-line no-undef
   Alpine.store('mm').hydrate();
 });

@@ -24,6 +24,7 @@ const MODULES = [
   'js/timeline/timeline/grid-axis.js',
   'js/timeline/timeline/track-header.js',
   'js/timeline/timeline/clip.js',
+  'js/timeline/timeline/timeline.js',
 ];
 
 for (const rel of MODULES) {
