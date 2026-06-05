@@ -312,6 +312,24 @@ def test_websocket_dispatch_importable():
     assert callable(handle_client_disconnect)
 
 
+def test_client_has_profileName_field():
+    """PR-3: Client.profileName replaces the five per-client *Script
+    fields. Defaults to None (no profile assigned yet)."""
+    from mosaicmesh.state import Client
+    c = Client()
+    assert hasattr(c, "profileName")
+    assert c.profileName is None
+
+
+def test_template_vars_importable():
+    """PR-3 dispatcher uses SafeDict + build_vars from
+    mosaicmesh/template_vars.py."""
+    from mosaicmesh.template_vars import SafeDict, build_vars
+    assert callable(build_vars)
+    assert SafeDict({"x": 1})["x"] == 1
+    assert SafeDict({"x": 1})["missing"] == "{missing}"
+
+
 def test_api_concurrency_importable():
     from mosaicmesh.api._concurrency import (
         parse_if_match,

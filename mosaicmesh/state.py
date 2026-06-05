@@ -179,6 +179,11 @@ class Client():
         self.stopScript = None
         self.rebootScript = None
         self.testScript = None
+        # Selected scripting profile (key into Settings.profiles). None means
+        # auto-match has not yet found a matching profile for this device's
+        # deviceType (or no profiles exist). The dispatcher treats None as
+        # "no scripts to run" and logs a warning.
+        self.profileName = None
         self.ready = False      # ready to display: media cached & client ready
         self.isOnline = False   # alive: connected / recent heartbeat
         self.synced = False     # SYN/SYNACK handshake (clock/group) complete
@@ -283,6 +288,8 @@ def migrate_client_objects():
         # while the process is live), so unconditionally reset on
         # startup -- any state in settings.dat is stale.
         client.cachePushProgress = None
+        if not hasattr(client, 'profileName'):
+            client.profileName = None
         # Backfill lifecycle-script defaults onto devices registered before the
         # automation existed (their fields are absent/None -> show as null).
         _apply_default_scripts(client)
