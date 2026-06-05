@@ -1095,6 +1095,14 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .mm-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 0; flex-wrap: wrap; }
 .mm-toolbar-date { font-weight: 600; min-width: 220px; text-align: center; }
 .btn-active { background: var(--accent, #345); color: white; }
+.mm-timeline-layout { display: flex; gap: 12px; }
+.mm-bin { width: 200px; flex: 0 0 200px; }
+.mm-bin-section { margin-bottom: 16px; }
+.mm-bin-title { font-weight: 600; margin-bottom: 6px; }
+.mm-bin-list { list-style: none; padding: 0; margin: 0; max-height: 240px; overflow-y: auto; }
+.mm-bin-item { padding: 4px 6px; cursor: default; }
+.mm-bin-item:hover { background: rgba(255,255,255,0.05); }
+.mm-timeline-main { flex: 1 1 auto; min-width: 0; }
   </style>
 </head>
 <body>
@@ -1123,34 +1131,59 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
         <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
         <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
 
-        <div x-show="$store.mm.hydrated" x-data="mmToolbar" class="mm-toolbar">
-          <button class="btn" :class="{'btn-active': $store.mm.viewMode==='day'}"   @click="setMode('day')">Day</button>
-          <button class="btn" :class="{'btn-active': $store.mm.viewMode==='week'}"  @click="setMode('week')">Week</button>
-          <button class="btn" :class="{'btn-active': $store.mm.viewMode==='month'}" @click="setMode('month')">Month</button>
-          <button class="btn btn-ghost" @click="step(-1)">◀</button>
-          <span class="mm-toolbar-date" x-text="formatDate()"></span>
-          <button class="btn btn-ghost" @click="step(1)">▶</button>
-          <button class="btn btn-ghost" @click="today()">Today</button>
+        <div x-show="$store.mm.hydrated" class="mm-timeline-layout">
+          <aside class="mm-bin">
+            <div x-data="mmMediaBin" class="mm-bin-section">
+              <div class="mm-bin-title">Media (<span x-text="filtered().length"></span>)</div>
+              <input class="input" type="text" x-model="search" placeholder="Search…" />
+              <ul class="mm-bin-list">
+                <template x-for="it in filtered()" :key="it.url">
+                  <li class="mm-bin-item">
+                    <span x-text="it.name"></span>
+                    <span class="size" style="color:var(--text-muted)" x-text="it.duration ? ' ' + it.duration + 's' : ''"></span>
+                  </li>
+                </template>
+              </ul>
+            </div>
+            <div x-data="mmPlaylistBin" class="mm-bin-section">
+              <div class="mm-bin-title">Playlists</div>
+              <ul class="mm-bin-list">
+                <template x-for="p in list" :key="p.name">
+                  <li class="mm-bin-item" x-text="p.name"></li>
+                </template>
+              </ul>
+            </div>
+          </aside>
+          <div class="mm-timeline-main">
+            <div x-data="mmToolbar" class="mm-toolbar">
+              <button class="btn" :class="{'btn-active': $store.mm.viewMode==='day'}"   @click="setMode('day')">Day</button>
+              <button class="btn" :class="{'btn-active': $store.mm.viewMode==='week'}"  @click="setMode('week')">Week</button>
+              <button class="btn" :class="{'btn-active': $store.mm.viewMode==='month'}" @click="setMode('month')">Month</button>
+              <button class="btn btn-ghost" @click="step(-1)">◀</button>
+              <span class="mm-toolbar-date" x-text="formatDate()"></span>
+              <button class="btn btn-ghost" @click="step(1)">▶</button>
+              <button class="btn btn-ghost" @click="today()">Today</button>
 
-          <template x-if="$store.mm.viewMode !== 'day'">
-            <select class="input" :value="$store.mm.selectedDisplay"
-                    @change="setSelectedDisplay($event.target.value)">
-              <template x-for="id in availableDisplayIds" :key="id">
-                <option :value="id" x-text="id"></option>
+              <template x-if="$store.mm.viewMode !== 'day'">
+                <select class="input" :value="$store.mm.selectedDisplay"
+                        @change="setSelectedDisplay($event.target.value)">
+                  <template x-for="id in availableDisplayIds" :key="id">
+                    <option :value="id" x-text="id"></option>
+                  </template>
+                </select>
               </template>
-            </select>
-          </template>
 
-          <span style="flex:1"></span>
-          <span class="size" style="color:var(--text-muted)">Fleet:</span>
-          <button class="btn btn-ghost" @click="fleetAction('login')"  title="Wake + unlock every device (SSH)">🔓</button>
-          <button class="btn btn-ghost" @click="fleetAction('start')"  title="Open the display page on every device">▶</button>
-          <button class="btn btn-ghost" @click="fleetAction('stop')"   title="Close the display on every device">⏹</button>
-          <button class="btn btn-ghost" @click="fleetAction('reboot')" title="Reboot every device">⟲</button>
-          <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg)">🐞</button>
+              <span style="flex:1"></span>
+              <span class="size" style="color:var(--text-muted)">Fleet:</span>
+              <button class="btn btn-ghost" @click="fleetAction('login')"  title="Wake + unlock every device (SSH)">🔓</button>
+              <button class="btn btn-ghost" @click="fleetAction('start')"  title="Open the display page on every device">▶</button>
+              <button class="btn btn-ghost" @click="fleetAction('stop')"   title="Close the display on every device">⏹</button>
+              <button class="btn btn-ghost" @click="fleetAction('reboot')" title="Reboot every device">⟲</button>
+              <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg)">🐞</button>
+            </div>
+            <div x-data="mmTimeline" x-html="render()"></div>
+          </div>
         </div>
-
-        <div x-show="$store.mm.hydrated" x-data="mmTimeline" x-html="render()"></div>
       </section>
       <section class="section" data-route="overview"><h2>Overview</h2>
         <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>

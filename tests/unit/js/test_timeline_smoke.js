@@ -28,6 +28,8 @@ const MODULES = [
   'js/timeline/toolbar.js',
   'js/timeline/timeline/sockjs-status.js',
   'js/timeline/timeline/now-line.js',
+  'js/timeline/bin/media-bin.js',
+  'js/timeline/bin/playlist-bin.js',
 ];
 
 for (const rel of MODULES) {
