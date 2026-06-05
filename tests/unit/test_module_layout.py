@@ -15,6 +15,7 @@ def test_state_classes_importable():
     assert hasattr(s, 'schedules')
     assert hasattr(s, 'scripts')
     assert hasattr(s, 'profiles')              # NEW
+    assert isinstance(s.profiles, dict)        # used as a dict throughout PR-2 handlers
     # New _serverVersion fields:
     p = Playlist()
     assert hasattr(p, '_serverVersion')

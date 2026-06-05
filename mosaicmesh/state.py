@@ -122,12 +122,19 @@ class ScriptingProfile():
         }
         self.launch = {               # how to actually launch the display
             "method": "shell",        # "shell" | "vnc-tap" | "ssh-then-vnc"
+            # Method-specific keys (vncPassword, taps, wakeScript, etc.) are
+            # only present when the corresponding method is active. Code that
+            # reads them must use dict.get() to avoid KeyError on profiles
+            # that haven't configured the keys yet (e.g. fresh shells).
         }
         self.webclip = {              # iOS-5 webclip metadata
             "bundleId": "",
             "title":    "",
         }
-        self.ssh = {                  # SSH connection options
+        self.ssh = {                  # SSH connection options.
+            # legacyCrypto enables the SHA-1-era cipher/kex set required for
+            # iOS 5.1.1 sshd; defaults to False (modern device); set True
+            # when creating a profile for iPad-1-era hardware.
             "legacyCrypto": False,
             "user": "root",
             "keyPath": "",
