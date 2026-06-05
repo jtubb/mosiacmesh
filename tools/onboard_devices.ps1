@@ -360,7 +360,28 @@ $sshLegacy = @(
     "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
     "-o", "IdentitiesOnly=yes",          # only the -i key; old sshd has low MaxAuthTries
     "-o", "StrictHostKeyChecking=accept-new",
-    "-o", "ConnectTimeout=10"
+    "-o", "ConnectTimeout=10",
+    # Suppress ssh.exe's "Warning: Permanently added '<host>' (RSA) to the
+    # list of known hosts." chatter. PowerShell renders any ssh.exe stderr
+    # as NativeCommandError (red block + stack trace) which looks alarming
+    # in the onboarding output even though the command actually succeeded.
+    # Silencing at the ssh client (LogLevel=ERROR) keeps real errors visible
+    # without forcing every call site to scrub `2>$null` around the invocation.
+    "-o", "LogLevel=ERROR",
+    # Per-session keepalive: send a no-op probe every 15s; disconnect after
+    # 4 unanswered probes (~60s). Without these, a session against an
+    # iPad-1 that drops into deep WiFi power-save (2s+ round trips, packets
+    # serviced on the radio's wake schedule) can hang indefinitely --
+    # there's no per-session timeout besides TCP's multi-minute retransmit
+    # default. Observed in the fleet rollout when screen10 stalled the
+    # whole script between "key pushed" and "key auth verified" because
+    # its WiFi went to sleep before Insomnia took effect (Insomnia only
+    # activates after the post-install respring). 60s is short enough to
+    # keep the rollout moving but long enough to absorb a normal LAN
+    # hiccup; the per-device push-key step's existing 4-attempt retry
+    # loop still gets a chance to recover before we mark the host failed.
+    "-o", "ServerAliveInterval=15",
+    "-o", "ServerAliveCountMax=4"
 )
 
 # --- clock / cert fix command ---------------------------------------------
@@ -629,7 +650,18 @@ foreach ($h in $targets) {
         # daemon registers automatically on next reboot. We also fire the
         # commands inline below so the iPad is in the right state NOW too.
         $plistPath = '/Library/LaunchDaemons/com.mosaicmesh.autolock-off.plist'
-        $daemonScript = "sleep 30; /usr/bin/activator send switch-off.com.a3tweaks.switch.autolock; sleep 2; /usr/bin/uiopen $DisplayUrl"
+        # Prefer sbdidlaunch (launches the MosaicMesh webclip in WEBAPP
+        # MODE -- chrome-less, fullscreen, no Safari URL bar) and fall
+        # back to uiopen (Safari) if the webclip isn't installed or
+        # sbdidlaunch isn't available on this device. The webclip's
+        # bundle id is com.apple.webapp-<32-hex UUID>, and our
+        # tools/mosaicmesh.webclip.Info.plist + step 5.4g pin a stable
+        # UUID across the fleet so the daemon's command is identical
+        # everywhere. See docs/superpowers/specs/2026-06-03-cache-
+        # progress-and-propagation-ui.md "Known limitation" for why
+        # webapp-mode matters for kiosk operation.
+        $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
+        $daemonScript = "sleep 30; /usr/bin/activator send switch-off.com.a3tweaks.switch.autolock; sleep 2; /usr/bin/sbdidlaunch $webclipBid 2>/dev/null || /usr/bin/uiopen $DisplayUrl"
         $writeDaemon = (
             "cat > $plistPath << 'PLIST'`n" +
             "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
@@ -741,123 +773,229 @@ foreach ($h in $targets) {
     #       The single key we need is `Enabled` = bool; extracted from
     #       strings on the dylib + InsomniaSettings prefs binary (2026-06-02).
     #       Owner: mobile:mobile, mode 644 (standard for user-domain prefs).
-    if ($status -eq "OK" -and $pkgsToInstall) {
+    #
+    #       Deployed via scp from tools/com.malcolmhall.Insomnia.plist
+    #       (same fix as 5.4d/5.4e): the earlier inline-heredoc with
+    #       backtick-escaped double quotes intermittently lost quotes
+    #       during PowerShell -> ssh -> bash argv flattening. An
+    #       unquoted-attribute plist parses as nil in
+    #       NSPropertyListSerialization, leaving Enabled=false and
+    #       Insomnia inert. Confirmed on .69 (Jun 3 09:15 onboarding)
+    #       which had a 213-byte plist with no quotes; subsequent
+    #       passes that happened to keep quotes intact landed 223
+    #       bytes correctly. Shipping the file removes the
+    #       non-determinism.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
         $insomniaPlistPath = '/var/mobile/Library/Preferences/com.malcolmhall.Insomnia.plist'
-        $writeInsomnia = (
-            "cat > $insomniaPlistPath << 'PLIST'`n" +
-            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
-            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
-            "<plist version=`"1.0`">`n" +
-            "<dict>`n" +
-            "    <key>Enabled</key>`n" +
-            "    <true/>`n" +
-            "</dict>`n" +
-            "</plist>`n" +
-            "PLIST`n" +
-            "chown mobile:mobile $insomniaPlistPath; chmod 644 $insomniaPlistPath;" +
-            " echo INSOMNIA_CONFIGURED"
-        )
-        try {
-            $iOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $writeInsomnia 2>&1) | Out-String
-            if ($iOut -match 'INSOMNIA_CONFIGURED') {
-                Write-Host "  insomnia: enabled (WiFi stays awake when screen is off)" -ForegroundColor Green
-            } else {
-                Write-Host "  insomnia config unexpected: $($iOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+        $insomniaPlistSrc = Join-Path $PSScriptRoot 'com.malcolmhall.Insomnia.plist'
+        if (-not (Test-Path $insomniaPlistSrc)) {
+            Write-Host "  insomnia plist: source file missing at $insomniaPlistSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                & $scp -i $KeyPath -P $p @sshLegacy $insomniaPlistSrc "${User}@${hostName}:$insomniaPlistPath" 2>&1 | Out-Null
+                # Fix ownership (scp lands files as root:wheel; the
+                # plist needs mobile:mobile so SpringBoard's
+                # preference daemon can read+rewrite it as the
+                # mobile user) and verify the quoted-attribute
+                # signature on disk.
+                # scp preserves byte-identical content, so file
+                # presence + non-empty is a sufficient verify. We
+                # deliberately avoid embedding double quotes in the
+                # ssh command body here -- the whole point of this
+                # refactor is to never send quotes through the
+                # PowerShell -> ssh.exe -> bash pipeline again.
+                $fixOwn = (
+                    "chown mobile:mobile $insomniaPlistPath;" +
+                    " chmod 644 $insomniaPlistPath;" +
+                    " if [ -s $insomniaPlistPath ];" +
+                    " then echo INSOMNIA_CONFIGURED;" +
+                    " else echo INSOMNIA_EMPTY;" +
+                    " fi"
+                )
+                $iOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $fixOwn 2>&1) | Out-String
+                if ($iOut -match 'INSOMNIA_CONFIGURED') {
+                    Write-Host "  insomnia: enabled (WiFi stays awake when screen is off)" -ForegroundColor Green
+                } elseif ($iOut -match 'INSOMNIA_EMPTY') {
+                    Write-Host "  insomnia: file empty after scp -- rerun" -ForegroundColor Yellow
+                } else {
+                    Write-Host "  insomnia config unexpected: $($iOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  insomnia config failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "  insomnia config failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
-    # 5.4d) write /etc/lighttpd/lighttpd.conf after tweaks are installed.
-    #       Binds to 127.0.0.1:8080 only (never LAN-accessible), serves
-    #       the cache directory, and sets correct MIME types for .mp4, .m4v,
-    #       .mov, .jpg, .png, etc. Same heredoc pattern as 5.4b (Veency) /
-    #       5.4c (Insomnia). lighttpd is lightweight and runs as mobile:mobile.
-    if ($status -eq "OK" -and $pkgsToInstall) {
-        $lighttpdConfig = (
-            "mkdir -p /etc/lighttpd /var/log /var/run /var/mobile/Media/MosaicMeshCache;`n" +
-            "chown mobile:mobile /var/mobile/Media/MosaicMeshCache;`n" +
-            "cat > /etc/lighttpd/lighttpd.conf << 'CONF'`n" +
-            "server.modules = ( `"mod_indexfile`", `"mod_dirlisting`", `"mod_staticfile`" )`n" +
-            "server.document-root = `"/var/mobile/Media/MosaicMeshCache/`"`n" +
-            "server.bind = `"127.0.0.1`"`n" +
-            "server.port = 8080`n" +
-            "server.errorlog = `"/var/log/lighttpd-error.log`"`n" +
-            "server.pid-file = `"/var/run/lighttpd.pid`"`n" +
-            "dir-listing.activate = `"disable`"`n" +
-            "mimetype.assign = (`n" +
-            "    `".mp4`"  => `"video/mp4`",`n" +
-            "    `".m4v`"  => `"video/x-m4v`",`n" +
-            "    `".mov`"  => `"video/quicktime`",`n" +
-            "    `".jpg`"  => `"image/jpeg`",`n" +
-            "    `".png`"  => `"image/png`",`n" +
-            "    `".html`" => `"text/html`",`n" +
-            "    `".js`"   => `"application/javascript`",`n" +
-            "    `".css`"  => `"text/css`",`n" +
-            "    `"`"      => `"application/octet-stream`"`n" +
-            ")`n" +
-            "index-file.names = ( `"index.html`" )`n" +
-            "CONF`n" +
-            "echo LIGHTTPD_CONF_OK"
-        )
-        try {
-            $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $lighttpdConfig 2>&1) | Out-String
-            if ($lOut -match 'LIGHTTPD_CONF_OK') {
-                Write-Host "  lighttpd config: written to /etc/lighttpd/lighttpd.conf" -ForegroundColor Green
-            } else {
-                Write-Host "  lighttpd config unexpected: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+    # 5.4d) deploy /etc/lighttpd/lighttpd.conf via scp from the local
+    #       repo (tools/lighttpd.conf). Earlier version of this step
+    #       built the file via a PowerShell -> ssh -> bash heredoc, but
+    #       PowerShell's backtick-escaping for inner double-quotes was
+    #       stripped during ssh.exe argument parsing, so the file landed
+    #       on the iPad with NO quotes around any string literal -> the
+    #       lighttpd config parser failed -> daemon couldn't start.
+    #       scp-from-local is the bullet-proof path: same content goes
+    #       on disk byte-for-byte as what we ship in the repo.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $confSrc = Join-Path $PSScriptRoot 'lighttpd.conf'
+        if (-not (Test-Path $confSrc)) {
+            Write-Host "  lighttpd config: source file missing at $confSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                # Make the dirs + cache dir on the iPad first; then scp the
+                # config. (lighttpd's config-validate happens at start time,
+                # not at file-arrival time, so order matters only in that
+                # the dirs must exist before lighttpd reads .pid-file etc.)
+                $mkPrep = "mkdir -p /etc/lighttpd /var/log /var/run /var/mobile/Media/MosaicMeshCache; chown mobile:mobile /var/mobile/Media/MosaicMeshCache; echo LIGHTTPD_DIRS_OK"
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $mkPrep 2>&1 | Out-Null
+                # Push the config. -O disables the new sftp-based scp protocol
+                # which OpenSSH 8.x defaults to but the iPad's old sshd may
+                # not implement. (If our ssh build doesn't have -O it'll
+                # silently complain; the fallback to legacy scp still works.)
+                & $scp -i $KeyPath -P $p @sshLegacy $confSrc "${User}@${hostName}:/etc/lighttpd/lighttpd.conf" 2>&1 | Out-Null
+                # Verify by counting expected string-literal lines on the iPad
+                $verifyCmd = 'grep -c "^server\." /etc/lighttpd/lighttpd.conf'
+                $vOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $verifyCmd 2>&1) | Out-String
+                # Expect at least 6 server.* lines (modules, document-root,
+                # bind, port, errorlog, pid-file). If we see them, the file
+                # didn't get mangled.
+                if ($vOut -match '\b([6-9]|[1-9][0-9])\b') {
+                    Write-Host "  lighttpd config: pushed via scp ($confSrc)" -ForegroundColor Green
+                } else {
+                    Write-Host "  lighttpd config verification unexpected: $($vOut.Trim())" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  lighttpd config failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "  lighttpd config failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
-    # 5.4e) write the LaunchDaemon plist so lighttpd starts at every
-    #       boot AND auto-respawns if killed. -D flag keeps lighttpd
-    #       in foreground so launchd's KeepAlive can track it. launchctl
-    #       load fires it immediately (in addition to the boot start).
-    if ($status -eq "OK" -and $pkgsToInstall) {
-        $lighttpdLaunchd = (
-            "mkdir -p /Library/LaunchDaemons;`n" +
-            "cat > /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist << 'PLIST'`n" +
-            "<?xml version=`"1.0`" encoding=`"UTF-8`"?>`n" +
-            "<!DOCTYPE plist PUBLIC `"-//Apple//DTD PLIST 1.0//EN`" `"http://www.apple.com/DTDs/PropertyList-1.0.dtd`">`n" +
-            "<plist version=`"1.0`">`n" +
-            "<dict>`n" +
-            "    <key>Label</key><string>com.mosaicmesh.lighttpd</string>`n" +
-            "    <key>ProgramArguments</key>`n" +
-            "    <array>`n" +
-            "        <string>/usr/sbin/lighttpd</string>`n" +
-            "        <string>-D</string>`n" +
-            "        <string>-f</string>`n" +
-            "        <string>/etc/lighttpd/lighttpd.conf</string>`n" +
-            "    </array>`n" +
-            "    <key>RunAtLoad</key><true/>`n" +
-            "    <key>KeepAlive</key><true/>`n" +
-            "    <key>StandardErrorPath</key><string>/var/log/lighttpd-launchd.log</string>`n" +
-            "</dict>`n" +
-            "</plist>`n" +
-            "PLIST`n" +
-            "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-            "launchctl unload /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist 2>/dev/null;`n" +
-            "launchctl load /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
-            "sleep 2;`n" +
-            "if [ -f /var/run/lighttpd.pid ]; then`n" +
-            "  echo LIGHTTPD_LAUNCHD_OK pid=`$(cat /var/run/lighttpd.pid);`n" +
-            "else`n" +
-            "  echo LIGHTTPD_LAUNCHD_NO_PID;`n" +
-            "fi"
-        )
-        try {
-            $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $lighttpdLaunchd 2>&1) | Out-String
-            if ($lOut -match 'LIGHTTPD_LAUNCHD_OK pid=(\d+)') {
-                Write-Host "  lighttpd LaunchDaemon: running pid=$($Matches[1])" -ForegroundColor Green
-            } else {
-                Write-Host "  lighttpd LaunchDaemon: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+    # 5.4e) deploy the LaunchDaemon plist (scp from local) so lighttpd
+    #       starts at every boot AND auto-respawns if killed, then exec
+    #       lighttpd directly to make it available immediately for this
+    #       onboarding pass.
+    #
+    #       Two bugs fixed here vs. the previous version:
+    #
+    #       (1) The plist used to be built with the same heredoc-with-
+    #           backtick-escaped-quotes pattern as 5.4d and suffered
+    #           the same quote-stripping problem (ssh.exe re-flattens
+    #           argv and loses the backticks), so the file landed with
+    #           broken XML. Fixed by shipping tools/com.mosaicmesh.
+    #           lighttpd.plist and scp'ing it byte-for-byte.
+    #
+    #       (2) `launchctl load /Library/LaunchDaemons/...` was used
+    #           to start the daemon immediately, but on iOS 5 launchctl-
+    #           over-SSH fails with "launch_msg(): Socket is not
+    #           connected" because the SSH session isn't connected to
+    #           launchd's bootstrap domain. The plist still lands on
+    #           disk for the boot-time path (launchd reads /Library/
+    #           LaunchDaemons at boot, finds it, RunAtLoad fires it,
+    #           KeepAlive respawns on crash). To start lighttpd RIGHT
+    #           NOW we just exec the daemon directly. Without -D flag
+    #           lighttpd daemonizes itself so the SSH command returns;
+    #           the pid file confirms success.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $plistSrc = Join-Path $PSScriptRoot 'com.mosaicmesh.lighttpd.plist'
+        if (-not (Test-Path $plistSrc)) {
+            Write-Host "  lighttpd plist: source file missing at $plistSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                # /Library/LaunchDaemons always exists on iOS but be
+                # defensive in case anyone forks this for another
+                # Darwin variant.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "mkdir -p /Library/LaunchDaemons" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy $plistSrc "${User}@${hostName}:/Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist" 2>&1 | Out-Null
+                # chmod + probe-before-act + start if needed + report pid.
+                # Kept as one ssh round-trip to keep onboarding fast on
+                # slow links.
+                #
+                # Probe-before-act fixes a race with the LaunchDaemon's
+                # KeepAlive=true: previously we unconditionally `killall
+                # lighttpd` then exec'd /usr/sbin/lighttpd, but launchd
+                # respawns the daemon within a few hundred ms of kill --
+                # often beating our manual start to the bind() on
+                # 127.0.0.1:8080, producing "Address already in use" and
+                # an empty pid in our output (because the LaunchDaemon
+                # rewrites /var/run/lighttpd.pid during the race).
+                #
+                # The new flow: if port 8080 is already LISTEN'd on, the
+                # LaunchDaemon (or a previous run) already owns it -- skip
+                # the kill, just report the pid. Only do a manual start
+                # when nothing is bound (first install before reboot;
+                # launchd doesn't pick up new plists in /Library/Launch-
+                # Daemons until it re-reads them, and `launchctl load`
+                # over SSH fails on iOS 5 -- see comment below).
+                $startCmd = (
+                    "chmod 644 /Library/LaunchDaemons/com.mosaicmesh.lighttpd.plist;`n" +
+                    # Probe by PORT BIND, not by process or by pidfile.
+                    # The question we actually want answered is `is port
+                    # 8080 already serving?` -- not `does ps show a
+                    # process named lighttpd?`. Empirically the process-
+                    # probe missed the listener on 17 of 18 devices in
+                    # the fleet rollout: apt's lighttpd postinst spawns
+                    # the daemon in a way that doesn't surface to `ps
+                    # ax | grep [l]ighttpd` from our SSH session (likely
+                    # session-visibility quirk on iOS 5), even though
+                    # something IS bound to 8080 (we know because our
+                    # subsequent /usr/sbin/lighttpd start fails with
+                    # `Address already in use`).
+                    #
+                    # bash's /dev/tcp/<host>/<port> virtual file is the
+                    # right tool: opens a real TCP connection, exits 0
+                    # iff the port accepts. iOS-5 Cydia ships bash 4.x,
+                    # which has /dev/tcp since 2.05, and root's SSH
+                    # login shell on these devices is bash.
+                    #
+                    # PID extraction note: `awk` AND `head` are both
+                    # missing from the minimal iOS-5 jailbreak rootfs
+                    # (they live in Cydia's coreutils-bin which we don't
+                    # depend on). Also, our LaunchDaemon plist runs
+                    # lighttpd with -D (foreground) so the daemon does
+                    # NOT write /var/run/lighttpd.pid -- launchd tracks
+                    # the pid via fork instead. So in the LaunchDaemon-
+                    # managed case the pidfile is empty/missing. The
+                    # POSIX shell builtin `read` consumes exactly one
+                    # line then exits (SIGPIPE to upstream grep is
+                    # harmless), giving us both `head -1` and
+                    # `awk '{print $1}'` without depending on either.
+                    # When `ps` returns no match (the iOS-5 quirk
+                    # above), pid is reported as `?` -- the actual
+                    # status (`already_running` / `started`) is still
+                    # truthful and the LaunchDaemon plist takes over
+                    # at next boot regardless.
+                    "if ( exec 3<>/dev/tcp/127.0.0.1/8080 ) 2>/dev/null; then`n" +
+                    "  exec 3<&-;`n" +
+                    "  PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
+                    "  if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
+                    "  [ -z `"`$PID`" ] && PID='?';`n" +
+                    "  echo LIGHTTPD_OK pid=`$PID already_running=1;`n" +
+                    "else`n" +
+                    "  /usr/sbin/lighttpd -f /etc/lighttpd/lighttpd.conf;`n" +
+                    "  sleep 2;`n" +
+                    "  if ( exec 3<>/dev/tcp/127.0.0.1/8080 ) 2>/dev/null; then`n" +
+                    "    exec 3<&-;`n" +
+                    "    PID=`$(cat /var/run/lighttpd.pid 2>/dev/null);`n" +
+                    "    if [ -z `"`$PID`" ]; then PID=`$(ps ax 2>/dev/null | grep '[l]ighttpd' | { read p _rest; echo `"`$p`"; }); fi;`n" +
+                    "    [ -z `"`$PID`" ] && PID='?';`n" +
+                    "    echo LIGHTTPD_OK pid=`$PID started=1;`n" +
+                    "  else`n" +
+                    "    echo LIGHTTPD_NO_PID;`n" +
+                    "  fi;`n" +
+                    "fi"
+                )
+                $lOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $startCmd 2>&1) | Out-String
+                if ($lOut -match 'LIGHTTPD_OK pid=(\d+)\s+(already_running|started)=1') {
+                    $how = if ($Matches[2] -eq 'already_running') { 'already serving' } else { 'started' }
+                    Write-Host "  lighttpd: $how pid=$($Matches[1]); LaunchDaemon plist set for boot" -ForegroundColor Green
+                } elseif ($lOut -match 'LIGHTTPD_OK pid=(\d+)') {
+                    # Defensive: pid line without the marker (older format).
+                    Write-Host "  lighttpd: running pid=$($Matches[1]); LaunchDaemon plist set for boot" -ForegroundColor Green
+                } else {
+                    Write-Host "  lighttpd start: $($lOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  lighttpd LaunchDaemon failed: $($_.Exception.Message)" -ForegroundColor Yellow
             }
-        } catch {
-            Write-Host "  lighttpd LaunchDaemon failed: $($_.Exception.Message)" -ForegroundColor Yellow
         }
     }
 
@@ -871,9 +1009,31 @@ foreach ($h in $targets) {
     if ($status -eq "OK" -and $pkgsToInstall) {
         try {
             # Look up the iPad's clientKey via /api/discovery/devices.
+            # The API exposes each client by its registered IP (e.g.
+            # "192.168.1.70"), so we have to translate $hostName ->
+            # IP before the lookup. Without this, -HostFile entries
+            # like "sign1screen4.home.lan" never matched the API's
+            # numeric IP and every device printed a false
+            # "no clientKey ... yet" warning even though it had
+            # registered fine.
+            #
+            # Resolve via .NET DNS (works for mDNS .local/.home.lan
+            # entries on Windows too). If $hostName was already an
+            # IP, GetHostAddresses round-trips it through.
+            $hostIP = $hostName
+            try {
+                $resolved = [System.Net.Dns]::GetHostAddresses($hostName) |
+                    Where-Object { $_.AddressFamily -eq 'InterNetwork' } |
+                    Select-Object -First 1
+                if ($resolved) { $hostIP = $resolved.IPAddressToString }
+            } catch {
+                # Resolution failed; fall through with $hostIP = $hostName
+                # so the API match still works for raw-IP -Hosts callers.
+            }
+
             $devs = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/devices" -TimeoutSec 5
             $devList = if ($devs.devices) { $devs.devices } else { $devs }
-            $thisDev = $devList | Where-Object { $_.ip -eq $hostName } | Select-Object -First 1
+            $thisDev = $devList | Where-Object { $_.ip -eq $hostIP } | Select-Object -First 1
             if ($thisDev -and $thisDev.clientKey) {
                 $body = @{
                     action = "set_cache_mode"
@@ -882,17 +1042,202 @@ foreach ($h in $targets) {
                 } | ConvertTo-Json -Compress
                 $resp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
                     -Method POST -ContentType "application/json" -Body $body -TimeoutSec 5
-                if ($resp.status -eq "SUCCESS") {
+                # api_discovery_configure returns {"success": true} on
+                # every success branch (see server.py:4182). An earlier
+                # version of this script checked $resp.status -eq
+                # "SUCCESS" instead, which printed a false "unexpected"
+                # warning even though the server-side mode update was
+                # applied. Check the actual response shape.
+                if ($resp.success -eq $true) {
                     Write-Host "  cacheMode: server marked $($thisDev.clientKey) as lighttpd-localhost" -ForegroundColor Green
                 } else {
                     Write-Host "  cacheMode response unexpected: $($resp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
                 }
+
+                # Also bring the server-side startScript in sync with
+                # the webclip we just installed (step 5.4g). Without
+                # this, existing clients keep whatever startScript was
+                # baked in at their first onboarding -- typically the
+                # old `uiopen ...; echo START_OK` form -- and the admin
+                # "Start" action launches Safari instead of webapp
+                # mode, even though the iPad has the webclip ready to
+                # go. We push the explicit sbdidlaunch+uiopen-fallback
+                # string here, matching server.py's
+                # DEFAULT_DEVICE_SCRIPTS["startScript"]. Keeping it as a
+                # PowerShell-side literal (not derived from the server)
+                # so the script is self-contained for fleet migrations
+                # without restarting the server.
+                # startScript is the SSH-exec fallback when the
+                # primary VNC-tap launch path fails (Veency
+                # unreachable, screen unresponsive). The primary path
+                # is server.py's _launch_webapp_via_vnc which taps
+                # the home-screen icon (matches the only working
+                # webclip-launch flow on iOS 5). See commit 5569318.
+                $newStartScript = "sbdidlaunch 'com.apple.webapp-4D6F736169634D6573684B696F736B31' 2>/dev/null" +
+                                  " || uiopen '$DisplayUrl'; echo START_OK"
+                $startBody = @{
+                    clientKey = $thisDev.clientKey
+                    startScript = $newStartScript
+                } | ConvertTo-Json -Compress
+                $startResp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $startBody -TimeoutSec 5
+                if ($startResp.success -eq $true) {
+                    Write-Host "  startScript: server-side updated to sbdidlaunch (webapp mode)" -ForegroundColor Green
+                } else {
+                    Write-Host "  startScript update unexpected: $($startResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
+
+                # stopScript: kill the Web.app webclip (the display
+                # client since 2026-06-03's webapp-mode rollout) plus
+                # MobileSafari (legacy / Safari-fallback path), then
+                # autolock + sleep. Same belt-and-suspenders kill
+                # pattern as server.py's DEFAULT_DEVICE_SCRIPTS, kept
+                # PowerShell-side so the onboarding script is
+                # self-contained.
+                $newStopScript = "killall Web 2>/dev/null; " +
+                                 "killall MobileSafari 2>/dev/null; " +
+                                 "activator send switch-on.com.a3tweaks.switch.autolock; " +
+                                 "activator send libactivator.system.sleepbutton; echo STOP_OK"
+                $stopBody = @{
+                    clientKey = $thisDev.clientKey
+                    stopScript = $newStopScript
+                } | ConvertTo-Json -Compress
+                $stopResp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $stopBody -TimeoutSec 5
+                if ($stopResp.success -eq $true) {
+                    Write-Host "  stopScript: server-side updated (kills Web + MobileSafari)" -ForegroundColor Green
+                } else {
+                    Write-Host "  stopScript update unexpected: $($stopResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
+
+                # loginScript: wake + unlock + autolock-off PLUS lock
+                # rotation to portrait. The wall is physically mounted
+                # in portrait orientation; any landscape flip (accidental,
+                # or via Veency input quirks) breaks the layout. Writing
+                # SBOrientationLockedActive + SBOrientationLockedOrientation
+                # through cfprefsd (via `defaults write`) makes SpringBoard
+                # apply the lock without a respring -- see server.py's
+                # DEFAULT_DEVICE_SCRIPTS["loginScript"] for the full
+                # rationale on why we use `su mobile -c` instead of
+                # writing as root. Re-pushing the exact server-side
+                # string from PowerShell keeps onboarding self-contained
+                # for fleet migrations without a server restart.
+                $newLoginScript = "activator send libactivator.lockscreen.dismiss; sleep 1; " +
+                                  "activator send switch-off.com.a3tweaks.switch.autolock; " +
+                                  "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedActive -bool YES' 2>/dev/null; " +
+                                  "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedOrientation -int 1' 2>/dev/null; " +
+                                  "echo LOGIN_OK"
+                $loginBody = @{
+                    clientKey = $thisDev.clientKey
+                    loginScript = $newLoginScript
+                } | ConvertTo-Json -Compress
+                $loginResp = Invoke-RestMethod -Uri "http://192.168.1.60:3000/api/discovery/configure" `
+                    -Method POST -ContentType "application/json" -Body $loginBody -TimeoutSec 5
+                if ($loginResp.success -eq $true) {
+                    Write-Host "  loginScript: server-side updated (rotation lock on wake)" -ForegroundColor Green
+                } else {
+                    Write-Host "  loginScript update unexpected: $($loginResp | ConvertTo-Json -Compress)" -ForegroundColor Yellow
+                }
             } else {
-                Write-Host "  cacheMode: no clientKey for ip=$hostName in discovery API yet" -ForegroundColor DarkYellow
+                Write-Host "  cacheMode: no clientKey for ip=$hostIP (host=$hostName) in discovery API yet" -ForegroundColor DarkYellow
                 Write-Host "                (run onboarding again after iPad first REGISTERs)" -ForegroundColor DarkYellow
             }
         } catch {
             Write-Host "  cacheMode set failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 5.4g) install MosaicMesh as a home-screen webclip so the iPad
+    #       can launch the display page in WEBAPP MODE (no Safari
+    #       chrome, fullscreen across script + video transitions).
+    #       SpringBoard auto-discovers webclips in /var/mobile/Library/
+    #       WebClips on its next launch; step 5.5's killall SpringBoard
+    #       below makes the new icon appear without an extra restart.
+    #
+    #       The Info.plist template (tools/mosaicmesh.webclip.Info.plist)
+    #       has a __URL__ placeholder that we sed-substitute with the
+    #       $DisplayUrl parameter on the iPad after scp -- same idiom
+    #       as the lighttpd config (avoid the bash-heredoc quote-loss
+    #       bug from earlier in the session).
+    #
+    #       Once installed, the icon appears but iOS does NOT auto-
+    #       launch webclips; the operator (or end user) has to tap the
+    #       home-screen icon once to enter webapp mode. Subsequent
+    #       launches from the icon all use webapp mode. iOS 5's
+    #       uiopen $DisplayUrl (used by 5.6 + the boot LaunchDaemon)
+    #       launches Safari -- a separate code path from the webclip.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        # Stable identifier so re-running the script overwrites the
+        # existing webclip instead of creating duplicate icons.
+        # iOS-5 webclip UUIDs are 32-hex-no-hyphens (confirmed from a
+        # real Add-to-Home-Screen result on .70). Using a recognisable
+        # ASCII pattern ("MosaicMeshKiosk1") so the resulting activator
+        # listener id (com.apple.webapp-4D6F...3031) is grep-friendly.
+        $webclipDir = "/var/mobile/Library/WebClips/4D6F736169634D6573684B696F736B31.webclip"
+        $webclipSrc = Join-Path $PSScriptRoot 'mosaicmesh.webclip.Info.plist'
+        if (-not (Test-Path $webclipSrc)) {
+            Write-Host "  webclip: source plist missing at $webclipSrc" -ForegroundColor Yellow
+        } else {
+            try {
+                # First sweep: remove any existing MosaicMesh-titled
+                # webclips. The operator may have manually Added to
+                # Home Screen during initial setup (variant titles
+                # "Mosaicmesh" / "Mosaic Mesh" / "Mosaic mesh", each
+                # with a different random UUID directory), and our
+                # stable-UUID install creates a SEPARATE icon next to
+                # those -- leaving stale duplicates. Match the Title
+                # value (any <string> tag whose content begins with
+                # "Mosaic" case-insensitive) and rm the whole .webclip
+                # dir. Single-quoted bash pattern avoids the
+                # PowerShell -> ssh.exe quote-stripping issue (the
+                # same one that bit us in 5.4c/d/e earlier in the
+                # session). Includes our own stable-UUID webclip so
+                # the subsequent re-create always refreshes the
+                # Info.plist content.
+                # The project name is actually "mosiacmesh" (i-before-a) per
+                # the repo + CLAUDE.md, but the page's <title>MosaicMesh</title>
+                # is spelled correctly (a-before-i). Manual Add-to-Home-
+                # Screen by an operator might capture either spelling
+                # depending on whether they typed it themselves or copied
+                # the page title. Match BOTH "Mosaic" and "Mosiac" so the
+                # cleanup catches all variants.
+                $cleanupCmd = 'for d in /var/mobile/Library/WebClips/*.webclip; do' +
+                              ' [ -d $d ] || continue;' +
+                              ' if grep -E -q -i ''<string>[Mm]os[ai][ai]c'' "$d/Info.plist" 2>/dev/null; then' +
+                              '   rm -rf "$d";' +
+                              ' fi;' +
+                              ' done;' +
+                              ' echo CLEANUP_DONE'
+                $cOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $cleanupCmd 2>&1) | Out-String
+                if ($cOut -match 'CLEANUP_DONE') {
+                    # Quiet success; no log line unless something
+                    # was actually removed (visible via ls below).
+                } else {
+                    Write-Host "  webclip cleanup unexpected: $($cOut.Trim() -replace '\s+',' ')" -ForegroundColor DarkYellow
+                }
+
+                # mkdir; scp; sed-substitute URL; chown/chmod.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    "mkdir -p '$webclipDir'" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy $webclipSrc `
+                    "${User}@${hostName}:$webclipDir/Info.plist" 2>&1 | Out-Null
+                # Pipe-delimited sed so the URL's / characters don't
+                # collide with sed's default delimiter. $DisplayUrl
+                # doesn't contain pipes for any sane HTTP URL.
+                $sedCmd = "sed -i 's|__URL__|$DisplayUrl|' '$webclipDir/Info.plist' && " +
+                          "chown -R mobile:mobile '$webclipDir' && " +
+                          "chmod 755 '$webclipDir' && " +
+                          "chmod 644 '$webclipDir/Info.plist' && " +
+                          "echo WEBCLIP_OK"
+                $wOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $sedCmd 2>&1) | Out-String
+                if ($wOut -match 'WEBCLIP_OK') {
+                    Write-Host "  webclip: installed; step 7 below launches it via sbdidlaunch" -ForegroundColor Green
+                } else {
+                    Write-Host "  webclip install unexpected: $($wOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  webclip install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
         }
     }
 
@@ -901,12 +1246,103 @@ foreach ($h in $targets) {
     #      are on disk but inert (activator listeners empty, send returns 255).
     #      Idempotent: killall returns non-zero if no SpringBoard but that's
     #      harmless. The screen flashes black for ~3s while SpringBoard restarts.
+    #
+    #      NOTE: The dock-pin step (5.4h, below) used to run BEFORE this
+    #      respring. That was wrong: iOS-5 SpringBoard treats /var/mobile/
+    #      Library/WebClips/ as authoritative for which icons should exist
+    #      and on launch RECONCILES IconState.plist against the WebClips
+    #      directory, writing a fresh IconState with newly-discovered
+    #      webclips placed in default positions (NOT the dock). Our
+    #      pre-respring edit was getting stomped on every fresh device --
+    #      verified across the 23 fresh devices in the first fleet rollout
+    #      (none had MosaicMesh on the dock after onboarding completed,
+    #      even though the dock-pin Python helper reported success on each).
+    #      The fix is the reorder below: respring first so SpringBoard
+    #      registers the webclip, then edit IconState, then let step 7's
+    #      second respring pick up the dock position.
     if ($status -eq "OK" -and $pkgsToInstall -and -not $NoRespring) {
         try {
             & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "killall SpringBoard 2>/dev/null; echo RESPRUNG" 2>&1 | Out-String | Out-Null
             Write-Host "  respringed (tweaks now loaded)" -ForegroundColor Green
         } catch {
             Write-Host "  respring failed: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    # 5.4h) pin the MosaicMesh webclip icon to the LEFTMOST dock slot
+    #       in portrait orientation. The admin "Start" action drives
+    #       a VNC tap at the framebuffer coordinate (945, 671) -- the
+    #       only working webclip-launch path on iOS 5 (see commit
+    #       5569318). That coordinate ONLY hits the icon if the icon
+    #       is in dock slot 0 in portrait. Without this step, Start
+    #       would tap an empty area on iPads where SpringBoard
+    #       happened to place the icon elsewhere on the home screen.
+    #
+    #       MUST RUN AFTER 5.5's respring. SpringBoard rewrites
+    #       IconState.plist on launch to include newly-discovered
+    #       webclips, so we need the post-respring state before we edit.
+    #       The brief sleep gives SpringBoard time to scan WebClips/,
+    #       discover MosaicMesh.webclip, and flush the new IconState
+    #       to disk before we pull it down. 5s is empirically sufficient
+    #       on iPad-1 / iOS 5.1.1; step 7's second respring picks up
+    #       the dock-positioned bid we write here.
+    #
+    #       Critical: DesiredIconState.plist must be deleted too.
+    #       That file is iOS-5 SpringBoard's "target layout" -- it gets
+    #       written when the user (or Add-to-Home-Screen) commits a
+    #       layout change, and on every subsequent launch SpringBoard
+    #       reconciles IconState against DesiredIconState, with
+    #       DesiredIconState winning. Every device in the fleet had
+    #       a stale DesiredIconState from a previously-deleted webclip
+    #       (com.apple.webapp-545D...), and SpringBoard was substituting
+    #       our newly-installed webclip into that orphaned slot on
+    #       every respring -- which is why our IconState edit kept
+    #       getting reverted to iconLists[1][3] (page 2, top-right).
+    #       Removing DesiredIconState makes IconState authoritative
+    #       again. SpringBoard does NOT regenerate DesiredIconState
+    #       automatically on respring -- only when the user makes a
+    #       deliberate layout change, at which point it'll reflect
+    #       the (now-correct) dock placement.
+    #
+    #       Approach: scp IconState down, edit with the local Python
+    #       helper (handles dock-overflow + folder traversal), scp
+    #       back, then rm DesiredIconState. step 7's killall SpringBoard
+    #       re-reads IconState with no DesiredIconState to override.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        # Let SpringBoard finish its post-respring WebClips scan + IconState write.
+        Start-Sleep -Seconds 5
+        $webclipBid = 'com.apple.webapp-4D6F736169634D6573684B696F736B31'
+        $remotePath = '/var/mobile/Library/SpringBoard/IconState.plist'
+        $localPlist = Join-Path ([System.IO.Path]::GetTempPath()) "mm-iconstate-$($hostName -replace '\.', '-').plist"
+        $dockHelper = Join-Path $PSScriptRoot '_dock_webapp_icon.py'
+        if (-not (Test-Path $dockHelper)) {
+            Write-Host "  dock pin: helper script missing at $dockHelper" -ForegroundColor Yellow
+        } else {
+            try {
+                # Pull, edit, push back, fix ownership, delete DesiredIconState.
+                # The chmod is 644 (not 600) so the file matches what
+                # SpringBoard itself writes -- a 600 file is still
+                # readable by the owner (mobile) but matching the
+                # native perms avoids any defensive-rewrite edge case.
+                & $scp -i $KeyPath -P $p @sshLegacy "${User}@${hostName}:$remotePath" $localPlist 2>&1 | Out-Null
+                $dockOut = (& python $dockHelper $localPlist $webclipBid 2>&1) | Out-String
+                & $scp -i $KeyPath -P $p @sshLegacy $localPlist "${User}@${hostName}:$remotePath" 2>&1 | Out-Null
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    ("chown mobile:mobile '$remotePath'; chmod 644 '$remotePath'; " +
+                     "rm -f /var/mobile/Library/SpringBoard/DesiredIconState.plist; " +
+                     "sync; echo dock_pin_ok") 2>&1 | Out-Null
+                Remove-Item $localPlist -Force -ErrorAction SilentlyContinue
+                $dockTrim = $dockOut.Trim() -replace '\s+', ' '
+                if ($dockTrim -match 'already at dock slot 0') {
+                    Write-Host "  dock pin: icon already at slot 0 (no change)" -ForegroundColor DarkGreen
+                } elseif ($dockTrim -match 'moved to dock slot 0') {
+                    Write-Host "  dock pin: moved icon to leftmost dock slot" -ForegroundColor Green
+                } else {
+                    Write-Host "  dock pin unexpected: $dockTrim" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  dock pin failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
         }
     }
 
@@ -920,24 +1356,92 @@ foreach ($h in $targets) {
         }
     }
 
-    # 7) open Safari to the MosaicMesh display URL -- joins the mesh and,
-    #    importantly, opens a websocket that keeps iPad-1's WiFi radio in
-    #    active mode (vs power-save). Without this final step the iPad has
-    #    everything installed but the radio idles, making it unreachable
-    #    for lifecycle scripts until something else creates outbound traffic.
+    # 7) launch the MosaicMesh display in WEBAPP MODE via the home-
+    #    screen webclip we installed in step 5.4g. sbdidlaunch takes
+    #    the webclip's bundle id (com.apple.webapp-<UUID>) and asks
+    #    SpringBoard to launch it -- same result as the operator
+    #    tapping the home-screen icon, but no physical interaction
+    #    required. Falls back to uiopen (Safari) if sbdidlaunch fails,
+    #    so iPads that somehow ended up without the webclip still
+    #    join the mesh.
+    #
+    #    Why we need to launch at all: opens a websocket that keeps
+    #    iPad-1's WiFi radio in active mode (vs power-save). Without
+    #    this the iPad has everything installed but the radio idles,
+    #    making it unreachable for lifecycle scripts until something
+    #    else creates outbound traffic.
+    #
     #    Default-on when -InstallTweaks; -NoOpenDisplay opts out.
     if ($status -eq "OK" -and $pkgsToInstall -and -not $NoOpenDisplay) {
-        # Brief sleep so SpringBoard has time to finish respringing before
-        # uiopen tries to launch Safari -- otherwise uiopen can race the
-        # SpringBoard relaunch and the URL doesn't open.
-        $openCmd = "sleep 4; uiopen '$DisplayUrl'; echo OPEN_RC=`$?"
+        # Final launch: respring SpringBoard a SECOND time, wake the
+        # screen, then VNC-tap the MosaicMesh icon at framebuffer
+        # (945, 671). This mimics the admin "Start" path that we
+        # know works (commit 5569318).
+        #
+        # Why we don't use sbdidlaunch here (the prior version did):
+        # sbdidlaunch returns rc=0 but doesn't actually keep the
+        # webclip in foreground -- iOS suspends + reclaims the
+        # launched app within ~1 sec. Worse, that failed-launch
+        # sequence leaves SpringBoard / Veency / mousesupport in a
+        # state where subsequent VNC taps misfire (tap goes through
+        # but hits the wrong icon). Empirically verified: on .50 and
+        # .79, after onboarding + sbdidlaunch, the next VNC tap at
+        # (945, 671) opened Game Center instead of MosaicMesh. After
+        # a fresh respring, the same coordinate launched MosaicMesh
+        # correctly.
+        #
+        # The VNC tap is sent from the SERVER (not the iPad) via
+        # vncdotool through Python. WEBAPP_ICON_FBX/FBY constants
+        # in server.py document the chosen coordinate.
+        # NOTE: api.shutdown() is mandatory after disconnect (and on any
+        # except path). vncdotool builds on Twisted, which spins up a
+        # reactor thread the moment api.connect() runs. proxy.disconnect()
+        # closes the VNC socket but leaves the reactor alive, so the
+        # interpreter never reaches exit -- the print() flushes, but the
+        # Python process keeps running and the parent PowerShell pipeline
+        # blocks forever on Out-String waiting for stdout EOF. Empirical:
+        # step 7 hung indefinitely after a successful tap on the first
+        # dry-run of this device because the prior heredoc lacked the
+        # shutdown call.
+        $vncTapPy = @"
+from vncdotool import api
+import sys, time
+try:
+    proxy = api.connect('${hostName}::5900', password='mosaicmesh', timeout=10)
+    proxy.mouseMove(945, 671)
+    time.sleep(0.3)
+    proxy.mouseDown(1)
+    time.sleep(0.1)
+    proxy.mouseUp(1)
+    proxy.disconnect()
+    print('VNC_TAP_OK', flush=True)
+except Exception as e:
+    print(f'VNC_TAP_FAIL {e}', flush=True)
+    api.shutdown()
+    sys.exit(1)
+api.shutdown()
+"@
         try {
-            $oOut = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" $openCmd 2>&1) | Out-String
-            if ($oOut -match 'OPEN_RC=0') {
-                Write-Host "  Safari opened: $DisplayUrl" -ForegroundColor Green
+            # 1) Second respring (clears post-sbdidlaunch corrupt state)
+            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                "killall SpringBoard 2>/dev/null; echo OK" 2>&1 | Out-Null
+            Start-Sleep -Seconds 8
+            # 2) Wake screen (so VNC tap lands on a live screen)
+            & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                "activator send libactivator.lockscreen.dismiss" 2>&1 | Out-Null
+            Start-Sleep -Seconds 1
+            # 3) VNC tap on dock-leftmost MosaicMesh icon
+            $tapOut = ($vncTapPy | & python -u - 2>&1) | Out-String
+            if ($tapOut -match 'VNC_TAP_OK') {
+                Write-Host "  display opened (webapp mode via VNC tap): $DisplayUrl" -ForegroundColor Green
             } else {
-                $rc = [regex]::Match($oOut, 'OPEN_RC=\d+').Value
-                Write-Host "  uiopen non-zero ($rc): $($oOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                Write-Host "  VNC tap launch failed: $($tapOut.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                # Fallback: uiopen Safari so the iPad still joins the
+                # mesh (keeps WiFi radio active). Operator can switch
+                # to webapp mode later by tapping the home-screen icon.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    "uiopen '$DisplayUrl'; echo OK" 2>&1 | Out-Null
+                Write-Host "  Safari opened (fallback): $DisplayUrl" -ForegroundColor DarkYellow
             }
         } catch {
             Write-Host "  open-display failed: $($_.Exception.Message)" -ForegroundColor Yellow

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    MosaicMesh home-screen webclip. Installed by
+    tools/onboard_devices.ps1 step 5.4g to
+    /var/mobile/Library/WebClips/<UUID>.webclip/Info.plist.
+
+    Key shape matches what iOS-5 Safari's "Add to Home Screen"
+    flow produces natively (probed from a real webclip on a manually-
+    onboarded iPad-1 in this session). Notable choices:
+
+      - FullScreen=true tells iOS-5 to launch the page in WEBAPP
+        MODE (no Safari chrome) from the home-screen icon. Works
+        together with the apple-mobile-web-app-capable meta tag in
+        index.html.
+      - IconIsScreenShotBased=true makes iOS use a screenshot of
+        the page as the icon. Drop an icon.png alongside this
+        Info.plist if you want a custom icon (and set
+        IconIsScreenShotBased=false).
+      - UIStatusBarStyle=UIStatusBarStyleTransparentBlack matches
+        the status-bar-style meta tag in index.html.
+
+    The __URL__ placeholder is sed-substituted with $DisplayUrl
+    at install time -- same template works for any server endpoint.
+-->
+<plist version="1.0">
+<dict>
+    <key>ClassicMode</key>
+    <false/>
+    <key>FullScreen</key>
+    <true/>
+    <key>IconIsPrecomposed</key>
+    <false/>
+    <key>IconIsScreenShotBased</key>
+    <true/>
+    <key>Scale</key>
+    <real>1</real>
+    <key>ScrollPoint</key>
+    <dict>
+        <key>x</key>
+        <real>0.0</real>
+        <key>y</key>
+        <real>0.0</real>
+    </dict>
+    <key>Title</key>
+    <string>MosaicMesh</string>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleTransparentBlack</string>
+    <key>URL</key>
+    <string>__URL__</string>
+</dict>
+</plist>

@@ -73,6 +73,14 @@ SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
                    "-o", "BatchMode=yes"]                # never prompt (unattended)
 # The wall's display page each device opens. Edit for your network.
 DISPLAY_URL = "http://192.168.1.60:3000/"
+# Bundle id of the MosaicMesh home-screen webclip, used by startScript
+# to launch the display in WEBAPP MODE (chrome-less, fullscreen across
+# script + video transitions). The webclip is installed by tools/
+# onboard_devices.ps1 step 5.4g with a stable UUID across the fleet.
+# Falls back to uiopen (Safari) on iPads where the webclip isn't
+# installed yet. Hex spells "MosaicMeshKiosk1" in ASCII for grep-
+# friendliness in `activator listeners` output.
+WEBCLIP_BUNDLE_ID = "com.apple.webapp-4D6F736169634D6573684B696F736B31"
 DEFAULT_DEVICE_SCRIPTS = {
     # Wake + unlock + keep the screen lit, via Activator. State-independent
     # (safe to call regardless of current iPad state): lockscreen.dismiss
@@ -83,16 +91,36 @@ DEFAULT_DEVICE_SCRIPTS = {
     # was already foregrounded on MosaicMesh -- removed so login is safe
     # to fire from any starting state. The SBSettings autolock switch off
     # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
+    # Also locks rotation to PORTRAIT on every login: a wall of iPads
+    # has a fixed physical orientation, so any user-induced rotation
+    # away from portrait (accidental, or by Veency input quirks) must
+    # be reverted before the display layer renders. SBOrientationLocked*
+    # are the prefs SpringBoard reads; `defaults write` routes through
+    # cfprefsd which fires the CFPreferences-change notification that
+    # SpringBoard's observer applies without a respring. Writing as
+    # mobile via `su -c` is mandatory -- root's defaults land in
+    # /var/root/Library/Preferences (wrong place); SpringBoard reads
+    # /var/mobile/Library/Preferences/com.apple.springboard.plist.
+    # Orientation enum is UIInterfaceOrientation: 1 = portrait.
+    # The `2>/dev/null`s keep the loginScript output clean for the
+    # admin UI; the LOGIN_OK terminator is what the server matches on.
     "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
-                    "activator send switch-off.com.a3tweaks.switch.autolock; echo LOGIN_OK",
-    # Open the display page in mobile Safari. Historical minimal form:
-    # uiopen brings Safari to the foreground; if Safari is already at
-    # this URL, no new tab is created (only different URLs stack as
-    # new tabs). Multiple killall+autolock+rm "improvements" I added
-    # later turned out to revert the iPads' awake state -- the boot
-    # LaunchDaemon's autolock-off + an always-running Safari were what
-    # kept the screens lit. Don't fight that.
-    "startScript":  "uiopen '" + DISPLAY_URL + "'; echo START_OK",
+                    "activator send switch-off.com.a3tweaks.switch.autolock; "
+                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedActive -bool YES' 2>/dev/null; "
+                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedOrientation -int 1' 2>/dev/null; "
+                    "echo LOGIN_OK",
+    # Open the display page in WEBAPP MODE via the home-screen webclip
+    # (sbdidlaunch on the webclip's bundle id), falling back to mobile
+    # Safari (uiopen) if the webclip isn't installed on this iPad yet.
+    # Webapp mode gives chrome-less fullscreen across script+video
+    # transitions; Safari mode keeps the URL bar visible and re-enters
+    # iOS native fullscreen per video. See docs/superpowers/specs/
+    # 2026-06-03-cache-progress-and-propagation-ui.md for context.
+    # Like the old uiopen-only form: brings the app to the foreground
+    # without forcing a reload, so a Safari/webapp instance that's
+    # already at this URL just gets refocused.
+    "startScript":  "sbdidlaunch '" + WEBCLIP_BUNDLE_ID + "' 2>/dev/null"
+                    " || uiopen '" + DISPLAY_URL + "'; echo START_OK",
     # Open the display page with the ?tdbg query flag, which the client JS
     # uses to (1) draw an on-screen timing HUD with current playback frame /
     # offset / drift, and (2) stream debug state back to the server log so
@@ -113,10 +141,16 @@ DEFAULT_DEVICE_SCRIPTS = {
                     "uiopen '" + DISPLAY_URL +
                     ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
                     "'; echo TEST_OK",
-    # Close Safari (the display client), re-enable auto-lock (login disabled it to
-    # keep the wall lit), and sleep the screen now via the sleep button. Symmetric
-    # with login: stop -> screen off + allowed to stay asleep.
-    "stopScript":   "killall MobileSafari 2>/dev/null; "
+    # Close the display client (Web.app for the home-screen webclip
+    # since 2026-06-03; MobileSafari for the legacy Safari fallback
+    # path), re-enable auto-lock (start disabled it via the boot
+    # LaunchDaemon's autolock-off), and sleep the screen now via the
+    # sleep button. Killing Web AND MobileSafari is belt-and-suspenders:
+    # whichever was foregrounded gets terminated, and the unused one
+    # is a no-op. Symmetric with start: stop -> screen off + allowed
+    # to stay asleep.
+    "stopScript":   "killall Web 2>/dev/null; "
+                    "killall MobileSafari 2>/dev/null; "
                     "activator send switch-on.com.a3tweaks.switch.autolock; "
                     "activator send libactivator.system.sleepbutton; echo STOP_OK",
     # Full device reboot.
@@ -184,6 +218,51 @@ _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
 # is the real bottleneck. Override:
 #   $env:MMRENDER_HWACCEL = "cuda"   (or "qsv", "d3d11va")
 _VIDEO_HWACCEL = os.environ.get("MMRENDER_HWACCEL") or ""
+
+# Cap on parallel cache-push scps to the iPad fleet. The cache is meant
+# to AVOID WiFi saturation at PLAY time, but if we fire 24 parallel
+# scps right after a render we saturate the same AP and every push
+# times out. With 24 contending streams the per-iPad rate dropped to
+# ~100 KB/s (~2.4 MB/s aggregate, all going to one AP). MMPUSH_
+# CONCURRENCY=2 keeps each push at ~LAN line rate and lets a fresh
+# render's 24x100MB push fan-out complete in ~5-10 min total instead
+# of all timing out.
+_PUSH_CONCURRENCY = int(os.environ.get("MMPUSH_CONCURRENCY") or 2)
+
+# Stall detection: a push is aborted only if no NEW bytes have landed
+# on the iPad's destination file within this window. The poller (see
+# _push_segment_to_cached_clients) ssh's stat -c%s every
+# _PUSH_POLL_INTERVAL_S seconds and signals the push coroutine if the
+# size hasn't increased in _PUSH_STALL_WINDOW_S. This replaces an
+# earlier static 600s per-push timeout, which proved to be the wrong
+# tool: a healthy slow transfer over contended WiFi can legitimately
+# need >10 min for one 100 MB segment; a static ceiling either kills
+# good work (set too tight) or papers over genuine stalls (set too
+# loose). Stall-based detection is strictly better.
+_PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
+# 2s poll was empirically too aggressive on iPad-1: every poll opens a
+# fresh ssh connection through the legacy SHA-1 handshake, which
+# competes with the scp's own connection. iPad-1 sshd seems to limit
+# concurrent connections enough that the actual scp transfer can stall
+# entirely while the poller keeps eating handshake cycles. 5s gives
+# the scp clear runway between polls; with a 30s stall window that's
+# still 5+ polls of evidence before we declare stall.
+_PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
+
+# Lazy module-level semaphore (created on first use, when an event
+# loop is guaranteed to exist; we don't want to bind it to whatever
+# loop happened to be current at import time).
+_push_sem = None
+
+
+def _get_push_sem():
+    """Return the module-level push semaphore, creating it on first
+    use inside the running event loop. Safe to call from any
+    coroutine; not safe to call before any loop has started."""
+    global _push_sem
+    if _push_sem is None:
+        _push_sem = asyncio.Semaphore(_PUSH_CONCURRENCY)
+    return _push_sem
 
 
 def _video_input_args():
@@ -399,11 +478,58 @@ def auto_configure_client(client_key, client):
     
     logging.info(f"Auto-configured client {client.friendlyName} -> {client.displayID}")
 
+def _expected_seg_keys_for_display(display):
+    """Set of seg_KEY strings (token_n) the display CURRENTLY expects
+    to be cached on any lighttpd-localhost iPad in its group. Driven
+    by the display's renderedToken (so a stale cache for a previous
+    render isn't counted as 'have'). Empty set if the display has no
+    renderedToken or no renderable SEGMENT items."""
+    if not display or not getattr(display, "renderedToken", None):
+        return set()
+    token = display.renderedToken
+    keys = set()
+    for i, me in enumerate(getattr(display, "mediaElements", []) or []):
+        if _is_renderable(me) and isVideoItem(me.file) \
+                and me.playmode == PlayMode.SEGMENT:
+            keys.add("%s_%d" % (token, i))
+    return keys
+
+
+def _expected_segments_for_client(client):
+    """Number of seg_ items this client SHOULD have cached given the
+    current rendered token of its display group. Operator-facing
+    convenience; the denominator of propagationPercent."""
+    did = getattr(client, "displayID", None)
+    if not did:
+        return 0
+    return len(_expected_seg_keys_for_display(settings.displays.get(did)))
+
+
+def _propagation_percent_for_client(client):
+    """0-100. Fraction of currently-expected segments this client has
+    in cachedSegments. Returns 100.0 for clients in displays with no
+    renderable segments (vacuously cached -- nothing to propagate).
+    Returns 100.0 for non-iPad / cacheMode=none clients too: the bar
+    is meaningful only for lighttpd-localhost iPads, but we don't want
+    a noisy 0% to drag down aggregates."""
+    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
+        return 100.0
+    did = getattr(client, "displayID", None)
+    if not did:
+        return 100.0
+    expected = _expected_seg_keys_for_display(settings.displays.get(did))
+    if not expected:
+        return 100.0
+    cached = getattr(client, "cachedSegments", set()) or set()
+    have = sum(1 for k in expected if k in cached)
+    return round(100.0 * have / len(expected), 1)
+
+
 def get_discovered_devices():
     """Get all discovered devices with discovery metadata"""
     discovered = []
     current_time = time.time()
-    
+
     for client_key, client in settings.clients.items():
         device_info = {
             "clientKey": client_key,
@@ -437,6 +563,14 @@ def get_discovered_devices():
             # somehow slipped through migrate_client_objects.
             "cacheMode": getattr(client, "cacheMode", "none"),
             "cachedSegments": sorted(list(getattr(client, "cachedSegments", set()) or set())),
+            # Progress-aware fields (2026-06-03 second iteration).
+            # cachePushProgress is None when idle, dict when active --
+            # see Client.cachePushProgress for the schema. The two
+            # derived fields below let dashboards render
+            # "cached N/M (P%)" without computing it themselves.
+            "cachePushProgress": getattr(client, "cachePushProgress", None),
+            "expectedSegments": _expected_segments_for_client(client),
+            "propagationPercent": _propagation_percent_for_client(client),
         }
         discovered.append(device_info)
     
@@ -1532,6 +1666,14 @@ class Client():
         # pipeline). Populated by _push_segment_to_cached_clients on
         # successful scp; pruned by _reconcile_ipad_cache.
         self.cachedSegments = set()
+        # In-memory only (does not persist; meaningful only during a
+        # push). Set to a dict by _push_segment_to_cached_clients when
+        # a push starts; cleared to None when the push ends (success
+        # or stall). Shape: {"token", "n", "bytesSent", "totalBytes",
+        # "startedMs", "lastChangeMs", "status", "mbps"}.
+        # See docs/superpowers/specs/2026-06-03-cache-progress-and-
+        # propagation-ui.md.
+        self.cachePushProgress = None
 
 async def ws_handler(manager, session, msg):
     # sockjs >=0.12 handler signature: (manager, session, msg).
@@ -1853,9 +1995,21 @@ def _do_tap(proxy, cx, cy):
     """Synchronous worker: move pointer + click button 1. Runs in
     the default ThreadPoolExecutor (offloaded from the asyncio loop
     by _auto_arm_client) because vncdotool's proxy methods block
-    on the Twisted reactor's queue dispatch."""
+    on the Twisted reactor's queue dispatch.
+
+    After the click, park the pointer in the corner so the visible
+    mouse cursor drawn by jp.ashikase.mousesupport (a MobileSubstrate
+    tweak veency depends on) doesn't linger over the displayed video.
+    (0, 0) lands the cursor in the top-left corner -- the least
+    obtrusive on-screen position; full off-screen coords get clamped
+    by Veency to the screen bounds, so this is as hidden as we get
+    without a system-wide mousesupport plist change."""
     proxy.mouseMove(cx, cy)
     proxy.mousePress(1)
+    try:
+        proxy.mouseMove(0, 0)
+    except Exception:
+        pass
 
 
 async def _get_pooled_vnc(client_key, ip):
@@ -1928,30 +2082,237 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     dst = ("%s@%s:/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
            % (SSH_USER, client.ip, segment_hash, segment_n))
     cmd = ["scp", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS + [src, dst]
-    proc = None
     try:
+        total_bytes = os.path.getsize(src)
+    except OSError:
+        # Source missing -- scp will fail with a clearer error than
+        # we can produce here, so let it run and surface that via
+        # the existing rc!=0 logging path. Default totalBytes to 0
+        # so cachePushProgress is well-formed; percent will read 0
+        # throughout, which is the truthful signal for a doomed push.
+        total_bytes = 0
+
+    # Throttle: 2026-06-03 production-load discovery -- firing 24
+    # parallel scps over a single AP saturates the WiFi, all of them
+    # crawl at ~100 KB/s, and they all hit a static timeout. We
+    # serialise via _PUSH_CONCURRENCY, AND we now detect stalls by
+    # polling the iPad-side destination file size (see
+    # _poll_push_progress). A push that's making forward progress,
+    # however slowly, runs to completion. Only a transfer that
+    # genuinely stops moving bytes for _PUSH_STALL_WINDOW_S aborts.
+    sem = _get_push_sem()
+    seg_key = "%s_%d" % (segment_hash, segment_n)
+    async with sem:
+        now_ms = int(time.time() * 1000)
+        client.cachePushProgress = {
+            "token": segment_hash,
+            "n": segment_n,
+            "bytesSent": 0,
+            "totalBytes": total_bytes,
+            "startedMs": now_ms,
+            "lastChangeMs": now_ms,
+            "status": "pushing",
+            "mbps": 0.0,
+        }
+        _broadcast_cache_progress(client_key, client)
+
+        stall_event = asyncio.Event()
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        poller = asyncio.ensure_future(
+            _poll_push_progress(client_key, client, stall_event, proc))
+        communicate_task = asyncio.ensure_future(proc.communicate())
+        stall_task = asyncio.ensure_future(stall_event.wait())
         try:
-            out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            logging.warning("cache-push %s seg_%s_%d: timeout",
-                            client_key, segment_hash, segment_n)
-            return
-        if proc.returncode == 0:
-            client.cachedSegments.add("%s_%d" % (segment_hash, segment_n))
-            logging.info("cache-push: %s seg_%s_%d -> %s",
-                         client_key, segment_hash, segment_n, client.ip)
-        else:
-            tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
-            logging.warning("cache-push rc=%s for %s seg_%s_%d: %s",
-                            proc.returncode, client_key,
-                            segment_hash, segment_n, " | ".join(tail))
+            done, pending = await asyncio.wait(
+                {communicate_task, stall_task},
+                return_when=asyncio.FIRST_COMPLETED)
+            if stall_task in done and communicate_task not in done:
+                # Stall path: poller signalled, scp hasn't finished.
+                # Kill scp, then await the ORIGINAL communicate task
+                # (now unblocked by SIGKILL on the child). Crucially
+                # we DO NOT call proc.communicate() a second time here
+                # -- asyncio's Process only allows one pending read at
+                # a time, and a second call collides with
+                # communicate_task with "read() called while another
+                # coroutine is already waiting for incoming data".
+                proc.kill()
+                try:
+                    await asyncio.wait_for(communicate_task, timeout=5)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                sent = client.cachePushProgress.get("bytesSent", 0) \
+                    if client.cachePushProgress else 0
+                logging.warning(
+                    "cache-push %s seg_%s_%d: stalled (no progress for %ds, "
+                    "%d/%d bytes)",
+                    client_key, segment_hash, segment_n,
+                    _PUSH_STALL_WINDOW_S, sent, total_bytes)
+                if client.cachePushProgress is not None:
+                    client.cachePushProgress["status"] = "stalled"
+                    _broadcast_cache_progress(client_key, client)
+                return
+            # scp finished first
+            stall_task.cancel()
+            _out, err = await communicate_task
+            if proc.returncode == 0:
+                client.cachedSegments.add(seg_key)
+                if client.cachePushProgress is not None:
+                    client.cachePushProgress["bytesSent"] = total_bytes
+                    client.cachePushProgress["status"] = "cached"
+                    _broadcast_cache_progress(client_key, client)
+                logging.info("cache-push: %s seg_%s_%d -> %s",
+                             client_key, segment_hash, segment_n, client.ip)
+            else:
+                tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
+                logging.warning("cache-push rc=%s for %s seg_%s_%d: %s",
+                                proc.returncode, client_key,
+                                segment_hash, segment_n, " | ".join(tail))
+        except Exception as e:  # noqa: BLE001
+            logging.warning("cache-push exception for %s seg_%s_%d: %s",
+                            client_key, segment_hash, segment_n, e)
+        finally:
+            poller.cancel()
+            try:
+                await poller
+            except (asyncio.CancelledError, Exception):
+                pass
+            # Clear transient progress state. The cached-status broadcast
+            # above (if applicable) is what consumers see; the in-memory
+            # dict is reset to None so subsequent /api/discovery/devices
+            # reads show idle.
+            client.cachePushProgress = None
+
+
+async def _poll_push_progress(client_key, client, stall_event, proc):
+    """Sibling coroutine to _push_segment_to_cached_clients. Opens
+    ONE long-running ssh connection that emits the destination
+    file's size every _PUSH_POLL_INTERVAL_S seconds (via a shell
+    loop on the iPad). Reads each line of stdout to update
+    client.cachePushProgress, broadcast CACHE_PROGRESS, and detect
+    stalls. Exits + closes its ssh when the enclosing push coroutine
+    cancels us (success or stall path) or when scp finishes.
+
+    Why one long-lived connection rather than per-poll connections:
+    iPad-1 sshd has a tight concurrent-connection limit. Opening a
+    fresh ssh every poll competes for handshake slots with the scp
+    itself, which can starve the very transfer we're watching --
+    bytes never move, the stall window fires erroneously, the
+    push is aborted by us not by reality. One ssh per push keeps
+    the poller's network footprint trivial relative to the
+    transfer."""
+    prog = client.cachePushProgress
+    if prog is None:
+        return
+    seg_path = ("/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
+                % (prog["token"], prog["n"]))
+    # The remote shell loop: print size (0 if file missing) every
+    # _PUSH_POLL_INTERVAL_S seconds, forever. We rely on ssh process
+    # cancellation (poller.cancel() in the push coroutine's finally
+    # block) to close this when the push ends. The interval lives
+    # on the iPad side so we don't pay handshake cost per sample.
+    poll_script = (
+        "F=%s; while true; do "
+        "if [ -f $F ]; then stat -c%%s $F; else echo 0; fi; "
+        "sleep %d; "
+        "done"
+    ) % (seg_path, int(_PUSH_POLL_INTERVAL_S))
+    ssh_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
+               + ["-T",   # disable TTY allocation; we're just streaming bytes
+                  "%s@%s" % (SSH_USER, client.ip),
+                  poll_script])
+    poll_proc = None
+    last_broadcast_bytes = -1
+    seen_nonzero = False
+    try:
+        poll_proc = await asyncio.create_subprocess_exec(
+            *ssh_cmd, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL)
+        while proc.returncode is None:
+            try:
+                line = await asyncio.wait_for(
+                    poll_proc.stdout.readline(),
+                    timeout=_PUSH_POLL_INTERVAL_S + 5)
+            except asyncio.TimeoutError:
+                line = b""
+            if proc.returncode is not None:
+                return
+            if client.cachePushProgress is None:
+                return
+            try:
+                sz = int((line or b"0").strip() or 0)
+            except ValueError:
+                sz = 0
+            now_ms = int(time.time() * 1000)
+            if sz > client.cachePushProgress["bytesSent"]:
+                if not seen_nonzero and sz > 0:
+                    seen_nonzero = True
+                elapsed_s = max(0.001,
+                                (now_ms - client.cachePushProgress["startedMs"])
+                                / 1000.0)
+                client.cachePushProgress["bytesSent"] = sz
+                client.cachePushProgress["lastChangeMs"] = now_ms
+                client.cachePushProgress["mbps"] = round(
+                    sz / 1024.0 / 1024.0 / elapsed_s, 2)
+                if sz != last_broadcast_bytes:
+                    _broadcast_cache_progress(client_key, client)
+                    last_broadcast_bytes = sz
+            else:
+                # No new bytes since last lastChangeMs update. Only
+                # treat this as a stall AFTER we've observed at least
+                # one non-zero size -- before that, scp is legitimately
+                # in setup (ssh handshake, key exchange, remote file
+                # open). On iPad-1's SHA-1 sshd this can take 30s+ on
+                # contended WiFi. Killing a transfer that hasn't
+                # had a chance to start writing yet is a regression
+                # vs. the static-timeout approach we replaced.
+                if not seen_nonzero:
+                    continue
+                stalled_ms = now_ms - client.cachePushProgress["lastChangeMs"]
+                if stalled_ms >= _PUSH_STALL_WINDOW_S * 1000:
+                    stall_event.set()
+                    return
+    finally:
+        if poll_proc is not None:
+            try:
+                poll_proc.kill()
+                await poll_proc.wait()
+            except Exception:
+                pass
+
+
+def _broadcast_cache_progress(client_key, client):
+    """Emit a SockJS CACHE_PROGRESS message reflecting
+    client.cachePushProgress. Broadcast DEST=ALL; admin.html listens
+    for it, iPads have no handler and silently drop it. Safe to call
+    when cachePushProgress is None (used as a clear/no-op ping)."""
+    prog = client.cachePushProgress or {}
+    total = prog.get("totalBytes", 0) or 0
+    sent = prog.get("bytesSent", 0) or 0
+    percent = (100.0 * sent / total) if total else 0.0
+    payload = {
+        "clientKey": client_key,
+        "ip": getattr(client, "ip", ""),
+        "displayID": getattr(client, "displayID", None),
+        "token": prog.get("token"),
+        "n": prog.get("n"),
+        "bytesSent": sent,
+        "totalBytes": total,
+        "percent": round(percent, 1),
+        "mbps": prog.get("mbps", 0.0),
+        "status": prog.get("status", "cached"),
+    }
+    try:
+        socketmanager.broadcast(jsonpickle.encode({
+            "DEST": "ALL",
+            "REQUEST": "CACHE_PROGRESS",
+            "PAYLOAD": payload,
+        }))
     except Exception as e:  # noqa: BLE001
-        logging.warning("cache-push exception for %s seg_%s_%d: %s",
-                        client_key, segment_hash, segment_n, e)
+        # SockJS broadcast errors are noisy and non-fatal -- we don't
+        # want a misbehaving consumer to spam logs at poll rate.
+        logging.debug("CACHE_PROGRESS broadcast failed for %s: %s",
+                      client_key, e)
 
 
 async def _reconcile_ipad_cache(client):
@@ -2020,6 +2381,54 @@ async def _reconcile_ipad_cache(client):
                           client.clientKey, s, e)
 
 
+# Veency-side framebuffer coordinate of the MosaicMesh home-screen
+# webclip icon when the iPad is in portrait orientation and the
+# operator has dragged the icon to the LEFTMOST dock slot. The
+# framebuffer is always landscape 1024x768 regardless of iPad
+# orientation, rotated 90 CCW from the portrait user view -- so the
+# user's portrait (96, 945) lands at framebuffer (945, 671). This
+# pair was empirically verified on .50 (sign1screen1) in this
+# session. If you reposition the icon, update this constant.
+# See docs/superpowers/specs/ for the rationale: iOS 5 doesn't
+# expose a CLI launcher that includes a webclip's URL context, so
+# the only reliable "launch the webclip" path is to drive
+# SpringBoard's own tap-handler via VNC.
+WEBAPP_ICON_FBX = 945
+WEBAPP_ICON_FBY = 671
+
+
+async def _launch_webapp_via_vnc(client_key):
+    """Launch the MosaicMesh home-screen webclip by sending a VNC
+    tap at the icon's framebuffer coordinate. The iPad's SpringBoard
+    receives the tap, reads the webclip's Info.plist (including its
+    URL context), and launches Web.app with that URL -- the same
+    code path a human finger triggers. Best-effort: a missing pool
+    entry / handshake failure just logs.
+
+    Requires the operator to have dragged the MosaicMesh icon to the
+    LEFTMOST dock slot on each iPad (in portrait orientation). The
+    onboarding script's webclip install (step 5.4g) creates the icon
+    but does not pin its position; that's a one-time per-iPad
+    manual step."""
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        logging.warning("launch-webapp %s: no client/ip", client_key)
+        return False
+    loop = asyncio.get_event_loop()
+    try:
+        proxy = await _get_pooled_vnc(client_key, client.ip)
+        await loop.run_in_executor(None, _do_tap, proxy,
+                                   WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
+        logging.info("launch-webapp: VNC-tapped %s at fb(%d,%d)",
+                     client_key, WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
+        return True
+    except Exception as e:  # noqa: BLE001
+        await _drop_pooled_vnc(client_key)
+        logging.warning("launch-webapp tap failed for %s: %s",
+                        client_key, e)
+        return False
+
+
 async def _auto_arm_client(client_key):
     """Deliver one Veency VNC tap (screen centre) to arm an un-armed
     iOS device. Holds one persistent VNC connection per iPad in
@@ -2065,6 +2474,56 @@ async def _run_device_script(client_key, which):
     if not client or not getattr(client, "ip", ""):
         logging.warning("run-script %s %s: no client/ip", client_key, which)
         return (None, "no-ip")
+
+    # Special-case "start": iOS 5 / iPad-1 has no CLI launcher that
+    # passes a webclip's URL context to Web.app, so neither sbdidlaunch
+    # nor `open <bundle-id>` nor `activator send` actually launch the
+    # MosaicMesh webapp foreground with content (we tried all of them
+    # in the 2026-06-03 session). The only working "launch the
+    # webclip" path is SpringBoard's own tap handler. So for "start"
+    # we (a) SSH-run the loginScript first to wake the screen +
+    # disable autolock, then (b) VNC-tap the icon's framebuffer
+    # coordinate (WEBAPP_ICON_FBX, WEBAPP_ICON_FBY) -- which requires
+    # the operator to have dragged the icon to the leftmost dock slot
+    # in portrait orientation on each iPad. Falls back to SSH-exec of
+    # startScript if the VNC tap fails (Veency unreachable, pool
+    # exhausted, etc.) so non-iPad-1 devices and emergency
+    # uiopen-to-Safari paths still work.
+    if which == "start":
+        # Wake the screen only -- send libactivator.lockscreen.dismiss
+        # (wakes if asleep, no-ops if awake). Do NOT also call the
+        # autolock switch-off here: it produces a transient "Autolock
+        # disabled" popup that intercepts the VNC tap below. Autolock
+        # is already off from the boot LaunchDaemon (5.4a) which fires
+        # the same switch-off command 30s after every boot, so the
+        # autolock state is correct system-wide regardless.
+        wake_script = "activator send libactivator.lockscreen.dismiss"
+        login_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
+                     ["%s@%s" % (SSH_USER, client.ip), wake_script])
+        try:
+            wake = await asyncio.create_subprocess_exec(
+                *login_cmd, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+            try:
+                await asyncio.wait_for(wake.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                try: wake.kill(); await wake.wait()
+                except Exception: pass
+        except Exception as e:  # noqa: BLE001
+            logging.warning("run-script %s start: wake step failed: %s",
+                            client_key, e)
+        # Brief settle delay so SpringBoard has finished the wake
+        # animation before we tap -- otherwise the tap can land
+        # mid-transition and SpringBoard ignores it.
+        await asyncio.sleep(0.8)
+        ok = await _launch_webapp_via_vnc(client_key)
+        if ok:
+            return (0, "VNC_TAP_OK")
+        logging.warning("run-script %s start: VNC tap failed, "
+                        "falling back to startScript SSH exec",
+                        client_key)
+        # Fall through to the generic SSH path below.
+
     field = which + "Script"
     script = getattr(client, field, None) or DEFAULT_DEVICE_SCRIPTS.get(field)
     if not script:
@@ -2715,13 +3174,18 @@ def msg_response(msg,session):
 
     elif(msg["REQUEST"] == "RELOAD"):
         # Admin command: tell display clients to hard-reload so they pick up new
-        # client JS/HTML. Scoped to one display group when PAYLOAD.displayID is
-        # given (only that group's members reload), otherwise every connected
-        # client via DEST="ALL". The client reloads only on a RELOAD addressed to
-        # it or to "ALL", so the control console isn't reloaded by a group reload.
+        # client JS/HTML. Three scopes:
+        #   PAYLOAD.clientKey -> only that one iPad (single-device probe)
+        #   PAYLOAD.displayID -> only that group's members
+        #   otherwise        -> every connected client via DEST="ALL"
+        # The client reloads only on a RELOAD addressed to its own UDID or to
+        # "ALL", so the control console isn't reloaded by a group reload.
         payload = msg.get("PAYLOAD")
+        client_key = payload.get("clientKey") if isinstance(payload, dict) else None
         display_id = payload.get("displayID") if isinstance(payload, dict) else None
-        if display_id:
+        if client_key:
+            broadcast_to_client(client_key, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
+        elif display_id:
             broadcast_to_display_group(display_id, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
         else:
             socketmanager.broadcast(jsonpickle.encode(
@@ -3022,7 +3486,16 @@ async def index_handler(request):
                 ct = 'text/css'
 
     logging.debug(ct)
-    return web.Response(body=data,content_type=ct)
+    # no-cache so a RELOAD broadcast actually delivers updated HTML/JS
+    # to iPad-1 Safari. Without this header, iPad-1's aggressive disk
+    # cache happily served stale index.html / inline scripts even after
+    # a sock.send(RELOAD) -- a real bug we hit during the 2026-06-03
+    # client-UX rollout (audio + fullscreen edits invisible until
+    # explicitly reloaded again with no-cache). The actual byte cost
+    # is negligible (a fleet RELOAD is rare) and these are small files.
+    headers = {"Cache-Control": "no-cache, no-store, must-revalidate",
+               "Pragma": "no-cache", "Expires": "0"}
+    return web.Response(body=data, content_type=ct, headers=headers)
 
 async def image_handler(request):
     logging.debug("IMAGE_HANDLER")
@@ -3153,8 +3626,15 @@ async def javascript_handler(request):
     if( os.path.isfile(file_path)):
         data = get_cached_file(file_path)
         if data is not None:
-            return web.Response(body=data, content_type='text/javascript')
-    
+            # See index_handler comment: iPad-1 needs explicit no-cache
+            # so a RELOAD actually delivers updated JS (mosiacmesh.js,
+            # GoTime.js). The server-side get_cached_file still caches
+            # the file contents in memory.
+            headers = {"Cache-Control": "no-cache, no-store, must-revalidate",
+                       "Pragma": "no-cache", "Expires": "0"}
+            return web.Response(body=data, content_type='text/javascript',
+                                headers=headers)
+
     return web.Response(status=404, reason='NOT FOUND')
 
 def generateAruco(displayID = None):
@@ -4087,12 +4567,49 @@ async def api_discovery_stats(request):
         gid = d["displayID"] or "default"
         display_groups[gid] = display_groups.get(gid, 0) + 1
     total = cache_stats['hits'] + cache_stats['misses']
+
+    # Per-display-group cache propagation: counts each lighttpd-
+    # localhost iPad in the group as one of {fullyCached, pushing,
+    # stalled, idle}. Empty for groups without a renderedToken or
+    # without renderable SEGMENT items -- the bar is meaningless
+    # there and the admin UI uses absence to hide the widget.
+    group_prop = {}
+    for did, display in settings.displays.items():
+        expected_keys = _expected_seg_keys_for_display(display)
+        if not expected_keys:
+            continue
+        total_g = 0
+        full = pushing = stalled = idle = 0
+        for k, c in settings.clients.items():
+            if getattr(c, "displayID", None) != did:
+                continue
+            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
+                continue
+            total_g += 1
+            cached = getattr(c, "cachedSegments", set()) or set()
+            if expected_keys.issubset(cached):
+                full += 1
+            elif getattr(c, "cachePushProgress", None):
+                if c.cachePushProgress.get("status") == "stalled":
+                    stalled += 1
+                else:
+                    pushing += 1
+            else:
+                idle += 1
+        if total_g > 0:
+            group_prop[did] = {
+                "total": total_g, "fullyCached": full,
+                "pushing": pushing, "stalled": stalled, "idle": idle,
+                "percent": round(100.0 * full / total_g, 1),
+            }
+
     return web.json_response({
         "success": True,
         "totalDevices": len(devices),
         "onlineDevices": len([d for d in devices if d["isOnline"]]),
         "autoConfiguredDevices": len([d for d in devices if d["autoConfigured"]]),
         "displayGroups": display_groups,
+        "displayGroupPropagation": group_prop,
         "cacheStats": {
             "hits": cache_stats['hits'],
             "misses": cache_stats['misses'],
@@ -4111,6 +4628,13 @@ async def api_discovery_configure(request):
         clear measuredPerimeter (force a re-calibrate at the new orientation)
       - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
         "none", "lighttpd-localhost", or "service-worker"
+      - {"action": "force_push", "displayID"} -> re-trigger cache-push
+        scps for the named display's CURRENT renderedToken to every
+        lighttpd-localhost iPad in that group, without re-running
+        ffmpeg. Recovery path for when an earlier render's push fan-out
+        failed (e.g. WiFi saturated, network blip, server crashed
+        mid-push). Pushes are still throttled via _PUSH_CONCURRENCY,
+        so this is safe to call without re-saturating the AP.
 
     (The action-based forms preserve the contract that discovery.html uses.)
     """
@@ -4131,6 +4655,88 @@ async def api_discovery_configure(request):
                 configured += 1
         saveSettings()
         return web.json_response({"success": True, "configured": configured})
+
+    if action == "clear_cache":
+        # Operator/test helper: drop a client's server-side
+        # cachedSegments record so the next force_push (or
+        # subsequent render) re-pushes the segments. Doesn't touch
+        # the actual files on the iPad (lighttpd will keep serving
+        # stale-but-byte-identical content until the push lands a
+        # newer copy). With no clientKey, clears all
+        # lighttpd-localhost clients (handy for re-running an
+        # acceptance test from scratch).
+        ck = data.get("clientKey")
+        cleared = 0
+        if ck:
+            c = settings.clients.get(ck)
+            if not c:
+                return web.json_response(
+                    {"success": False, "error": "Client not found"}, status=404)
+            c.cachedSegments = set()
+            cleared = 1
+        else:
+            for c in settings.clients.values():
+                if getattr(c, "cacheMode", "none") == "lighttpd-localhost":
+                    c.cachedSegments = set()
+                    cleared += 1
+        saveSettings()
+        logging.info("clear_cache: cleared cachedSegments on %d client(s)", cleared)
+        return web.json_response({"success": True, "cleared": cleared})
+
+    if action == "force_push":
+        # Recovery path: replay the post-render push hook for an
+        # already-rendered display, without paying the ffmpeg cost
+        # again. Walks the current display's mediaElements, finds
+        # SEGMENT items, and queues _push_segment_to_cached_clients
+        # for each (lighttpd-localhost iPad, segment_index) pair that
+        # ISN'T already in client.cachedSegments. Returns the count of
+        # pushes queued; actual completion is logged via the existing
+        # cache-push: INFO lines.
+        display_id = data.get("displayID")
+        if not display_id:
+            return web.json_response(
+                {"success": False, "error": "displayID required"}, status=400)
+        display = settings.displays.get(display_id)
+        if not display:
+            return web.json_response(
+                {"success": False, "error": "display not found"}, status=404)
+        token = getattr(display, "renderedToken", "") or ""
+        if not token:
+            return web.json_response(
+                {"success": False,
+                 "error": "no renderedToken yet -- run RENDER first"},
+                status=409)
+        # Identify segment items by enumerated position (matches what
+        # render_group_async + _per_client_items use as the index).
+        seg_indices = [i for i, me in enumerate(display.mediaElements)
+                       if _is_renderable(me) and isVideoItem(me.file)
+                       and me.playmode == PlayMode.SEGMENT]
+        queued = 0
+        skipped_cached = 0
+        skipped_no_perim = 0
+        for key, c in _group_clients(display_id):
+            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
+                continue
+            if c.measuredPerimeter is None:
+                skipped_no_perim += 1
+                continue
+            cached = getattr(c, "cachedSegments", set()) or set()
+            for n in seg_indices:
+                seg_key = "%s_%d" % (token, n)
+                if seg_key in cached:
+                    skipped_cached += 1
+                    continue
+                asyncio.ensure_future(
+                    _push_segment_to_cached_clients(key, token, n))
+                queued += 1
+        logging.info("force_push: display=%r token=%s queued=%d "
+                     "skipped_cached=%d skipped_no_perim=%d",
+                     display_id, token, queued, skipped_cached,
+                     skipped_no_perim)
+        return web.json_response({"success": True, "queued": queued,
+                                  "skipped_cached": skipped_cached,
+                                  "skipped_no_perim": skipped_no_perim,
+                                  "token": token})
 
     client_key = data.get("clientKey")
     if not client_key:
@@ -4262,6 +4868,10 @@ def migrate_client_objects():
             client.cacheMode = "none"
         if not hasattr(client, 'cachedSegments'):
             client.cachedSegments = set()
+        # cachePushProgress is transient (a push is meaningful only
+        # while the process is live), so unconditionally reset on
+        # startup -- any state in settings.dat is stale.
+        client.cachePushProgress = None
         # Backfill lifecycle-script defaults onto devices registered before the
         # automation existed (their fields are absent/None -> show as null).
         _apply_default_scripts(client)
