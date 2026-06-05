@@ -57,6 +57,17 @@ Still relevant:
 
 **Device discovery & auto-config.** `mosaicmesh.api.discovery.auto_configure_client` maps `deviceType` → display group ("Mobile"/"Tablet"/"Desktop"/"Default"), derives a friendly name, and tags capabilities (HD/touch/keyboard). A parallel **REST** surface (`/api/discovery/devices`, `/stats`, `/configure`) is handled by the `api_discovery_devices` / `api_discovery_stats` / `api_discovery_configure` handlers in `mosaicmesh.api.discovery` and returns plain JSON for the admin/discovery HTML pages. The background `process()` loop (in `server.py`) marks clients stale after 60s of silence and emits `DISCOVERY_HEARTBEAT` / `CLIENTS_WENT_OFFLINE` broadcasts.
 
+**REST API surface for the admin UI.** The new admin timeline view (PR-4) hydrates from REST endpoints, one module per resource under `mosaicmesh/api/`:
+
+  - `/api/playlists` (GET / POST / PUT / DELETE) — `mosaicmesh/api/playlists.py`
+  - `/api/schedules` (GET / POST / PUT / DELETE) — `mosaicmesh/api/schedules.py`
+  - `/api/profiles`  (GET / POST / PUT / DELETE) + `POST /api/clients/{key}/profile` — `mosaicmesh/api/profiles.py`
+  - `/api/media`     (GET) + `/upload/{dest}` (POST) — `mosaicmesh/api/media.py`
+
+All mutating endpoints use `If-Match: <_serverVersion>` for optimistic concurrency. The helper module `mosaicmesh/api/_concurrency.py` centralizes the header parsing + 412/428 response shapes. Successful PUTs bump the target's `_serverVersion` by 1; the response always echoes the new version on the returned resource. DELETE on `Playlist` or `ScriptingProfile` returns 409 + a `refs` list when the resource is referenced by a Schedule or Client respectively.
+
+Response convention (matches `/api/discovery/configure`): `{success: true, ...}` on success, `{success: false, error: "..."}` on error. HTTP status per resource: 201 create, 204 delete, 400 validation, 404 missing, 409 conflict, 412 stale If-Match, 428 missing If-Match.
+
 **Physical-layout calibration (OpenCV/ArUco).** This is the distinctive part. `generateAruco()` writes a unique DICT_6X6_50 marker per client to `media/<clientID>/images/aruco.png` and tells each client to display it. A user photographs the wall of screens and POSTs it to `/upload/calibrate`; `calibrate()` detects the markers, maps each marker ID back to a client, and records `measuredCenter`/`measuredPerimeter` so the server knows where each physical screen sits. `find_squares`/`angle_cos` are contour helpers for this.
 
 **Clock synchronization.** Synchronized playback relies on `js/GoTime.js`, which estimates client-vs-server offset by polling `/time` (and over the websocket via the `SERVERTIME` request). Media playback targets are aligned to this shared clock so frames advance together across displays.
@@ -79,6 +90,11 @@ Still relevant:
   - `websocket/typed.py` — `handle_websocket_message` (async typed protocol; intended replacement for `msg_response` but **NOT YET wired into `ws_handler`** — only exercised by direct test calls).
   - `websocket/dispatch.py` — `ws_handler` (SockJS connection lifecycle) + `handle_client_disconnect`. `ws_handler.MESSAGE` dispatches only to `msg_response` — wiring the typed handler in is a future task.
   - `api/discovery.py` — `auto_configure_client` (deviceType → displayID), `get_discovered_devices`, `sync_new_client_to_group`, the cache-push propagation calculators (`_expected_seg_keys_for_display`, `_expected_segments_for_client`, `_propagation_percent_for_client`), and the three `/api/discovery/*` aiohttp REST handlers (`api_discovery_devices`, `api_discovery_stats`, `api_discovery_configure`).
+  - `api/playlists.py` — REST CRUD for `Playlist` (GET/POST/PUT/DELETE /api/playlists; If-Match concurrency; 409+refs on DELETE when referenced by a Schedule).
+  - `api/schedules.py` — REST CRUD for `Schedule` with foreign-key validation (playlistName + displayID must exist), freq + byweekday + HH:MM time format + end-dict shape checks; id auto-generated server-side (uuid4-16hex).
+  - `api/profiles.py`  — REST CRUD for `ScriptingProfile` + per-client assignment (`POST /api/clients/{key}/profile`). PR-2 only ships the CRUD shell; PR-3 wires dispatcher behavior + bootstrap default.
+  - `api/media.py`     — `GET /api/media` (lists media/server/{images,videos} + per-video durations); `POST /upload/{dest}` (multipart upload routed to calibrate/image/video processors). Relocated from server.py in PR-2.
+  - `api/_concurrency.py` — shared If-Match parsing + 412/428 response helpers used by playlists, schedules, profiles.
 - `js/mosiacmesh.js` — client connection logic, UDID cookie, SockJS wiring, message construction (`generateMessage`).
 - `js/GoTime.js` — clock-sync library used for synchronized playback.
 - `*.html` (root) — `index` (display client), `admin` (control), `discovery` (device management).
