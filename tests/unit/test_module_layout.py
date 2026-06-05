@@ -285,3 +285,8 @@ def test_websocket_legacy_importable():
 def test_websocket_typed_importable():
     from mosaicmesh.websocket.typed import handle_websocket_message
     assert callable(handle_websocket_message)
+
+def test_websocket_dispatch_importable():
+    from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
+    assert callable(ws_handler)
+    assert callable(handle_client_disconnect)
