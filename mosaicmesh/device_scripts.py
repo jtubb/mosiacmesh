@@ -139,6 +139,13 @@ WEBAPP_ICON_FBY = 671
 # and _auto_arm_client should be updated to call through the dispatcher
 # instead of reaching directly. Removing the cross-import is a PR-3
 # follow-up; for PR-1 the smell is bounded and documented.
+#
+# Style note: this module uses `import server as _server` (with the leading-
+# underscore alias) rather than the bare `import server` used elsewhere in
+# the mosaicmesh package. No functional difference — the alias visually
+# distinguishes "reach-back to legacy" usages from the more common pattern.
+# If a future PR-3 cleanup removes these reach-backs entirely, the alias
+# goes with them.
 async def _drop_pooled_vnc(client_key):
     """Evict and disconnect a pooled VNC client. Safe to call when
     the client_key isn't pooled (no-op). Called on per-tap failure

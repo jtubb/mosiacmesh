@@ -49,7 +49,7 @@ from mosaicmesh.broadcast import (
 )
 from mosaicmesh.calibration import (
     order_points, _draw_fitted_label, group_bounding_box,
-    reconstruct_screen_quad, _quad_box, _quad_iou, _quad_aspect,
+    reconstruct_screen_quad, _quad_box, _quad_aspect,
     _aspect_in_marker_frame, reconcile_screen_quad, _render_output_dims,
     warp_image_for_screen, _hex_to_bgr, letterbox_to_aspect,
     assign_group_bounding_boxes, _group_clients,
@@ -1337,13 +1337,14 @@ def _quad_iou(q1, q2):
     bounding-box approximation -- fast and good enough for the "did these
     two quads accidentally trace the same compound region?" decision.
 
-    NOTE: mosaicmesh.calibration also defines _quad_iou, but with the
+    NOTE: mosaicmesh.calibration ALSO defines _quad_iou, but with the
     PRECISE convex intersection (cv.intersectConvexConvex) for the
     marker/border reconciliation pipeline. The two are intentionally
     different algorithms for different call sites; do not merge them.
     This AABB version is local to server.py because it's only used by
-    the _drop_overlapping helper in the screen-quad detection pipeline,
-    where it shadows the calibration import in server.py's namespace.
+    the _drop_overlapping helper in the screen-quad detection pipeline.
+    server.py does NOT re-export _quad_iou from mosaicmesh.calibration
+    (the calibration version stays internal to that module).
     """
     x1, y1, w1, h1 = cv.boundingRect(q1)
     x2, y2, w2, h2 = cv.boundingRect(q2)
