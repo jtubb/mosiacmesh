@@ -105,6 +105,7 @@ export function mmTimelineComponent() {
           html += clipDayHtml({ placement: p, viewDateMs: win.startMs, conflictRanges });
         }
       }
+      html += `<div class="mm-now-line"></div>`;
       html += `</div>`;
       return html;
     },
@@ -219,6 +220,7 @@ export function mmTimelineComponent() {
           </div>
         `;
       }
+      html += `<div class="mm-now-line"></div>`;
       html += `</div>`;
       return html;
     },

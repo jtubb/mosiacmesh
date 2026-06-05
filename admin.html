@@ -1063,6 +1063,12 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .cache-propagation.stalled .cache-propagation-counts { color: #d32f2f;
     font-weight: 600; }
 /* ===== Timeline Day-view grid ===== */
+.mm-day-grid, .mm-week-grid { position: relative; }
+.mm-now-line {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--err, red); pointer-events: none;
+  left: 0; z-index: 5;
+}
 .mm-day-grid { font-size: 12px; }
 .mm-week-grid { font-size: 12px; }
 .mm-week-cell { background: rgba(255,255,255,0.02); min-height: 18px; }
