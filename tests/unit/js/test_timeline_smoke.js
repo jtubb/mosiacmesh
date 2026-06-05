@@ -26,6 +26,7 @@ const MODULES = [
   'js/timeline/timeline/clip.js',
   'js/timeline/timeline/timeline.js',
   'js/timeline/toolbar.js',
+  'js/timeline/timeline/sockjs-status.js',
 ];
 
 for (const rel of MODULES) {
