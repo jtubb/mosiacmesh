@@ -92,9 +92,14 @@ export function mmTimelineComponent() {
         const placements = this.placementsForTrack(did);
         const conflicts = detectConflicts(placements);
         const status = this.statusForTrack(did);
-        const friendly = (this.$store.mm.displays.find(c => c.displayID === did) || {}).friendlyName || did;
+        // The track label IS the display-group name (displayID). Earlier
+        // code grabbed `displays.find(...).friendlyName` here, which
+        // returned the FIRST device's per-device friendly name (e.g.
+        // "sign1screen15") rather than the group name (e.g. "Tablet") —
+        // misleading the operator about which group the row represents.
+        // Pass null friendlyName so track-header.js uses `displayID`.
         html += `<div class="mm-track-row" style="grid-column:1">${trackHeaderHtml({
-          displayID: did, friendlyName: friendly,
+          displayID: did, friendlyName: null,
           onlineCount: status.online, totalCount: status.total,
           renderInProgress: status.renderInProgress
         })}</div>`;
