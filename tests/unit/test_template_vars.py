@@ -23,6 +23,23 @@ def test_safedict_leaves_unknown_tokens_literal():
     assert out == "echo X and {unknown}"
 
 
+def test_safedict_format_spec_on_missing_key_documented_limitation():
+    """Pinning test for the known SafeDict limitation: when a template
+    applies a format spec to a missing key (e.g. {missing:>10}), Python
+    substitutes the literal '{missing}' string and THEN applies the
+    spec to it, producing right-padded literal text rather than
+    leaving the {missing:>10} placeholder intact.
+
+    The project's actual profile scripts use no format specs, so this
+    is acceptable for v1. If a future template needs format specs on
+    optional fields, replace SafeDict with a string.Formatter subclass
+    that overrides get_field. This test exists so the behavior change
+    is visible if anyone removes the limitation."""
+    out = "value=[{missing:>10}]".format_map(SafeDict({}))
+    # The literal '{missing}' (9 chars) gets right-padded to 10
+    assert out == "value=[ {missing}]"
+
+
 def test_build_vars_includes_client_fields():
     """build_vars(client, profile) returns a dict with all the spec-§7
     template variables filled from the client + profile objects."""
@@ -57,6 +74,20 @@ def test_build_vars_handles_missing_profile_fields():
     assert vars_["webclipBundleId"] == ""
     assert vars_["webclipTitle"] == ""
     assert vars_["vncPassword"] == ""
+
+
+def test_build_vars_includes_fbX_fbY_stubs():
+    """Spec §7's template variable table lists {fbX}/{fbY}. They live
+    inside launch.taps as per-tap coords, not as scalar fields — so the
+    dispatcher's _vnc_tap_sequence reads them directly. build_vars
+    still includes them as empty strings so an operator-written template
+    referencing them substitutes to empty rather than leaving the
+    literal placeholder."""
+    c = Client()
+    p = ScriptingProfile()
+    vars_ = build_vars(c, p)
+    assert "fbX" in vars_ and vars_["fbX"] == ""
+    assert "fbY" in vars_ and vars_["fbY"] == ""
 
 
 def test_template_substitution_through_safedict():
