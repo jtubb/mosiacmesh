@@ -87,6 +87,10 @@ from mosaicmesh.api.discovery import (
     api_discovery_devices, api_discovery_stats, api_discovery_configure,
 )
 from mosaicmesh.websocket.legacy import msg_response
+# Re-exported for backward-compat: tests in test_websocket_handlers.py call
+# server.handle_websocket_message(...) directly. The handler is not yet wired
+# into ws_handler (that's Task 12 / dispatch.py); the re-export keeps the
+# tests' import path stable in the meantime.
 from mosaicmesh.websocket.typed import handle_websocket_message
 
 # Coordinated-start constants

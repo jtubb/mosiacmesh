@@ -1,10 +1,14 @@
 """Async type-based websocket message handler — intended replacement for the
 legacy REQUEST-based protocol (mosaicmesh.websocket.legacy.msg_response).
 
-Both protocols coexist per CLAUDE.md's dual-protocol convention. They funnel
-through mosaicmesh/websocket/dispatch.py's ws_handler (still in server.py
-for now; moves to dispatch.py in Task 12). Per the spec, the legacy
-protocol must not be removed — the 24 iPad-1 production displays use it.
+Both protocols coexist per CLAUDE.md's dual-protocol convention. They will
+funnel through mosaicmesh/websocket/dispatch.py's ws_handler — but this
+handler is NOT YET WIRED INTO ws_handler at all (ws_handler currently calls
+only msg_response). Task 12 (dispatch.py) will connect both. The current
+state means handle_websocket_message is exercised only by direct test calls
+(test_websocket_handlers.py) and the re-export from server.py keeps it
+visible in that namespace. Per the spec, the legacy protocol must not be
+removed — the 24 iPad-1 production displays use it.
 
 Substitutions applied (pure relocation, no semantic changes):
   - bare `settings` -> `server.settings`
@@ -27,6 +31,14 @@ from mosaicmesh.state import Client
 # server.auto_configure_client inside the function body so existing tests
 # that use `patch('server.auto_configure_client')` continue to intercept it.
 # Same pattern as legacy.py's lazy server._run_device_script (Task 10).
+#
+# Asymmetry note: legacy.py imports auto_configure_client at module level
+# because test_client_management.py patches at a different level (it mocks
+# the underlying display dict directly, not auto_configure_client). The two
+# files diverge intentionally on this import strategy. If a future test for
+# the LEGACY protocol's auto_configure_client path starts using
+# patch('server.auto_configure_client'), legacy.py would silently bypass it
+# and need to switch to the lazy pattern here.
 
 
 async def handle_websocket_message(session, message_data):
