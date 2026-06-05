@@ -87,12 +87,14 @@ def test_vnc_tap_sequence_taps_each_coord_in_order():
     proxy = MagicMock()
     server._veency_pool["cid"] = proxy   # pre-seed pool so _get_pooled_vnc returns instantly
     tapped = []
-    with patch.object(server, "_get_pooled_vnc",
-                      new=AsyncMock(return_value=proxy)), \
-         patch.object(server, "_do_tap",
-                      side_effect=lambda px, x, y: tapped.append((x, y))):
-        ok = _run(_vnc_tap_sequence(c, launch_cfg, {}))
-    server._veency_pool.pop("cid", None)
+    try:
+        with patch.object(server, "_get_pooled_vnc",
+                          new=AsyncMock(return_value=proxy)), \
+             patch.object(server, "_do_tap",
+                          side_effect=lambda px, x, y: tapped.append((x, y))):
+            ok = _run(_vnc_tap_sequence(c, launch_cfg, {}))
+    finally:
+        server._veency_pool.pop("cid", None)
     assert ok is True
     assert tapped == [(100, 200), (300, 400)]
 
@@ -150,7 +152,8 @@ def test_ssh_then_vnc_falls_back_to_ssh_when_tap_fails():
          patch.object(server, "_drop_pooled_vnc", new=AsyncMock()), \
          patch("asyncio.sleep", new=AsyncMock()):
         ok = _run(_ssh_then_vnc(c, p, {}))
-    # tap failed, so we fell back to ssh-exec the start script
-    assert ok is False or ok == 0 or (isinstance(ok, tuple) and ok[0] == 0)
+    # tap failed → fell back to ssh-exec scripts['start'] → _exec_ssh
+    # returns (rc, output) from the mocked subprocess
+    assert ok == (0, "FALLBACK_OK")
     # The exec_mock should now have TWO calls: the wake step + the fallback start
     assert exec_mock.call_count == 2

@@ -13,6 +13,8 @@ import os
 import logging
 import asyncio
 
+from mosaicmesh.template_vars import SafeDict
+
 # --- Device lifecycle automation -----------------------------------------
 # The server runs per-device shell scripts over SSH (login/start/stop/reboot),
 # using the passphrase-less key installed by tools/onboard_devices.ps1 and the
@@ -308,8 +310,6 @@ async def _run_device_script(client_key, which):
 # call into this dispatcher exclusively).
 # =============================================================================
 
-from mosaicmesh.template_vars import SafeDict
-
 
 async def _exec_ssh(client, script_template, vars_):
     """Run `script_template` over SSH on `client.ip`, substituting `{tokens}`
@@ -375,7 +375,7 @@ async def _vnc_tap_sequence(client, launch_cfg, vars_):
     if not getattr(client, "ip", ""):
         logging.warning("_vnc_tap_sequence %s: no ip", client.clientID)
         return False
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     try:
         proxy = await _server._get_pooled_vnc(client.clientID, client.ip)
         for t in taps:
@@ -399,8 +399,17 @@ async def _ssh_then_vnc(client, profile, vars_):
     On tap failure, fall back to SSH-exec'ing profile.scripts['start']
     (same fallback the legacy _run_device_script does today).
 
-    Returns True on a successful tap, the (rc, out) tuple from the fallback
-    SSH path when the tap fails, or False when both fail."""
+    Return shape varies — callers MUST normalize:
+      - `True`            : VNC tap succeeded (preferred path).
+      - `(rc, out)` tuple : tap failed, fell back to SSH; check `rc == 0`.
+      - `False`           : tap failed AND fallback SSH had nothing to run
+                            (empty scripts['start']) — outer _exec_ssh
+                            returns (None, "no-script") so we never hit
+                            this branch with a real profile, but bool
+                            False is what _vnc_tap_sequence returns on
+                            its own failure paths.
+    Task 3's run_profile_action normalizes all three into a uniform
+    `(rc, out)` shape before returning to its caller."""
     wake_script = (profile.launch.get("wakeScript")
                    or "activator send libactivator.lockscreen.dismiss")
     await _exec_ssh(client, wake_script, vars_)
@@ -419,6 +428,10 @@ async def _ssh_then_vnc(client, profile, vars_):
 # stop, test, reboot) always go through plain _exec_ssh — only "start"
 # needs a VNC tap on iPad-1 because iOS 5 has no CLI launcher that
 # passes a webclip's URL context to Web.app.
+#
+# Return shape varies by entry — see _ssh_then_vnc docstring. Callers
+# (run_profile_action) MUST normalize bool True/False + (rc, out)
+# tuples into a uniform shape before returning to outer callers.
 LAUNCH_METHODS = {
     "shell":        lambda c, p, v: _exec_ssh(c, p.scripts.get("start", ""), v),
     "vnc-tap":      lambda c, p, v: _vnc_tap_sequence(c, p.launch, v),
