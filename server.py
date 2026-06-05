@@ -87,6 +87,7 @@ from mosaicmesh.api.discovery import (
     api_discovery_devices, api_discovery_stats, api_discovery_configure,
 )
 from mosaicmesh.websocket.legacy import msg_response
+from mosaicmesh.websocket.typed import handle_websocket_message
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
@@ -966,73 +967,6 @@ def _device_field(value):
     types leaking non-serializable objects into client state."""
     resolved = value() if callable(value) else value
     return resolved if isinstance(resolved, str) else None
-
-async def handle_websocket_message(session, message_data):
-    """Dispatch a structured ('type'-based) WebSocket message.
-
-    Per-client delivery still flows through the central socketmanager + DEST
-    routing used elsewhere; direct replies use session.send.
-    """
-    if not isinstance(message_data, dict):
-        return  # ignore malformed frames without raising
-
-    msg_type = message_data.get('type')
-
-    if msg_type == 'clientInfo':
-        client = settings.clients.setdefault(session.id, Client())
-        client.clientID = session.id
-        client.friendlyName = message_data.get('friendlyName', client.friendlyName)
-        client.deviceWidth = message_data.get('deviceWidth', client.deviceWidth)
-        client.deviceHeight = message_data.get('deviceHeight', client.deviceHeight)
-        client.deviceType = message_data.get('deviceType', client.deviceType)
-        client.userAgent = message_data.get('userAgent', client.userAgent)
-        if getattr(session, 'request', None) is not None:
-            client.ip = _client_ip(session.request)
-        client.lastSeen = time.time()
-        client.isOnline = True
-        # synced stays False until the client emits TIME_SYNCED (see the
-        # REGISTER handler comment) -- REGISTER is page-bootstrap, not
-        # clock-sync.
-        client.connectionCount += 1
-        # Best-effort fingerprinting (fields may be methods or plain values)
-        try:
-            device = device_detector.parse(client.userAgent)
-            client.osName = _device_field(device.os_name) or client.osName
-            client.osVersion = _device_field(device.os_version) or client.osVersion
-            client.deviceBrand = _device_field(device.device_brand) or client.deviceBrand
-            client.deviceModel = _device_field(device.device_model) or client.deviceModel
-            detected_type = _device_type_str(_device_field(device.device_type))
-            if detected_type and not message_data.get('deviceType'):
-                client.deviceType = detected_type
-        except Exception as e:
-            logging.debug(f"Device detection skipped: {e}")
-        auto_configure_client(session.id, client)
-
-    elif msg_type == 'ready':
-        client = settings.clients.get(session.id)
-        if client:
-            client.ready = message_data.get('ready', True)
-            client.lastSeen = time.time()
-
-    elif msg_type == 'heartbeat':
-        client = settings.clients.get(session.id)
-        if client:
-            client.lastSeen = time.time()
-            client.isOnline = True
-        await session.send(jsonpickle.encode({"REQUEST": "HEARTBEAT", "PAYLOAD": "ACK"}))
-
-    elif msg_type == 'displayData':
-        # Relay to peers in the same display group via the central manager
-        display_id = message_data.get('displayID')
-        if socketmanager is not None and display_id is not None:
-            broadcast_to_display_group(display_id, {
-                "REQUEST": "displayData",
-                "PAYLOAD": message_data.get('data')
-            })
-        await session.send(jsonpickle.encode({"REQUEST": "displayData", "PAYLOAD": "ACK"}))
-
-    else:
-        logging.debug(f"Unknown websocket message type: {msg_type}")
 
 async def index_handler(request):
     logging.debug("INDEX_HANDLER")

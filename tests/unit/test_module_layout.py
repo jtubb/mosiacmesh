@@ -281,3 +281,7 @@ def test_propagation_percent_short_circuits():
 def test_websocket_legacy_importable():
     from mosaicmesh.websocket.legacy import msg_response
     assert callable(msg_response)
+
+def test_websocket_typed_importable():
+    from mosaicmesh.websocket.typed import handle_websocket_message
+    assert callable(handle_websocket_message)
