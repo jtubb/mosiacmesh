@@ -153,7 +153,7 @@ def msg_response(msg,session):
 
     elif(msg["REQUEST"] == "REMOVE_CLIENT"):
         # Admin-initiated removal of a single device. The device re-registers
-        # (as new) if it ever reconnects -- this only clears the stale record.
+        # (as new) if it ever reconnects — this only clears the stale record.
         payload = msg.get("PAYLOAD") or {}
         target = payload.get("clientID") if isinstance(payload, dict) else payload
         removed = server.settings.clients.pop(target, None)
@@ -254,7 +254,7 @@ def msg_response(msg,session):
 
         # Sync EVERY (re)connecting client to its group, not just first-timers: a
         # reload/reconnect mid-playback must resume (re-send PRELOAD + PLAY with the
-        # in-progress epoch). Idempotent -- no-op unless the group is currently PLAY.
+        # in-progress epoch). Idempotent — no-op unless the group is currently PLAY.
         sync_new_client_to_group(msg["SRC"], client)
 
         # Enhanced success response with configuration info
