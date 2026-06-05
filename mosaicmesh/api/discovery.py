@@ -21,6 +21,7 @@ from mosaicmesh.cache import cache_stats, file_cache
 from mosaicmesh.calibration import _group_clients
 
 __all__ = [
+    "auto_match_profile",
     "auto_configure_client",
     "get_discovered_devices",
     "_expected_seg_keys_for_display",
@@ -31,6 +32,31 @@ __all__ = [
     "api_discovery_stats",
     "api_discovery_configure",
 ]
+
+
+def auto_match_profile(client, settings):
+    """Return the name of the first profile whose matchDeviceType equals
+    client.deviceType (case-insensitive), or None if no profile matches.
+    A profile with matchDeviceType='' is treated as manual-only and never
+    matched.
+
+    Case-insensitive comparison because device_detector emits lowercase
+    deviceType ('tablet', 'smartphone', 'desktop') but profile labels
+    written by humans through the REST API or admin UI usually capitalize
+    ('Tablet'). Spec §7's example default uses 'Tablet'; production
+    Client.deviceType is 'tablet'. Normalizing on both sides removes
+    the trap.
+
+    Per spec §7: 'assigned at REGISTER from first profile whose
+    matchDeviceType matches client.deviceType; admin can override'."""
+    dt = (getattr(client, "deviceType", "") or "").lower()
+    if not dt:
+        return None
+    for name, prof in (settings.profiles or {}).items():
+        match = (getattr(prof, "matchDeviceType", "") or "").lower()
+        if match and match == dt:
+            return name
+    return None
 
 
 def auto_configure_client(client_key, client):
@@ -67,6 +93,12 @@ def auto_configure_client(client_key, client):
     if client.deviceType == "desktop":
         client.capabilities.append("keyboard")
         client.capabilities.append("mouse")
+
+    # PR-3: auto-assign a ScriptingProfile on first connect. Only fires
+    # when profileName is still None (operator overrides via
+    # POST /api/clients/{key}/profile take precedence forever after).
+    if not getattr(client, "profileName", None):
+        client.profileName = auto_match_profile(client, server.settings)
 
     client.autoConfigured = True
     client.discoverySource = "websocket"
