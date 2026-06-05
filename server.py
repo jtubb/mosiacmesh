@@ -2108,6 +2108,17 @@ async def process():
 socketmanager = None
 
 if __name__ == '__main__':
+    # When this file is executed directly, Python registers it in sys.modules
+    # under '__main__'. Any sub-module that does `import server` (a pattern we
+    # use throughout mosaicmesh/) would otherwise create a SECOND copy of this
+    # file under 'server' — one where the __main__ block never runs, so
+    # `settings` and other __main__-block bindings are missing. Aliasing
+    # __main__ under 'server' makes the lazy imports resolve to the running
+    # namespace and keeps the singleton (settings, runner, socketmanager) in
+    # one place.
+    import sys
+    sys.modules.setdefault('server', sys.modules[__name__])
+
     args = parse_args()
     settings = Settings()
     runner = None
