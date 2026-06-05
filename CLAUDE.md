@@ -99,6 +99,8 @@ Response convention (matches `/api/discovery/configure`): `{success: true, ...}`
   - `api/profiles.py`  — REST CRUD for `ScriptingProfile` + per-client assignment (`POST /api/clients/{key}/profile`). PR-2 only ships the CRUD shell; PR-3 wires dispatcher behavior + bootstrap default.
   - `api/media.py`     — `GET /api/media` (lists media/server/{images,videos} + per-video durations); `POST /upload/{dest}` (multipart upload routed to calibrate/image/video processors). Relocated from server.py in PR-2.
   - `api/_concurrency.py` — shared If-Match parsing + 412/428 response helpers used by playlists, schedules, profiles.
+- `js/timeline/` — admin-side ES modules (PR-4a+, modern JS). NOT loaded on the iPad-1 display clients (those load `js/mosiacmesh.js` + `js/GoTime.js` which stay ES5 + jQuery 1.x). Top-level `js/timeline/index.js` is the Alpine.js bootstrap loaded from `admin.html`. See `js/timeline/README.md` for the module map.
+- `tests/unit/js/` — Node 20+ `--test` suites for the pure-function JS modules (`util/time.js`, `util/conflicts.js`) + a module-load smoke. Run via `python pytest_runner.py --js` or `node --test tests/unit/js/*.js`.
 - `js/mosiacmesh.js` — client connection logic, UDID cookie, SockJS wiring, message construction (`generateMessage`).
 - `js/GoTime.js` — clock-sync library used for synchronized playback.
 - `*.html` (root) — `index` (display client), `admin` (control), `discovery` (device management).
@@ -108,6 +110,7 @@ Response convention (matches `/api/discovery/configure`): `{success: true, ...}`
 ## Conventions
 
 - **Legacy device compatibility is a hard requirement.** Display clients must run on **1st-gen iPads (iOS 5.1 / Safari 5.1)**. Client JS (`js/mosiacmesh.js`, `js/GoTime.js`, inline `<script>` in `index.html`) must be **ES5 only** — no `let`/`const`, arrow functions, template literals, `class`, `Promise`, `fetch`. Keep **jQuery 1.x** and **SockJS** (with its polling fallbacks). `admin.html`/`discovery.html` are desktop control consoles and may use modern JS. Server-side Python is invisible to the device.
+- **Admin UI uses Alpine.js 3.x + native ES modules.** Loaded from CDN; no build step. Coexists with jQuery 1.x in `admin.html` (Alpine sits alongside, doesn't replace). Display clients on the iPad-1 are unaffected — they still load ES5 + jQuery 1.x.
 - There are **two websocket message protocols**: the legacy `REQUEST`-based one (`mosaicmesh.websocket.legacy.msg_response`, used by current JS clients — do not remove) and a newer async `type`-based one (`mosaicmesh.websocket.typed.handle_websocket_message`, the intended replacement). `handle_websocket_message` is **NOT YET wired into `ws_handler`** — it is only exercised by direct test calls; wiring it in is a future task. Per-client delivery uses the central `socketmanager` + a `DEST` field, not per-client sockets.
 - The discovery REST API is served by granular handlers in `mosaicmesh.api.discovery`: `api_discovery_devices` / `api_discovery_stats` / `api_discovery_configure`. `configure` accepts both field-update (`{clientKey, displayID, friendlyName}`) and action (`{action: "reconfigure"|"bulk_reconfigure"}`) payloads.
 - Note the spelling: the project, files, and SockJS manager name are all **`mosiacmesh`** (transposed "ai"). Match it exactly — the websocket manager is registered under `name='mosiacmesh'`.

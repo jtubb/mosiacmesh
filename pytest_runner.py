@@ -19,14 +19,24 @@ def main():
     
     # Parse our arguments
     if len(sys.argv) > 1:
-        if '--unit' in sys.argv:
+        if '--js' in sys.argv:
+            import glob
+            files = sorted(glob.glob('tests/unit/js/test_*.js'))
+            if not files:
+                print('No JS tests found at tests/unit/js/test_*.js')
+                sys.exit(0)
+            print(f'Running {len(files)} JS test files via node --test...')
+            rc = subprocess.call(['node', '--test'] + files)
+            sys.exit(rc)
+        elif '--unit' in sys.argv:
             cmd.extend(['tests/unit'])
         elif '--integration' in sys.argv:
-            cmd.extend(['tests/integration'])  
+            cmd.extend(['tests/integration'])
         elif '--help' in sys.argv or '-h' in sys.argv:
-            print("Usage: python pytest_runner.py [--unit|--integration|--coverage]")
+            print("Usage: python pytest_runner.py [--unit|--integration|--js|--coverage]")
             print("  --unit        Run only unit tests")
-            print("  --integration Run only integration tests") 
+            print("  --integration Run only integration tests")
+            print("  --js          Run Node-based JS unit tests under tests/unit/js/")
             print("  --coverage    Run with coverage report")
             print("  --verbose     Verbose output")
             return 0
