@@ -43,6 +43,28 @@ def test_default_profile_shape():
     assert p.ssh["legacyCrypto"] is True
 
 
+def test_default_profile_wakeScript_respringings_before_tap():
+    """REGRESSION GUARD: the wakeScript MUST respring SpringBoard
+    (killall SpringBoard) before the VNC tap fires. Live-fleet
+    smoke on 2026-06-05 proved that activator system.homebutton
+    alone doesn't reliably return to home-page-1 from Spotlight /
+    keyboard / arbitrary app states, causing the tap at (945, 671)
+    to land on the wrong icon (typically Game Center). A respring
+    is the only mechanism that GUARANTEES a clean home-screen
+    state before the tap. Do not remove the killall SpringBoard
+    without an alternative that's been smoke-tested against
+    Spotlight, lock-screen-with-keyboard, and foreground-app
+    starting states."""
+    p = DEFAULT_PROFILE_IPAD1_IOS5
+    wake = p.launch["wakeScript"]
+    assert "killall SpringBoard" in wake, \
+        "wakeScript MUST respring SpringBoard before the VNC tap"
+    assert "sleep" in wake, \
+        "wakeScript MUST sleep after respring so SpringBoard has time to relaunch"
+    assert "lockscreen.dismiss" in wake, \
+        "wakeScript MUST dismiss the lockscreen in case it auto-locked"
+
+
 def test_default_profile_login_script_byte_identical_to_legacy():
     """After template substitution against a sample client, the default
     profile's login script equals the legacy DEFAULT_DEVICE_SCRIPTS

@@ -49,7 +49,24 @@ def _make_default_profile():
     p.launch = {
         "method": "ssh-then-vnc",
         "vncPassword": "mosaicmesh",
-        "wakeScript": "activator send libactivator.lockscreen.dismiss",
+        # Kill any foreground app (Web.app, Safari) then respring
+        # SpringBoard — only reliable way to GUARANTEE the iPad is
+        # showing home-page-1 with the dock visible at tap time.
+        # activator's system.homebutton was unreliable: from Spotlight,
+        # an app, or the lockscreen-with-keyboard state it didn't
+        # always land on home-page-1, so (fbX, fbY) tapped the wrong
+        # icon (typically Game Center at iconLists[0][8]).
+        # sleep 4 waits for SpringBoard to relaunch and load icons
+        # (~3s observed); lockscreen.dismiss at the end wakes the
+        # screen in case it auto-locked during the respring.
+        # Veency dies with SpringBoard, so the dispatcher's
+        # _ssh_then_vnc drops the pooled VNC connection AFTER this
+        # wakeScript completes — see mosaicmesh.device_scripts.
+        "wakeScript": ("killall Web 2>/dev/null; "
+                       "killall MobileSafari 2>/dev/null; "
+                       "killall SpringBoard; "
+                       "sleep 4; "
+                       "activator send libactivator.lockscreen.dismiss"),
         "taps": [{"fbX": 945, "fbY": 671}],
     }
     p.webclip = {

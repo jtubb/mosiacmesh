@@ -117,6 +117,42 @@ def test_vnc_tap_sequence_keys_pool_by_client_key_not_clientID():
     assert "cid" not in pool_keys_used   # must NOT be c.clientID
 
 
+def test_ssh_then_vnc_drops_pool_between_wake_and_tap():
+    """REGRESSION GUARD: when the wakeScript respringings SpringBoard
+    (the canonical pattern — Veency is a SpringBoard tweak that dies
+    with it), the pooled VNC connection points at a dead socket.
+    _ssh_then_vnc MUST call _drop_pooled_vnc between the wake step
+    and the tap so _get_pooled_vnc handshakes fresh against the
+    newly-relaunched Veency. Without this, the tap silently fires
+    into a dead socket and the user sees the iPad respring + sit
+    there with no visible click. Live-fleet bug caught 2026-06-05."""
+    c = _client()
+    p = _profile("ssh-then-vnc", vncPassword="pw",
+                 wakeScript="killall SpringBoard; sleep 4",
+                 taps=[{"fbX": 945, "fbY": 671}])
+    fake_proc = MagicMock()
+    fake_proc.wait = AsyncMock()
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+    fake_proc.returncode = 0
+    fake_proc.kill = MagicMock()
+    proxy = MagicMock()
+    drop_calls = []
+    async def fake_drop(key):
+        drop_calls.append(key)
+    with patch("asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=fake_proc)), \
+         patch.object(server, "_get_pooled_vnc",
+                      new=AsyncMock(return_value=proxy)), \
+         patch.object(server, "_do_tap",
+                      side_effect=lambda *a: None), \
+         patch("mosaicmesh.device_scripts._drop_pooled_vnc",
+               new=fake_drop), \
+         patch("asyncio.sleep", new=AsyncMock()):
+        _run(_ssh_then_vnc("KEY-respring", c, p, {}))
+    assert "KEY-respring" in drop_calls, \
+        "_ssh_then_vnc MUST drop the pool between wakeScript and tap"
+
+
 def test_ssh_then_vnc_runs_wakeScript_then_taps():
     """_ssh_then_vnc executes profile.launch['wakeScript'] over SSH
     first (best-effort), then calls _vnc_tap_sequence."""

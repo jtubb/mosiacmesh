@@ -173,6 +173,14 @@ async def _ssh_then_vnc(client_key, client, profile, vars_):
                    or "activator send libactivator.lockscreen.dismiss")
     await _exec_ssh(client, wake_script, vars_)
     await asyncio.sleep(0.8)
+    # Veency is a SpringBoard tweak — if the wakeScript respringged
+    # (killall SpringBoard, a common pattern to guarantee a clean
+    # home-page-1 state before the tap), the pooled VNC connection
+    # now points at a dead socket. Drop it so _vnc_tap_sequence's
+    # _get_pooled_vnc handshakes a fresh connection against the
+    # newly-restarted Veency. Safe no-op when the wakeScript didn't
+    # respring (the next _get_pooled_vnc will just re-handshake).
+    await _drop_pooled_vnc(client_key)
     ok = await _vnc_tap_sequence(client_key, client, profile.launch, vars_)
     if ok:
         return True
