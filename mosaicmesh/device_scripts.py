@@ -107,11 +107,20 @@ async def _exec_ssh(client, script_template, vars_):
         return (None, str(e))
 
 
-async def _vnc_tap_sequence(client, launch_cfg, vars_):
+async def _vnc_tap_sequence(client_key, client, launch_cfg, vars_):
     """Send each tap in `launch_cfg['taps']` (a list of {fbX,fbY} dicts)
     to the client's framebuffer via the pooled Veency connection. Returns
     True if every tap landed, False on the first failure (and the pooled
     connection is dropped so the next attempt re-handshakes).
+
+    **Pool key must be `client_key` (the dict key in settings.clients),
+    NOT `client.clientID`.** The legacy `_launch_webapp_via_vnc` and the
+    surrounding `_auto_arm_client` pool consumers all key by the dict
+    key. Production fleets have `client_key != client.clientID` (the
+    dict key is a long token; clientID is an 8-char browser cookie), so
+    a mismatch creates duplicate pool entries per iPad — Veency on iOS 5
+    only services one connection at a time, so the second connection
+    can leave the iPad in an unexpected screen state when the tap fires.
 
     The pool itself still lives in server.py (see PR-1 TODO comment) —
     moving it here is a follow-up.
@@ -120,29 +129,29 @@ async def _vnc_tap_sequence(client, launch_cfg, vars_):
     taps = launch_cfg.get("taps") or []
     if not taps:
         logging.warning("_vnc_tap_sequence %s: no taps configured",
-                        client.clientID)
+                        client_key)
         return False
     if not getattr(client, "ip", ""):
-        logging.warning("_vnc_tap_sequence %s: no ip", client.clientID)
+        logging.warning("_vnc_tap_sequence %s: no ip", client_key)
         return False
     loop = asyncio.get_running_loop()
     try:
-        proxy = await _server._get_pooled_vnc(client.clientID, client.ip)
+        proxy = await _server._get_pooled_vnc(client_key, client.ip)
         for t in taps:
             fbX = int(t.get("fbX", 0))
             fbY = int(t.get("fbY", 0))
             await loop.run_in_executor(None, _server._do_tap, proxy, fbX, fbY)
             logging.info("vnc-tap: %s at fb(%d,%d)",
-                         client.clientID, fbX, fbY)
+                         client_key, fbX, fbY)
         return True
     except Exception as e:  # noqa: BLE001
-        await _drop_pooled_vnc(client.clientID)
+        await _drop_pooled_vnc(client_key)
         logging.warning("vnc-tap-sequence failed for %s: %s",
-                        client.clientID, e)
+                        client_key, e)
         return False
 
 
-async def _ssh_then_vnc(client, profile, vars_):
+async def _ssh_then_vnc(client_key, client, profile, vars_):
     """Run `profile.launch['wakeScript']` (or fall back to a known-safe
     default) over SSH to wake the device, settle 0.8s for the SpringBoard
     animation, then VNC-tap the icon coordinates in profile.launch['taps'].
@@ -164,11 +173,11 @@ async def _ssh_then_vnc(client, profile, vars_):
                    or "activator send libactivator.lockscreen.dismiss")
     await _exec_ssh(client, wake_script, vars_)
     await asyncio.sleep(0.8)
-    ok = await _vnc_tap_sequence(client, profile.launch, vars_)
+    ok = await _vnc_tap_sequence(client_key, client, profile.launch, vars_)
     if ok:
         return True
     logging.warning("_ssh_then_vnc %s: tap failed; falling back to "
-                    "scripts['start'] via SSH", client.clientID)
+                    "scripts['start'] via SSH", client_key)
     return await _exec_ssh(client, profile.scripts.get("start", ""), vars_)
 
 
@@ -185,9 +194,13 @@ async def _ssh_then_vnc(client, profile, vars_):
 LAUNCH_METHODS = {
     # REQUIRED: run_profile_action uses this entry as the fallback for
     # unknown launch methods. Do not remove without updating that fallback.
-    "shell":        lambda c, p, v: _exec_ssh(c, p.scripts.get("start", ""), v),
-    "vnc-tap":      lambda c, p, v: _vnc_tap_sequence(c, p.launch, v),
-    "ssh-then-vnc": lambda c, p, v: _ssh_then_vnc(c, p, v),
+    #
+    # Signature: (client_key, client, profile, vars_) — client_key is
+    # needed by the VNC-using methods to key the Veency pool by the
+    # same identifier as _auto_arm_client.
+    "shell":        lambda k, c, p, v: _exec_ssh(c, p.scripts.get("start", ""), v),
+    "vnc-tap":      lambda k, c, p, v: _vnc_tap_sequence(k, c, p.launch, v),
+    "ssh-then-vnc": lambda k, c, p, v: _ssh_then_vnc(k, c, p, v),
 }
 
 
@@ -232,7 +245,7 @@ async def run_profile_action(client_key, which):
     if which == "start":
         method = profile.launch.get("method", "shell")
         fn = LAUNCH_METHODS.get(method) or LAUNCH_METHODS["shell"]
-        result = await fn(client, profile, vars_)
+        result = await fn(client_key, client, profile, vars_)
         # Normalize bool returns from VNC-only methods to (rc, out)-ish
         if isinstance(result, bool):
             return (0 if result else None, "VNC_TAP_OK" if result else "vnc-tap-failed")

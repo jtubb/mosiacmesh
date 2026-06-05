@@ -85,18 +85,36 @@ def test_vnc_tap_sequence_taps_each_coord_in_order():
                   "taps": [{"fbX": 100, "fbY": 200},
                            {"fbX": 300, "fbY": 400}]}
     proxy = MagicMock()
-    server._veency_pool["cid"] = proxy   # pre-seed pool so _get_pooled_vnc returns instantly
     tapped = []
-    try:
-        with patch.object(server, "_get_pooled_vnc",
-                          new=AsyncMock(return_value=proxy)), \
-             patch.object(server, "_do_tap",
-                          side_effect=lambda px, x, y: tapped.append((x, y))):
-            ok = _run(_vnc_tap_sequence(c, launch_cfg, {}))
-    finally:
-        server._veency_pool.pop("cid", None)
+    with patch.object(server, "_get_pooled_vnc",
+                      new=AsyncMock(return_value=proxy)), \
+         patch.object(server, "_do_tap",
+                      side_effect=lambda px, x, y: tapped.append((x, y))):
+        ok = _run(_vnc_tap_sequence("KEY-abc", c, launch_cfg, {}))
     assert ok is True
     assert tapped == [(100, 200), (300, 400)]
+
+
+def test_vnc_tap_sequence_keys_pool_by_client_key_not_clientID():
+    """REGRESSION GUARD: the Veency pool MUST be keyed by client_key
+    (the dict key in settings.clients), not by client.clientID. Pre-PR-3
+    the pool was keyed by client_key; auto_arm_client + _launch_webapp_via_vnc
+    + the dispatcher must all use the same key or duplicate pool entries
+    leave Veency in an unexpected state (iOS 5 Veency services only one
+    connection at a time)."""
+    c = _client()       # _client() sets c.clientID = "cid"
+    assert c.clientID == "cid"
+    pool_keys_used = []
+    proxy = MagicMock()
+    async def fake_get_pool(key, ip):
+        pool_keys_used.append(key)
+        return proxy
+    with patch.object(server, "_get_pooled_vnc", new=fake_get_pool), \
+         patch.object(server, "_do_tap", side_effect=lambda *a: None):
+        _run(_vnc_tap_sequence("KEY-from-settings",
+                               c, {"taps": [{"fbX": 1, "fbY": 1}]}, {}))
+    assert pool_keys_used == ["KEY-from-settings"]
+    assert "cid" not in pool_keys_used   # must NOT be c.clientID
 
 
 def test_ssh_then_vnc_runs_wakeScript_then_taps():
@@ -120,7 +138,7 @@ def test_ssh_then_vnc_runs_wakeScript_then_taps():
          patch.object(server, "_do_tap",
                       side_effect=lambda px, x, y: tapped.append((x, y))), \
          patch("asyncio.sleep", new=AsyncMock()):
-        ok = _run(_ssh_then_vnc(c, p, {}))
+        ok = _run(_ssh_then_vnc("KEY-abc", c, p, {}))
     assert ok is True
     assert tapped == [(945, 671)]
     # The SSH wake step ran exactly once with the wakeScript body
@@ -151,7 +169,7 @@ def test_ssh_then_vnc_falls_back_to_ssh_when_tap_fails():
                       side_effect=RuntimeError("VNC unreachable")), \
          patch.object(server, "_drop_pooled_vnc", new=AsyncMock()), \
          patch("asyncio.sleep", new=AsyncMock()):
-        ok = _run(_ssh_then_vnc(c, p, {}))
+        ok = _run(_ssh_then_vnc("KEY-abc", c, p, {}))
     # tap failed → fell back to ssh-exec scripts['start'] → _exec_ssh
     # returns (rc, output) from the mocked subprocess
     assert ok == (0, "FALLBACK_OK")
