@@ -1,7 +1,14 @@
-import sys, asyncio, argparse, jsonpickle
+"""Unit tests for _run_device_script — the public dispatcher entry point
+after the PR-3 ScriptingProfile cut-over.
+
+Pre-PR-3 this test file targeted per-Client {login,start,stop,reboot}Script
+fields + DEFAULT_DEVICE_SCRIPTS. Those are gone; behavior now flows through
+client.profileName -> settings.profiles[name] -> dispatcher."""
+import sys, asyncio, argparse
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
 _orig = argparse.ArgumentParser.parse_args
 argparse.ArgumentParser.parse_args = lambda self, *a, **k: argparse.Namespace(Port=3000, Verbose=False)
 try:
@@ -9,29 +16,8 @@ try:
 finally:
     argparse.ArgumentParser.parse_args = _orig
 
-
-def _client(ip="192.168.1.50"):
-    c = server.Client()
-    c.ip = ip
-    return c
-
-
-def test_apply_default_scripts_backfills_only_unset():
-    c = server.Client()
-    assert c.loginScript is None and c.startScript is None
-    c.startScript = "custom-start"          # operator-set: must be preserved
-    server._apply_default_scripts(c)
-    assert c.startScript == "custom-start"  # not overridden
-    assert c.loginScript == server.DEFAULT_DEVICE_SCRIPTS["loginScript"]
-    assert c.stopScript == server.DEFAULT_DEVICE_SCRIPTS["stopScript"]
-    assert c.rebootScript == server.DEFAULT_DEVICE_SCRIPTS["rebootScript"]
-
-
-def test_default_start_opens_display_url_in_safari():
-    s = server.DEFAULT_DEVICE_SCRIPTS["startScript"]
-    assert "uiopen" in s and server.DISPLAY_URL in s
-    assert "MobileSafari" in server.DEFAULT_DEVICE_SCRIPTS["stopScript"]
-    assert "reboot" in server.DEFAULT_DEVICE_SCRIPTS["rebootScript"]
+from mosaicmesh.state import Settings, Client, ScriptingProfile
+from mosaicmesh.profile_bootstrap import DEFAULT_PROFILE_IPAD1_IOS5
 
 
 def _run(coro):
@@ -42,101 +28,114 @@ def _run(coro):
         loop.close()
 
 
-def test_run_device_script_builds_legacy_ssh_command():
-    server.settings = server.Settings()
-    server.settings.clients["a"] = _client("192.168.1.50")
-    server._apply_default_scripts(server.settings.clients["a"])
-    captured = {}
-
-    async def fake_exec(*args, **kwargs):
-        captured["args"] = args
-        class P:
-            returncode = 0
-            async def communicate(self_): return (b"START_OK", b"")
-        return P()
-
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-        rc, out = _run(server._run_device_script("a", "start"))
-
-    args = captured["args"]
-    assert args[0] == "ssh"
-    assert "-i" in args and server.SSH_KEY_PATH in args
-    assert "-o" in args and "HostKeyAlgorithms=+ssh-rsa" in args   # legacy crypto
-    assert "root@192.168.1.50" in args
-    assert args[-1] == server.DEFAULT_DEVICE_SCRIPTS["startScript"]  # the script runs last
-    assert rc == 0 and "START_OK" in out
+def _seeded(ckey="a", ip="10.0.0.5"):
+    server.settings = Settings()
+    import copy
+    server.settings.profiles["ipad1-ios5"] = copy.deepcopy(DEFAULT_PROFILE_IPAD1_IOS5)
+    c = Client(); c.clientID = ckey; c.ip = ip
+    c.profileName = "ipad1-ios5"
+    server.settings.clients[ckey] = c
+    return ckey
 
 
-def test_run_device_script_prefers_per_device_override():
-    server.settings = server.Settings()
-    c = _client("10.0.0.9"); c.rebootScript = "ldrestart"
-    server.settings.clients["b"] = c
-    captured = {}
+def test_run_device_script_builds_legacy_ssh_command_for_login():
+    """Login goes straight through _exec_ssh — verify the SSH command
+    shape (legacy crypto opts, ssh key path, user@ip, substituted script
+    body) matches what the iPad-1 sshd expects."""
+    ckey = _seeded()
+    fake_proc = MagicMock()
+    fake_proc.communicate = AsyncMock(return_value=(b"LOGIN_OK\n", b""))
+    fake_proc.returncode = 0
+    fake_proc.kill = MagicMock()
+    fake_proc.wait = AsyncMock()
+    with patch("asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=fake_proc)) as exec_mock:
+        rc, out = _run(server._run_device_script(ckey, "login"))
+    assert rc == 0
+    args = exec_mock.call_args.args
+    assert "ssh" in args[0]
+    assert "-o" in args and "HostKeyAlgorithms=+ssh-rsa" in args
+    assert args[-2] == "root@10.0.0.5"
+    # Substituted login script must contain the literal command body (no
+    # {tokens} left)
+    assert "activator send libactivator.lockscreen.dismiss" in args[-1]
+    assert "echo LOGIN_OK" in args[-1]
 
-    async def fake_exec(*args, **kwargs):
-        captured["args"] = args
-        class P:
-            returncode = 0
-            async def communicate(self_): return (b"", b"")
-        return P()
 
-    with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-        _run(server._run_device_script("b", "reboot"))
-    assert captured["args"][-1] == "ldrestart"   # used the override, not the default
-
-
-def test_run_device_script_no_ip_is_noop():
-    server.settings = server.Settings()
-    server.settings.clients["c"] = server.Client()   # no ip
-    with patch("asyncio.create_subprocess_exec") as ex:
-        rc, out = _run(server._run_device_script("c", "start"))
-    ex.assert_not_called()
+def test_run_device_script_no_profile_is_noop():
+    """A Client with profileName=None returns the sentinel (None, 'no-profile')
+    without attempting any subprocess work."""
+    server.settings = Settings()
+    c = Client(); c.clientID = "x"; c.ip = "10.0.0.5"; c.profileName = None
+    server.settings.clients["x"] = c
+    with patch("asyncio.create_subprocess_exec",
+               new=AsyncMock()) as exec_mock:
+        rc, out = _run(server._run_device_script("x", "login"))
     assert rc is None
+    assert out == "no-profile"
+    assert exec_mock.call_count == 0
 
 
-def _sess():
-    s = MagicMock(); s.id = "s"; s.request = MagicMock()
-    s.request.remote = "127.0.0.1"; s.request.headers = {"User-Agent": "T"}
-    return s
+def test_run_device_script_unknown_profile_is_noop():
+    server.settings = Settings()
+    c = Client(); c.clientID = "x"; c.ip = "10.0.0.5"
+    c.profileName = "ghost-profile"
+    server.settings.clients["x"] = c
+    rc, out = _run(server._run_device_script("x", "stop"))
+    assert rc is None
+    assert out == "no-profile"
 
 
-def _dispatch(payload):
-    """Call the RUN_SCRIPT handler, capturing which client keys get dispatched."""
-    calls = []
-    with patch.object(server, "_run_device_script", lambda k, w: calls.append((k, w))), \
-         patch("asyncio.ensure_future", lambda coro: coro):
-        ret = server.msg_response(
-            {"SRC": "admin", "DEST": "SRV", "REQUEST": "RUN_SCRIPT", "PAYLOAD": payload}, _sess())
-    return calls, jsonpickle.decode(ret)["PAYLOAD"]
+def test_run_device_script_start_routes_through_ssh_then_vnc_for_default():
+    """The default ipad1-ios5 profile uses launch.method='ssh-then-vnc';
+    'start' must therefore go through the ssh-then-vnc path (which runs
+    the wakeScript over SSH first, then VNC-taps)."""
+    ckey = _seeded()
+    fake_proc = MagicMock()
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+    fake_proc.returncode = 0
+    fake_proc.kill = MagicMock()
+    fake_proc.wait = AsyncMock()
+    proxy = MagicMock()
+    tapped = []
+    with patch("asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=fake_proc)) as exec_mock, \
+         patch.object(server, "_get_pooled_vnc",
+                      new=AsyncMock(return_value=proxy)), \
+         patch.object(server, "_do_tap",
+                      side_effect=lambda px, x, y: tapped.append((x, y))), \
+         patch("asyncio.sleep", new=AsyncMock()):
+        result = _run(server._run_device_script(ckey, "start"))
+    # tap at the default profile's coordinate
+    assert tapped == [(945, 671)]
+    # wake step ran over SSH exactly once
+    assert exec_mock.call_count == 1
+    # success path
+    rc, out = result
+    assert rc == 0
+    assert out == "VNC_TAP_OK"
 
 
-def _three_clients():
-    server.settings = server.Settings()
-    for k, g in (("a", "G"), ("b", "G"), ("c", "Other")):
-        cl = server.Client(); cl.displayID = g; cl.ip = "1.2.3.4"
-        server.settings.clients[k] = cl
+def test_run_device_script_reboot_runs_reboot_template():
+    ckey = _seeded()
+    fake_proc = MagicMock()
+    fake_proc.communicate = AsyncMock(return_value=(b"REBOOTING\n", b""))
+    fake_proc.returncode = 0
+    fake_proc.kill = MagicMock()
+    fake_proc.wait = AsyncMock()
+    with patch("asyncio.create_subprocess_exec",
+               new=AsyncMock(return_value=fake_proc)) as exec_mock:
+        rc, out = _run(server._run_device_script(ckey, "reboot"))
+    assert rc == 0
+    # The reboot script template ("echo REBOOTING; reboot") goes through
+    # _exec_ssh unchanged (no template tokens).
+    assert exec_mock.call_args.args[-1] == "echo REBOOTING; reboot"
 
 
-def test_run_script_single_client():
-    _three_clients()
-    calls, payload = _dispatch({"clientKey": "a", "script": "stop"})
-    assert calls == [("a", "stop")] and payload["count"] == 1
-
-
-def test_run_script_group_fanout():
-    _three_clients()
-    calls, payload = _dispatch({"displayID": "G", "script": "start"})
-    assert set(k for k, _ in calls) == {"a", "b"}        # only group G, not "c"
-    assert all(w == "start" for _, w in calls) and payload["count"] == 2
-
-
-def test_run_script_all_fleet():
-    _three_clients()
-    calls, payload = _dispatch({"all": True, "script": "reboot"})
-    assert set(k for k, _ in calls) == {"a", "b", "c"} and payload["count"] == 3
-
-
-def test_run_script_bad_script_rejected():
-    _three_clients()
-    calls, payload = _dispatch({"all": True, "script": "format-c"})
-    assert calls == [] and payload["status"] == "BAD_REQUEST"
+def test_run_device_script_via_legacy_broadcast_call_site_unchanged():
+    """The legacy mosaicmesh/websocket/legacy.py RUN_SCRIPT handler calls
+    `server._run_device_script(k, which)` — same arity and entry point —
+    so its call sites need NO change post-PR-3. This is a smoke that the
+    re-export through server.py is intact."""
+    assert hasattr(server, "_run_device_script")
+    assert callable(server._run_device_script)

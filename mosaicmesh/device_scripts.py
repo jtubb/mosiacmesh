@@ -198,110 +198,11 @@ async def _launch_webapp_via_vnc(client_key):
 
 
 async def _run_device_script(client_key, which):
-    """Run a device's lifecycle script (which in {login,start,stop,reboot}) over
-    SSH, using the per-device field (or the fleet default). Best-effort: missing
-    key / no IP / SSH failure just logs. Returns (rc, output) for the caller/log."""
-    import server as _server
-    client = _server.settings.clients.get(client_key)
-    if not client or not getattr(client, "ip", ""):
-        logging.warning("run-script %s %s: no client/ip", client_key, which)
-        return (None, "no-ip")
-
-    # Special-case "start": iOS 5 / iPad-1 has no CLI launcher that
-    # passes a webclip's URL context to Web.app, so neither sbdidlaunch
-    # nor `open <bundle-id>` nor `activator send` actually launch the
-    # MosaicMesh webapp foreground with content (we tried all of them
-    # in the 2026-06-03 session). The only working "launch the
-    # webclip" path is SpringBoard's own tap handler. So for "start"
-    # we (a) SSH-run the loginScript first to wake the screen +
-    # disable autolock, then (b) VNC-tap the icon's framebuffer
-    # coordinate (WEBAPP_ICON_FBX, WEBAPP_ICON_FBY) -- which requires
-    # the operator to have dragged the icon to the leftmost dock slot
-    # in portrait orientation on each iPad. Falls back to SSH-exec of
-    # startScript if the VNC tap fails (Veency unreachable, pool
-    # exhausted, etc.) so non-iPad-1 devices and emergency
-    # uiopen-to-Safari paths still work.
-    if which == "start":
-        # Wake the screen only -- send libactivator.lockscreen.dismiss
-        # (wakes if asleep, no-ops if awake). Do NOT also call the
-        # autolock switch-off here: it produces a transient "Autolock
-        # disabled" popup that intercepts the VNC tap below. Autolock
-        # is already off from the boot LaunchDaemon (5.4a) which fires
-        # the same switch-off command 30s after every boot, so the
-        # autolock state is correct system-wide regardless.
-        wake_script = "activator send libactivator.lockscreen.dismiss"
-        login_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
-                     ["%s@%s" % (SSH_USER, client.ip), wake_script])
-        try:
-            wake = await asyncio.create_subprocess_exec(
-                *login_cmd, stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL)
-            try:
-                await asyncio.wait_for(wake.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                try: wake.kill(); await wake.wait()
-                except Exception: pass
-        except Exception as e:  # noqa: BLE001
-            logging.warning("run-script %s start: wake step failed: %s",
-                            client_key, e)
-        # Brief settle delay so SpringBoard has finished the wake
-        # animation before we tap -- otherwise the tap can land
-        # mid-transition and SpringBoard ignores it.
-        await asyncio.sleep(0.8)
-        ok = await _launch_webapp_via_vnc(client_key)
-        if ok:
-            return (0, "VNC_TAP_OK")
-        logging.warning("run-script %s start: VNC tap failed, "
-                        "falling back to startScript SSH exec",
-                        client_key)
-        # Fall through to the generic SSH path below.
-
-    field = which + "Script"
-    script = getattr(client, field, None) or DEFAULT_DEVICE_SCRIPTS.get(field)
-    if not script:
-        logging.warning("run-script %s %s: no script", client_key, which)
-        return (None, "no-script")
-    cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
-           ["%s@%s" % (SSH_USER, client.ip), script])
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            # CRITICAL: kill the subprocess on timeout. Without this the
-            # ssh.exe stays alive in the background indefinitely -- on
-            # iOS-5 fleets where SSH connects but the iPad's shell hangs
-            # mid-command (WiFi power-save mid-handshake, slow respring,
-            # etc.), every Start/Login/Test that times out for one
-            # device leaves a leaked ssh.exe on the server. Observed in
-            # production: 87 zombie ssh.exe processes accumulated over
-            # 19-22 hours, saturating the Windows network stack until
-            # iPad GET requests couldn't even reach aiohttp's listener.
-            logging.warning("run-script %s %s: timeout (30s); killing ssh.exe",
-                            client_key, which)
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-            return (None, "timeout")
-        text = (out or b"").decode("utf-8", "replace").strip()
-        logging.warning("run-script %s %s rc=%s: %s", client_key, which,
-                        proc.returncode, text.replace("\n", " ")[:300])
-        return (proc.returncode, text)
-    except Exception as e:  # noqa: BLE001
-        # Catch-all: any other error (proc creation failed, etc.) -- still
-        # try to kill if proc was created.
-        if proc is not None and proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-        logging.warning("run-script %s %s failed: %s", client_key, which, e)
-        return (None, str(e))
+    """Public entry point — delegates to run_profile_action. Kept under the
+    old name so existing call sites (mosaicmesh/websocket/legacy.py
+    RUN_SCRIPT handler, ad-hoc tests that patch server._run_device_script)
+    continue to work without change."""
+    return await run_profile_action(client_key, which)
 
 
 # =============================================================================
