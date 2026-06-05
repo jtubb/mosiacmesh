@@ -87,6 +87,11 @@ from mosaicmesh.api.discovery import (
     api_discovery_devices, api_discovery_stats, api_discovery_configure,
 )
 from mosaicmesh.websocket.legacy import msg_response
+# Re-exported for backward-compat: tests in test_websocket_handlers.py call
+# server.handle_websocket_message(...) directly. The handler is also NOT YET
+# wired into ws_handler (dispatch.py only dispatches to msg_response); when
+# the typed protocol gets wired in, ws_handler should call it conditionally
+# and this re-export becomes optional.
 from mosaicmesh.websocket.typed import handle_websocket_message
 from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
 

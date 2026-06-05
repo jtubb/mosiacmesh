@@ -1,9 +1,17 @@
-"""SockJS connection lifecycle + dispatch to legacy or typed handlers.
+"""SockJS connection lifecycle + dispatch to the legacy handler.
 
 Owns the connect/disconnect callbacks registered on the sockjs manager.
-For each message, dispatches to either:
+For each incoming MESSAGE event, dispatches to:
   - mosaicmesh.websocket.legacy.msg_response (REQUEST-based, iPad-1 fleet)
-  - mosaicmesh.websocket.typed.handle_websocket_message (type-based, newer)
+
+NOT YET WIRED: mosaicmesh.websocket.typed.handle_websocket_message
+exists as an intended replacement for the legacy protocol but is
+currently called only from direct test invocations
+(server.handle_websocket_message via test_websocket_handlers.py). The
+typed handler is NOT dispatched from ws_handler in this file —
+ws_handler's MESSAGE branch only invokes msg_response. Wiring the
+typed protocol in is a future task; until then the re-export in
+server.py keeps the test import path stable.
 
 Completes the mosaicmesh/websocket/ subpackage: legacy.py (Task 10) +
 typed.py (Task 11) + this file. After this task, server.py's only
