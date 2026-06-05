@@ -163,34 +163,31 @@ class TestWebSocketHandlers:
 class TestWebSocketBroadcasting:
     """Test WebSocket broadcasting functionality"""
     
-    @pytest.mark.asyncio
-    async def test_broadcast_to_display_group(self, mock_settings):
-        """Test broadcasting message to display group"""
+    def test_broadcast_to_display_group(self, mock_settings):
+        """Broadcasting to a display group fans out via the central
+        socketmanager + DEST routing (one broadcast per client in the group)."""
         if not hasattr(server, 'broadcast_to_display_group'):
             pytest.skip("broadcast_to_display_group not implemented")
-            
-        # Setup display with clients
-        display = server.Display()
-        display.clientList = ['client1', 'client2']
-        mock_settings.displays['TestDisplay'] = display
-        
-        # Create mock clients with websocket sessions
+
+        # Two clients in the target group, one outside it
         client1 = server.Client()
-        client1.websocket = AsyncMock()
+        client1.displayID = 'TestDisplay'
         client2 = server.Client()
-        client2.websocket = AsyncMock()
-        
+        client2.displayID = 'TestDisplay'
+        other = server.Client()
+        other.displayID = 'OtherDisplay'
+
         mock_settings.clients['client1'] = client1
         mock_settings.clients['client2'] = client2
+        mock_settings.clients['other'] = other
         server.settings = mock_settings
-        
-        message = {'type': 'broadcast', 'data': 'test message'}
-        
-        await server.broadcast_to_display_group('TestDisplay', message)
-        
-        # Both clients should have received the message
-        client1.websocket.send.assert_called_once()
-        client2.websocket.send.assert_called_once()
+        server.socketmanager = MagicMock()
+
+        message = {"REQUEST": "broadcast", "PAYLOAD": "test message"}
+        server.broadcast_to_display_group('TestDisplay', message)
+
+        # One broadcast per in-group client; the 'other' client is excluded
+        assert server.socketmanager.broadcast.call_count == 2
     
     @pytest.mark.asyncio
     async def test_broadcast_discovery_announcement(self, mock_settings, mock_client):
@@ -283,8 +280,57 @@ class TestWebSocketConnectionManagement:
         # Old client should be removed, recent client should remain
         assert 'old' not in mock_settings.clients
         assert 'recent' in mock_settings.clients
-        
+
         mock_save.assert_called_once()
+
+    @patch('server.saveSettings')
+    def test_clear_offline_clients_bulk(self, mock_save, mock_settings):
+        """max_age_seconds=0 (the 'Clear offline' bulk path) removes every
+        offline client regardless of age, but never an online one."""
+        if not hasattr(server, 'cleanup_old_clients'):
+            pytest.skip("cleanup_old_clients not implemented")
+
+        offline_recent = server.Client()
+        offline_recent.lastSeen = time.time() - 90  # offline only 90s
+        offline_recent.isOnline = False
+
+        online = server.Client()
+        online.lastSeen = time.time()
+        online.isOnline = True
+
+        mock_settings.clients['offline'] = offline_recent
+        mock_settings.clients['online'] = online
+        server.settings = mock_settings
+
+        removed = server.cleanup_old_clients(max_age_seconds=0)
+
+        assert removed == 1
+        assert 'offline' not in mock_settings.clients
+        assert 'online' in mock_settings.clients
+
+    def test_sanitize_display_groups_merges_html_key(self, mock_settings):
+        """An HTML-corrupted group key is removed, merged into the clean name,
+        and any client referencing it is repointed."""
+        if not hasattr(server, 'sanitize_display_groups'):
+            pytest.skip("sanitize_display_groups not implemented")
+
+        bad = 'Default <span class="badge">0 screens</span>'
+        mock_settings.displays = {
+            'Default': server.Display(),
+            'Desktop': server.Display(),
+            bad: server.Display(),
+        }
+        c = server.Client()
+        c.displayID = bad
+        mock_settings.clients = {'c1': c}
+        server.settings = mock_settings
+
+        fixed = server.sanitize_display_groups()
+
+        assert fixed == 1
+        assert bad not in mock_settings.displays
+        assert set(mock_settings.displays.keys()) == {'Default', 'Desktop'}
+        assert mock_settings.clients['c1'].displayID == 'Default'
 
 
 class TestMessageValidation:

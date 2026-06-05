@@ -123,6 +123,8 @@ var GoTime = (function f() {
         _syncCount: 0,
         _offset: 0,
         _precision: 2e308,
+        _lastAcceptTime: null,   // when the offset was last (re)locked
+        _precisionDecay: 0.0005, // ms the accept-threshold grows per ms since last lock
         _history: [],
         _syncInitialTimeouts: [0, 3000, 9000, 18000, 45000],
         _syncInterval: 900000,
@@ -201,10 +203,20 @@ var GoTime = (function f() {
             Method: method,
             Time: timestamp
         });*/
-        // Only update the offset if the precision is improved
-        if (sample.precision <= options._precision) {
+        // Accept the sample if its precision (RTT/2) beats the stored precision, which
+        // now DECAYS with time since the last accepted sample. Previously precision
+        // only ratcheted down, so the offset froze on the single best-ever RTT: it
+        // never tracked clock drift over a long wall session, and one low-RTT outlier
+        // could lock a wrong offset forever. The decayed threshold lets a fresh
+        // low-RTT sample re-lock (capped so a network blip can't lock a bad sample),
+        // so the offset follows drift while still preferring low-jitter measurements.
+        var sinceAccept = (options._lastAcceptTime == null) ? 2e308 : (timestamp - options._lastAcceptTime);
+        var grow = sinceAccept * options._precisionDecay;
+        if (grow > 50) { grow = 50; }
+        if (sample.precision <= options._precision + grow) {
             options._offset = Math.round(sample.offset);
             options._precision = sample.precision;
+            options._lastAcceptTime = timestamp;
         }
         if (!options._firstSyncCallbackRan && (options._firstSyncCallback != null)) {
             options._firstSyncCallbackRan = true;

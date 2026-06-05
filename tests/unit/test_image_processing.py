@@ -44,42 +44,43 @@ class TestImageProcessing:
             detector = server.setup_aruco_detector()
             assert detector is not None
     
-    @patch('cv2.aruco.detectMarkers')
-    def test_detect_aruco_markers_found(self, mock_detect):
+    @patch('cv2.aruco.ArucoDetector')
+    def test_detect_aruco_markers_found(self, mock_detector_cls):
         """Test ArUco marker detection with markers found"""
         if not hasattr(server, 'detect_aruco_markers'):
             pytest.skip("ArUco detection not implemented")
-            
-        # Mock detection results
+
+        # Mock detection results via the modern ArucoDetector object API
         mock_corners = [np.array([[[10, 10], [50, 10], [50, 50], [10, 50]]])]
         mock_ids = np.array([[1]])
         mock_rejected = []
-        mock_detect.return_value = (mock_corners, mock_ids, mock_rejected)
-        
+        mock_detector_cls.return_value.detectMarkers.return_value = (
+            mock_corners, mock_ids, mock_rejected)
+
         # Create test image
         test_image = np.zeros((100, 100, 3), dtype=np.uint8)
-        
+
         corners, ids, rejected = server.detect_aruco_markers(test_image)
-        
+
         assert corners is not None
         assert ids is not None
         assert len(corners) == 1
         assert ids[0][0] == 1
-        mock_detect.assert_called_once()
-    
-    @patch('cv2.aruco.detectMarkers')
-    def test_detect_aruco_markers_none_found(self, mock_detect):
+        mock_detector_cls.return_value.detectMarkers.assert_called_once()
+
+    @patch('cv2.aruco.ArucoDetector')
+    def test_detect_aruco_markers_none_found(self, mock_detector_cls):
         """Test ArUco marker detection with no markers found"""
         if not hasattr(server, 'detect_aruco_markers'):
             pytest.skip("ArUco detection not implemented")
-            
+
         # Mock no detection results
-        mock_detect.return_value = (None, None, [])
-        
+        mock_detector_cls.return_value.detectMarkers.return_value = (None, None, [])
+
         test_image = np.zeros((100, 100, 3), dtype=np.uint8)
-        
+
         corners, ids, rejected = server.detect_aruco_markers(test_image)
-        
+
         assert corners is None
         assert ids is None
     

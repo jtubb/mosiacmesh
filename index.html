@@ -8,15 +8,40 @@
   <script src="/js/mosiacmesh.js"></script>
   <script>
     var blink = true;
+    // Tracks whether we have already told the server "my
+    // ProgrammableTimer is synced" since our LAST sock-open. Reset to
+    // false on disconnect (when sock becomes null) so the next
+    // converge+connect cycle re-emits SYNACK to the server -- the
+    // server clears client.synced on disconnect, so we have to
+    // re-announce after every reconnect.
+    var _mmSyncedSent = false;
     function tickcallback(currentTime,currentTarget,drift_correction)
     {
         if(sock == null)
         {
-            mosiacMeshConnect(mosiacMeshCallback);
+            _mmSyncedSent = false;   // re-emit SYNACK on next reconnect+sync
+            reconnectWatchdog();   // guarded reconnect (no overlapping handshakes)
         }
+        // The tick fires on the synchronized GoTime second: record its phase and
+        // beat the indicator so all displays pulse together.
+        recordTickPhase(currentTime);
+        _lastTickAt = Date.now();
+        triggerPulse();
         if(ProgrammableTimer.isSynced())
         {
-			if(blink)
+            // One-shot announce: tell the server our clock has converged
+            // (jitter within tolerance over the rolling drift_history
+            // window). The server's SYNACK handler sets
+            // client.synced=True, which _begin_prepare uses to gate
+            // PREPARE delivery to clients whose clocks are stable.
+            if (!_mmSyncedSent && sock !== null &&
+                typeof SockJS !== "undefined" && sock.readyState === SockJS.OPEN) {
+                try {
+                    sock.send(generateMessage("SRV", "SYNACK", getUDID()));
+                    _mmSyncedSent = true;
+                } catch (e) { /* try again next tick */ }
+            }
+			if(blink && !playback.active)
 			{
 				if((Math.round(currentTime/1000)*1000)%2000 == 0)
 				{
@@ -28,8 +53,16 @@
 				}
 			}
         }
-        else
+        else if (blink)
         {
+            // Only overwrite the canvas with the "syncing..." placeholder
+            // while blink is true (the pre-play TICK/TOCK idle state).
+            // calibrate/identify/play/stop handlers all set blink=false
+            // because they’ve installed their own canvas content
+            // (ArUco marker, identify label, video, etc.) and the tick
+            // callback must not clobber it -- which it WAS doing whenever
+            // ProgrammableTimer’s _synced flapped to false, briefly
+            // replacing the marker with "Synching to time server...".
             $('#canvas').text("Synching to time server...").css('font-size','8vw');
         }
         //console.log(currentTime + "," +currentTarget + "," + drift_correction+"," + (1000-drift_correction)+","+(currentTarget-currentTime));
@@ -38,7 +71,644 @@
     ProgrammableTimer.setup(1000,tickcallback);
 	
 	var mediaSequence = null;
-	
+	var mediaReady = false;
+	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
+		video: null, videoIndex: -1, driftTimer: null, paused: false, startTimer: null,
+		scriptRaf: null, scriptIndex: -1,
+		// Adaptive seek-ahead: a hard seek on the iPad-1 settles ~latency late (the
+		// shared clock advances during the rebuffer), so seeking to the exact target
+		// lands ~that-latency behind and stays there (iOS-5 can't rate-correct). We
+		// seek to target+seekAheadMs and tune seekAheadMs from each seek's residual so
+		// it converges to the device's seek latency (~200ms observed on iPad-1; fast
+		// devices tune it back toward 0). Start near the iPad estimate for fast convergence.
+		seekAheadMs: 200, seekPending: false, lastSeekAt: 0,
+		// iOS (esp. iPad 1 / iOS 5) won't start <video> without a user gesture and
+		// the activation does NOT transfer to a freshly-created element. So we reuse
+		// ONE persistent <video> (pvid) across items and bless it once via a tap
+		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
+		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null,
+		boundaryTimer: null };
+
+	// Play video MUTED. A muted <video> is exempt from autoplay policy on every
+	// browser, so it starts with NO user gesture — no tap-to-start anywhere
+	// (kiosk-friendly), at the cost of audio. Flip to false to restore sound, which
+	// re-enables the arm / tap-to-start gesture path (needed for unmuted playback).
+	var VIDEO_MUTED = true;
+
+	// One persistent video element, created once and reused for every video item
+	// so a single user gesture keeps the whole session playable on iOS.
+	function getPersistentVideo() {
+		if (!playback.pvid) {
+			var v = document.createElement('video');
+			v.muted = VIDEO_MUTED; // unmuted only when audio is wanted (needs a gesture)
+			v.setAttribute('webkit-playsinline', '');
+			v.setAttribute('playsinline', '');
+			v.preload = 'auto';
+			// Lock the video to the viewport itself (position:fixed, full size). It
+			// is appended to <body>, NOT #canvas — #canvas is transform-centered,
+			// which (a) is a containing block that would trap a fixed child and
+			// (b) mis-positions under scroll on iOS-5. Explicit 100%/100% also sizes
+			// it (iOS-5 won't auto-size a <video> to its content).
+			v.style.position = 'fixed';
+			v.style.left = '0'; v.style.top = '0';
+			v.style.width = '100%'; v.style.height = '100%';
+			v.style.background = '#000';
+			v.style.zIndex = '1';
+			v.style.display = 'none';
+			// Once the video actually starts (modern autoplay, the muted fallback,
+			// or a post-tap play), drop the overlay and mark the session active. On
+			// iPad 1 'playing' won't fire until the gesture, so the overlay persists.
+			v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+			document.body.appendChild(v);
+			playback.pvid = v;
+		}
+		return playback.pvid;
+	}
+	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
+	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
+	var KEYFRAME_GRID_MS = 250;  // MUST match server KEYFRAME_GRID_SEC (0.25s): drift
+	                             // re-aligns by seeking to this keyframe grid so iOS-5
+	                             // (keyframe-accurate seek) and modern clients land on
+	                             // the same frame -> the wall agrees with itself.
+	// Drift past this triggers a BOUNDARY-aligned re-align seek (see driftTick). With
+	// boundary alignment the residual is the lead-estimate error + timer jitter, NOT a
+	// grid-snap, so the threshold is jitter-based (not grid-relative): high enough that
+	// jitter doesn't trigger needless re-seeks once converged (each seek stalls the
+	// iPad), low enough to re-align on real drift. iOS-5 IGNORES playbackRate (verified:
+	// set 1.15 but currentTime advances 1.0x), so a seek is the only lever there.
+	var DRIFT_SEEK_MS = 100;
+	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
+	                             // time to settle + establish playback before another,
+	                             // else a slow/stalled element gets re-seeked every tick
+	                             // and stays stuck at currentTime 0 (never plays).
+
+	// Optional on-screen timing HUD. Open the page with ?tdbg to diagnose sync /
+	// flashing on a device: live clock(el) vs video(ct), drift(err), look-ahead,
+	// and a tick counter (rapidly climbing # == a re-render/flash loop). Element
+	// is created lazily on first use (the <video> is in <body> by then). ES5-safe.
+	if (/tdbg/.test(location.href)) {
+		window._mmDbg = true;   // also stream debug to the server log (CLIENTLOG)
+		window._tdbg = function(pos, v, errorMs) {
+			var el = document.getElementById('tdbg');
+			if (!el) {
+				if (!document.body) { return; }
+				el = document.createElement('div'); el.id = 'tdbg';
+				el.style.cssText = 'position:fixed;left:0;bottom:0;z-index:99999;' +
+					'background:rgba(0,0,0,0.7);color:#0f0;font:12px monospace;' +
+					'padding:3px 5px;white-space:pre;pointer-events:none;';
+				document.body.appendChild(el);
+				window._tdbgN = 0;
+			}
+			window._tdbgN++;
+			var elapsed = GoTime.now() - playback.startEpoch;
+			el.textContent = 'idx=' + (pos ? pos.index : '-') +
+				' off=' + (pos ? Math.round(pos.offsetMs) : '-') +
+				' ct=' + (v ? Math.round(v.currentTime * 1000) : '-') +
+				' err=' + Math.round(errorMs) +
+				' ahead=' + Math.round(playback.seekAheadMs) +
+				' rs=' + (v ? v.readyState : '-') +
+				' el=' + Math.round(elapsed) +
+				' r=' + (window._mmRenderN || 0) + ' #' + window._tdbgN;
+		};
+		// Always-on persistent-<video> state line (updates during PREPARE/arming,
+		// when the drift HUD above isn't running). Shows why a tap doesn't start:
+		// verr=decode/network error code, rs/ns=ready/network state, evt=last media
+		// event. ES5-safe. pointer-events:none so it never blocks the tap overlay.
+		window._mmVidEvt = '-';
+		setInterval(function () {
+			var v = playback.pvid;
+			var el2 = document.getElementById('tdbg2');
+			if (!el2) {
+				if (!document.body) { return; }
+				el2 = document.createElement('div'); el2.id = 'tdbg2';
+				el2.style.cssText = 'position:fixed;left:0;bottom:20px;z-index:99999;' +
+					'background:rgba(0,0,0,0.7);color:#ff0;font:12px monospace;' +
+					'padding:3px 5px;white-space:pre;pointer-events:none;';
+				document.body.appendChild(el2);
+			}
+			if (v && !v._mmEvtHooked) {
+				v._mmEvtHooked = true;
+				var names = ['playing', 'error', 'stalled', 'waiting', 'pause', 'canplay', 'suspend', 'abort'];
+				var mk = function (n) { return function () { window._mmVidEvt = n + (v.error ? ('/e' + v.error.code) : ''); dbg('vid:' + n); }; };
+				var i; for (i = 0; i < names.length; i++) { v.addEventListener(names[i], mk(names[i]), false); }
+			}
+			el2.textContent = 'arm activated=' + playback.activated +
+				' paused=' + (v ? v.paused : '-') +
+				' rs=' + (v ? v.readyState : '-') +
+				' ns=' + (v ? v.networkState : '-') +
+				' verr=' + (v && v.error ? v.error.code : '-') +
+				' src=' + (v && v.getAttribute('src') ? '1' : '0') +
+				' evt=' + window._mmVidEvt;
+		}, 500);
+	}
+
+	// JS mirror of server.playlist_index — keep the two in sync.
+	function playlistIndex(elapsedMs, durations, loop) {
+		var total = 0, i;
+		for (i = 0; i < durations.length; i++) { total += durations[i]; }
+		if (total <= 0) { return null; }
+		if (loop) { elapsedMs = ((elapsedMs % total) + total) % total; }
+		else if (elapsedMs >= total) { return null; }
+		if (elapsedMs < 0) { elapsedMs = 0; }
+		var cum = 0;
+		for (i = 0; i < durations.length; i++) {
+			if (elapsedMs < cum + durations[i]) { return { index: i, offsetMs: elapsedMs - cum }; }
+			cum += durations[i];
+		}
+		return { index: durations.length - 1, offsetMs: durations[durations.length - 1] };
+	}
+
+	function isVideoItem(file) {
+		// Mirror server.isVideoItem (_VIDEO_EXTS). ES5-safe regex.
+		return /\.(mp4|mov|m4v|webm|ogv)(\?|$)/i.test(file || '');
+	}
+
+	function showTapStart() { var el = document.getElementById('tapstart'); if (el) { el.style.display = 'block'; } }
+	function hideTapStart() { var el = document.getElementById('tapstart'); if (el) { el.style.display = 'none'; } }
+
+	// Called from the #tapstart overlay's tap handler — a real user gesture.
+	// iOS-5 only begins LOADING a <video> from a gesture-triggered play(), and the
+	// gesture is voided by any DOM mutation / async deferral before play(). So do
+	// load()+play() FIRST and nothing else; the 'playing' listener (in
+	// getPersistentVideo) dismisses the overlay, and the drift loop syncs position.
+	function activatePlayback() {
+		dbg("tap");
+		var v = getPersistentVideo();
+		v.style.display = 'block';
+		// iOS-5 Safari needs load()+play() TOGETHER inside the tap gesture to start
+		// a held/paused element (play() alone won't restart it). The PREPARE
+		// loadedmetadata handler is one-shot (removes itself), so this load() can't
+		// re-trigger the hold. ES5/iOS-5 proven arming sequence.
+		try { v.load(); } catch (e) {}
+		try {
+			var p = v.play();
+			if (p && p['catch']) {
+				p['catch'](function () { v.muted = true; var q = v.play(); if (q && q['catch']) { q['catch'](function () {}); } });
+			}
+		} catch (e) {}
+		// Do NOT optimistically set activated here: a synthetic/blocked tap (e.g. an
+		// auto-arm VNC tap on iOS 5, where play() needs a REAL gesture) would falsely
+		// mark us armed and suppress the prompt while the video stays paused. The
+		// 'playing' listener (getPersistentVideo) sets activated only once it actually
+		// starts, and hides the overlay then.
+		return false;
+	}
+
+	function showBlackout() { var el = document.getElementById('blackout'); if (el) { el.style.display = 'block'; } }
+	function hideBlackout() { var el = document.getElementById('blackout'); if (el) { el.style.display = 'none'; } }
+
+	function sendMsg(request, payload) {
+		try { sock.send(generateMessage("SRV", request, payload)); } catch (e) {}
+	}
+
+	// Stream client debug state to the server log (opt-in via ?tdbg) so device
+	// behavior is visible without reading an on-screen HUD. ES5-safe.
+	function dbg(tag, extra) {
+		if (!window._mmDbg) { return; }
+		var v = playback.pvid;
+		var payload = {
+			tag: tag,
+			activated: playback.activated, active: playback.active,
+			paused: v ? v.paused : null,
+			rs: v ? v.readyState : null, ns: v ? v.networkState : null,
+			verr: (v && v.error) ? v.error.code : null,
+			ct: v ? Math.round(v.currentTime * 1000) : null,
+			src: (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')).split('/').pop() : null,
+			idx: playback.videoIndex,
+			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null
+		};
+		if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { payload[k] = extra[k]; } } }
+		sendMsg("CLIENTLOG", payload);
+	}
+
+	// Undo the calibrate view's <html> framing (8px border + window-16 sizing) and
+	// its white page override, returning to the black playback background.
+	function exitCalibrateView() {
+		$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
+		$('html, body').css('background-color', '');
+		$('#canvas').css({ color: '' });
+	}
+
+	// Coordinated-start phase 1: buffer the first item and HOLD frame 0 (paused).
+	// Report READY when buffered (and armed, for gesture devices). A gesture device
+	// that is not yet armed reports NEEDS_ARM and, when the arming touch lands,
+	// "arm-then-hold": let play() fire to consume the gesture, then pause back to 0
+	// and send READY. The server's GO (PLAY with a future startEpoch) releases us.
+	function prepareFirstItem(prepareId) {
+		clearScript();
+		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+		// Arm/buffer off the first VIDEO item in the playlist — the gesture is
+		// needed before the first video plays, even if item 0 is a non-video (e.g.
+		// a SCRIPT animation). The persistent <video> is reused for every video
+		// item, so blessing it once (with the first video's src) arms them all.
+		var item = null, i;
+		for (i = 0; i < playback.items.length; i++) {
+			if (isVideoItem(playback.items[i].file)) { item = playback.items[i]; break; }
+		}
+		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }  // no video -> nothing to arm
+		var v = getPersistentVideo();
+		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = VIDEO_MUTED;
+		playback.videoSrc = item.file;
+		var holdAtZero = function () {
+			try { v.pause(); } catch (e) {}
+			try { v.currentTime = 0; } catch (e) {}
+		};
+		var reportReady = function () { dbg("send-READY"); sendMsg("READY", { prepareId: prepareId }); };
+		var onArmed = function () {            // 'playing' fired => armed (autoplay or tap)
+			if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+			playback.activated = true; hideTapStart();
+			holdAtZero(); reportReady();
+		};
+		if (v.getAttribute('src') !== item.file) { v.src = item.file; try { v.load(); } catch (e) {} }
+		if (playback.activated) {
+			// Already blessed this session: the element can (re)load + play
+			// programmatically, so just buffer + hold 0 and report READY; GO starts it.
+			holdAtZero(); reportReady(); return;
+		}
+		// Not yet blessed -> ARM NOW, during PREPARE, so GO can start the clip
+		// PROGRAMMATICALLY in sync with displays that autoplay (instead of the iPad
+		// first showing a tap prompt at GO, after the balls). Do NOT wait for
+		// loadedmetadata: iOS 5 won't fetch even metadata without a user gesture, so
+		// that event never fires pre-tap. Instead attempt muted autoplay (modern starts
+		// -> 'playing' -> onArmed -> READY, no visible tap), and on a fixed grace show
+		// the tap prompt + NEEDS_ARM if we still haven't started (iOS 5). The human tap
+		// (activatePlayback -> load()+play() in the gesture) loads + blesses it; the
+		// server holds GO until every display is READY, so the wall starts together.
+		if (playback._armPlaying) { try { v.removeEventListener('playing', playback._armPlaying); } catch (e) {} }
+		playback._armPlaying = function () { v.removeEventListener('playing', playback._armPlaying); playback._armPlaying = null; onArmed(); };
+		v.addEventListener('playing', playback._armPlaying);
+		if (VIDEO_MUTED) { var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); } }
+		playback.armTimer = setTimeout(function () {
+			if (!playback.activated) {
+				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });
+				showTapStart();           // human tap (activatePlayback -> load()+play()) blesses it
+			}
+		}, 700);
+	}
+
+	function clearVideo() {
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		var v = playback.pvid;
+		if (v && playback.activated && v.getAttribute('src')) {
+			// Do NOT pause the blessed element between items. iOS-5 drops the
+			// element's user-activation on pause, which re-locks playback so the
+			// NEXT video's play() is blocked again (and, with activated already
+			// true, showItem won't re-prompt) — the "video didn't start, no tap
+			// prompt" bug. Instead keep it playing, muted and looping, but fully
+			// transparent so the non-video item shows through it. showItem's video
+			// branch restores opacity + audio. Mirrors stopPlayback's keep-alive.
+			v.muted = true; v.loop = true; v.style.opacity = '0';
+			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
+		} else if (v) {
+			// Not yet gesture-blessed (nothing to preserve): just hide it.
+			try { v.pause(); } catch (e) {}
+			v.style.display = 'none';
+		}
+		playback.video = null;
+		playback.videoIndex = -1;
+	}
+
+	var _raf = window.requestAnimationFrame || window.webkitRequestAnimationFrame ||
+		function(cb){ return setTimeout(cb, 16); };
+	var _caf = window.cancelAnimationFrame || window.webkitCancelAnimationFrame ||
+		function(id){ clearTimeout(id); };
+
+	// Built-in animations: each is a PURE function of elapsed time (tMs) and canvas
+	// size, so every display draws the same frame at the same shared-clock instant.
+	var animations = {
+		bouncingBalls: function(ctx, tMs, w, h) {
+			var colors = ['#e74c3c', '#27ae60', '#2980b9', '#f1c40f'];
+			var r = Math.max(12, Math.min(w, h) * 0.06), n = 4, i;
+			for (i = 0; i < n; i++) {
+				var px = (Math.sin(tMs / (900 + i * 220) + i) + 1) / 2;        // 0..1
+				var py = (Math.sin(tMs / (700 + i * 180) + i * 1.7) + 1) / 2;  // 0..1
+				ctx.fillStyle = colors[i % colors.length];
+				ctx.beginPath();
+				ctx.arc(r + px * (w - 2 * r), r + py * (h - 2 * r), r, 0, Math.PI * 2);
+				ctx.fill();
+			}
+		}
+	};
+
+	function clearScript() {
+		if (playback.scriptRaf) { _caf(playback.scriptRaf); playback.scriptRaf = null; }
+		playback.scriptIndex = -1;
+	}
+
+	function runScriptLoop(canvas, name) {
+		var ctx = canvas.getContext('2d');
+		function frame() {
+			if (!playback.active) { return; }
+			var durations = [], k;
+			for (k = 0; k < playback.items.length; k++) { durations.push(playback.items[k].duration); }
+			var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+			if (pos === null) { stopPlayback(); return; }
+			if (pos.index !== playback.scriptIndex) { return; } // transition; renderPlayback handles it
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			if (animations[name]) { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height); }
+			playback.scriptRaf = _raf(frame);
+		}
+		playback.scriptRaf = _raf(frame);
+	}
+
+	// Keep the active video aligned to the shared clock: a proportional playbackRate
+	// controller for small drift, a hard seek for large drift (the latter is also the
+	// iOS-5 path, where playbackRate may be ignored so error grows until it is seeked).
+	function driftTick() {
+		var v = playback.video;
+		if (!v || !playback.active) { return; }
+		// Should be playing but isn't (not a user PAUSE)? iOS-5 can drop the
+		// element's user-activation across a stop/start, so a programmatic play()
+		// gets blocked again. Retry it; if it still won't go, re-show the tap
+		// prompt so a gesture can re-bless it. The 'playing' listener hides the
+		// prompt once it actually starts (so modern displays never see it).
+		if (v.paused && !playback.paused) {
+			var pr = v.play();
+			if (pr && pr['catch']) { pr['catch'](function () {}); }
+			if (v.paused) { showTapStart(); }   // still blocked (iOS 5): need the tap
+			return;
+		}
+		// Leave the video alone while it is still seeking or lacks playable data
+		// (readyState < HAVE_FUTURE_DATA). Correcting mid-seek restarts buffering,
+		// so during startup the video can never establish playback — it gets
+		// re-seeked every tick and stays stuck at currentTime 0. Let it buffer to
+		// a playable state, then sync.
+		if (v.seeking || v.readyState < 3) { return; }
+		var durations = [], i;
+		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
+		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+		if (pos === null || pos.index !== playback.videoIndex) { return; }
+		var errorMs = v.currentTime * 1000 - pos.offsetMs;   // <0 => BEHIND clock, >0 => AHEAD
+		// A prior BOUNDARY-aligned seek has settled: tune the seek-ahead lead from its
+		// residual. Boundary-aligned err has NO keyframe snap (the seek is timed to land
+		// as the clock reaches the keyframe), so it's a clean latency-estimate error ->
+		// correct it nearly fully (x0.9), converging the lead to the device's seek
+		// latency in 1-2 seeks. (Gradual x0.4 on snap-noisy err froze half-way at
+		// ~-138ms.) err<0 => landed behind -> grow the lead.
+		if (playback.seekPending) {
+			playback.seekPending = false;
+			playback.seekAheadMs -= errorMs * 0.9;
+			if (playback.seekAheadMs < 0) { playback.seekAheadMs = 0; }
+			if (playback.seekAheadMs > 1200) { playback.seekAheadMs = 1200; }
+		}
+		// Rate-limit hard seeks so each settles before the next.
+		var nowMs = GoTime.now();
+		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
+		var didSeek = false;
+		// Off the shared clock by more than the tolerance? Re-align with a BOUNDARY-
+		// ALIGNED seek so the residual is CONSISTENT (no random keyframe snap). Seeking
+		// NOW lands at an arbitrary phase -> +-grid/2 snap that freezes at a different
+		// value every startup (and differs across iPads). Instead schedule the seek to
+		// SETTLE exactly when the clock reaches a grid keyframe: seek to the next grid
+		// keyframe G (just past offset+lead) at the wall-instant when offset == G - lead,
+		// so after ~lead of settle it lands as the clock arrives at G -> currentTime ==
+		// clock target. Residual collapses to the (converging) lead error + timer jitter,
+		// and is the SAME across the fleet (all land on the same keyframe at the same
+		// clock instant). One seek per re-align; the lead converges in 1-2 startup seeks.
+		if (canSeek && (errorMs < -DRIFT_SEEK_MS || errorMs > DRIFT_SEEK_MS)) {
+			var lead = playback.seekAheadMs;
+			var maxMs = ((v.duration || (durations[pos.index] / 1000)) * 1000) - 50;
+			var G = Math.ceil((pos.offsetMs + lead + 40) / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
+			var issueDelay = G - pos.offsetMs - lead;   // wall-ms until we fire the seek
+			if (issueDelay < 0) { issueDelay = 0; }
+			if (G > maxMs) { G = maxMs; }
+			if (G < 0) { G = 0; }
+			playback.lastSeekAt = nowMs;                 // cooldown starts now so we don't re-schedule
+			didSeek = true;
+			if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); }
+			playback.boundaryTimer = setTimeout(function () {
+				playback.boundaryTimer = null;
+				var vv = playback.video;
+				if (!playback.active || playback.paused || !vv) { return; }
+				try { vv.currentTime = G / 1000; } catch (e) {}
+				vv.playbackRate = 1;
+				playback.seekPending = true;             // tune the lead from the residual next tick
+				playback.lastSeekAt = GoTime.now();
+			}, issueDelay);
+		} else {
+			var rate = 1 - errorMs / 2000;
+			if (rate < 0.85) { rate = 0.85; }
+			if (rate > 1.15) { rate = 1.15; }
+			v.playbackRate = rate;
+		}
+		if (window._tdbg) { window._tdbg(pos, v, errorMs); }
+		// Throttled drift trace (~1/s): err is ms off the shared clock; rateSet is what
+		// we asked for; rateGot is what the element reports (if iOS pins it to 1.0,
+		// rate fine-correction is a no-op and only seeks move us). sk=1 if we seeked.
+		if (!playback._lastTrace || (nowMs - playback._lastTrace) > 1000) {
+			playback._lastTrace = nowMs;
+			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (didSeek ? 1 : 0), lead: Math.round(playback.seekAheadMs) });
+		}
+	}
+
+	function startDriftLoop() {
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); }
+		playback.driftTimer = setInterval(driftTick, 500);
+	}
+
+	function showItem(i, offsetMs) {
+		clearVideo();
+		clearScript();
+		hideTapStart();   // only video items that still need a gesture re-show it
+		var item = playback.items[i];
+		if (!item) { return; }
+		$('#canvas').css('background-color', item.backgroundColor || '#000000');
+		if (item.playmode === 'SCRIPT') {
+			var cnv = document.createElement('canvas');
+			cnv.width = window.innerWidth; cnv.height = window.innerHeight;
+			cnv.style.width = '100%'; cnv.style.height = '100%';
+			$('#canvas').empty();
+			document.getElementById('canvas').appendChild(cnv);
+			playback.scriptIndex = i;
+			runScriptLoop(cnv, item.file);
+		} else if (isVideoItem(item.file)) {
+			var v = getPersistentVideo();
+			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
+			v.style.opacity = '1';       // restore visibility (clearVideo keep-alive set it to 0)
+			v.loop = false;              // playlist advances via renderPlayback, not element loop
+			v.muted = VIDEO_MUTED;       // muted (kiosk) unless audio wanted; fallback re-mutes if blocked
+			hideBlackout();              // drop the 'stopped' cover
+			$('#canvas').empty();        // clear any prior image/script content
+			playback.video = v;
+			playback.videoIndex = i;
+			var seekAndPlay = function() {
+				try { v.currentTime = (offsetMs || 0) / 1000; } catch (e) {}
+				var p = v.play();
+				if (p && p['catch']) {
+					// Modern browsers: unmuted autoplay may be blocked -> fall back to
+					// muted so it still starts. (iPad 1's play() returns no promise, so
+					// this never runs there — it relies on the tap-to-start gesture.)
+					p['catch'](function() {
+						v.muted = true;
+						var p2 = v.play();
+						if (p2 && p2['catch']) { p2['catch'](function() {}); }
+					});
+				}
+			};
+			if (item.file !== playback.videoSrc) {
+				// New clip: (re)load, then seek+play once metadata is ready. Cancel any
+				// boundary seek still pending for the previous clip's timeline.
+				if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
+				playback.videoSrc = item.file;
+				v.src = item.file;
+				var once = function() { v.removeEventListener('loadedmetadata', once); seekAndPlay(); };
+				v.addEventListener('loadedmetadata', once);
+				try { v.load(); } catch (e) {}
+			} else if (v.readyState >= 1) {
+				// Same clip already loaded. Only (re)seek if it's paused or
+				// meaningfully off the target. A redundant PLAY/renderPlayback for
+				// the clip already playing (e.g. a reconnect re-sending PLAY) must
+				// NOT re-seek — on the iPad that rebuffers and visibly flashes the
+				// clip. A genuine loop restart still seeks (offset ~0 vs currentTime
+				// near the end is a large diff).
+				var driftMs = Math.abs(v.currentTime * 1000 - (offsetMs || 0));
+				if (v.paused || driftMs > HARD_SEEK_MS) { seekAndPlay(); }
+			} else {
+				var once2 = function() { v.removeEventListener('loadedmetadata', once2); seekAndPlay(); };
+				v.addEventListener('loadedmetadata', once2);
+			}
+			startDriftLoop();
+			// Show the tap prompt if not yet playing. Browsers that allow autoplay
+			// (muted, or modern) start immediately and the 'playing' listener hides it
+			// before it's seen; iOS 5 can't autoplay at all, so the prompt stays for
+			// the one required tap.
+			if (!playback.activated) { showTapStart(); }
+		} else {
+			$('#canvas').html('<img src="' + item.file + '" style="max-width:100%; max-height:100%;">');
+		}
+	}
+
+	function pausePlayback() {
+		playback.paused = true;
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
+		if (playback.video) { try { playback.video.pause(); } catch (e) {} }
+	}
+
+	function stopPlayback() {
+		playback.active = false;
+		playback.paused = false;
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
+		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+		if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
+		clearScript();
+		$('#canvas').empty();
+		var v = playback.pvid;
+		if (v && playback.activated && v.getAttribute('src')) {
+			// Keep the blessed element ALIVE — playing, muted, looping, behind a
+			// black cover — instead of pausing it. iOS drops the element's
+			// user-activation on pause, which would force a new tap on the next
+			// start; keeping it playing preserves it (audio is muted, screen is
+			// black, so it reads as 'stopped').
+			v.muted = true; v.loop = true; v.style.display = 'block';
+			var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); }
+			showBlackout();
+		} else if (v) {
+			try { v.pause(); } catch (e) {}
+			v.style.display = 'none';
+			showBlackout();
+		}
+		playback.video = null;
+		playback.videoIndex = -1;
+	}
+
+	// Frame-accurate, self-correcting render loop: each transition recomputes the
+	// current item from the shared clock and schedules the exact next boundary.
+	function renderPlayback() {
+		if (!playback.active || playback.paused) { return; }
+		window._mmRenderN = (window._mmRenderN || 0) + 1;   // tdbg: re-render/flash counter
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		var durations = [], i;
+		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
+		var elapsed = GoTime.now() - playback.startEpoch;
+		var pos = playlistIndex(elapsed, durations, playback.loop);
+		if (pos === null) { stopPlayback(); return; }
+		showItem(pos.index, pos.offsetMs);
+		var msToNext = durations[pos.index] - pos.offsetMs;
+		if (msToNext < 16) { msToNext = 16; } // floor to avoid a 0ms busy loop
+		playback.timer = setTimeout(renderPlayback, msToNext);
+	}
+	var _phaseHistory = [];     // recent tick phases: signed ms from nearest second
+	var _lastTickAt = 0;        // wall-clock time of the last synchronized tick
+	var SETTLE_SAMPLES = 5;
+	var SETTLE_STDDEV_MS = 10;  // beat is steady (low jitter) ...
+	var SETTLE_MEAN_MS = 20;    // ... and centered on the second start
+
+	function recordTickPhase(currentTime) {
+		var ph = currentTime % 1000;
+		if (ph > 500) { ph -= 1000; } // e.g. 998 -> -2 (2ms before the second)
+		_phaseHistory.push(ph);
+		if (_phaseHistory.length > SETTLE_SAMPLES) { _phaseHistory.shift(); }
+	}
+
+	// "settled" = the synchronized beat has stopped wandering (low std dev) AND
+	// sits around the second start (mean near zero). Stricter than isSynced(),
+	// which only checks the tick isn't badly late.
+	function clockSettled() {
+		var n = _phaseHistory.length, i, sum = 0;
+		if (n < SETTLE_SAMPLES) { return false; }
+		for (i = 0; i < n; i++) { sum += _phaseHistory[i]; }
+		var mean = sum / n;
+		var sq = 0;
+		for (i = 0; i < n; i++) { var d = _phaseHistory[i] - mean; sq += d * d; }
+		var stddev = Math.sqrt(sq / n);
+		return (stddev <= SETTLE_STDDEV_MS) && (Math.abs(mean) <= SETTLE_MEAN_MS);
+	}
+
+	// Restart the one-shot beat animation. Whoever calls this sets the pulse
+	// phase; driving it from the synchronized tick pulses all displays together.
+	function triggerPulse() {
+		var el = document.getElementById('heartbeat');
+		if (!el) { return; }
+		el.style.webkitAnimationName = 'none';
+		el.style.animationName = 'none';
+		void el.offsetWidth; // force reflow so the animation can restart
+		el.style.webkitAnimationName = 'hb-pulse';
+		el.style.animationName = 'hb-pulse';
+	}
+
+	// Heartbeat indicator color: red (disconnected) -> orange (connected, clock
+	// not settled) -> yellow (clock settled on the second) -> green (settled +
+	// media cached/ready).
+	function updateHeartbeat() {
+		var el = document.getElementById('heartbeat');
+		if (!el) { return; }
+		var connected = (typeof sock !== 'undefined' && sock &&
+			typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN);
+		var settled = clockSettled();
+		var cls = 'hb-red';
+		if (connected) {
+			if (settled && mediaReady) { cls = 'hb-green'; }
+			else if (settled) { cls = 'hb-yellow'; }
+			else { cls = 'hb-orange'; }
+		}
+		el.className = cls;
+		// If the synchronized tick isn't driving the beat (no recent tick, e.g.
+		// before the clock starts ticking), beat locally so the dot still pulses.
+		if (Date.now() - _lastTickAt > 1500) { triggerPulse(); }
+	}
+	setInterval(updateHeartbeat, 1000);
+	updateHeartbeat();
+
+	// Auto-reconnect watchdog. Runs on its own fixed timer (NOT the GoTime tick,
+	// which stops when the server is unreachable) so a display recovers on its
+	// own after a server restart / network blip. Reconnect only when the socket
+	// is gone or closed; stay hands-off while it is still CONNECTING so we never
+	// spawn overlapping SockJS handshakes. ES5 — 1st-gen iPad / iOS 5 safe.
+	function reconnectWatchdog() {
+		if (typeof SockJS === 'undefined') { return; }
+		if (sock == null ||
+			(sock.readyState !== SockJS.OPEN && sock.readyState !== SockJS.CONNECTING)) {
+			log('reconnect watchdog: re-opening socket...');
+			mosiacMeshConnect(mosiacMeshCallback);
+		}
+	}
+	setInterval(reconnectWatchdog, 3000);
+
 	function mosiacMeshCallback(data_obj)
 	{
 		log('Received: ' + data_obj);
@@ -47,12 +717,43 @@
 		{
 			if(data_obj.REQUEST == "PRELOAD")
 			{
-				mediaSequence = data_obj.PAYLOAD;
-				for(var key in mediaSequence)
+				mediaSequence = data_obj.PAYLOAD.items || [];
+				mediaReady = false;
+				var total = mediaSequence.length, settled = 0, j;
+				if(total === 0) { mediaReady = true; updateHeartbeat(); }
+				var onSettled = function() {
+					settled++;
+					if(settled >= total) { mediaReady = true; updateHeartbeat(); }
+				};
+				for(j = 0; j < mediaSequence.length; j++)
 				{
-					mediaSequence[key].URL;
-					 $('<img id=key/>').attr('src',mediaSequence[key].URL).appendTo('#canvas').css('display','none');
+					if(mediaSequence[j].playmode === 'SCRIPT')
+					{
+						onSettled(); // a script item has nothing to fetch
+					}
+					else if(isVideoItem(mediaSequence[j].file))
+					{
+						var vp = document.createElement('video');
+						vp.preload = 'auto';
+						vp.muted = true;
+						var onceV = function() {
+							if (this._hbDone) { return; }
+							this._hbDone = true;
+							onSettled();
+						};
+						vp.addEventListener('canplaythrough', onceV);
+						vp.addEventListener('error', onceV);
+						vp.addEventListener('stalled', onceV);
+						vp.src = mediaSequence[j].file;
+					}
+					else
+					{
+						var img = new Image();
+						img.onload = img.onerror = onSettled;
+						img.src = mediaSequence[j].file;
+					}
 				}
+				prefetchPlaylistMedia(data_obj.PAYLOAD.items);
 			}
 			else if(data_obj.REQUEST == "IDENTIFY")
 			{
@@ -62,6 +763,27 @@
 			else if(data_obj.REQUEST == "CALIBRATE")
 			{
 				blink = false;
+				// Stop playback and clear the persistent <video> out of the way: it is
+				// fixed/full-screen at z-index 1 and (since the muted keep-alive) stays
+				// up between plays, so it would COVER the calibration marker (the screen
+				// reads as solid black). Make it transparent — keep it playing muted so
+				// its iOS gesture-activation survives for the next PLAY — and drop the
+				// blackout cover, tap prompt, and any script canvas.
+				playback.active = false;
+				if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
+				if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
+				if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+				if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
+				clearScript();
+				if (playback.pvid) { playback.pvid.style.opacity = '0'; }
+				hideBlackout();
+				hideTapStart();
+				// The page background is black for video playback, but calibration
+				// needs a WHITE screen field so the <html> 8px black border reads as
+				// the screen-perimeter band against white. Force the page white here;
+				// PLAY/stop revert it to black.
+				$('html, body').css('background-color', '#ffffff');
 				$('#canvas').css({'background-color': 'white', 'color': 'black'});
 				$('#canvas').text("");
 				var image = new Image();
@@ -80,6 +802,58 @@
 					position: 'relative',
 					overflow: 'hidden'
 				});
+				// Report the CURRENT viewport size so calibration reconstructs the
+				// screen from the marker using the dims actually being photographed
+				// (the page may have been registered before going full screen).
+				if (window._mmReportCanvas) { window._mmReportCanvas(); }
+			}
+			else if(data_obj.REQUEST == "PREPARE")
+			{
+				// Phase 1 of coordinated start: buffer + HOLD frame 0, then report
+				// READY (or NEEDS_ARM). Do NOT start the clock — the GO (a PLAY with a
+				// future startEpoch) releases us at the shared instant.
+				blink = false;
+				exitCalibrateView();
+				hideBlackout();
+				playback.items = data_obj.PAYLOAD.items || [];
+				playback.loop = !!data_obj.PAYLOAD.loop;
+				playback.active = false;
+				playback.paused = false;
+				dbg("recv-PREPARE");
+				prepareFirstItem(data_obj.PAYLOAD.prepareId);
+			}
+			else if(data_obj.REQUEST == "PLAY")
+			{
+				blink = false;
+				exitCalibrateView();   // undo calibrate <html> framing + white page
+				hideBlackout();        // lift the 'stopped' cover from a prior keep-alive
+				playback.items = data_obj.PAYLOAD.items || [];
+				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
+				playback.loop = !!data_obj.PAYLOAD.loop;
+				playback.active = true;
+				playback.paused = false;
+				dbg("recv-PLAY");
+				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
+				var _delay = playback.startEpoch - GoTime.now();
+				// Defer ONLY for a plausible coordinated GO (the start epoch is at most
+				// ~RELEASE_LEAD_MS ahead). A large delay means the clock isn't synced
+				// yet (e.g. just reconnected) or the epoch is stale; a <=0 delay is a
+				// past epoch (late-join / resume / reconnect). Both start immediately so
+				// we never hang waiting on a bogus future time.
+				if (_delay > 0 && _delay < 3000) {
+					// Holding frame 0 from PREPARE — release at the shared start epoch.
+					playback.startTimer = setTimeout(function () { renderPlayback(); }, _delay);
+				} else {
+					renderPlayback();
+				}
+			}
+			else if(data_obj.REQUEST == "STOP")
+			{
+				stopPlayback();
+			}
+			else if(data_obj.REQUEST == "PAUSE")
+			{
+				pausePlayback();
 			}
 		}
 	}
@@ -94,6 +868,12 @@
 	mosiacMeshConnect(mosiacMeshCallback);
   </script>
   <style>
+	/* Full-bleed black page: kills the default 8px body margin (white strip at
+	   the top/edges) and any white background behind the video/UI. Default
+	   text color is white so the pre-playback canvas labels (TICK/TOCK,
+	   IDENTIFY, "Synching to time server...") are visible on the black page;
+	   calibrate mode explicitly flips to black-on-white. */
+	html, body { margin: 0; padding: 0; height: 100%; background: #000; color: #fff; overflow: hidden; }
 	.canvas {
 		width: 100%;
 		-webkit-transform: translateX(-50%) translateY(-50%);
@@ -103,11 +883,128 @@
 		top: 50%;
 		text-align: center;
 	}
+	/* Heartbeat status indicator (shaded sphere, top-right) */
+	#heartbeat {
+		position: fixed;
+		top: 10px;
+		right: 10px;
+		width: 20px;
+		height: 20px;
+		border-radius: 50%;
+		z-index: 9999;
+		-webkit-box-shadow: inset -3px -3px 5px rgba(0,0,0,0.45), 0 0 4px rgba(0,0,0,0.4);
+		box-shadow: inset -3px -3px 5px rgba(0,0,0,0.45), 0 0 4px rgba(0,0,0,0.4);
+		/* One-shot 1s beat, (re)triggered each synchronized timer tick so all
+		   displays pulse together (see triggerPulse / tickcallback). Falls back
+		   to the local 1s refresh before the clock is synced. */
+		-webkit-animation-name: none;
+		animation-name: none;
+		-webkit-animation-duration: 1s;
+		animation-duration: 1s;
+		-webkit-animation-timing-function: ease-out;
+		animation-timing-function: ease-out;
+		-webkit-animation-iteration-count: 1;
+		animation-iteration-count: 1;
+	}
+	@-webkit-keyframes hb-pulse {
+		0%   { -webkit-transform: scale(1.0);  opacity: 0.85; }
+		20%  { -webkit-transform: scale(1.28); opacity: 1; }
+		100% { -webkit-transform: scale(1.0);  opacity: 0.85; }
+	}
+	@keyframes hb-pulse {
+		0%   { transform: scale(1.0);  opacity: 0.85; }
+		20%  { transform: scale(1.28); opacity: 1; }
+		100% { transform: scale(1.0);  opacity: 0.85; }
+	}
+	/* solid background-color is the iOS-5 fallback if radial-gradient is unsupported */
+	.hb-red {
+		background-color: #d63a2a;
+		background: -webkit-radial-gradient(32% 30%, circle, #ff9080, #b21f0f 78%);
+		background: radial-gradient(circle at 32% 30%, #ff9080, #b21f0f 78%);
+	}
+	.hb-orange {
+		background-color: #e07b1a;
+		background: -webkit-radial-gradient(32% 30%, circle, #ffc080, #c25e00 78%);
+		background: radial-gradient(circle at 32% 30%, #ffc080, #c25e00 78%);
+	}
+	.hb-yellow {
+		background-color: #e6c200;
+		background: -webkit-radial-gradient(32% 30%, circle, #fff39a, #c8a400 78%);
+		background: radial-gradient(circle at 32% 30%, #fff39a, #c8a400 78%);
+	}
+	.hb-green {
+		background-color: #1f9d4d;
+		background: -webkit-radial-gradient(32% 30%, circle, #9bf0a0, #137a37 78%);
+		background: radial-gradient(circle at 32% 30%, #9bf0a0, #137a37 78%);
+	}
   </style>
 </head>
 <body>
+	<div id="heartbeat" class="hb-red"></div>
 	<div id="canvas" class="canvas"></div>
+	<!-- iOS needs a user gesture to start <video>; this full-screen overlay is the
+	     tap target (a person or the gesture/SSH script taps it once per session).
+	     Inline handlers + px units for 1st-gen iPad / iOS 5 compatibility. -->
+	<div id="tapstart" onclick="return activatePlayback();" ontouchend="return activatePlayback();" ontouchstart="return activatePlayback();"
+	     style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; z-index:1000;
+	            background:#000; color:#fff; text-align:center; font-size:28px; cursor:pointer;">
+		<div style="margin-top:42%;">&#9658; Tap to start</div>
+	</div>
+	<!-- 'Stopped' cover: black screen over the persistent video, which is kept
+	     playing (muted, looping) behind it to preserve iOS user-activation. -->
+	<div id="blackout" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; z-index:2; background:#000;"></div>
 	<div id="preload" class="preload"></div>
+	<script>
+// Service Worker registration -- modern devices only. iOS 5 Safari
+// has navigator.serviceWorker == undefined; the if-guard makes this
+// block a no-op there. (The Promise-chain syntax (.then) is fine
+// for iOS 5 to PARSE -- it only fails to execute, and we never enter
+// the if branch on iOS 5.) See spec
+// docs/superpowers/specs/2026-06-03-media-cache-design.md Task 13.
+(function(){
+	try {
+		if (navigator && navigator.serviceWorker) {
+			navigator.serviceWorker.register('/sw.js').then(function(reg){
+				if (navigator.serviceWorker.controller) {
+					announceCacheMode();
+				} else {
+					navigator.serviceWorker.addEventListener('controllerchange',
+						announceCacheMode);
+				}
+			}).catch(function(){
+				// SW registration failed (e.g., file 404). Don't announce
+				// -- server keeps this client at cacheMode="none".
+			});
+		}
+	} catch (e) { /* iOS 5 with modern syntax errors -- ignore */ }
+})();
+
+function announceCacheMode(){
+	try {
+		if (typeof sock === "undefined" || sock === null) return;
+		sock.send(generateMessage("SRV", "ANNOUNCE_CACHE_MODE",
+								  {"mode": "service-worker"}));
+	} catch (e) { /* best-effort */ }
+}
+
+// Called by the existing PRELOAD message handler when running on a
+// modern device. Issues a non-Range fetch() for each new SEGMENT URL,
+// which populates the Service Worker's Cache API. Subsequent <video>
+// Range requests get sliced from the cached body.
+function prefetchPlaylistMedia(items){
+	if (!('caches' in window)) return;  // SW not supported -> no-op
+	if (!items || !items.length) return;
+	for (var i = 0; i < items.length; i++){
+		var it = items[i];
+		if (it.playmode !== "SEGMENT") continue;
+		if (!it.file) continue;
+		try {
+			// fire-and-forget; SW intercepts and populates cache.
+			fetch(it.file, { mode: 'cors', cache: 'no-store' }).catch(function(){});
+		} catch (e) { /* ES5-incompatible browser -- ignore */ }
+	}
+}
+	</script>
 </body>
 </html>
 

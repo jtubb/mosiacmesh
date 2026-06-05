@@ -3,7 +3,9 @@ var udid;
 // Cache DOM selectors for better performance
 var domCache = {};
 function getCachedElement(selector) {
-    if (!domCache[selector]) {
+    // Re-query when missing OR cached empty (the element may not have existed
+    // in the DOM the first time this selector was requested). ES5-safe.
+    if (!domCache[selector] || domCache[selector].length === 0) {
         domCache[selector] = $(selector);
     }
     return domCache[selector];
@@ -44,7 +46,7 @@ function getset_cookie(cname, cvalue, days)
 	}
 	
 	// Set new cookie and update cache
-	const d = new Date();
+	var d = new Date(); // ES5: 1st-gen iPad (iOS 5 / Safari 5.1) has no `const`
 	d.setTime(d.getTime() + (365*24*60*60*1000));
 	var expires = "expires="+ d.toUTCString();
 	document.cookie = cname + "=" + cvalue + ";" + expires + ";path=/;SameSite=Strict";
@@ -90,27 +92,77 @@ function getUDID() {
 		sock_callback = callback
 		mosiacMeshDisconnect();
 
-		sock = new SockJS('http://' + window.location.host + '/sockjs/', [], {
+		// Capture THIS socket instance in a closure (`s`). All three handlers fire
+		// asynchronously and read the global `sock`; on reconnect the old socket's
+		// late onclose used to run `sock = null` and clobber the NEW socket -> the
+		// watchdog then opened yet another, leaving 2-3 live sessions all delivering
+		// every message (the iPad reloaded its <video> repeatedly -> Chrome 29
+		// MEDIA_ERR_SRC_NOT_SUPPORTED). Guarding each handler with `sock !== s` makes
+		// a superseded socket inert: it neither delivers nor nulls its successor.
+		var s = new SockJS('http://' + window.location.host + '/sockjs/', [], {
 			debug: true,
 			transports: [ "websocket", "xhr-streaming", "iframe-eventsource", "iframe-htmlfile", "xhr-polling", "iframe-xhr-polling", "jsonp-polling" ]
 		});
+		sock = s;
 
 		log('connecting...');
 
-		sock.onopen = function() {
+		s.onopen = function() {
+			if (sock !== s) { return; }   // superseded by a newer connection
 			log('connected.');
-			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height}));
+			// ES5-safe touch detection (1st-gen iPad / iOS 5 Safari supports
+			// 'ontouchstart'). Lets the server recover iPads that present a
+			// desktop/Mac user-agent. maxTouchPoints is undefined on old Safari,
+			// so undefined > 0 is false — the 'ontouchstart' check carries it.
+			var hasTouch = ('ontouchstart' in window) ||
+				(navigator.maxTouchPoints > 0) ||
+				(navigator.msMaxTouchPoints > 0);
+			// screen.* is the device resolution (orientation-independent on iOS);
+			// the canvas/viewport (innerWidth/innerHeight) reflects the ACTUAL
+			// rendered area and orientation. Device-aspect vs canvas-aspect lets
+			// the server infer rotation/warp from the calibration photo. ES5-safe.
+			var cw = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || screen.width;
+			var ch = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
+			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height,
+				"canvasWidth": cw, "canvasHeight": ch, "touch": hasTouch}));
+			// Re-report the viewport whenever it changes (e.g. entering full screen
+			// for calibration, or rotating). REGISTER only captures it once; if the
+			// page registered while NOT full screen, the stored canvas dims would be
+			// stale and the calibration reconstruction (which extrapolates the screen
+			// from the 300px marker using canvas dims) would come out mis-scaled.
+			// Wired once; exposed as window._mmReportCanvas for the CALIBRATE handler.
+			if (!window._mmCanvasWatch) {
+				window._mmCanvasWatch = true;
+				var _mmRT = null;
+				var _mmReport = function() {
+					if (!(sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN)) { return; }
+					var w = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || screen.width;
+					var h = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
+					sock.send(generateMessage("SRV", "REPORT_CANVAS", { "canvasWidth": w, "canvasHeight": h }));
+				};
+				window._mmReportCanvas = _mmReport;
+				var _mmDeb = function() { if (_mmRT) { clearTimeout(_mmRT); } _mmRT = setTimeout(_mmReport, 400); };
+				if (window.addEventListener) {
+					window.addEventListener('resize', _mmDeb, false);
+					window.addEventListener('orientationchange', _mmDeb, false);
+				}
+			}
 			update_ui();
 		};
 
-		sock.onmessage = function(msg) {
+		s.onmessage = function(msg) {
+			if (sock !== s) { return; }   // superseded socket: don't double-deliver
 			log('Received: ' + msg.data);
 			data_obj = JSON.parse(msg.data.replace("'",""));
 			if(data_obj.REQUEST == "SERVERTIME")
 			{
 				GoTime.wsReceived(data_obj.PAYLOAD);
 			}
-			if(data_obj.REQUEST == "RELOAD")
+			// Honor DEST so RELOAD can target one display group (per-client DEST)
+			// or every client (DEST "ALL"); without this it fired on any message.
+			// _mmNoReload lets a non-display page (the admin console) opt out.
+			if(data_obj.REQUEST == "RELOAD" && !window._mmNoReload &&
+			   (data_obj.DEST == getUDID() || data_obj.DEST == "ALL"))
 		    {
 				location.reload(true);
 			}
@@ -120,10 +172,14 @@ function getUDID() {
 			}
 		};
 
-		sock.onclose = function() {
+		s.onclose = function() {
 			log('Disconnected.');
-			sock = null;
-			update_ui();
+			// Only clear the global if WE are still the current socket; a late
+			// onclose from a superseded socket must not null out its replacement.
+			if (sock === s) {
+				sock = null;
+				update_ui();
+			}
 			//ProgrammableTimer.stop();
 		};
 	}
@@ -134,7 +190,10 @@ function getUDID() {
 		WhenSynced: updateData, // Is called for the first sync
 		OnSync: goTimeSync, // Calls on ever sync starting with the second sync
 		SyncInitialTimeouts: [500, 3000, 9000, 15000],
-		SyncInterval: 900000 // Set this often for demo purposes only
+		// Re-sync every 60s (was 15min). With the decaying precision threshold this
+		// re-locks the clock offset to fresh low-RTT samples, tracking oscillator
+		// drift over a long wall session and keeping displays mutually aligned.
+		SyncInterval: 60000
 	});
 
 
