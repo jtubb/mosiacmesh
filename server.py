@@ -94,6 +94,11 @@ from mosaicmesh.api.schedules import (
     api_schedules_list, api_schedules_create,
     api_schedules_update, api_schedules_delete,
 )
+from mosaicmesh.api.profiles import (
+    api_profiles_list, api_profiles_create,
+    api_profiles_update, api_profiles_delete,
+    api_clients_assign_profile,
+)
 from mosaicmesh.websocket.legacy import msg_response
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
@@ -2281,6 +2286,11 @@ if __name__ == '__main__':
         app.router.add_post('/api/schedules', api_schedules_create)
         app.router.add_put('/api/schedules/{id}', api_schedules_update)
         app.router.add_delete('/api/schedules/{id}', api_schedules_delete)
+        app.router.add_get('/api/profiles', api_profiles_list)
+        app.router.add_post('/api/profiles', api_profiles_create)
+        app.router.add_put('/api/profiles/{name}', api_profiles_update)
+        app.router.add_delete('/api/profiles/{name}', api_profiles_delete)
+        app.router.add_post('/api/clients/{clientKey}/profile', api_clients_assign_profile)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         
         asyncio.run(run_server())
