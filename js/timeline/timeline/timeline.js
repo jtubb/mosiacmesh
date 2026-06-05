@@ -191,15 +191,28 @@ export function mmTimelineComponent() {
       // Hour rows 06..22 (typical wall-display operating hours); midnight
       // shoulders show as bonus rows.
       const HOUR_START = 0, HOUR_END = 24;
-      let html = `<div class="mm-week-grid" style="display:grid; grid-template-columns: 60px repeat(7, 1fr); gap:2px;">`;
+      // grid-template-rows pinned: header row auto, plus 24 fixed-height
+      // hour rows. Without this, CSS Grid auto-sizes the hour rows from
+      // their content's min-content, which collapses to ~0px when a
+      // multi-row clip claims the entire column in those rows and pushes
+      // the per-row week-cell out — there's no per-row content left to
+      // hold the row open. Result: a 09:00-17:00 schedule rendered as
+      // a single-row-tall block instead of 8 hours tall.
+      // The explicit row sizing also gives a consistent vertical scale
+      // (24px per hour = 576px total grid height) regardless of how many
+      // schedules occupy each row.
+      const ROW_PX = 24;
+      let html = `<div class="mm-week-grid" style="display:grid; grid-template-columns: 60px repeat(7, 1fr); grid-template-rows: auto repeat(24, ${ROW_PX}px); gap:2px;">`;
       // Header: hour-label col + 7 day labels
       html += `<div class="mm-axis-cell" style="grid-column:1">hr</div>`;
       html += weekAxisHtml(win.startMs);
-      // Rows: one per hour
+      // Rows: one per hour. Explicit grid-row keeps each label aligned
+      // with its row even if a multi-row clip later spans across.
       for (let h = HOUR_START; h < HOUR_END; h++) {
-        html += `<div class="mm-axis-cell" style="grid-column:1">${String(h).padStart(2,'0')}</div>`;
+        const row = 2 + h;
+        html += `<div class="mm-axis-cell" style="grid-column:1; grid-row:${row}">${String(h).padStart(2,'0')}</div>`;
         for (let dIdx = 0; dIdx < 7; dIdx++) {
-          html += `<div class="mm-week-cell" style="grid-column:${dIdx + 2}"></div>`;
+          html += `<div class="mm-week-cell" style="grid-column:${dIdx + 2}; grid-row:${row}"></div>`;
         }
       }
       // Position clips: 1 column per day, vertical extent = % of hour range
