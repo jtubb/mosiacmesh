@@ -33,7 +33,7 @@ import datetime
 from mosaicmesh.state import (
     Settings, Scripts, Display, PlayState, MediaElement,
     Playlist, Schedule, PlayMode, Client,
-    _apply_default_scripts, migrate_client_objects,
+    migrate_client_objects,
 )
 from mosaicmesh.persistence import (
     save_settings_incremental, saveSettings, cleanup_old_clients,
@@ -73,9 +73,7 @@ from mosaicmesh.render import (
 )
 from mosaicmesh.device_scripts import (
     SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
-    WEBCLIP_BUNDLE_ID, WEBAPP_ICON_FBX, WEBAPP_ICON_FBY,
-    DEFAULT_DEVICE_SCRIPTS,
-    _launch_webapp_via_vnc, _run_device_script, _drop_pooled_vnc,
+    _run_device_script, _drop_pooled_vnc,
 )
 from mosaicmesh.scheduling import (
     _FREQ_MAP, playlist_index, _parse_date, _hhmm_to_min, schedule_active_at,
@@ -794,8 +792,7 @@ def _mdns_reverse(ip, wait=1.5):
 # client id). Live identity fields (clientID, ip, hostname, device*, online,
 # connectionCount) are NOT copied — the new record keeps those.
 _MERGE_FIELDS = ("displayID", "measuredCenter", "measuredPerimeter", "arucoID",
-                 "capabilities", "loginScript", "startScript", "stopScript",
-                 "rebootScript", "testScript")
+                 "capabilities", "profileName")
 
 
 def _merge_reconnected_client(new_key, new_client):

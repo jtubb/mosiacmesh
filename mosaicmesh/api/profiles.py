@@ -1,12 +1,10 @@
 """REST CRUD for ScriptingProfiles plus per-client profile assignment.
 
-PR-2 implements the CRUD shell. PR-3 will populate Settings.profiles with
-the bootstrapped 'ipad1-ios5' default + wire device_scripts.py to actually
-USE these profiles for script execution. Until PR-3 lands, profiles are
-inert data — clients still execute scripts via the hardcoded
-DEFAULT_DEVICE_SCRIPTS.
-
 A ScriptingProfile is referenced by Clients via Client.profileName.
+The dispatcher (mosaicmesh.device_scripts.run_profile_action) resolves
+the profile at script-run time and executes the appropriate lifecycle
+action over SSH and/or Veency VNC taps.
+
 DELETE returns 409 with a refs list (clientKeys) when the profile is
 assigned to any client.
 """

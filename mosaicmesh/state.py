@@ -106,8 +106,8 @@ class ScriptingProfile():
     PR-2 ships the class shape + REST CRUD + Settings.profiles dict.
     PR-3 ships the launch dispatcher (_exec_ssh / _vnc_tap_sequence /
     _ssh_then_vnc in mosaicmesh.device_scripts) + the bootstrap migration
-    that seeds the ipad1-ios5 default profile and removes the hardcoded
-    DEFAULT_DEVICE_SCRIPTS from server.py.
+    that seeds the ipad1-ios5 default profile on first startup. The legacy
+    hardcoded script constants were removed in PR-3 Task 7.
     """
     def __init__(self):
         self.name = ""                # unique key (e.g. "ipad1-ios5")
@@ -174,11 +174,6 @@ class Client():
         self.deviceBrand=""
         self.deviceModel=""
         self.deviceType=""
-        self.loginScript = None
-        self.startScript = None
-        self.stopScript = None
-        self.rebootScript = None
-        self.testScript = None
         # Selected scripting profile (key into Settings.profiles). None means
         # auto-match has not yet found a matching profile for this device's
         # deviceType (or no profiles exist). The dispatcher treats None as
@@ -215,16 +210,6 @@ class Client():
         # See docs/superpowers/specs/2026-06-03-cache-progress-and-
         # propagation-ui.md.
         self.cachePushProgress = None
-
-
-def _apply_default_scripts(client):
-    """Backfill the lifecycle-script fields with fleet defaults where unset (None),
-    so a freshly-registered/older device isn't left with null scripts. Never
-    overrides a per-device script an operator has set."""
-    import server as _server
-    for field, default in _server.DEFAULT_DEVICE_SCRIPTS.items():
-        if getattr(client, field, None) is None:
-            setattr(client, field, default)
 
 
 def migrate_client_objects():
@@ -290,9 +275,6 @@ def migrate_client_objects():
         client.cachePushProgress = None
         if not hasattr(client, 'profileName'):
             client.profileName = None
-        # Backfill lifecycle-script defaults onto devices registered before the
-        # automation existed (their fields are absent/None -> show as null).
-        _apply_default_scripts(client)
         # Re-attempt resolution for clients that never got a hostname (e.g.
         # resolved blank before DNS was fixed / before the mDNS fallback). The
         # 60s retry throttle keeps perpetually-nameless devices from churning.

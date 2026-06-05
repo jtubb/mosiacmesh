@@ -464,13 +464,6 @@ async def api_discovery_configure(request):
         if "friendlyName" in data:
             client.friendlyName = data["friendlyName"]
             client.nameIsCustom = True   # user-set name: DNS won't override it
-        # Per-device lifecycle scripts (login/start/stop/reboot/test). ""
-        # clears back to the fleet default on next backfill; a non-empty
-        # string overrides it.
-        for sf in ("loginScript", "startScript", "stopScript", "rebootScript",
-                   "testScript"):
-            if sf in data:
-                setattr(client, sf, data[sf] if data[sf] else None)
 
     saveSettings()
     return web.json_response({"success": True})

@@ -1,26 +1,29 @@
-"""Execution of per-device lifecycle scripts over SSH plus the Veency
-VNC-tap launch helper.
+"""ScriptingProfile dispatcher — executes profile-driven lifecycle actions
+over SSH and/or Veency VNC taps.
 
-This is the CURRENT (PR-1) layout: scripts and constants are still
-hardcoded here. PR-3 of the admin-timeline-redesign spec will replace
-this module's contents with the ScriptingProfile dispatcher -- until
-then, behavior must remain byte-identical.
+Public entry point: `_run_device_script(client_key, which)` (aliased to
+`run_profile_action` for backwards compatibility with the pre-PR-3 call
+sites in mosaicmesh/websocket/legacy.py and ad-hoc tests).
 
-The shared SSH options live here too -- onboard_devices.ps1 has its own
-copy of these in PowerShell array form for the bootstrap phase.
-"""
+The three launch primitives — `_exec_ssh`, `_vnc_tap_sequence`,
+`_ssh_then_vnc` — are selected by `profile.launch['method']` via the
+`LAUNCH_METHODS` table. Lifecycle actions other than 'start' always go
+through plain `_exec_ssh` because iOS 5 only requires the VNC dance to
+launch a webclip; stopping or testing a running webapp just needs a
+shell command.
+
+SSH constants and the Veency `_drop_pooled_vnc` helper live here. The
+pool ITSELF (`_veency_pool`, `_veency_lock`, `_get_pooled_vnc`, `_do_tap`)
+still lives in server.py — see TODO in `_vnc_tap_sequence` for the
+deferred cleanup."""
 import os
 import logging
 import asyncio
 
 from mosaicmesh.template_vars import SafeDict, build_vars
 
-# --- Device lifecycle automation -----------------------------------------
-# The server runs per-device shell scripts over SSH (login/start/stop/reboot),
-# using the passphrase-less key installed by tools/onboard_devices.ps1 and the
-# same legacy-crypto flags (the iPad-1's OpenSSH only speaks SHA-1-era crypto).
-# Client.{login,start,stop,reboot}Script default to None and are backfilled with
-# DEFAULT_DEVICE_SCRIPTS (editable per device via the discovery configure API).
+# SSH constants used by the dispatcher and re-exported to server.py for the
+# VNC pool helpers (_get_pooled_vnc, _auto_arm_client) that still live there.
 SSH_KEY_PATH = os.path.expanduser(os.path.join("~", ".ssh", "mosaic_ipad"))
 SSH_USER = "root"
 SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
@@ -31,123 +34,8 @@ SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
                    "-o", "BatchMode=yes"]                # never prompt (unattended)
 # The wall's display page each device opens. Edit for your network.
 DISPLAY_URL = "http://192.168.1.60:3000/"
-# Bundle id of the MosaicMesh home-screen webclip, used by startScript
-# to launch the display in WEBAPP MODE (chrome-less, fullscreen across
-# script + video transitions). The webclip is installed by tools/
-# onboard_devices.ps1 step 5.4g with a stable UUID across the fleet.
-# Falls back to uiopen (Safari) on iPads where the webclip isn't
-# installed yet. Hex spells "MosaicMeshKiosk1" in ASCII for grep-
-# friendliness in `activator listeners` output.
-WEBCLIP_BUNDLE_ID = "com.apple.webapp-4D6F736169634D6573684B696F736B31"
-DEFAULT_DEVICE_SCRIPTS = {
-    # Wake + unlock + keep the screen lit, via Activator. State-independent
-    # (safe to call regardless of current iPad state): lockscreen.dismiss
-    # wakes the screen if asleep AND skips slide-to-unlock if locked AND
-    # no-ops if already unlocked. The previous version also pressed the
-    # home button, which had the destructive side effect of minimizing
-    # Safari (kicking the wall display to the home screen) if the iPad
-    # was already foregrounded on MosaicMesh -- removed so login is safe
-    # to fire from any starting state. The SBSettings autolock switch off
-    # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
-    # Also locks rotation to PORTRAIT on every login: a wall of iPads
-    # has a fixed physical orientation, so any user-induced rotation
-    # away from portrait (accidental, or by Veency input quirks) must
-    # be reverted before the display layer renders. SBOrientationLocked*
-    # are the prefs SpringBoard reads; `defaults write` routes through
-    # cfprefsd which fires the CFPreferences-change notification that
-    # SpringBoard's observer applies without a respring. Writing as
-    # mobile via `su -c` is mandatory -- root's defaults land in
-    # /var/root/Library/Preferences (wrong place); SpringBoard reads
-    # /var/mobile/Library/Preferences/com.apple.springboard.plist.
-    # Orientation enum is UIInterfaceOrientation: 1 = portrait.
-    # The `2>/dev/null`s keep the loginScript output clean for the
-    # admin UI; the LOGIN_OK terminator is what the server matches on.
-    "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
-                    "activator send switch-off.com.a3tweaks.switch.autolock; "
-                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedActive -bool YES' 2>/dev/null; "
-                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedOrientation -int 1' 2>/dev/null; "
-                    "echo LOGIN_OK",
-    # Open the display page in WEBAPP MODE via the home-screen webclip
-    # (sbdidlaunch on the webclip's bundle id), falling back to mobile
-    # Safari (uiopen) if the webclip isn't installed on this iPad yet.
-    # Webapp mode gives chrome-less fullscreen across script+video
-    # transitions; Safari mode keeps the URL bar visible and re-enters
-    # iOS native fullscreen per video. See docs/superpowers/specs/
-    # 2026-06-03-cache-progress-and-propagation-ui.md for context.
-    # Like the old uiopen-only form: brings the app to the foreground
-    # without forcing a reload, so a Safari/webapp instance that's
-    # already at this URL just gets refocused.
-    "startScript":  "sbdidlaunch '" + WEBCLIP_BUNDLE_ID + "' 2>/dev/null"
-                    " || uiopen '" + DISPLAY_URL + "'; echo START_OK",
-    # Open the display page with the ?tdbg query flag, which the client JS
-    # uses to (1) draw an on-screen timing HUD with current playback frame /
-    # offset / drift, and (2) stream debug state back to the server log so
-    # operators can collect group-wide diagnostics without per-device touch.
-    #
-    # KILL Safari first then uiopen: on iOS 5 `uiopen` to a URL Safari is
-    # already showing only brings Safari to the foreground -- it does NOT
-    # reload the page. Tdbg mode needs a fresh page load (new SockJS
-    # connection, fresh JS state, fresh ?tdbg flag in location.href). The
-    # killall + relaunch is the only way to guarantee that on iOS 5.
-    # testScript needs killall because it's changing the URL (regular ->
-    # ?tdbg) and iOS 5 Safari otherwise stacks the new tab on top of
-    # the old. Plain killall (SIGTERM) lets Safari clean up; -9 was
-    # too aggressive. NO autolock toggle or SuspendState rm here --
-    # those were experimental fixes that turned out to interact badly
-    # with the always-awake state.
-    "testScript":   "killall MobileSafari 2>/dev/null; sleep 1; "
-                    "uiopen '" + DISPLAY_URL +
-                    ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
-                    "'; echo TEST_OK",
-    # Close the display client (Web.app for the home-screen webclip
-    # since 2026-06-03; MobileSafari for the legacy Safari fallback
-    # path), re-enable auto-lock (start disabled it via the boot
-    # LaunchDaemon's autolock-off), and sleep the screen now via the
-    # sleep button. Killing Web AND MobileSafari is belt-and-suspenders:
-    # whichever was foregrounded gets terminated, and the unused one
-    # is a no-op. Symmetric with start: stop -> screen off + allowed
-    # to stay asleep.
-    "stopScript":   "killall Web 2>/dev/null; "
-                    "killall MobileSafari 2>/dev/null; "
-                    "activator send switch-on.com.a3tweaks.switch.autolock; "
-                    "activator send libactivator.system.sleepbutton; echo STOP_OK",
-    # Full device reboot.
-    "rebootScript": "echo REBOOTING; reboot",
-}
-
-# Veency-side framebuffer coordinate of the MosaicMesh home-screen
-# webclip icon when the iPad is in portrait orientation and the
-# operator has dragged the icon to the LEFTMOST dock slot. The
-# framebuffer is always landscape 1024x768 regardless of iPad
-# orientation, rotated 90 CCW from the portrait user view -- so the
-# user's portrait (96, 945) lands at framebuffer (945, 671). This
-# pair was empirically verified on .50 (sign1screen1) in this
-# session. If you reposition the icon, update this constant.
-# See docs/superpowers/specs/ for the rationale: iOS 5 doesn't
-# expose a CLI launcher that includes a webclip's URL context, so
-# the only reliable "launch the webclip" path is to drive
-# SpringBoard's own tap-handler via VNC.
-WEBAPP_ICON_FBX = 945
-WEBAPP_ICON_FBY = 671
 
 
-# TODO(PR-3): the next two functions reach back into server.py for the
-# Veency connection pool (_veency_pool, _veency_lock, _get_pooled_vnc, _do_tap).
-# That cross-module dependency is the most awkward boundary in PR-1's split
-# — it exists because _auto_arm_client (still in server.py) also needs the
-# pool. When PR-3 of the admin-timeline-redesign spec replaces this module
-# with the ScriptingProfile dispatcher, the pool itself + its lock + the
-# tap primitive should migrate into the dispatcher's launch-method layer,
-# and _auto_arm_client should be updated to call through the dispatcher
-# instead of reaching directly. Removing the cross-import is a PR-3
-# follow-up; for PR-1 the smell is bounded and documented.
-#
-# Style note: this module uses `import server as _server` (with the leading-
-# underscore alias) rather than the bare `import server` used elsewhere in
-# the mosaicmesh package. No functional difference — the alias visually
-# distinguishes "reach-back to legacy" usages from the more common pattern.
-# If a future PR-3 cleanup removes these reach-backs entirely, the alias
-# goes with them.
 async def _drop_pooled_vnc(client_key):
     """Evict and disconnect a pooled VNC client. Safe to call when
     the client_key isn't pooled (no-op). Called on per-tap failure
@@ -164,52 +52,12 @@ async def _drop_pooled_vnc(client_key):
         logging.debug("veency pool disconnect for %s: %s", client_key, e)
 
 
-async def _launch_webapp_via_vnc(client_key):
-    """Launch the MosaicMesh home-screen webclip by sending a VNC
-    tap at the icon's framebuffer coordinate. The iPad's SpringBoard
-    receives the tap, reads the webclip's Info.plist (including its
-    URL context), and launches Web.app with that URL -- the same
-    code path a human finger triggers. Best-effort: a missing pool
-    entry / handshake failure just logs.
-
-    Requires the operator to have dragged the MosaicMesh icon to the
-    LEFTMOST dock slot on each iPad (in portrait orientation). The
-    onboarding script's webclip install (step 5.4g) creates the icon
-    but does not pin its position; that's a one-time per-iPad
-    manual step."""
-    import server as _server
-    client = _server.settings.clients.get(client_key)
-    if not client or not getattr(client, "ip", ""):
-        logging.warning("launch-webapp %s: no client/ip", client_key)
-        return False
-    loop = asyncio.get_event_loop()
-    try:
-        proxy = await _server._get_pooled_vnc(client_key, client.ip)
-        await loop.run_in_executor(None, _server._do_tap, proxy,
-                                   WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
-        logging.info("launch-webapp: VNC-tapped %s at fb(%d,%d)",
-                     client_key, WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
-        return True
-    except Exception as e:  # noqa: BLE001
-        await _drop_pooled_vnc(client_key)
-        logging.warning("launch-webapp tap failed for %s: %s",
-                        client_key, e)
-        return False
-
-
 async def _run_device_script(client_key, which):
     """Public entry point — delegates to run_profile_action. Kept under the
     old name so existing call sites (mosaicmesh/websocket/legacy.py
     RUN_SCRIPT handler, ad-hoc tests that patch server._run_device_script)
     continue to work without change."""
     return await run_profile_action(client_key, which)
-
-
-# =============================================================================
-# PR-3 dispatcher (added alongside the legacy _run_device_script during the
-# stacked rollout — Task 7 deletes the legacy path and makes _run_device_script
-# call into this dispatcher exclusively).
-# =============================================================================
 
 
 async def _exec_ssh(client, script_template, vars_):

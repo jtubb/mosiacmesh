@@ -6,7 +6,7 @@ def test_state_classes_importable():
     from mosaicmesh.state import (
         Settings, Scripts, Display, PlayState, MediaElement,
         Playlist, Schedule, PlayMode, Client, ScriptingProfile,
-        migrate_client_objects, _apply_default_scripts,
+        migrate_client_objects,
     )
     s = Settings()
     assert hasattr(s, 'clients')
@@ -216,25 +216,15 @@ def test_render_keyframe_grid_args_behavior():
 
 def test_device_scripts_importable():
     from mosaicmesh.device_scripts import (
-        DEFAULT_DEVICE_SCRIPTS, WEBCLIP_BUNDLE_ID,
-        WEBAPP_ICON_FBX, WEBAPP_ICON_FBY,
-        SSH_LEGACY_OPTS,
-        _run_device_script, _launch_webapp_via_vnc, _drop_pooled_vnc,
+        SSH_LEGACY_OPTS, DISPLAY_URL,
+        _run_device_script, _drop_pooled_vnc,
+        run_profile_action, LAUNCH_METHODS,
     )
-    assert isinstance(DEFAULT_DEVICE_SCRIPTS, dict)
-    assert 'loginScript' in DEFAULT_DEVICE_SCRIPTS
-    assert 'startScript' in DEFAULT_DEVICE_SCRIPTS
-    assert 'stopScript' in DEFAULT_DEVICE_SCRIPTS
-    assert isinstance(WEBAPP_ICON_FBX, int)
-    assert isinstance(WEBAPP_ICON_FBY, int)
     assert callable(_run_device_script)
-    assert callable(_launch_webapp_via_vnc)
     assert callable(_drop_pooled_vnc)
-    # Constant composition check: the startScript embeds WEBCLIP_BUNDLE_ID.
-    # If either constant silently changes, the webclip-launch shell command
-    # breaks fleet-wide. Cheap regression bait that will be retired when
-    # PR-3 replaces this module with the ScriptingProfile dispatcher.
-    assert WEBCLIP_BUNDLE_ID in DEFAULT_DEVICE_SCRIPTS['startScript']
+    assert callable(run_profile_action)
+    assert isinstance(LAUNCH_METHODS, dict)
+    assert {"shell", "vnc-tap", "ssh-then-vnc"}.issubset(LAUNCH_METHODS.keys())
     # SSH options must keep IdentitiesOnly=yes — required for the iPad-1 fleet
     # (low MaxAuthTries; dropping this flag causes auth lockouts). Documented
     # in onboard_devices.ps1's sshLegacy. Catches a silent regression that
@@ -374,3 +364,30 @@ def test_bump_version_increments_monotonically():
     legacy = SimpleNamespace()
     bump_version(legacy)
     assert legacy._serverVersion == 1
+
+
+def test_no_legacy_script_fields_on_client():
+    """PR-3 deleted the five per-Client *Script attributes — verify they're
+    gone so jsonpickle of an older settings.dat doesn't quietly resurrect them."""
+    from mosaicmesh.state import Client
+    c = Client()
+    for f in ("loginScript", "startScript", "stopScript",
+              "testScript", "rebootScript"):
+        assert not hasattr(c, f), f"{f} should be deleted in PR-3"
+
+
+def test_default_profile_is_seeded_in_settings_via_migrate():
+    """migrate_client_objects() seeds settings.profiles['ipad1-ios5'] when
+    profiles is empty."""
+    from mosaicmesh.state import Settings, migrate_client_objects
+    import server
+    prev = getattr(server, 'settings', None)
+    try:
+        server.settings = Settings()   # empty profiles dict
+        migrate_client_objects()
+        assert "ipad1-ios5" in server.settings.profiles
+        prof = server.settings.profiles["ipad1-ios5"]
+        assert prof.matchDeviceType == "Tablet"
+        assert prof.launch["method"] == "ssh-then-vnc"
+    finally:
+        server.settings = prev

@@ -35,7 +35,6 @@ from mosaicmesh.state import (
     Playlist,
     Schedule,
     PlayState,
-    _apply_default_scripts,
 )
 from mosaicmesh.persistence import (
     saveSettings,
@@ -237,7 +236,6 @@ def msg_response(msg,session):
         if is_new_client:
             client.discoveryTime = time.time()
             auto_configure_client(msg["SRC"], client)
-            _apply_default_scripts(client)   # backfill login/start/stop/reboot defaults
 
             # Notify admin interface of new device
             new_device_notification = {
