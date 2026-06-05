@@ -300,3 +300,127 @@ async def _run_device_script(client_key, which):
                 pass
         logging.warning("run-script %s %s failed: %s", client_key, which, e)
         return (None, str(e))
+
+
+# =============================================================================
+# PR-3 dispatcher (added alongside the legacy _run_device_script during the
+# stacked rollout — Task 7 deletes the legacy path and makes _run_device_script
+# call into this dispatcher exclusively).
+# =============================================================================
+
+from mosaicmesh.template_vars import SafeDict
+
+
+async def _exec_ssh(client, script_template, vars_):
+    """Run `script_template` over SSH on `client.ip`, substituting `{tokens}`
+    via SafeDict so unknown tokens stay literal. Returns (rc, output). Mirrors
+    the SSH-construction + 30s-timeout + kill-on-timeout discipline of the
+    legacy _run_device_script generic path so byte-for-byte command shape
+    on the wire is preserved.
+
+    Caller is responsible for picking the right script_template (e.g.
+    `profile.scripts["start"]`); this function does not look up scripts."""
+    if not script_template:
+        logging.warning("_exec_ssh %s: empty script template", client.ip)
+        return (None, "no-script")
+    script = script_template.format_map(SafeDict(vars_))
+    cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
+           ["%s@%s" % (SSH_USER, client.ip), script])
+    proc = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT)
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            logging.warning("_exec_ssh %s: timeout (30s); killing ssh.exe",
+                            client.ip)
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+            return (None, "timeout")
+        text = (out or b"").decode("utf-8", "replace").strip()
+        logging.warning("_exec_ssh %s rc=%s: %s", client.ip, proc.returncode,
+                        text.replace("\n", " ")[:300])
+        return (proc.returncode, text)
+    except Exception as e:  # noqa: BLE001
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
+        logging.warning("_exec_ssh %s failed: %s", client.ip, e)
+        return (None, str(e))
+
+
+async def _vnc_tap_sequence(client, launch_cfg, vars_):
+    """Send each tap in `launch_cfg['taps']` (a list of {fbX,fbY} dicts)
+    to the client's framebuffer via the pooled Veency connection. Returns
+    True if every tap landed, False on the first failure (and the pooled
+    connection is dropped so the next attempt re-handshakes).
+
+    The pool itself still lives in server.py (see PR-1 TODO comment) —
+    moving it here is a follow-up.
+    """
+    import server as _server
+    taps = launch_cfg.get("taps") or []
+    if not taps:
+        logging.warning("_vnc_tap_sequence %s: no taps configured",
+                        client.clientID)
+        return False
+    if not getattr(client, "ip", ""):
+        logging.warning("_vnc_tap_sequence %s: no ip", client.clientID)
+        return False
+    loop = asyncio.get_event_loop()
+    try:
+        proxy = await _server._get_pooled_vnc(client.clientID, client.ip)
+        for t in taps:
+            fbX = int(t.get("fbX", 0))
+            fbY = int(t.get("fbY", 0))
+            await loop.run_in_executor(None, _server._do_tap, proxy, fbX, fbY)
+            logging.info("vnc-tap: %s at fb(%d,%d)",
+                         client.clientID, fbX, fbY)
+        return True
+    except Exception as e:  # noqa: BLE001
+        await _drop_pooled_vnc(client.clientID)
+        logging.warning("vnc-tap-sequence failed for %s: %s",
+                        client.clientID, e)
+        return False
+
+
+async def _ssh_then_vnc(client, profile, vars_):
+    """Run `profile.launch['wakeScript']` (or fall back to a known-safe
+    default) over SSH to wake the device, settle 0.8s for the SpringBoard
+    animation, then VNC-tap the icon coordinates in profile.launch['taps'].
+    On tap failure, fall back to SSH-exec'ing profile.scripts['start']
+    (same fallback the legacy _run_device_script does today).
+
+    Returns True on a successful tap, the (rc, out) tuple from the fallback
+    SSH path when the tap fails, or False when both fail."""
+    wake_script = (profile.launch.get("wakeScript")
+                   or "activator send libactivator.lockscreen.dismiss")
+    await _exec_ssh(client, wake_script, vars_)
+    await asyncio.sleep(0.8)
+    ok = await _vnc_tap_sequence(client, profile.launch, vars_)
+    if ok:
+        return True
+    logging.warning("_ssh_then_vnc %s: tap failed; falling back to "
+                    "scripts['start'] via SSH", client.clientID)
+    return await _exec_ssh(client, profile.scripts.get("start", ""), vars_)
+
+
+# Dispatch table consumed by run_profile_action (added in Task 3).
+# A profile's `launch["method"]` field keys into this table to select
+# how a "start" action gets executed. Other lifecycle actions (login,
+# stop, test, reboot) always go through plain _exec_ssh — only "start"
+# needs a VNC tap on iPad-1 because iOS 5 has no CLI launcher that
+# passes a webclip's URL context to Web.app.
+LAUNCH_METHODS = {
+    "shell":        lambda c, p, v: _exec_ssh(c, p.scripts.get("start", ""), v),
+    "vnc-tap":      lambda c, p, v: _vnc_tap_sequence(c, p.launch, v),
+    "ssh-then-vnc": lambda c, p, v: _ssh_then_vnc(c, p, v),
+}
