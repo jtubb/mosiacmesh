@@ -21,6 +21,7 @@ const MODULES = [
   'js/timeline/store.js',
   'js/timeline/util/time.js',
   'js/timeline/util/conflicts.js',
+  'js/timeline/timeline/grid-axis.js',
 ];
 
 for (const rel of MODULES) {
