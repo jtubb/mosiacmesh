@@ -139,3 +139,21 @@ def test_run_device_script_via_legacy_broadcast_call_site_unchanged():
     re-export through server.py is intact."""
     assert hasattr(server, "_run_device_script")
     assert callable(server._run_device_script)
+
+
+def test_run_device_script_no_ip_is_noop():
+    """A Client without an IP must skip silently — the dispatcher MUST
+    NOT attempt `ssh root@` or a VNC connect to an empty host. Parity
+    with the pre-PR-3 _run_device_script's explicit no-ip guard. (See
+    run_profile_action's `if not getattr(client, "ip", ""):` early
+    return.)"""
+    ckey = _seeded(ip="")   # explicitly empty
+    with patch("asyncio.create_subprocess_exec",
+               new=AsyncMock()) as exec_mock, \
+         patch.object(server, "_get_pooled_vnc",
+                      new=AsyncMock()) as pool_mock:
+        rc, out = _run(server._run_device_script(ckey, "start"))
+    assert rc is None
+    assert out == "no-ip"
+    assert exec_mock.call_count == 0
+    assert pool_mock.call_count == 0

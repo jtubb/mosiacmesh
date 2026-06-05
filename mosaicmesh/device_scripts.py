@@ -364,6 +364,14 @@ async def run_profile_action(client_key, which):
     if client is None:
         logging.warning("run_profile_action %s %s: no client", client_key, which)
         return (None, "no-client")
+    if not getattr(client, "ip", ""):
+        # Parity with the pre-PR-3 _run_device_script: a Client without an
+        # IP can't be reached — skip silently rather than attempting
+        # `ssh root@` (or a VNC connect to "") which would log noisy errors
+        # and waste a 10s connect timeout per device on every fleet-wide
+        # broadcast.
+        logging.warning("run_profile_action %s %s: no ip", client_key, which)
+        return (None, "no-ip")
     profile_name = getattr(client, "profileName", None)
     profile = (_server.settings.profiles.get(profile_name)
                if profile_name else None)
