@@ -112,6 +112,24 @@ describe('expandSchedule — WEEKLY', () => {
     // Should be the Sunday (2026-06-07)
     assert.equal(new Date(out[0].startMs).getUTCDay(), 0); // JS getUTCDay: 0=Sun
   });
+
+  test('WEEKLY with empty byweekday fires once per week on dtstart DOW', () => {
+    // REGRESSION GUARD: previously WEEKLY with byweekday=[] fired every
+    // day in the window — diverged from iCal/dateutil semantics. Fix:
+    // when byweekday is empty, default to dtstart's day-of-week (server
+    // matches via dateutil.rrule). dtstart 2026-06-01 is a Monday → only
+    // Monday placements within the week.
+    const s = S({ freq: 'WEEKLY', byweekday: [], dtstart: '2026-06-01' });
+    const out = expandSchedule(s,
+      ms('2026-06-01T00:00:00Z'),
+      ms('2026-06-15T00:00:00Z'));  // 2-week window
+    assert.equal(out.length, 2);
+    for (const p of out) {
+      // jsDow: 0=Mon..6=Sun in our convention
+      const dow = (new Date(p.startMs).getUTCDay() + 6) % 7;
+      assert.equal(dow, 0, `expected Monday, got dow=${dow}`);
+    }
+  });
 });
 
 describe('expandSchedule — end={count}', () => {
@@ -121,6 +139,39 @@ describe('expandSchedule — end={count}', () => {
       ms('2026-06-01T00:00:00Z'),
       ms('2026-06-30T00:00:00Z'));
     assert.equal(out.length, 3);
+  });
+
+  test('count=3 with window AFTER dtstart yields zero (first 3 already past)', () => {
+    // REGRESSION GUARD: previously the implementation iterated only
+    // from windowStart-1, so the count quota was burned by candidate
+    // days padded for cross-midnight rather than by actual occurrences.
+    // The fix counts from dtstart per iCal RFC 5545 — the Nth fire is
+    // the Nth fire regardless of which window the caller asks about.
+    const s = S({ freq: 'DAILY', dtstart: '2026-06-01',
+                  end: { type: 'count', count: 3 } });
+    const out = expandSchedule(s,
+      ms('2026-06-05T00:00:00Z'),
+      ms('2026-06-30T00:00:00Z'));
+    assert.equal(out.length, 0);
+  });
+
+  test('count=5 with one exdate yields 4 placements (exdate consumes quota)', () => {
+    // iCal RFC 5545: COUNT counts the original occurrence set BEFORE
+    // EXDATE filtering. count=5 + exdate-of-day-3 → 4 placements,
+    // not 5. Matches dateutil.rrule on the server.
+    const s = S({ freq: 'DAILY', dtstart: '2026-06-01',
+                  exdates: ['2026-06-03'],
+                  end: { type: 'count', count: 5 } });
+    const out = expandSchedule(s,
+      ms('2026-06-01T00:00:00Z'),
+      ms('2026-06-30T00:00:00Z'));
+    assert.equal(out.length, 4);
+    const dates = out.map(p => {
+      const d = new Date(p.startMs);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+    });
+    assert.deepEqual(dates,
+      ['2026-06-01', '2026-06-02', '2026-06-04', '2026-06-05']);
   });
 });
 

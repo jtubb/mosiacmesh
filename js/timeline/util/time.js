@@ -40,44 +40,70 @@ function jsDow(ms) {
   return (js + 6) % 7;
 }
 
+function isoDate(ms) {
+  const d = new Date(ms);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+// Hard cap so a misconfigured schedule (e.g. count without dtstart) can't
+// loop forever. 10 years of daily fires = 3650 iterations — way more than
+// any real admin schedule needs. Tested below this cap; raise only if a
+// genuine use case appears.
+const MAX_CANDIDATE_DAYS = 365 * 10;
+
 /**
- * Generate the candidate occurrence start-of-day timestamps within
- * [dtstart, end-clamp ∩ window] given freq + interval + byweekday.
+ * Generator: yield every occurrence-day from dtstart forward, in order,
+ * applying freq + interval + byweekday rules. Stops at MAX_CANDIDATE_DAYS
+ * so a bad schedule can't lock the UI.
  *
- * Returns midnight-UTC ms for each candidate day.
+ * **Important**: yields from dtstart, NOT from windowStart. The caller
+ * uses this to count occurrences (for `end={count}`) consistently — the
+ * Nth fire is the Nth fire regardless of which window the caller asks
+ * about. The caller then applies windowStart/windowEnd clipping.
  */
-function candidateDays(s, fromMs, toMs) {
+function* allCandidateDays(s) {
   const dtstartMs = ymdToMs(s.dtstart);
-  const startMs = Math.max(dtstartMs, fromMs - DAY_MS);  // pad 1 day for cross-midnight
-  const days = [];
-  for (let t = startMs; t <= toMs; t += DAY_MS) {
+  const dtstartDow = jsDow(dtstartMs);
+  // WEEKLY with empty byweekday: iCal/dateutil default is once per week
+  // on dtstart's day-of-week (NOT every day, which was a PR-4a-T4 bug).
+  const weeklyBwd = (s.byweekday && s.byweekday.length > 0)
+                  ? s.byweekday
+                  : [dtstartDow];
+  const interval = s.interval || 1;
+  let t = dtstartMs;
+  for (let i = 0; i < MAX_CANDIDATE_DAYS; i++, t += DAY_MS) {
     if (s.freq === 'DAILY') {
-      const idx = Math.round((t - dtstartMs) / DAY_MS);
-      if (idx >= 0 && (idx % (s.interval || 1) === 0)) days.push(t);
+      if (i % interval === 0) yield t;
     } else if (s.freq === 'WEEKLY') {
       const dow = jsDow(t);
-      if (s.byweekday && s.byweekday.length > 0 && !s.byweekday.includes(dow)) continue;
+      if (!weeklyBwd.includes(dow)) continue;
       const weekIdx = Math.floor((t - dtstartMs) / (7 * DAY_MS));
-      if (weekIdx >= 0 && (weekIdx % (s.interval || 1) === 0)) days.push(t);
+      if (weekIdx % interval === 0) yield t;
     } else if (s.freq === 'MONTHLY' || s.freq === 'YEARLY') {
       // Minimal support: fire on same day-of-month as dtstart for MONTHLY,
       // or same month+day for YEARLY. interval respected the same way.
+      // O(window/DAY) — fine for the admin's Day/Week/Month views; a wider
+      // schedule (e.g. yearly fire across a 10-yr window) walks ~3650 days
+      // and rejects almost all at the date check. Cheap enough to skip an
+      // optimization pass until profiling says otherwise.
       const ds = new Date(dtstartMs);
       const td = new Date(t);
       if (s.freq === 'MONTHLY') {
         if (td.getUTCDate() !== ds.getUTCDate()) continue;
         const monthsBetween = (td.getUTCFullYear() - ds.getUTCFullYear()) * 12
                             + (td.getUTCMonth() - ds.getUTCMonth());
-        if (monthsBetween >= 0 && monthsBetween % (s.interval || 1) === 0) days.push(t);
+        if (monthsBetween >= 0 && monthsBetween % interval === 0) yield t;
       } else {  // YEARLY
         if (td.getUTCMonth() !== ds.getUTCMonth()) continue;
         if (td.getUTCDate() !== ds.getUTCDate()) continue;
         const yearsBetween = td.getUTCFullYear() - ds.getUTCFullYear();
-        if (yearsBetween >= 0 && yearsBetween % (s.interval || 1) === 0) days.push(t);
+        if (yearsBetween >= 0 && yearsBetween % interval === 0) yield t;
       }
     }
   }
-  return days;
 }
 
 export function expandSchedule(s, windowStartMs, windowEndMs) {
@@ -92,11 +118,11 @@ export function expandSchedule(s, windowStartMs, windowEndMs) {
   // extends into the NEXT day; add 24h to the end offset.
   if (wrapsMidnight) endOfDayOffset += DAY_MS;
 
-  const days = candidateDays(s, windowStartMs, windowEndMs);
-
-  // end={count} clamp: we count the Nth occurrence FROM dtstart, not
-  // from windowStart, so a count-3 schedule yields the same 3 fires
-  // regardless of which window we ask about.
+  // end={count} clamp: counts the Nth occurrence FROM dtstart (iCal
+  // RFC 5545 semantics, matching dateutil.rrule on the server). The
+  // count INCLUDES exdates — RFC says COUNT counts the original set
+  // before EXDATE filtering. So `count=5` + exdate-of-day-3 yields
+  // 4 placements (days 1,2,4,5), not 5.
   let count = null;
   if (s.end && s.end.type === 'count') count = Math.max(0, s.end.count|0);
   let emitted = 0;
@@ -109,22 +135,23 @@ export function expandSchedule(s, windowStartMs, windowEndMs) {
   }
 
   const out = [];
-  for (const dayMs of days) {
-    // Check exdates by YYYY-MM-DD (UTC)
-    const dStr = isoDate(dayMs);
-    if (exdateSet.has(dStr)) continue;
-
+  for (const dayMs of allCandidateDays(s)) {
     if (count != null && emitted >= count) break;
     emitted += 1;
 
-    let placeStart = dayMs + startOfDayOffset;
-    let placeEnd   = dayMs + endOfDayOffset;
+    const placeStartRaw = dayMs + startOfDayOffset;
+    const placeEndRaw   = dayMs + endOfDayOffset;
 
-    if (untilMs != null && placeStart > untilMs) break;
+    if (untilMs != null && placeStartRaw > untilMs) break;
+    // Past the window's end — no later occurrence can be visible.
+    if (placeStartRaw >= windowEndMs) break;
+    // Entirely before the window — skip but keep counting toward quota.
+    if (placeEndRaw <= windowStartMs) continue;
+    // Exdate skip (still consumed quota above per iCal semantics).
+    if (exdateSet.has(isoDate(dayMs))) continue;
 
-    // Clip to window
-    placeStart = Math.max(placeStart, windowStartMs);
-    placeEnd   = Math.min(placeEnd,   windowEndMs);
+    const placeStart = Math.max(placeStartRaw, windowStartMs);
+    const placeEnd   = Math.min(placeEndRaw,   windowEndMs);
     if (placeEnd <= placeStart) continue;
 
     out.push({
@@ -138,12 +165,4 @@ export function expandSchedule(s, windowStartMs, windowEndMs) {
   }
 
   return out;
-}
-
-function isoDate(ms) {
-  const d = new Date(ms);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${dd}`;
 }
