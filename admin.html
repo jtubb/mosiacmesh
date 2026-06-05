@@ -10,6 +10,16 @@
   <script src="/js/GoTime.js"></script> 
   <script src="/js/mosiacmesh.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
+  <script>
+    // Defer Alpine's auto-start so the ES module below can register the
+    // store + components BEFORE Alpine evaluates the existing x-data
+    // attributes on the page. Module scripts are deferred and run AFTER
+    // classic defer scripts, so without this hook Alpine would already
+    // have processed the DOM and missed every Alpine.data/store call.
+    // The module retrieves window.__deferredAlpineStart and invokes it
+    // once registration is complete.
+    window.deferLoadingAlpine = function (start) { window.__deferredAlpineStart = start; };
+  </script>
   <script defer
           src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.10/dist/cdn.min.js"
           integrity="sha384-XBJ5+bq4ga1+0s+J4sl6njqQ9C/YIfKeQw18HypSuGEaPm1g/VWaNdsQ5d3sE1qi"
