@@ -12,7 +12,7 @@ finally:
     argparse.ArgumentParser.parse_args = _orig
 
 from mosaicmesh.state import Settings, Client, ScriptingProfile
-from mosaicmesh.api.discovery import auto_match_profile
+from mosaicmesh.api.discovery import auto_match_profile, auto_configure_client
 
 
 def _profile(name, match):
@@ -56,13 +56,61 @@ def test_empty_matchDeviceType_is_manual_only():
     assert auto_match_profile(c, s) is None
 
 
-def test_does_not_override_already_set_profileName():
-    """If client.profileName is already set (operator override), the
-    REGISTER auto-match must not change it."""
+def test_helper_returns_candidate_regardless_of_existing_profileName():
+    """auto_match_profile is a pure helper — it returns the candidate
+    that WOULD be assigned, leaving the not-override decision to the
+    caller (auto_configure_client). The wiring guard is exercised by
+    test_auto_configure_preserves_existing_profileName below."""
     s = Settings()
     s.profiles["ipad"] = _profile("ipad", "Tablet")
     c = Client(); c.deviceType = "Tablet"; c.profileName = "custom-override"
-    # The helper just returns a candidate; the caller decides. But test
-    # the helper's "candidate" output is still the matching profile —
-    # the caller is responsible for the not-override semantics.
     assert auto_match_profile(c, s) == "ipad"
+
+
+# ---------------------------------------------------------------------------
+# Integration tests for the auto_configure_client wiring (Step 5.2c). These
+# exercise the wired-up guard end-to-end so a refactor that breaks the
+# insertion point or the `if not getattr(...)` check fails loudly.
+# ---------------------------------------------------------------------------
+
+
+def _setup(deviceType="Tablet", clientID="abc"):
+    """Replace server.settings with a fresh Settings + one Display and
+    return (client_key, client)."""
+    server.settings = Settings()
+    server.settings.profiles["ipad1-ios5"] = _profile("ipad1-ios5", "Tablet")
+    c = Client()
+    c.clientID = clientID
+    c.deviceType = deviceType
+    c.deviceModel = "iPad"
+    c.deviceBrand = "Apple"
+    return clientID, c
+
+
+def test_auto_configure_sets_profileName_on_first_connect():
+    """auto_configure_client must assign client.profileName from
+    auto_match_profile when the client has no override."""
+    key, c = _setup(deviceType="tablet")
+    assert c.profileName is None
+    auto_configure_client(key, c)
+    assert c.profileName == "ipad1-ios5"
+
+
+def test_auto_configure_preserves_existing_profileName():
+    """Operator overrides (set via POST /api/clients/{key}/profile)
+    must survive a subsequent REGISTER — the auto-match guard checks
+    `if not getattr(client, 'profileName', None)`."""
+    key, c = _setup(deviceType="tablet")
+    c.profileName = "custom-override"
+    auto_configure_client(key, c)
+    assert c.profileName == "custom-override"
+
+
+def test_auto_configure_leaves_profileName_None_when_no_match():
+    """Device whose deviceType doesn't match any profile keeps
+    profileName=None. The client will still be auto-configured
+    (displayID, capabilities, etc.) but the dispatcher will warn on
+    every script invocation until an operator assigns a profile."""
+    key, c = _setup(deviceType="desktop")
+    auto_configure_client(key, c)
+    assert c.profileName is None

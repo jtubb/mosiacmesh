@@ -48,7 +48,13 @@ def auto_match_profile(client, settings):
     the trap.
 
     Per spec §7: 'assigned at REGISTER from first profile whose
-    matchDeviceType matches client.deviceType; admin can override'."""
+    matchDeviceType matches client.deviceType; admin can override'.
+
+    First-match-wins is deterministic on Python 3.7+ thanks to dict
+    insertion-order preservation. If multiple profiles share the same
+    matchDeviceType, the earliest-created one wins. Operators who need
+    differentiated routing should give each profile a unique
+    matchDeviceType (or use the empty string + manual assignment)."""
     dt = (getattr(client, "deviceType", "") or "").lower()
     if not dt:
         return None
