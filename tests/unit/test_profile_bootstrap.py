@@ -120,3 +120,30 @@ def test_seed_skips_when_other_profiles_exist():
     s.profiles["android-tv"] = custom
     seed_default_profile_if_empty(s)
     assert "ipad1-ios5" not in s.profiles
+
+
+def test_seed_produces_independent_copy():
+    """The module-level DEFAULT_PROFILE_IPAD1_IOS5 singleton MUST NOT
+    share mutable state with the seeded copy in settings.profiles.
+    Operator edits to a settings.profiles["ipad1-ios5"].scripts dict
+    (or webclip/launch/ssh) must not leak back into the canonical
+    literal — otherwise a second server in the same process (or a
+    test that runs after another) sees corrupted defaults.
+
+    This test is the safety net for any future edit to
+    _make_default_profile() that accidentally shares a reference."""
+    s = Settings()
+    seed_default_profile_if_empty(s)
+    # mutate every mutable nested container in the seeded copy
+    s.profiles["ipad1-ios5"].scripts["login"] = "CORRUPTED"
+    s.profiles["ipad1-ios5"].launch["taps"].append({"fbX": 1, "fbY": 1})
+    s.profiles["ipad1-ios5"].webclip["bundleId"] = "CORRUPTED"
+    s.profiles["ipad1-ios5"].ssh["legacyCrypto"] = False
+    # canonical literal must be unchanged
+    assert DEFAULT_PROFILE_IPAD1_IOS5.scripts["login"].startswith(
+        "activator send libactivator.lockscreen.dismiss")
+    assert DEFAULT_PROFILE_IPAD1_IOS5.launch["taps"] == [
+        {"fbX": 945, "fbY": 671}]
+    assert (DEFAULT_PROFILE_IPAD1_IOS5.webclip["bundleId"]
+            == "com.apple.webapp-4D6F736169634D6573684B696F736B31")
+    assert DEFAULT_PROFILE_IPAD1_IOS5.ssh["legacyCrypto"] is True
