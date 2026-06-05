@@ -23,6 +23,7 @@ const MODULES = [
   'js/timeline/util/conflicts.js',
   'js/timeline/timeline/grid-axis.js',
   'js/timeline/timeline/track-header.js',
+  'js/timeline/timeline/clip.js',
 ];
 
 for (const rel of MODULES) {
