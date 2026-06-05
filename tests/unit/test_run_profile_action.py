@@ -2,7 +2,7 @@
 
 Behavioral contract:
   - Resolves profile via client.profileName -> server.settings.profiles[name]
-  - Returns ("no-profile", None) and logs a warning when no profile is set
+  - Returns (None, "no-profile") and logs a warning when no profile is set
     or the named profile is missing (no crash, fleet-wide robustness)
   - Routes 'start' through LAUNCH_METHODS[profile.launch['method']]
   - Routes login/stop/test/reboot through _exec_ssh(profile.scripts[which])

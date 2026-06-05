@@ -433,6 +433,8 @@ async def _ssh_then_vnc(client, profile, vars_):
 # (run_profile_action) MUST normalize bool True/False + (rc, out)
 # tuples into a uniform shape before returning to outer callers.
 LAUNCH_METHODS = {
+    # REQUIRED: run_profile_action uses this entry as the fallback for
+    # unknown launch methods. Do not remove without updating that fallback.
     "shell":        lambda c, p, v: _exec_ssh(c, p.scripts.get("start", ""), v),
     "vnc-tap":      lambda c, p, v: _vnc_tap_sequence(c, p.launch, v),
     "ssh-then-vnc": lambda c, p, v: _ssh_then_vnc(c, p, v),
@@ -458,7 +460,7 @@ async def run_profile_action(client_key, which):
     success / falsy failure)."""
     import server as _server
     client = _server.settings.clients.get(client_key)
-    if not client:
+    if client is None:
         logging.warning("run_profile_action %s %s: no client", client_key, which)
         return (None, "no-client")
     profile_name = getattr(client, "profileName", None)
