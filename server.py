@@ -99,6 +99,7 @@ from mosaicmesh.api.profiles import (
     api_profiles_update, api_profiles_delete,
     api_clients_assign_profile,
 )
+from mosaicmesh.api.media import api_media, upload_handler
 from mosaicmesh.websocket.legacy import msg_response
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
@@ -1160,39 +1161,6 @@ def runScript(scriptID):
 def deleteScript(scriptID):
     del settings.scripts[scriptID]
 
-async def upload_handler(request):
-    logging.debug("UPLOAD_HANDLER")
-    uploadDest = request.match_info.get('dest')
-    logging.debug(uploadDest)
-    reader = await request.multipart()
-    # reader.next() will `yield` the fields of your form
-    field = await reader.next()
-    logging.debug(field.name)
-    filename = field.filename
-    # You cannot rely on Content-Length if transfer is chunked.
-    size = 0
-    path = os.path.join('cache')
-    if not os.path.exists(path):
-        os.mkdir(path)
-    with open(os.path.join(path,filename), 'wb') as f:
-        while True:
-            chunk = await field.read_chunk()  # 8192 bytes by default.
-            if not chunk:
-                break
-            size += len(chunk)
-            f.write(chunk)
-    
-    response = "none"
-    ct = 'application/octet-stream'
-    
-    if(uploadDest == "calibrate"):
-        response, ct = calibrate(os.path.join(path,filename))
-    elif(uploadDest == "image"):
-        response, ct = processImage(path,filename)
-    elif(uploadDest == "video"):
-        response, ct = processVideo(path, filename)
-    return web.Response(body=response, content_type=ct)
-
 def processImage(path,filename):
     logging.debug("processImage")
     imgDir = "media/server/images"
@@ -1966,27 +1934,6 @@ async def get_video_duration(path):
     _video_duration_cache[ckey] = dur
     return dur
 
-
-async def api_media(request):
-    """List the shared media library under media/server/{images,videos}, plus
-    per-video durations (seconds) so the playlist editor can offer 'full length'."""
-    def _list(sub):
-        d = os.path.join("media", "server", sub)
-        if not os.path.isdir(d):
-            return []
-        return ["/media/server/" + sub + "/" + f
-                for f in sorted(os.listdir(d))
-                if os.path.isfile(os.path.join(d, f))]
-    videos = _list("videos")
-    durations = {}
-    for url in videos:
-        disk = os.path.join("media", "server", "videos", os.path.basename(url))
-        d = await get_video_duration(disk)
-        if d is not None:
-            durations[url] = round(d, 1)
-    body = json.dumps({"images": _list("images"), "videos": videos,
-                       "videoDurations": durations})
-    return web.Response(text=body, content_type="application/json")
 
 async def api_effects(request):
     """List the registered transition effects and their parameter schemas."""
