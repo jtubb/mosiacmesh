@@ -24,6 +24,7 @@ from mosaicmesh.api._concurrency import (
 
 __all__ = [
     "api_playlists_list",
+    "api_playlists_get",
     "api_playlists_create",
     "api_playlists_update",
     "api_playlists_delete",
@@ -46,6 +47,21 @@ async def api_playlists_list(request):
     import server
     out = [_serialize(p) for p in server.settings.playlists.values()]
     return web.json_response({"success": True, "playlists": out})
+
+
+async def api_playlists_get(request):
+    """GET /api/playlists/{name} — fetch a single playlist by name.
+    Returns 200 + {playlist}; 404 if missing. Used by the 412 refetch path
+    in js/timeline/api.js (refetchPlaylist) so a conflict resolver can pull
+    the current server state without re-listing all playlists."""
+    import server
+    name = request.match_info.get("name", "")
+    p = server.settings.playlists.get(name)
+    if p is None:
+        return web.json_response({"success": False,
+                                  "error": f"playlist '{name}' not found"},
+                                 status=404)
+    return web.json_response({"success": True, "playlist": _serialize(p)})
 
 
 async def api_playlists_create(request):

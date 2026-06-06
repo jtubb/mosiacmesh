@@ -135,8 +135,24 @@ export const api = {
   },
 
   // ---- Refetch (used by 412 conflict resolver) ----
-  async refetchSchedule(id)        { return await getJson('/api/schedules/' + encodeURIComponent(id)); },
-  async refetchPlaylist(name)      { return await getJson('/api/playlists/' + encodeURIComponent(name)); },
+  // Prefer the single-item GET if the server supports it (registered in PR-4c);
+  // fall back to the list endpoint + filter so older deployments also work.
+  async refetchSchedule(id) {
+    try {
+      const b = await getJson('/api/schedules/' + encodeURIComponent(id));
+      if (b?.schedule) return b.schedule;
+    } catch (_) { /* fall through to list */ }
+    const b = await getJson('/api/schedules');
+    return (b?.schedules || []).find(s => s.id === id) ?? null;
+  },
+  async refetchPlaylist(name) {
+    try {
+      const b = await getJson('/api/playlists/' + encodeURIComponent(name));
+      if (b?.playlist) return b.playlist;
+    } catch (_) { /* fall through to list */ }
+    const b = await getJson('/api/playlists');
+    return (b?.playlists || []).find(p => p.name === name) ?? null;
+  },
 
   // ---- Profiles ----
   async assignProfile(clientKey, profileName) {

@@ -85,11 +85,13 @@ from mosaicmesh.api.discovery import (
     api_discovery_devices, api_discovery_stats, api_discovery_configure,
 )
 from mosaicmesh.api.playlists import (
-    api_playlists_list, api_playlists_create,
+    api_playlists_list, api_playlists_get,
+    api_playlists_create,
     api_playlists_update, api_playlists_delete,
 )
 from mosaicmesh.api.schedules import (
-    api_schedules_list, api_schedules_create,
+    api_schedules_list, api_schedules_get,
+    api_schedules_create,
     api_schedules_update, api_schedules_delete,
 )
 from mosaicmesh.api.profiles import (
@@ -2258,10 +2260,12 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)
         app.router.add_route('POST', '/api/discovery/configure', api_discovery_configure)
         app.router.add_get('/api/playlists', api_playlists_list)
+        app.router.add_get('/api/playlists/{name}', api_playlists_get)
         app.router.add_post('/api/playlists', api_playlists_create)
         app.router.add_put('/api/playlists/{name}', api_playlists_update)
         app.router.add_delete('/api/playlists/{name}', api_playlists_delete)
         app.router.add_get('/api/schedules', api_schedules_list)
+        app.router.add_get('/api/schedules/{id}', api_schedules_get)
         app.router.add_post('/api/schedules', api_schedules_create)
         app.router.add_put('/api/schedules/{id}', api_schedules_update)
         app.router.add_delete('/api/schedules/{id}', api_schedules_delete)

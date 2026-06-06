@@ -24,6 +24,7 @@ from mosaicmesh.api._concurrency import (
 
 __all__ = [
     "api_schedules_list",
+    "api_schedules_get",
     "api_schedules_create",
     "api_schedules_update",
     "api_schedules_delete",
@@ -159,6 +160,21 @@ async def api_schedules_list(request):
     import server
     out = [_serialize(s) for s in server.settings.schedules.values()]
     return web.json_response({"success": True, "schedules": out})
+
+
+async def api_schedules_get(request):
+    """GET /api/schedules/{id} — fetch a single schedule by id.
+    Returns 200 + {schedule}; 404 if missing. Used by the 412 refetch path
+    in js/timeline/api.js (refetchSchedule) so a conflict resolver can pull
+    the current server state without re-listing all schedules."""
+    import server
+    sid = request.match_info.get("id", "")
+    s = server.settings.schedules.get(sid)
+    if s is None:
+        return web.json_response({"success": False,
+                                  "error": f"schedule '{sid}' not found"},
+                                 status=404)
+    return web.json_response({"success": True, "schedule": _serialize(s)})
 
 
 async def api_schedules_create(request):
