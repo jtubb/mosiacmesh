@@ -31,6 +31,7 @@ const MODULES = [
   'js/timeline/bin/media-bin.js',
   'js/timeline/bin/playlist-bin.js',
   'js/timeline/util/optimistic.js',
+  'js/timeline/util/refetch-merge.js',
   'js/timeline/util/snap.js',
   'js/timeline/timeline/toast.js',
   'js/timeline/drag/dragstate.js',

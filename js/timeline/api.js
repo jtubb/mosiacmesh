@@ -134,6 +134,10 @@ export const api = {
     return await deleteReq(`/api/playlists/${encodeURIComponent(name)}`);
   },
 
+  // ---- Refetch (used by 412 conflict resolver) ----
+  async refetchSchedule(id)        { return await getJson('/api/schedules/' + encodeURIComponent(id)); },
+  async refetchPlaylist(name)      { return await getJson('/api/playlists/' + encodeURIComponent(name)); },
+
   // ---- Profiles ----
   async assignProfile(clientKey, profileName) {
     const b = await postJson(`/api/clients/${encodeURIComponent(clientKey)}/profile`, { profileName });
