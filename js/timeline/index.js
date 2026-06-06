@@ -38,6 +38,7 @@ import { attachUpload } from './upload.js';
 import { attachRecurrenceEditor } from './modals/recurrence-editor.js';
 import { attachContextMenu } from './context-menu.js';
 import { attachPlaylistEditor } from './modals/playlist-editor.js';
+import { attachTrackHeaderPopover } from './track-header-popover.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -79,6 +80,7 @@ function bootstrap() {
   attachRecurrenceEditor(store);
   attachContextMenu(store);
   attachPlaylistEditor(store);
+  attachTrackHeaderPopover(store);
 }
 
 if (window.__deferredAlpineStart) {

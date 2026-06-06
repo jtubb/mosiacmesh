@@ -170,7 +170,12 @@ export const api = {
     return await deleteReq(`/api/profiles/${encodeURIComponent(name)}`);
   },
   async assignProfile(clientKey, profileName) {
-    const b = await postJson(`/api/clients/${encodeURIComponent(clientKey)}/profile`, { profileName });
+    // Server explicitly rejects empty string with 'use null to clear
+    // the profile'. A <select> with <option value=""> produces ''
+    // for the (no override) sentinel — normalise here so callers
+    // don't have to remember the server quirk.
+    const body = { profileName: profileName === '' ? null : profileName };
+    const b = await postJson(`/api/clients/${encodeURIComponent(clientKey)}/profile`, body);
     return b;
   },
 

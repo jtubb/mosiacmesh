@@ -48,6 +48,7 @@ const MODULES = [
   'js/timeline/modals/playlist-editor.js',
   'js/timeline/modals/profile-editor.js',
   'js/timeline/modals/calibration.js',
+  'js/timeline/track-header-popover.js',
 ];
 
 for (const rel of MODULES) {
