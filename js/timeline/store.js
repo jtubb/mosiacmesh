@@ -24,6 +24,7 @@
  * surfaces a clear error rather than a silent no-op.
  */
 import { api } from './api.js';
+import { expandSchedule } from './util/time.js';
 
 function todayIso() {
   const d = new Date();
@@ -233,6 +234,23 @@ export function makeStore() {
         },
         { conflictKind: 'playlist', conflictId: name },
       );
+    },
+
+    // PR-4c: returns the next N concrete clip placements for a schedule,
+    // looking forward from `fromIso` (default = today). Powers the
+    // recurrence modal's "next 5 occurrences" preview. Re-uses the same
+    // expander the day-grid renders with so the preview matches what
+    // the operator will see once the schedule lands.
+    nextOccurrences(scheduleId, n = 5, fromIso = null) {
+      const s = this.schedules.find(x => x.id === scheduleId);
+      if (!s) return [];
+      const startIso = fromIso || new Date().toISOString().slice(0, 10);
+      const [y, m, d] = startIso.split('-').map(Number);
+      const fromMs = Date.UTC(y, m - 1, d);
+      // 365 days forward is sufficient for any DAILY..YEARLY recurrence.
+      const HORIZON_MS = 365 * 24 * 60 * 60 * 1000;
+      const placements = expandSchedule(s, fromMs, fromMs + HORIZON_MS);
+      return placements.slice(0, n);
     },
   };
 }

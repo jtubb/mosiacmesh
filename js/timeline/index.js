@@ -35,7 +35,7 @@ import { attachSelection } from './select.js';
 import { attachDrillIn } from './drill-in.js';
 import { attachMediaToClip } from './drag/media-to-clip.js';
 import { attachUpload } from './upload.js';
-import { attachRecurrencePopover } from './recurrence-popover.js';
+import { attachRecurrenceEditor } from './modals/recurrence-editor.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -74,7 +74,7 @@ function bootstrap() {
   attachDrillIn(store);
   attachMediaToClip(store);
   attachUpload(store);
-  attachRecurrencePopover(store);
+  attachRecurrenceEditor(store);
 }
 
 if (window.__deferredAlpineStart) {
