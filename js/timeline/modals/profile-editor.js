@@ -52,6 +52,7 @@ export function openProfileEditor(store) {
   activeUi = { store, root, draft: null, draftKind: null /* 'edit' | 'new' */ };
   renderProfileList(activeUi);
   populateSampleSelectors(activeUi);
+  wirePreviewHandlers(activeUi);
   wireShellHandlers(activeUi);
 }
 
@@ -232,8 +233,62 @@ function captureForm(ui) {
 }
 
 function refreshPreview(ui) {
-  var out = ui.root.querySelector('[data-field="previewBody"]');
-  out.textContent = ui.draft ? '(preview comes in T-C5)' : '';
+  const out = ui.root.querySelector('[data-field="previewBody"]');
+  if (!ui.draft) { out.textContent = ''; return; }
+  const clientKey = ui.root.querySelector('[data-field="sampleClient"]').value;
+  const scriptKey = ui.root.querySelector('[data-field="sampleScript"]').value;
+  const client = ui.store.displays.find(function(d) { return (d.clientKey || d.id) === clientKey; });
+  const template = (ui.draft.scripts && ui.draft.scripts[scriptKey]) || '';
+  const vars = buildPreviewVars(client, ui.draft);
+  // Render the template with vars; mark unresolved {tokens} in red.
+  const html = template.replace(/\{([a-zA-Z_]\w*)\}/g, function(full, key) {
+    if (key in vars) return escapeText(String(vars[key]));
+    return '<span class="mm-pe-unresolved">' + escapeText(full) + '</span>';
+  }).replace(/\n/g, '<br>');
+  // Switch from textContent to innerHTML because we hand-build the
+  // highlighted spans. escapeText is applied to user-supplied values
+  // above so this is safe.
+  out.innerHTML = html;
+}
+
+function buildPreviewVars(client, draft) {
+  // Mirror of mosaicmesh.template_vars.SafeDict + build_vars (the
+  // server-side substitution). Keep the keys in sync — see
+  // mosaicmesh/template_vars.py for the canonical list.
+  const v = {
+    clientID:        '',
+    ip:              '',
+    friendlyName:    '',
+    displayId:       '',
+    cacheMode:       '',
+    webclipBundleId: '',
+    webclipTitle:    '',
+    vncPassword:     '',
+    fbX:             '',
+    fbY:             '',
+    displayUrl:      window.location.origin + '/',
+  };
+  if (client) {
+    v.clientID     = client.clientID  || client.clientKey || client.id || '';
+    v.ip           = client.ip        || client.address   || '';
+    v.friendlyName = client.friendlyName || '';
+    v.displayId    = client.displayID || client.displayId || '';
+    v.cacheMode    = client.cacheMode || '';
+    v.displayUrl   = client.displayUrl || (window.location.origin + '/');
+  }
+  if (draft.webclip) {
+    if (draft.webclip.bundleId) v.webclipBundleId = draft.webclip.bundleId;
+    if (draft.webclip.title)    v.webclipTitle    = draft.webclip.title;
+  }
+  if (draft.launch) {
+    if (draft.launch.vncPassword) v.vncPassword = draft.launch.vncPassword;
+  }
+  return v;
+}
+
+function wirePreviewHandlers(ui) {
+  ui.root.querySelector('[data-field="sampleClient"]').addEventListener('change', function() { refreshPreview(ui); });
+  ui.root.querySelector('[data-field="sampleScript"]').addEventListener('change', function() { refreshPreview(ui); });
 }
 
 function escapeText(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
