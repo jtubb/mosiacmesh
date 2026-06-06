@@ -1192,7 +1192,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
               <input class="input" type="text" x-model="search" placeholder="Search…" />
               <ul class="mm-bin-list">
                 <template x-for="it in filtered()" :key="it.url">
-                  <li class="mm-bin-item">
+                  <li class="mm-bin-item"
+                      draggable="true"
+                      @dragstart="dragStart(it, $event)"
+                      @dragend="dragEnd()">
                     <span x-text="it.name"></span>
                     <span class="size" style="color:var(--text-muted)" x-text="it.duration ? ' ' + it.duration + 's' : ''"></span>
                   </li>

@@ -39,6 +39,7 @@ const MODULES = [
   'js/timeline/drag/clip-resize.js',
   'js/timeline/select.js',
   'js/timeline/drill-in.js',
+  'js/timeline/drag/media-to-clip.js',
 ];
 
 for (const rel of MODULES) {
