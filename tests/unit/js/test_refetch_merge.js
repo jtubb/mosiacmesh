@@ -8,7 +8,7 @@ test('refetchAfterConflict replaces schedule + toasts', async () => {
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(url);
-    const payload = { id: 'sch1', playlistName: 'Morning', startTime: '12:00', endTime: '13:00', _serverVersion: 5 };
+    const payload = { schedule: { id: 'sch1', playlistName: 'Morning', startTime: '12:00', endTime: '13:00', _serverVersion: 5 } };
     return {
       ok: true, status: 200,
       text: async () => JSON.stringify(payload),
@@ -35,7 +35,7 @@ test('refetchAfterConflict for playlist replaces by name', async () => {
   const calls = [];
   globalThis.fetch = async (url) => {
     calls.push(url);
-    const payload = { name: 'Morning', items: [{ file: 'a.mp4' }, { file: 'b.mp4' }], _serverVersion: 9 };
+    const payload = { playlist: { name: 'Morning', items: [{ file: 'a.mp4' }, { file: 'b.mp4' }], _serverVersion: 9 } };
     return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
   };
   const { refetchAfterConflict } = await import('../../../js/timeline/util/refetch-merge.js?t=' + (Date.now()+1));

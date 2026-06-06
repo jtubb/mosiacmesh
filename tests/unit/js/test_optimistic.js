@@ -55,7 +55,7 @@ describe('withRollback', () => {
     // Mock fetch so api.refetchSchedule returns a fresh entity.
     globalThis.fetch = async () => ({
       ok: true, status: 200,
-      text: async () => JSON.stringify({ id: 'sch1', playlistName: 'Morning', startTime: '12:00', _serverVersion: 5 }),
+      text: async () => JSON.stringify({ schedule: { id: 'sch1', playlistName: 'Morning', startTime: '12:00', _serverVersion: 5 } }),
     });
 
     const store = {
