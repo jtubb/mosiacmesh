@@ -197,6 +197,7 @@ export function makeStore() {
           if (idx >= 0) this.schedules[idx] = updated;
           return updated;
         },
+        { conflictKind: 'schedule', conflictId: id },
       );
     },
 
@@ -230,6 +231,7 @@ export function makeStore() {
           this.playlists[name] = updated;
           return updated;
         },
+        { conflictKind: 'playlist', conflictId: name },
       );
     },
   };

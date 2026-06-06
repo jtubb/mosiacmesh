@@ -30,7 +30,7 @@ function deepClone(value) {
   return out;
 }
 
-export async function withRollback(store, snapshotKeys, mutationFn, apiFn) {
+export async function withRollback(store, snapshotKeys, mutationFn, apiFn, opts = {}) {
   const snapshot = {};
   for (const k of snapshotKeys) snapshot[k] = deepClone(store[k]);
   try {
@@ -38,6 +38,24 @@ export async function withRollback(store, snapshotKeys, mutationFn, apiFn) {
     return await apiFn();
   } catch (e) {
     for (const k of snapshotKeys) store[k] = snapshot[k];
+    // PR-4c: 412 means the server saw a newer version. Replace the
+    // rollback toast with a refetch + 'updated by another admin' toast
+    // by delegating to refetch-merge.js. Refetch failures fall through
+    // to the plain-toast path below so a hard-broken server still
+    // surfaces the error.
+    if (e && e.status === 412 && opts.conflictKind && opts.conflictId) {
+      let refetchSucceeded = false;
+      try {
+        const { refetchAfterConflict } = await import('./refetch-merge.js');
+        await refetchAfterConflict(store, opts.conflictKind, opts.conflictId);
+        refetchSucceeded = true;
+      } catch (_) {
+        // Refetch failed — let the plain-toast path below run.
+      }
+      if (refetchSucceeded) {
+        throw e;   // refetch handled the user-facing message; propagate the error so caller .catch sees it
+      }
+    }
     const errMsg = (e && e.body && e.body.error) || (e && e.message) || String(e);
     if (typeof store.toast === 'function') store.toast(errMsg, 'error');
     throw e;
