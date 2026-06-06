@@ -83,7 +83,7 @@ function populateSampleSelectors(ui) {
 function wireShellHandlers(ui) {
   ui.root.querySelector('[data-action="new"]').addEventListener('click', () => {
     ui.draftKind = 'new';
-    ui.draft = { name: '', label: '', matchDeviceType: 'Tablet',
+    ui.draft = { name: '', label: '', matchDeviceType: '',
                  scripts: { login: '', start: '', stop: '', test: '', reboot: '' },
                  launch: { method: 'ssh-then-vnc', taps: [] },
                  webclip: { bundleId: '', title: '' },
@@ -126,12 +126,20 @@ function renderForm(ui) {
     <div class="mm-form-grid">
       <label>Name <input type="text" data-field="name" value="${escapeAttr(d.name)}" ${ui.draftKind === 'edit' ? 'disabled' : ''}></label>
       <label>Label <input type="text" data-field="label" value="${escapeAttr(d.label || '')}"></label>
-      <label>Match device type
-        <select data-field="matchDeviceType">
-          ${['Tablet','Mobile','Desktop','Default'].map(function(t) {
-            return '<option value="' + t + '"' + ((d.matchDeviceType||'Tablet')===t?' selected':'') + '>' + t + '</option>';
-          }).join('')}
-        </select>
+      <label title="Matched case-insensitively against client.deviceType (the User-Agent classification from device_detector). Leave empty for manual-only assignment.">Match device type (UA)
+        <input type="text" data-field="matchDeviceType" list="mm-pe-device-types" value="${escapeAttr(d.matchDeviceType || '')}" placeholder="e.g. tablet (empty = no auto-match)">
+        <datalist id="mm-pe-device-types">
+          <option value="tablet">
+          <option value="smartphone">
+          <option value="desktop">
+          <option value="tv">
+          <option value="smart display">
+          <option value="console">
+          <option value="phablet">
+          <option value="feature phone">
+          <option value="wearable">
+          <option value="car browser">
+        </datalist>
       </label>
       <label>Launch method
         <select data-field="launchMethod">
