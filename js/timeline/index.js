@@ -27,6 +27,7 @@ import { startStatusSubscriber } from './timeline/sockjs-status.js';
 import { startNowLine, autoscrollIntoView } from './timeline/now-line.js';
 import { mmMediaBinComponent } from './bin/media-bin.js';
 import { mmPlaylistBinComponent } from './bin/playlist-bin.js';
+import { mmToastComponent } from './timeline/toast.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -47,6 +48,8 @@ function bootstrap() {
   Alpine.data('mmMediaBin', mmMediaBinComponent);
   // eslint-disable-next-line no-undef
   Alpine.data('mmPlaylistBin', mmPlaylistBinComponent);
+  // eslint-disable-next-line no-undef
+  Alpine.data('mmToast', mmToastComponent);
   // eslint-disable-next-line no-undef
   const store = Alpine.store('mm');   // the reactive Proxy
   store.hydrate().then(() => {

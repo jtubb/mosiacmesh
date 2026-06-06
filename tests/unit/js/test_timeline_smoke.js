@@ -32,6 +32,7 @@ const MODULES = [
   'js/timeline/bin/playlist-bin.js',
   'js/timeline/util/optimistic.js',
   'js/timeline/util/snap.js',
+  'js/timeline/timeline/toast.js',
 ];
 
 for (const rel of MODULES) {
