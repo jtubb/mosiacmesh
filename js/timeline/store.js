@@ -153,7 +153,23 @@ export function makeStore() {
 
     // ---- Drill-in state (PR-4b) ----
     drilledIn: null,
-    drillInto(id) { this.drilledIn = (this.drilledIn === id) ? null : id; },
+    drillInto(id) {
+      this.drilledIn = (this.drilledIn === id) ? null : id;
+      // Collapsing the drill-in clears any sub-item selection so a
+      // stray Del press later can't try to remove an item from a
+      // playlist the operator can't see.
+      if (this.drilledIn === null) this.selectedSubItem = null;
+    },
+
+    // ---- Sub-item selection (PR-4c gap-fix, spec §358) ----
+    // When a playlist is drilled in, single-click on a sub-item sets
+    // this to {playlistName, index}. The Del key handler in select.js
+    // reads it and calls removePlaylistItem.
+    selectedSubItem: null,
+    selectSubItem(playlistName, index) {
+      this.selectedSubItem = { playlistName, index };
+    },
+    clearSubItemSelection() { this.selectedSubItem = null; },
 
     // ---- Mutations (PR-4b) ----
     /**
@@ -234,6 +250,32 @@ export function makeStore() {
         },
         { conflictKind: 'playlist', conflictId: name },
       );
+    },
+
+    /**
+     * Remove a single playlist item by index. Thin wrapper over
+     * updatePlaylist — the server has no per-item endpoint, so this
+     * just PUTs the full items array minus the indexed entry. Used by
+     * the Del-on-sub-clip handler in select.js (PR-4c gap-fix). Also
+     * clears selectedSubItem on success so the visual highlight goes
+     * with the item.
+     */
+    async removePlaylistItem(name, index) {
+      const cur = this.playlists[name];
+      if (!cur) throw new Error(`removePlaylistItem: playlist '${name}' not found`);
+      const items = (cur.items || []).slice();
+      if (index < 0 || index >= items.length) {
+        throw new Error(`removePlaylistItem: index ${index} out of range for '${name}'`);
+      }
+      items.splice(index, 1);
+      await this.updatePlaylist(name, { items });
+      // Only reaches this line on success (updatePlaylist throws on
+      // rollback). Clear the selection so a follow-up Del press doesn't
+      // try to remove the now-shifted index.
+      if (this.selectedSubItem && this.selectedSubItem.playlistName === name
+          && this.selectedSubItem.index === index) {
+        this.selectedSubItem = null;
+      }
     },
 
     // ---- Profile CRUD (PR-4c T-C1) ----

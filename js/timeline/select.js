@@ -32,15 +32,29 @@ export function attachSelection(store) {
     if (ev.key !== 'Delete' && ev.key !== 'Backspace') return;
     const tag = (ev.target.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea' || ev.target.isContentEditable) return;
-    if (store.selection.size === 0) return;
-    ev.preventDefault();
-    const ids = Array.from(store.selection);
-    // Soft confirm only for bulk deletes — single-clip Del is the
-    // common case and prompting would feel heavy.
-    if (ids.length > 3 && !confirm(`Delete ${ids.length} schedules?`)) return;
-    for (const id of ids) {
-      store.deleteSchedule(id).catch(() => {});
+
+    // Clip selection takes precedence: if the operator has schedules
+    // selected on the main grid, Del removes those (existing behavior).
+    if (store.selection.size > 0) {
+      ev.preventDefault();
+      const ids = Array.from(store.selection);
+      // Soft confirm only for bulk deletes — single-clip Del is the
+      // common case and prompting would feel heavy.
+      if (ids.length > 3 && !confirm(`Delete ${ids.length} schedules?`)) return;
+      for (const id of ids) {
+        store.deleteSchedule(id).catch(() => {});
+      }
+      store.clearSelection();
+      return;
     }
-    store.clearSelection();
+
+    // PR-4c gap-fix (spec §358): Del on a drilled-in sub-item removes
+    // it from the playlist. Reaches this branch only when no schedule
+    // is selected — clip-level Del always wins.
+    if (store.selectedSubItem) {
+      ev.preventDefault();
+      const { playlistName, index } = store.selectedSubItem;
+      store.removePlaylistItem(playlistName, index).catch(() => {});
+    }
   }, true);
 }

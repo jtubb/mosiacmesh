@@ -22,10 +22,22 @@ export default async function () {
     }, scheduleId);
     await page.waitForSelector('.mm-drillin-item', { timeout: 5000 });
 
-    // Click the first item -> editor opens.
+    // PR-4c gap-fix: single-click on a sub-item SELECTS (sets the
+    // highlight + makes Del work); double-click opens the editor.
+    // Verify the selection state first.
     await page.evaluate(() => {
       const it = document.querySelector('.mm-drillin-item');
       it.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
+    await page.waitForSelector('.mm-drillin-item.mm-drillin-item-selected', { timeout: 5000 });
+    const selectedAfterClick = await page.evaluate(
+      () => Alpine.store('mm').selectedSubItem);
+    assert.ok(selectedAfterClick && selectedAfterClick.index === 0, `expected selectedSubItem.index===0, got ${JSON.stringify(selectedAfterClick)}`);
+
+    // Now DOUBLE-click to open the editor.
+    await page.evaluate(() => {
+      const it = document.querySelector('.mm-drillin-item');
+      it.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
     });
     await page.waitForSelector('.mm-modal', { timeout: 5000 });
 

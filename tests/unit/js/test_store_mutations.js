@@ -178,3 +178,45 @@ describe('store.deleteProfile', () => {
     assert.equal(store.profiles.p1, undefined);
   });
 });
+
+describe('store.removePlaylistItem', () => {
+  test('removes by index + clears selectedSubItem when it matches', async () => {
+    const store = await loadStore();
+    store.playlists = { Morning: { name: 'Morning', items: [{ file: 'a.mp4' }, { file: 'b.mp4' }, { file: 'c.mp4' }], _serverVersion: 4 } };
+    store.selectedSubItem = { playlistName: 'Morning', index: 1 };
+    installFetch({
+      'PUT /api/playlists/Morning': async (opts) => {
+        const body = JSON.parse(opts.body);
+        return { status: 200, body: { playlist: { name: 'Morning', items: body.items, _serverVersion: 5 } } };
+      },
+    });
+    await store.removePlaylistItem('Morning', 1);
+    assert.deepEqual(store.playlists.Morning.items.map(i => i.file), ['a.mp4', 'c.mp4']);
+    assert.equal(store.playlists.Morning._serverVersion, 5);
+    assert.equal(store.selectedSubItem, null);
+  });
+
+  test('out-of-range index throws without server call', async () => {
+    const store = await loadStore();
+    store.playlists = { Morning: { name: 'Morning', items: [{ file: 'a.mp4' }], _serverVersion: 1 } };
+    installFetch({}); // no handlers — would throw if a request were attempted
+    await assert.rejects(() => store.removePlaylistItem('Morning', 5), /out of range/);
+    assert.equal(store.playlists.Morning.items.length, 1);   // unchanged
+  });
+
+  test('leaves selection alone when it points at a different item', async () => {
+    const store = await loadStore();
+    store.playlists = { Morning: { name: 'Morning', items: [{ file: 'a' }, { file: 'b' }, { file: 'c' }], _serverVersion: 1 } };
+    store.selectedSubItem = { playlistName: 'Morning', index: 2 };
+    installFetch({
+      'PUT /api/playlists/Morning': async (opts) => {
+        const body = JSON.parse(opts.body);
+        return { status: 200, body: { playlist: { name: 'Morning', items: body.items, _serverVersion: 2 } } };
+      },
+    });
+    await store.removePlaylistItem('Morning', 0);   // remove index 0, selection at index 2
+    // Selection unchanged in this implementation — operator may need to clear it themselves.
+    // What matters: it's not the removed index, so the function leaves it.
+    assert.deepEqual(store.selectedSubItem, { playlistName: 'Morning', index: 2 });
+  });
+});

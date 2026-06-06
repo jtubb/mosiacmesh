@@ -40,10 +40,19 @@ export default async function () {
       (lbl) => Alpine.store('mm').profiles['ipad1-ios5']?.label === lbl,
       NEW_LABEL, { timeout: 5000 });
 
-    // Revert so we don't leave a noisy label on the server.
+    // Revert. The store's optimistic update writes the label
+    // immediately but the _serverVersion bump may lag a microtask, so
+    // a follow-up store.updateProfile can race and 412. Bypass the
+    // store and PUT directly with the current server version — the
+    // test is asserting the editor flow, not the revert mechanics.
     await page.evaluate(async () => {
-      const p = Alpine.store('mm').profiles['ipad1-ios5'];
-      await Alpine.store('mm').updateProfile('ipad1-ios5', { ...p, label: 'iPad 1 — iOS 5.1.1' });
+      const fresh = await (await fetch('/api/profiles')).json();
+      const p = (fresh.profiles || []).find(x => x.name === 'ipad1-ios5');
+      await fetch('/api/profiles/ipad1-ios5', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'If-Match': String(p._serverVersion) },
+        body: JSON.stringify({ label: 'iPad 1 — iOS 5.1.1' }),
+      });
     });
     return 'pass';
   } finally { await browser.close(); }

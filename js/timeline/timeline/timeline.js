@@ -153,17 +153,23 @@ export function mmTimelineComponent() {
         const durations = items.map(it => Number((typeof it === 'object' && it && it.duration) || 0));
         const total = durations.reduce((a, b) => a + b, 0);
         const widths = total > 0 ? durations.map(d => (d / total) * 100) : items.map(() => 100 / items.length);
+        // PR-4c gap-fix: highlight the selected sub-item so Del's effect
+        // is obvious. Alpine reactivity on store.selectedSubItem causes
+        // x-html to re-render this row when selection changes.
+        const sel = this.$store.mm.selectedSubItem;
+        const selectedIdx = (sel && sel.playlistName === name) ? sel.index : -1;
         let left = 0;
         inner = items.map((it, i) => {
           const file = (typeof it === 'string') ? it : (it && it.file) || '';
           const widthPct = widths[i];
-          const html = `<div class="mm-drillin-item" data-item-index="${i}" style="left:${left}%; width:${widthPct}%;" title="${escapeAttr(file)}">${escapeText(basename(file))}</div>`;
+          const cls = 'mm-drillin-item' + (i === selectedIdx ? ' mm-drillin-item-selected' : '');
+          const html = `<div class="${cls}" data-item-index="${i}" style="left:${left}%; width:${widthPct}%;" title="${escapeAttr(file)}">${escapeText(basename(file))}</div>`;
           left += widthPct;
           return html;
         }).join('');
       }
       return `<div class="mm-drillin-row" style="grid-column:1 / 26" data-playlist-name="${escapeAttr(name)}" data-schedule-id="${escapeAttr(placement.scheduleId)}">
-        <div class="mm-drillin-header"><span class="mm-drillin-label">${escapeText(name)}</span> <span class="mm-drillin-hint">double-click clip again to collapse</span></div>
+        <div class="mm-drillin-header"><span class="mm-drillin-label">${escapeText(name)}</span> <span class="mm-drillin-hint">single-click to select · double-click to edit · Del to remove</span></div>
         <div class="mm-drillin-items">${inner}</div>
       </div>`;
     },

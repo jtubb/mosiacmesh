@@ -13,13 +13,37 @@
  * Called by:
  *   - context-menu Edit playlist items (opens at the FIRST item; user
  *     can switch via the dropdown inside the modal)
- *   - drill-in single-click on a .mm-drillin-item
+ *   - drill-in DOUBLE-click on a .mm-drillin-item
+ *
+ * Single-click on a sub-item SELECTS it (sets store.selectedSubItem)
+ * so the Del key can remove it. The selection<->open distinction
+ * mirrors the main-grid pattern (single-click selects a clip; double-
+ * click drills in).
  */
 import { openModal, closeModal } from './modal-shell.js';
 
 export function attachPlaylistEditor(store) {
-  // Single-click on a drilled-in item opens the editor at that item.
+  // Single-click on a drilled-in item: SELECT (Del shortcut becomes
+  // remove). Click on empty drill-in row area clears selection.
   document.addEventListener('click', (ev) => {
+    const item = ev.target.closest('.mm-drillin-item');
+    if (item) {
+      const row = item.closest('.mm-drillin-row');
+      if (!row) return;
+      const playlistName = row.dataset.playlistName;
+      const itemIndex = Number(item.dataset.itemIndex || 0);
+      store.selectSubItem(playlistName, itemIndex);
+      return;
+    }
+    // Click on the drill-in row but NOT on an item: clear selection.
+    const row = ev.target.closest('.mm-drillin-row');
+    if (row && store.selectedSubItem) {
+      store.clearSubItemSelection();
+    }
+  }, true);
+
+  // Double-click on a drilled-in item OPENS the editor.
+  document.addEventListener('dblclick', (ev) => {
     const item = ev.target.closest('.mm-drillin-item');
     if (!item) return;
     const row = item.closest('.mm-drillin-row');
