@@ -1190,6 +1190,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
             <div x-data="mmMediaBin" class="mm-bin-section">
               <div class="mm-bin-title">Media (<span x-text="filtered().length"></span>)</div>
               <input class="input" type="text" x-model="search" placeholder="Search…" />
+              <button class="btn btn-ghost" id="mmUploadBtn" type="button" style="margin-top:6px; width: 100%;">+ Upload</button>
               <ul class="mm-bin-list">
                 <template x-for="it in filtered()" :key="it.url">
                   <li class="mm-bin-item"
@@ -1250,6 +1251,8 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
             <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
           </template>
         </div>
+        <!-- PR-4b T12: hidden file picker driven by the + Upload button in the media bin. -->
+        <input type="file" id="mmUploadInput" multiple accept="image/*,video/*" style="display:none">
       </section>
       <section class="section" data-route="overview"><h2>Overview</h2>
         <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>

@@ -34,6 +34,7 @@ import { attachClipResize } from './drag/clip-resize.js';
 import { attachSelection } from './select.js';
 import { attachDrillIn } from './drill-in.js';
 import { attachMediaToClip } from './drag/media-to-clip.js';
+import { attachUpload } from './upload.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -71,6 +72,7 @@ function bootstrap() {
   attachSelection(store);
   attachDrillIn(store);
   attachMediaToClip(store);
+  attachUpload(store);
 }
 
 if (window.__deferredAlpineStart) {
