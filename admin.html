@@ -1185,6 +1185,21 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-bin-item { padding: 4px 6px; cursor: default; }
 .mm-bin-item:hover { background: rgba(255,255,255,0.05); }
 .mm-timeline-main { flex: 1 1 auto; min-width: 0; }
+/* PR-4c T-C3: profile-editor 3-pane shell */
+.mm-profile-editor { display: grid; grid-template-columns: 200px 1fr 280px; gap: 10px; min-width: 900px; max-width: 1100px; min-height: 480px; }
+.mm-pe-list { border-right: 1px solid rgba(255,255,255,0.08); padding-right: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mm-pe-list-actions { display: flex; gap: 4px; }
+.mm-pe-profiles { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; font-size: 12px; }
+.mm-pe-profiles li { padding: 6px 8px; cursor: pointer; border-radius: 3px; }
+.mm-pe-profiles li:hover { background: rgba(255,255,255,0.06); }
+.mm-pe-profiles li.selected { background: rgba(120,170,240,0.18); }
+.mm-pe-form { overflow-y: auto; padding-right: 8px; min-width: 0; }
+.mm-pe-empty { color: var(--text-muted, #888); padding: 12px; font-size: 12px; }
+.mm-pe-preview { border-left: 1px solid rgba(255,255,255,0.08); padding-left: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mm-pe-preview-header { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.mm-pe-preview-body { flex: 1; background: rgba(0,0,0,0.3); padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; overflow-y: auto; min-height: 200px; }
+.mm-pe-danger { color: var(--err, #f88); }
+.mm-pe-unresolved { color: var(--err, #f88); font-weight: bold; }
   </style>
 </head>
 <body>
