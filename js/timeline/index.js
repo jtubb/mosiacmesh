@@ -29,6 +29,7 @@ import { mmMediaBinComponent } from './bin/media-bin.js';
 import { mmPlaylistBinComponent } from './bin/playlist-bin.js';
 import { mmToastComponent } from './timeline/toast.js';
 import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
+import { attachClipMove } from './drag/clip-move.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -61,6 +62,7 @@ function bootstrap() {
   startNowLine(() => Alpine.store('mm'));
   // PR-4b: install document-level drag listeners for playlist→track.
   attachPlaylistToTrack(store);
+  attachClipMove(store);
 }
 
 if (window.__deferredAlpineStart) {

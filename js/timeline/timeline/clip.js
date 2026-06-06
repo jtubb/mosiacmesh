@@ -51,7 +51,7 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRo
   const rowStyle = gridRow != null ? ` grid-row:${gridRow};` : '';
 
   return `
-    <div class="mm-clip" data-schedule-id="${escapeAttr(placement.scheduleId)}"
+    <div class="mm-clip" draggable="true" data-schedule-id="${escapeAttr(placement.scheduleId)}"
          style="grid-column:${colStart} / ${colEnd};${rowStyle} margin-left:${leftPct}%; margin-right:${rightPct}%;">
       <div class="mm-clip-title">${escapeText(placement.playlistName)}</div>
       <div class="mm-clip-time">${tStart}–${tEnd}</div>

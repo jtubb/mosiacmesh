@@ -35,6 +35,7 @@ const MODULES = [
   'js/timeline/timeline/toast.js',
   'js/timeline/drag/dragstate.js',
   'js/timeline/drag/playlist-to-track.js',
+  'js/timeline/drag/clip-move.js',
 ];
 
 for (const rel of MODULES) {

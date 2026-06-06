@@ -1101,7 +1101,16 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
    dragover/drop targets the droparea, not the clip on top of it. */
 .mm-track-droparea { background: rgba(255,255,255,0.02); border-radius: 4px; min-height: 28px; }
 .mm-track-droparea.mm-drag-target { background: rgba(80,160,255,0.18); outline: 2px dashed rgba(80,160,255,0.6); outline-offset: -2px; }
+/* PR-4b: while any of our drag handlers is mid-drag, clips become
+   transparent to pointer events so the .mm-track-droparea underneath
+   receives dragover/drop. The dragging element is still grabbed by the
+   browser (its own pointer-events state doesn't matter once drag began),
+   so this only affects OTHER clips that the cursor crosses. */
+body.mm-dragging .mm-clip,
 body.mm-dragging-playlist .mm-clip { pointer-events: none; }
+body.mm-dragging .mm-clip { opacity: 0.85; }
+.mm-clip[draggable="true"] { cursor: grab; }
+.mm-clip[draggable="true"]:active { cursor: grabbing; }
 .mm-bin-item[draggable="true"] { cursor: grab; }
 .mm-bin-item[draggable="true"]:active { cursor: grabbing; }
 .mm-clip { background: var(--accent, #345); color: white; border-radius: 4px; padding: 4px 6px; position: relative; overflow: hidden; }
