@@ -1113,7 +1113,8 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-clip[draggable="true"]:active { cursor: grabbing; }
 .mm-bin-item[draggable="true"] { cursor: grab; }
 .mm-bin-item[draggable="true"]:active { cursor: grabbing; }
-.mm-clip { background: var(--accent, #345); color: white; border-radius: 4px; padding: 4px 6px; position: relative; overflow: hidden; user-select: none; }
+.mm-clip { background: var(--accent, #345); color: white; border-radius: 4px; padding: 4px 6px; position: relative; overflow: hidden; user-select: none; outline: 1px solid transparent; transition: outline 60ms; }
+.mm-clip-selected { outline: 2px solid var(--warn, #fc6); outline-offset: 1px; }
 /* PR-4b: 6px invisible edge handles for pointer-event resize. Hover
    shows a subtle highlight; cursor: ew-resize. draggable=false on the
    element keeps an edge-grab from kicking off the clip-move handler. */

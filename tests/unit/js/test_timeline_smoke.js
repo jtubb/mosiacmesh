@@ -37,6 +37,7 @@ const MODULES = [
   'js/timeline/drag/playlist-to-track.js',
   'js/timeline/drag/clip-move.js',
   'js/timeline/drag/clip-resize.js',
+  'js/timeline/select.js',
 ];
 
 for (const rel of MODULES) {

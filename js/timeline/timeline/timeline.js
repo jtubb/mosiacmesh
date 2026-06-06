@@ -112,11 +112,15 @@ export function mmTimelineComponent() {
         // PR-4b: per-track droparea covering all 24 hour columns. Used by
         // js/timeline/drag/playlist-to-track.js to handle drag→create.
         html += `<div class="mm-track-droparea" data-display-id="${escapeAttr(did)}" style="grid-row:${row}; grid-column:2 / 26"></div>`;
+        const selection = this.$store.mm.selection;
         for (const p of placements) {
           const conflictRanges = conflicts
             .filter(c => c.loserId === p.scheduleId)
             .map(c => ({ overlapStartMs: c.overlapStartMs, overlapEndMs: c.overlapEndMs }));
-          html += clipDayHtml({ placement: p, viewDateMs: win.startMs, conflictRanges, gridRow: row });
+          html += clipDayHtml({
+            placement: p, viewDateMs: win.startMs, conflictRanges, gridRow: row,
+            isSelected: selection.has(p.scheduleId),
+          });
         }
       }
       html += `<div class="mm-now-line"></div>`;

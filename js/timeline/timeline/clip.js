@@ -29,7 +29,7 @@ function hourFractionFromDayStart(absMs, dayStartMs) {
   return Math.max(0, Math.min(24, (absMs - dayStartMs) / HOUR_MS));
 }
 
-export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRow = null }) {
+export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRow = null, isSelected = false }) {
   const startHr = hourFractionFromDayStart(placement.startMs, viewDateMs);
   const endHr   = hourFractionFromDayStart(placement.endMs,   viewDateMs);
   if (endHr <= startHr) return '';
@@ -51,7 +51,7 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRo
   const rowStyle = gridRow != null ? ` grid-row:${gridRow};` : '';
 
   return `
-    <div class="mm-clip" draggable="true" data-schedule-id="${escapeAttr(placement.scheduleId)}"
+    <div class="mm-clip${isSelected ? ' mm-clip-selected' : ''}" draggable="true" data-schedule-id="${escapeAttr(placement.scheduleId)}"
          style="grid-column:${colStart} / ${colEnd};${rowStyle} margin-left:${leftPct}%; margin-right:${rightPct}%;">
       <div class="mm-clip-title">${escapeText(placement.playlistName)}</div>
       <div class="mm-clip-time">${tStart}–${tEnd}</div>

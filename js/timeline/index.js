@@ -31,6 +31,7 @@ import { mmToastComponent } from './timeline/toast.js';
 import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
 import { attachClipMove } from './drag/clip-move.js';
 import { attachClipResize } from './drag/clip-resize.js';
+import { attachSelection } from './select.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -65,6 +66,7 @@ function bootstrap() {
   attachPlaylistToTrack(store);
   attachClipMove(store);
   attachClipResize(store);
+  attachSelection(store);
 }
 
 if (window.__deferredAlpineStart) {
