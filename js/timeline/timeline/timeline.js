@@ -83,12 +83,18 @@ export function mmTimelineComponent() {
     renderDay() {
       const tracks = this.tracks;
       const win = this.visibleWindow;
-      let html = `<div class="mm-day-grid" style="display:grid; grid-template-columns: 110px repeat(24, 1fr); gap:2px;">`;
+      // PR-4b: explicit grid-row per track row so the .mm-track-droparea
+      // cell (cols 2-26) shares its cell with the clips that overlay it.
+      // Without explicit rows, auto-placement could split clips and the
+      // droparea onto different rows when their counts disagree.
+      let html = `<div class="mm-day-grid" style="display:grid; grid-template-columns: 110px repeat(24, 1fr); grid-auto-rows: minmax(32px, auto); gap:2px;">`;
       // Axis row
-      html += `<div class="mm-axis-cell" style="grid-column:1">Track</div>`;
+      html += `<div class="mm-axis-cell" style="grid-row:1; grid-column:1">Track</div>`;
       html += dayAxisHtml();
       // Tracks
-      for (const did of tracks) {
+      for (let i = 0; i < tracks.length; i++) {
+        const did = tracks[i];
+        const row = i + 2;
         const placements = this.placementsForTrack(did);
         const conflicts = detectConflicts(placements);
         const status = this.statusForTrack(did);
@@ -98,16 +104,19 @@ export function mmTimelineComponent() {
         // "sign1screen15") rather than the group name (e.g. "Tablet") —
         // misleading the operator about which group the row represents.
         // Pass null friendlyName so track-header.js uses `displayID`.
-        html += `<div class="mm-track-row" style="grid-column:1">${trackHeaderHtml({
+        html += `<div class="mm-track-row" style="grid-row:${row}; grid-column:1">${trackHeaderHtml({
           displayID: did, friendlyName: null,
           onlineCount: status.online, totalCount: status.total,
           renderInProgress: status.renderInProgress
         })}</div>`;
+        // PR-4b: per-track droparea covering all 24 hour columns. Used by
+        // js/timeline/drag/playlist-to-track.js to handle drag→create.
+        html += `<div class="mm-track-droparea" data-display-id="${escapeAttr(did)}" style="grid-row:${row}; grid-column:2 / 26"></div>`;
         for (const p of placements) {
           const conflictRanges = conflicts
             .filter(c => c.loserId === p.scheduleId)
             .map(c => ({ overlapStartMs: c.overlapStartMs, overlapEndMs: c.overlapEndMs }));
-          html += clipDayHtml({ placement: p, viewDateMs: win.startMs, conflictRanges });
+          html += clipDayHtml({ placement: p, viewDateMs: win.startMs, conflictRanges, gridRow: row });
         }
       }
       html += `<div class="mm-now-line"></div>`;

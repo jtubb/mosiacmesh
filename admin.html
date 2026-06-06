@@ -1094,6 +1094,16 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .mm-track-status { color: var(--text-muted); font-size: 11px; }
 .mm-status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; vertical-align:middle; margin-right:4px; }
 .mm-render-badge { color: var(--warn); font-size: 10px; margin-left: 6px; }
+/* PR-4b: drop target overlay for drag-playlist→create-schedule. Sits in
+   the same grid cell as any clips on that track row; clips are emitted
+   AFTER the droparea so they paint on top. During an in-flight playlist
+   drag, body.mm-dragging-playlist disables pointer-events on clips so the
+   dragover/drop targets the droparea, not the clip on top of it. */
+.mm-track-droparea { background: rgba(255,255,255,0.02); border-radius: 4px; min-height: 28px; }
+.mm-track-droparea.mm-drag-target { background: rgba(80,160,255,0.18); outline: 2px dashed rgba(80,160,255,0.6); outline-offset: -2px; }
+body.mm-dragging-playlist .mm-clip { pointer-events: none; }
+.mm-bin-item[draggable="true"] { cursor: grab; }
+.mm-bin-item[draggable="true"]:active { cursor: grabbing; }
 .mm-clip { background: var(--accent, #345); color: white; border-radius: 4px; padding: 4px 6px; position: relative; overflow: hidden; }
 .mm-clip-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-clip-time { font-size: 10px; opacity: 0.8; }
@@ -1163,7 +1173,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
               <div class="mm-bin-title">Playlists</div>
               <ul class="mm-bin-list">
                 <template x-for="p in list" :key="p.name">
-                  <li class="mm-bin-item" x-text="p.name"></li>
+                  <li class="mm-bin-item"
+                      draggable="true"
+                      @dragstart="dragStart(p.name, $event)"
+                      @dragend="dragEnd()"
+                      x-text="p.name"></li>
                 </template>
               </ul>
             </div>

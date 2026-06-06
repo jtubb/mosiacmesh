@@ -29,7 +29,7 @@ function hourFractionFromDayStart(absMs, dayStartMs) {
   return Math.max(0, Math.min(24, (absMs - dayStartMs) / HOUR_MS));
 }
 
-export function clipDayHtml({ placement, viewDateMs, conflictRanges = [] }) {
+export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRow = null }) {
   const startHr = hourFractionFromDayStart(placement.startMs, viewDateMs);
   const endHr   = hourFractionFromDayStart(placement.endMs,   viewDateMs);
   if (endHr <= startHr) return '';
@@ -45,10 +45,14 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [] }) {
   const stripes = renderStripes(conflictRanges, viewDateMs, startHr, endHr);
   const tStart  = formatHm(placement.startMs);
   const tEnd    = formatHm(placement.endMs);
+  // PR-4b: explicit grid-row keeps the clip aligned with its track row's
+  // .mm-track-droparea cell so the clip visually sits on top of the
+  // drop target (same cell, later in DOM = above in stacking order).
+  const rowStyle = gridRow != null ? ` grid-row:${gridRow};` : '';
 
   return `
     <div class="mm-clip" data-schedule-id="${escapeAttr(placement.scheduleId)}"
-         style="grid-column:${colStart} / ${colEnd}; margin-left:${leftPct}%; margin-right:${rightPct}%;">
+         style="grid-column:${colStart} / ${colEnd};${rowStyle} margin-left:${leftPct}%; margin-right:${rightPct}%;">
       <div class="mm-clip-title">${escapeText(placement.playlistName)}</div>
       <div class="mm-clip-time">${tStart}–${tEnd}</div>
       ${stripes}

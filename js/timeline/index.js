@@ -28,6 +28,7 @@ import { startNowLine, autoscrollIntoView } from './timeline/now-line.js';
 import { mmMediaBinComponent } from './bin/media-bin.js';
 import { mmPlaylistBinComponent } from './bin/playlist-bin.js';
 import { mmToastComponent } from './timeline/toast.js';
+import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -58,6 +59,8 @@ function bootstrap() {
   startStatusSubscriber(store);
   // eslint-disable-next-line no-undef
   startNowLine(() => Alpine.store('mm'));
+  // PR-4b: install document-level drag listeners for playlist→track.
+  attachPlaylistToTrack(store);
 }
 
 if (window.__deferredAlpineStart) {

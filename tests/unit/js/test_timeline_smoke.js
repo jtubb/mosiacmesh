@@ -33,6 +33,8 @@ const MODULES = [
   'js/timeline/util/optimistic.js',
   'js/timeline/util/snap.js',
   'js/timeline/timeline/toast.js',
+  'js/timeline/drag/dragstate.js',
+  'js/timeline/drag/playlist-to-track.js',
 ];
 
 for (const rel of MODULES) {
