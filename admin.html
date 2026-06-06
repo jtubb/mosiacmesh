@@ -1154,6 +1154,18 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-toast { padding: 8px 12px; border-radius: 6px; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,0.5); font-size: 12px; }
 .mm-toast-error { background: var(--err, #c33); }
 .mm-toast-info  { background: var(--accent, #345); }
+/* PR-4c: modal scaffold (modal-shell.js) */
+.mm-modal-overlay { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; }
+.mm-modal { background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.7); min-width: 360px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; }
+.mm-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.mm-modal-header h2 { font-size: 14px; margin: 0; }
+.mm-modal-body { padding: 12px; overflow: auto; }
+.mm-modal-close { padding: 2px 8px; min-width: auto; }
+.mm-context-menu { position: fixed; z-index: 1600; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); list-style: none; margin: 0; }
+.mm-context-menu li { padding: 6px 12px; cursor: pointer; font-size: 12px; }
+.mm-context-menu li:hover { background: rgba(255,255,255,0.08); }
+.mm-context-menu li.mm-context-divider { padding: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 2px 0; pointer-events: none; }
+.mm-context-menu li.mm-context-danger { color: var(--err, #f88); }
 .mm-timeline-layout { display: flex; gap: 12px; }
 .mm-bin { width: 200px; flex: 0 0 200px; }
 .mm-bin-section { margin-bottom: 16px; }
@@ -1258,6 +1270,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
         </div>
         <!-- PR-4b T12: hidden file picker driven by the + Upload button in the media bin. -->
         <input type="file" id="mmUploadInput" multiple accept="image/*,video/*" style="display:none">
+        <!-- PR-4c: single host element for all modals. modal-shell.js
+             appends an overlay+dialog and removes it on close. -->
+        <div id="mmModalHost"></div>
+        <!-- PR-4c: context menu overlay. context-menu.js positions this
+             at the cursor + populates items. -->
+        <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
         <!-- PR-4b T13: recurrence popover. Anchored under a clip via Alt+click. -->
         <div id="mmRecurrencePopover" class="mm-popover" style="display:none">
           <div class="mm-popover-row">
