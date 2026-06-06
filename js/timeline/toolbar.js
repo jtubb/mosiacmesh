@@ -10,6 +10,7 @@
 
 import { openProfileEditor } from './modals/profile-editor.js';
 import { openCalibrationModal } from './modals/calibration.js';
+import { fireFleetAction } from './modals/fleet-confirm.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -53,13 +54,14 @@ export function mmToolbarComponent() {
 
     setSelectedDisplay(id) { this.$store.mm.selectDisplay(id); },
 
-    // Fleet actions proxy to existing jQuery handlers
+    // PR-4c gap-fix (spec §363): route fleet actions through the
+    // confirm modal in modals/fleet-confirm.js. >3 affected devices
+    // prompts; ≤3 fires immediately. The modal sends the RUN_SCRIPT
+    // frame directly rather than calling the legacy runScriptAll —
+    // runScriptAll has its own confirm() for stop/reboot which would
+    // double-prompt under our modal.
     fleetAction(which) {
-      if (typeof window.runScriptAll === 'function') {
-        window.runScriptAll(which);
-      } else {
-        console.warn('[timeline] runScriptAll not available on window');
-      }
+      fireFleetAction(this.$store.mm, which);
     },
 
     formatDate() {

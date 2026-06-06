@@ -1220,6 +1220,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-pe-preview-body { flex: 1; background: rgba(0,0,0,0.3); padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; overflow-y: auto; min-height: 200px; }
 .mm-pe-danger { color: var(--err, #f88); }
 .mm-pe-unresolved { color: var(--err, #f88); font-weight: bold; }
+/* PR-4c gap-fix (spec §363): fleet-action confirm modal body */
+.mm-fleet-confirm { min-width: 320px; max-width: 460px; }
+.mm-fleet-confirm-desc { color: var(--text-muted, #888); font-size: 12px; margin: 0 0 10px; }
+.mm-fleet-confirm-summary { font-size: 13px; margin: 0 0 14px; }
+.mm-fleet-confirm-summary strong { color: var(--warn, #fc6); }
+.mm-fleet-confirm-danger { background: var(--err, #c33) !important; }
 /* PR-4c T-C4: profile-editor form pane */
 .mm-pe-script-row { display: grid; grid-template-columns: 50px 1fr; gap: 6px; align-items: center; margin-bottom: 4px; font-size: 11px; }
 .mm-pe-script-row textarea { font-family: monospace; font-size: 11px; padding: 4px; box-sizing: border-box; width: 100%; }
