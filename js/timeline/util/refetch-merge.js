@@ -11,18 +11,19 @@
 import { api } from '../api.js';
 
 export async function refetchAfterConflict(store, kind, id) {
+  let displayName;
   if (kind === 'schedule') {
-    const fresh = await api.refetchSchedule(id);
     const idx = store.schedules.findIndex(s => s.id === id);
-    if (idx !== -1) store.schedules[idx] = fresh;
+    if (idx === -1) return;   // not in local store; nothing to merge or surface
+    const fresh = await api.refetchSchedule(id);
+    store.schedules[idx] = fresh;
+    displayName = fresh.playlistName || id;
   } else if (kind === 'playlist') {
     const fresh = await api.refetchPlaylist(id);   // id = playlist name
     store.playlists[id] = fresh;
+    displayName = id;
   } else {
     throw new Error(`refetchAfterConflict: unknown kind ${kind}`);
   }
-  const name = (kind === 'schedule')
-    ? (store.schedules.find(s => s.id === id)?.playlistName || id)
-    : id;
-  store.toast(`"${name}" was updated by another admin — pulled latest.`, 'info');
+  store.toast(`"${displayName}" was updated by another admin — pulled latest.`, 'info');
 }
