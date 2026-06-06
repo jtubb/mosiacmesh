@@ -1909,7 +1909,10 @@ $(function(){
 </script>
 <script>
 function adminRoute() {
-  var r = (location.hash || "#overview").slice(1);
+  // PR-5: default landing route is now the timeline (was 'overview' before
+  // PR-4). Operators reach all other sections via the nav. Bookmarked
+  // URLs with explicit hashes (#displays, #overview, etc.) still resolve.
+  var r = (location.hash || "#timeline").slice(1);
   var found = false;
   $('.section').each(function(){ var on = $(this).data('route') === r; $(this).toggleClass('active', on); if(on) found=true; });
   if (!found) { $('.section[data-route=timeline]').addClass('active'); r = "timeline"; }
