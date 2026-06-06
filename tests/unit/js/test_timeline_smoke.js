@@ -41,6 +41,7 @@ const MODULES = [
   'js/timeline/drill-in.js',
   'js/timeline/drag/media-to-clip.js',
   'js/timeline/upload.js',
+  'js/timeline/recurrence-popover.js',
 ];
 
 for (const rel of MODULES) {
