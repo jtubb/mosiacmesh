@@ -8,6 +8,9 @@
  * that's been working in production.
  */
 
+import { openProfileEditor } from './modals/profile-editor.js';
+import { openCalibrationModal } from './modals/calibration.js';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function isoDate(ms) {
@@ -27,6 +30,9 @@ export function mmToolbarComponent() {
     setMode(m) { this.$store.mm.setViewMode(m); },
 
     today() { this.$store.mm.goToday(); },
+
+    openProfileEditor()  { openProfileEditor(this.$store.mm); },
+    openCalibration()    { openCalibrationModal(this.$store.mm); },
 
     /** Step by 1 day (Day view) / 7 days (Week) / 1 month (Month). */
     step(dir) {

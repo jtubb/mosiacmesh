@@ -46,6 +46,8 @@ const MODULES = [
   'js/timeline/modals/recurrence-editor.js',
   'js/timeline/context-menu.js',
   'js/timeline/modals/playlist-editor.js',
+  'js/timeline/modals/profile-editor.js',
+  'js/timeline/modals/calibration.js',
 ];
 
 for (const rel of MODULES) {
