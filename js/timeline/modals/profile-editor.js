@@ -234,21 +234,43 @@ function captureForm(ui) {
 
 function refreshPreview(ui) {
   const out = ui.root.querySelector('[data-field="previewBody"]');
-  if (!ui.draft) { out.textContent = ''; return; }
+  out.textContent = '';
+  if (!ui.draft) return;
   const clientKey = ui.root.querySelector('[data-field="sampleClient"]').value;
   const scriptKey = ui.root.querySelector('[data-field="sampleScript"]').value;
   const client = ui.store.displays.find(function(d) { return (d.clientKey || d.id) === clientKey; });
   const template = (ui.draft.scripts && ui.draft.scripts[scriptKey]) || '';
   const vars = buildPreviewVars(client, ui.draft);
-  // Render the template with vars; mark unresolved {tokens} in red.
-  const html = template.replace(/\{([a-zA-Z_]\w*)\}/g, function(full, key) {
-    if (key in vars) return escapeText(String(vars[key]));
-    return '<span class="mm-pe-unresolved">' + escapeText(full) + '</span>';
-  }).replace(/\n/g, '<br>');
-  // Switch from textContent to innerHTML because we hand-build the
-  // highlighted spans. escapeText is applied to user-supplied values
-  // above so this is safe.
-  out.innerHTML = html;
+  // Build the preview tree from DOM nodes only — never assign the
+  // template body (operator-controlled text that gets stored on the
+  // server) to innerHTML. The previous version concatenated
+  // escapeText-wrapped tokens into a larger string and innerHTML'd the
+  // whole thing, but the LITERAL segments BETWEEN tokens still went
+  // through raw, leaving stored-XSS surface for any admin viewing
+  // another admin's profile. Caught by automated security review.
+  const re = /\{([a-zA-Z_]\w*)\}/g;
+  let lastIndex = 0;
+  let m;
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > lastIndex) {
+      out.appendChild(document.createTextNode(template.slice(lastIndex, m.index)));
+    }
+    const key = m[1];
+    if (key in vars) {
+      out.appendChild(document.createTextNode(String(vars[key])));
+    } else {
+      const span = document.createElement('span');
+      span.className = 'mm-pe-unresolved';
+      span.textContent = '{' + key + '}';
+      out.appendChild(span);
+    }
+    lastIndex = m.index + m[0].length;
+  }
+  if (lastIndex < template.length) {
+    out.appendChild(document.createTextNode(template.slice(lastIndex)));
+  }
+  // Newlines render natively inside a <pre> element (out is .mm-pe-preview-body, a <pre>),
+  // so no <br> conversion is needed when we use text nodes.
 }
 
 function buildPreviewVars(client, draft) {
