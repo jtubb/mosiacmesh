@@ -56,6 +56,8 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRo
       <div class="mm-clip-title">${escapeText(placement.playlistName)}</div>
       <div class="mm-clip-time">${tStart}–${tEnd}</div>
       ${stripes}
+      <div class="mm-clip-resize-handle" data-edge="left" draggable="false"></div>
+      <div class="mm-clip-resize-handle" data-edge="right" draggable="false"></div>
     </div>
   `;
 }

@@ -30,6 +30,7 @@ import { mmPlaylistBinComponent } from './bin/playlist-bin.js';
 import { mmToastComponent } from './timeline/toast.js';
 import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
 import { attachClipMove } from './drag/clip-move.js';
+import { attachClipResize } from './drag/clip-resize.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -63,6 +64,7 @@ function bootstrap() {
   // PR-4b: install document-level drag listeners for playlist→track.
   attachPlaylistToTrack(store);
   attachClipMove(store);
+  attachClipResize(store);
 }
 
 if (window.__deferredAlpineStart) {
