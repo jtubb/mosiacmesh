@@ -32,6 +32,7 @@ import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
 import { attachClipMove } from './drag/clip-move.js';
 import { attachClipResize } from './drag/clip-resize.js';
 import { attachSelection } from './select.js';
+import { attachDrillIn } from './drill-in.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -67,6 +68,7 @@ function bootstrap() {
   attachClipMove(store);
   attachClipResize(store);
   attachSelection(store);
+  attachDrillIn(store);
 }
 
 if (window.__deferredAlpineStart) {

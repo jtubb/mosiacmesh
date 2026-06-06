@@ -1122,6 +1122,19 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-clip-resize-handle[data-edge="left"]  { left: 0; }
 .mm-clip-resize-handle[data-edge="right"] { right: 0; }
 .mm-clip-resize-handle:hover { background: rgba(255,255,255,0.15); }
+/* PR-4b: drill-in sub-row. Sits below the main day grid, spans the
+   full width, hosts a left-to-right ribbon of playlist items. Each
+   item is absolute-positioned with left+width % so dragging media in
+   (PR4b T11) lands on the row regardless of which item is under the
+   cursor. */
+.mm-drillin-row { background: rgba(120, 170, 240, 0.08); border-left: 3px solid var(--accent, #6ad); border-radius: 4px; padding: 6px 8px; margin-top: 4px; }
+.mm-drillin-header { display: flex; align-items: baseline; gap: 8px; font-size: 11px; margin-bottom: 4px; }
+.mm-drillin-label { font-weight: 600; }
+.mm-drillin-hint { color: var(--text-muted, #888); font-size: 10px; }
+.mm-drillin-items { position: relative; height: 28px; background: rgba(0,0,0,0.18); border-radius: 3px; }
+.mm-drillin-item { position: absolute; top: 2px; bottom: 2px; background: var(--bg-elev, #333); border-radius: 3px; padding: 0 6px; font-size: 11px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.08); }
+.mm-drillin-row.mm-drag-target { background: rgba(120, 170, 240, 0.2); outline: 2px dashed rgba(120, 170, 240, 0.6); outline-offset: -2px; }
+.mm-drillin-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 6px; }
 .mm-clip-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-clip-time { font-size: 10px; opacity: 0.8; }
 .mm-clip-stripe {

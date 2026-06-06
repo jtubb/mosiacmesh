@@ -38,6 +38,7 @@ const MODULES = [
   'js/timeline/drag/clip-move.js',
   'js/timeline/drag/clip-resize.js',
   'js/timeline/select.js',
+  'js/timeline/drill-in.js',
 ];
 
 for (const rel of MODULES) {

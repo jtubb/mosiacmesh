@@ -39,6 +39,7 @@ function formatHm(ms) {
   const d = new Date(ms);
   return `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
 }
+function basename(p) { return String(p || '').split('/').pop() || ''; }
 
 export function mmTimelineComponent() {
   return {
@@ -124,8 +125,47 @@ export function mmTimelineComponent() {
         }
       }
       html += `<div class="mm-now-line"></div>`;
+      // PR-4b: drill-in sub-row placed via auto-flow at the row right
+      // after the last explicit track row, spanning the full grid. The
+      // header carries the playlist name so the association with the
+      // drilled clip is obvious without complex inline placement.
+      const drilled = this.$store.mm.drilledIn;
+      if (drilled) {
+        const allPlacements = tracks.flatMap(did => this.placementsForTrack(did));
+        const dp = allPlacements.find(p => p.scheduleId === drilled);
+        if (dp) html += this.renderDrillInRow(dp, this.$store.mm.playlists[dp.playlistName]);
+      }
       html += `</div>`;
       return html;
+    },
+
+    renderDrillInRow(placement, playlist) {
+      const items = (playlist && playlist.items) || [];
+      const name = (playlist && playlist.name) || placement.playlistName;
+      let inner;
+      if (items.length === 0) {
+        inner = `<div class="mm-drillin-empty">No items in playlist "${escapeText(name)}". Drag media files here to add.</div>`;
+      } else {
+        // Items run left-to-right across the row, sized by per-item
+        // duration if known, else equal slices. Playback order is the
+        // items array's order — there's no time-of-day inside a playlist,
+        // so this is a visual approximation.
+        const durations = items.map(it => Number((typeof it === 'object' && it && it.duration) || 0));
+        const total = durations.reduce((a, b) => a + b, 0);
+        const widths = total > 0 ? durations.map(d => (d / total) * 100) : items.map(() => 100 / items.length);
+        let left = 0;
+        inner = items.map((it, i) => {
+          const file = (typeof it === 'string') ? it : (it && it.file) || '';
+          const widthPct = widths[i];
+          const html = `<div class="mm-drillin-item" data-item-index="${i}" style="left:${left}%; width:${widthPct}%;" title="${escapeAttr(file)}">${escapeText(basename(file))}</div>`;
+          left += widthPct;
+          return html;
+        }).join('');
+      }
+      return `<div class="mm-drillin-row" style="grid-column:1 / 26" data-playlist-name="${escapeAttr(name)}" data-schedule-id="${escapeAttr(placement.scheduleId)}">
+        <div class="mm-drillin-header"><span class="mm-drillin-label">${escapeText(name)}</span> <span class="mm-drillin-hint">double-click clip again to collapse</span></div>
+        <div class="mm-drillin-items">${inner}</div>
+      </div>`;
     },
 
     monthWindow() {
