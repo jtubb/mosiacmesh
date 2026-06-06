@@ -121,18 +121,116 @@ export function makeStore() {
     goToday()           { this.viewDate = todayIso(); },
     selectDisplay(id)   { this.selectedDisplay = id; },
 
-    // ---- Stubs for PR-4b. Implemented later; throw if called now. ----
-    async createSchedule(/*partial*/) {
-      throw new Error('createSchedule: not implemented in PR-4a (lands in PR-4b)');
+    // ---- Toast state (PR-4b) ----
+    toasts: [],
+    _nextToastId: 1,
+    toast(msg, kind = 'info') {
+      const id = this._nextToastId++;
+      this.toasts.push({ id, msg: String(msg), kind });
+      // Auto-dismiss info toasts after 4s; error toasts stick until clicked.
+      if (kind !== 'error' && typeof setTimeout === 'function') {
+        setTimeout(() => this.dismissToast(id), 4000);
+      }
+      return id;
     },
-    async updateSchedule(/*id, patch*/) {
-      throw new Error('updateSchedule: not implemented in PR-4a (lands in PR-4b)');
+    dismissToast(id) {
+      this.toasts = this.toasts.filter(t => t.id !== id);
     },
-    async deleteSchedule(/*id*/) {
-      throw new Error('deleteSchedule: not implemented in PR-4a (lands in PR-4b)');
+
+    // ---- Selection state (PR-4b) ----
+    selection: new Set(),
+    selectClip(id, multi = false) {
+      if (!multi) {
+        this.selection = new Set([id]);
+      } else {
+        const s = new Set(this.selection);
+        if (s.has(id)) s.delete(id); else s.add(id);
+        this.selection = s;
+      }
     },
-    async updatePlaylist(/*name, patch*/) {
-      throw new Error('updatePlaylist: not implemented in PR-4a (lands in PR-4b)');
+    clearSelection() { this.selection = new Set(); },
+
+    // ---- Drill-in state (PR-4b) ----
+    drilledIn: null,
+    drillInto(id) { this.drilledIn = (this.drilledIn === id) ? null : id; },
+
+    // ---- Mutations (PR-4b) ----
+    /**
+     * POST a new schedule. Optimistic: append a placeholder with a temp
+     * id; on success, swap in the server's authoritative id +
+     * _serverVersion; on failure, roll back the array.
+     */
+    async createSchedule(partial) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      const tempId = '__pending_' + Math.random().toString(36).slice(2);
+      const placeholder = { id: tempId, _serverVersion: 0, ...partial };
+      await withRollback(this, ['schedules'],
+        () => { this.schedules.push(placeholder); },
+        async () => {
+          const created = await api.createSchedule(partial);
+          const idx = this.schedules.findIndex(s => s.id === tempId);
+          if (idx >= 0) this.schedules[idx] = created;
+          else this.schedules.push(created);
+          return created;
+        },
+      );
+    },
+
+    /**
+     * PUT a partial patch with If-Match. Optimistic: apply the patch
+     * locally; on success, replace with the server's returned object
+     * (carrying the new _serverVersion); on failure (412 stale or
+     * other), restore the pre-patch snapshot.
+     */
+    async updateSchedule(id, patch) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      const cur = this.schedules.find(s => s.id === id);
+      if (!cur) throw new Error(`updateSchedule: schedule '${id}' not found`);
+      const ifMatch = cur._serverVersion;
+      await withRollback(this, ['schedules'],
+        () => { Object.assign(cur, patch); },
+        async () => {
+          const updated = await api.updateSchedule(id, patch, ifMatch);
+          const idx = this.schedules.findIndex(s => s.id === id);
+          if (idx >= 0) this.schedules[idx] = updated;
+          return updated;
+        },
+      );
+    },
+
+    /**
+     * DELETE a schedule. Optimistic: remove from local; on failure,
+     * restore the snapshot (placeholder reinserted).
+     */
+    async deleteSchedule(id) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      await withRollback(this, ['schedules'],
+        () => { this.schedules = this.schedules.filter(s => s.id !== id); },
+        async () => { await api.deleteSchedule(id); },
+      );
+    },
+
+    /**
+     * PUT a partial playlist patch with If-Match. Same rollback shape
+     * as updateSchedule but the slice is `playlists` (a dict, not list).
+     */
+    async updatePlaylist(name, patch) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      const cur = this.playlists[name];
+      if (!cur) throw new Error(`updatePlaylist: playlist '${name}' not found`);
+      const ifMatch = cur._serverVersion;
+      await withRollback(this, ['playlists'],
+        () => { this.playlists[name] = { ...cur, ...patch }; },
+        async () => {
+          const updated = await api.updatePlaylist(name, patch, ifMatch);
+          this.playlists[name] = updated;
+          return updated;
+        },
+      );
     },
   };
 }
