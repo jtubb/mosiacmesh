@@ -1172,6 +1172,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-recurrence-preview ol { margin: 6px 0 0 18px; padding: 0; }
 .mm-recurrence-preview li { padding: 2px 0; }
 .mm-recurrence-empty { color: var(--text-muted, #888); list-style: none; margin-left: -18px; }
+/* PR-4c T-D1: calibration modal */
+.mm-calibration .steps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.mm-calibration .steps li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mm-calibration .steps .num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent, #345); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 11px; flex-shrink: 0; }
+.mm-calibration-status, .mm-calibration-result { font-size: 11px; color: var(--text-muted, #888); }
+.mm-calibration-result { margin: 10px 0; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; }
 .mm-context-menu { position: fixed; z-index: 1600; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); list-style: none; margin: 0; }
 .mm-context-menu li { padding: 6px 12px; cursor: pointer; font-size: 12px; }
 .mm-context-menu li:hover { background: rgba(255,255,255,0.08); }
