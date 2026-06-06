@@ -132,3 +132,49 @@ describe('store.selection', () => {
     assert.equal(store.selection.size, 0);
   });
 });
+
+describe('store.createProfile', () => {
+  test('happy path: inserts server-authoritative profile into profiles dict', async () => {
+    const store = await loadStore();
+    installFetch({
+      'POST /api/profiles': async () => ({
+        status: 201,
+        body: { profile: { name: 'p1', label: 'Profile 1', _serverVersion: 1 } },
+      }),
+    });
+    await store.createProfile({ name: 'p1', label: 'Profile 1' });
+    assert.equal(store.profiles.p1.label, 'Profile 1');
+    assert.equal(store.profiles.p1._serverVersion, 1);
+  });
+});
+
+describe('store.updateProfile', () => {
+  test('rollback on 4xx: profile restored to original', async () => {
+    const store = await loadStore();
+    store.profiles = { p1: { name: 'p1', label: 'orig', _serverVersion: 1 } };
+    installFetch({
+      'PUT /api/profiles/p1': async () => ({
+        status: 400,
+        body: { success: false, error: 'bad name' },
+      }),
+    });
+    let thrown = null;
+    try {
+      await store.updateProfile('p1', { label: 'new' });
+    } catch (e) { thrown = e; }
+    assert.ok(thrown, 'should throw on 4xx');
+    assert.equal(store.profiles.p1.label, 'orig');   // rolled back
+  });
+});
+
+describe('store.deleteProfile', () => {
+  test('removes optimistic; server confirm leaves it absent', async () => {
+    const store = await loadStore();
+    store.profiles = { p1: { name: 'p1' } };
+    installFetch({
+      'DELETE /api/profiles/p1': async () => ({ status: 204, body: '' }),
+    });
+    await store.deleteProfile('p1');
+    assert.equal(store.profiles.p1, undefined);
+  });
+});

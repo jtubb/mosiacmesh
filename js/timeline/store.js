@@ -236,6 +236,58 @@ export function makeStore() {
       );
     },
 
+    // ---- Profile CRUD (PR-4c T-C1) ----
+
+    async createProfile(profile) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['profiles'], () => {
+        // Optimistic: insert with a placeholder _serverVersion until
+        // the server returns the authoritative copy.
+        this.profiles[profile.name] = { ...profile, _serverVersion: 0 };
+      }, async () => {
+        const fresh = await api.createProfile(profile);
+        this.profiles[fresh.name] = fresh;
+      });
+    },
+
+    async updateProfile(name, patch) {
+      // No opts.conflictKind: refetch-merge.js (T-A1) doesn't yet handle
+      // the 'profile' kind. 412 here falls through to the plain-toast
+      // rollback path. Extending refetch-merge for profiles is a follow-up.
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      const current = this.profiles[name];
+      if (!current) throw new Error(`profile not found: ${name}`);
+      return withRollback(this, ['profiles'], () => {
+        this.profiles[name] = { ...current, ...patch };
+      }, async () => {
+        const fresh = await api.updateProfile(name, patch, current._serverVersion);
+        this.profiles[name] = fresh;
+      });
+    },
+
+    async deleteProfile(name) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['profiles'], () => {
+        delete this.profiles[name];
+      }, async () => {
+        await api.deleteProfile(name);
+      });
+    },
+
+    async assignProfileToClient(clientKey, profileName) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['displays'], () => {
+        const c = this.displays.find(d => d.clientKey === clientKey);
+        if (c) c.profileName = profileName;
+      }, async () => {
+        await api.assignProfile(clientKey, profileName);
+      });
+    },
+
     // PR-4c: returns the next N concrete clip placements for a schedule,
     // looking forward from `fromIso` (default = today). Powers the
     // recurrence modal's "next 5 occurrences" preview. Re-uses the same

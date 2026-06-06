@@ -155,6 +155,20 @@ export const api = {
   },
 
   // ---- Profiles ----
+  /** POST /api/profiles — body must include name. Returns the created profile. */
+  async createProfile(profile) {
+    const b = await postJson('/api/profiles', profile);
+    return b?.profile ?? b;
+  },
+  /** PUT /api/profiles/{name} — partial patch + If-Match. Returns the updated profile. */
+  async updateProfile(name, patch, ifMatch) {
+    const b = await putJson(`/api/profiles/${encodeURIComponent(name)}`, patch, ifMatch);
+    return b?.profile ?? b;
+  },
+  /** DELETE /api/profiles/{name} — 204 on success, 409+refs when in use. */
+  async deleteProfile(name) {
+    return await deleteReq(`/api/profiles/${encodeURIComponent(name)}`);
+  },
   async assignProfile(clientKey, profileName) {
     const b = await postJson(`/api/clients/${encodeURIComponent(clientKey)}/profile`, { profileName });
     return b;
