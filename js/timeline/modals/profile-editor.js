@@ -116,16 +116,125 @@ function selectProfile(ui, name) {
   ui.root.querySelector('[data-action="delete"]').disabled = false;
 }
 
-// Stubs that T-C4 + T-C5 will replace with real implementations.
+// T-C4: real form implementation. T-C5 replaces refreshPreview stub.
 function renderForm(ui) {
   const formHost = ui.root.querySelector('.mm-pe-form');
-  const stub = document.createElement('div');
-  stub.className = 'mm-pe-empty';
-  stub.textContent = 'Form coming in T-C4 — editing ' + (ui.draft ? (ui.draft.name || '(new)') : 'nothing');
-  formHost.innerHTML = '';
-  formHost.appendChild(stub);
+  if (!ui.draft) { formHost.innerHTML = ''; const e = document.createElement('div'); e.className = 'mm-pe-empty'; e.textContent = 'Select a profile to edit.'; formHost.appendChild(e); return; }
+  const d = ui.draft;
+  formHost.innerHTML = `
+    <div class="mm-form-grid">
+      <label>Name <input type="text" data-field="name" value="${escapeAttr(d.name)}" ${ui.draftKind === 'edit' ? 'disabled' : ''}></label>
+      <label>Label <input type="text" data-field="label" value="${escapeAttr(d.label || '')}"></label>
+      <label>Match device type
+        <select data-field="matchDeviceType">
+          ${['Tablet','Mobile','Desktop','Default'].map(function(t) {
+            return '<option value="' + t + '"' + ((d.matchDeviceType||'Tablet')===t?' selected':'') + '>' + t + '</option>';
+          }).join('')}
+        </select>
+      </label>
+      <label>Launch method
+        <select data-field="launchMethod">
+          ${['shell','vnc-tap','ssh-then-vnc'].map(function(m) {
+            return '<option value="' + m + '"' + ((d.launch && d.launch.method ? d.launch.method : 'ssh-then-vnc')===m?' selected':'') + '>' + m + '</option>';
+          }).join('')}
+        </select>
+      </label>
+    </div>
+    <details open><summary>Scripts</summary>
+      ${['login','start','stop','test','reboot'].map(function(k) {
+        return '<label class="mm-pe-script-row"><span>' + k + '</span><textarea data-field="script-' + k + '" rows="3">' + escapeText((d.scripts && d.scripts[k]) ? d.scripts[k] : '') + '</textarea></label>';
+      }).join('')}
+    </details>
+    <details><summary>Launch config</summary>
+      <div class="mm-form-grid">
+        <label>VNC password <input type="text" data-field="vncPassword" value="${escapeAttr((d.launch && d.launch.vncPassword) ? d.launch.vncPassword : '')}"></label>
+        <label>Wake script <input type="text" data-field="wakeScript" value="${escapeAttr((d.launch && d.launch.wakeScript) ? d.launch.wakeScript : '')}"></label>
+        <label class="mm-form-row-wide" data-field="tapsRow">Taps (one fbX,fbY per line)
+          <textarea data-field="taps" rows="2">${escapeText((d.launch && d.launch.taps) ? d.launch.taps.map(function(t) { return t.fbX + ',' + t.fbY; }).join('\n') : '')}</textarea>
+        </label>
+      </div>
+    </details>
+    <details><summary>Webclip</summary>
+      <div class="mm-form-grid">
+        <label>Bundle ID <input type="text" data-field="webclipBundleId" value="${escapeAttr((d.webclip && d.webclip.bundleId) ? d.webclip.bundleId : '')}"></label>
+        <label>Title <input type="text" data-field="webclipTitle" value="${escapeAttr((d.webclip && d.webclip.title) ? d.webclip.title : '')}"></label>
+      </div>
+    </details>
+    <details><summary>SSH</summary>
+      <div class="mm-form-grid">
+        <label>User <input type="text" data-field="sshUser" value="${escapeAttr((d.ssh && d.ssh.user) ? d.ssh.user : 'root')}"></label>
+        <label>Key path <input type="text" data-field="sshKeyPath" value="${escapeAttr((d.ssh && d.ssh.keyPath) ? d.ssh.keyPath : '')}"></label>
+        <label><input type="checkbox" data-field="sshLegacyCrypto"${(d.ssh && d.ssh.legacyCrypto) ? ' checked' : ''}> Legacy crypto (iOS 5)</label>
+      </div>
+    </details>
+    <div class="mm-form-actions">
+      <button type="button" class="btn btn-ghost" data-action="cancel-form">Discard changes</button>
+      <button type="button" class="btn btn-primary" data-action="save-form">Save</button>
+    </div>
+  `;
+  function updateLaunchVisibility() {
+    var m = formHost.querySelector('[data-field="launchMethod"]').value;
+    formHost.querySelector('[data-field="tapsRow"]').style.display = (m === 'shell') ? 'none' : '';
+  }
+  updateLaunchVisibility();
+  formHost.addEventListener('input', function() { captureForm(ui); refreshPreview(ui); });
+  formHost.addEventListener('change', function() { captureForm(ui); refreshPreview(ui); updateLaunchVisibility(); });
+  formHost.querySelector('[data-action="cancel-form"]').addEventListener('click', function() {
+    if (ui.draftKind === 'edit') { selectProfile(ui, ui.draft.name); }
+    else { ui.draft = null; ui.draftKind = null; renderProfileList(ui); renderForm(ui); refreshPreview(ui); }
+  });
+  formHost.querySelector('[data-action="save-form"]').addEventListener('click', async function() {
+    captureForm(ui);
+    if (!ui.draft.name.trim()) { ui.store.toast('Name is required.', 'error'); return; }
+    try {
+      if (ui.draftKind === 'new') {
+        await ui.store.createProfile(ui.draft);
+        ui.draftKind = 'edit';
+      } else {
+        await ui.store.updateProfile(ui.draft.name, ui.draft);
+      }
+      renderProfileList(ui);
+    } catch (_) { /* toast via withRollback */ }
+  });
 }
+
+function captureForm(ui) {
+  if (!ui.draft) return;
+  var d = ui.draft;
+  function f(sel) { return ui.root.querySelector(sel); }
+  if (ui.draftKind === 'new') d.name = f('[data-field="name"]').value.trim();
+  d.label = f('[data-field="label"]').value;
+  d.matchDeviceType = f('[data-field="matchDeviceType"]').value;
+  d.scripts = d.scripts || {};
+  ['login','start','stop','test','reboot'].forEach(function(k) {
+    d.scripts[k] = f('[data-field="script-' + k + '"]').value;
+  });
+  d.launch = d.launch || {};
+  d.launch.method = f('[data-field="launchMethod"]').value;
+  d.launch.vncPassword = f('[data-field="vncPassword"]').value || undefined;
+  d.launch.wakeScript = f('[data-field="wakeScript"]').value || undefined;
+  d.launch.taps = f('[data-field="taps"]').value.split('\n')
+    .map(function(s) { return s.trim(); }).filter(Boolean)
+    .map(function(s) {
+      var parts = s.split(',');
+      var x = Number(parts[0] ? parts[0].trim() : NaN);
+      var y = Number(parts[1] ? parts[1].trim() : NaN);
+      return { fbX: x, fbY: y };
+    })
+    .filter(function(t) { return isFinite(t.fbX) && isFinite(t.fbY); });
+  d.webclip = d.webclip || {};
+  d.webclip.bundleId = f('[data-field="webclipBundleId"]').value || undefined;
+  d.webclip.title = f('[data-field="webclipTitle"]').value || undefined;
+  d.ssh = d.ssh || {};
+  d.ssh.user = f('[data-field="sshUser"]').value || 'root';
+  d.ssh.keyPath = f('[data-field="sshKeyPath"]').value || undefined;
+  d.ssh.legacyCrypto = !!f('[data-field="sshLegacyCrypto"]').checked;
+}
+
 function refreshPreview(ui) {
-  const out = ui.root.querySelector('[data-field="previewBody"]');
+  var out = ui.root.querySelector('[data-field="previewBody"]');
   out.textContent = ui.draft ? '(preview comes in T-C5)' : '';
 }
+
+function escapeText(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function escapeAttr(s) { return escapeText(s).replace(/"/g,'&quot;'); }
