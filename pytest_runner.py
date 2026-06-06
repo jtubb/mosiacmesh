@@ -28,15 +28,33 @@ def main():
             print(f'Running {len(files)} JS test files via node --test...')
             rc = subprocess.call(['node', '--test'] + files)
             sys.exit(rc)
+        elif '--e2e' in sys.argv:
+            # PR-4b: Playwright browser-driven integration tests.
+            # Requires `npm install` (adds ~150MB chromium download).
+            # Run against a live dev server (default localhost:3000;
+            # override via MM_BASE_URL env var).
+            if not os.path.isdir('node_modules/playwright'):
+                print('Playwright not installed. To run e2e tests:')
+                print('  npm install')
+                print('  npx playwright install chromium')
+                print('  python pytest_runner.py --e2e')
+                sys.exit(0)
+            print('Running tests/e2e/run.js (requires dev server on '
+                  + os.environ.get('MM_BASE_URL', 'http://localhost:3000')
+                  + ')...')
+            rc = subprocess.call(['node', 'tests/e2e/run.js'])
+            sys.exit(rc)
         elif '--unit' in sys.argv:
             cmd.extend(['tests/unit'])
         elif '--integration' in sys.argv:
             cmd.extend(['tests/integration'])
         elif '--help' in sys.argv or '-h' in sys.argv:
-            print("Usage: python pytest_runner.py [--unit|--integration|--js|--coverage]")
+            print("Usage: python pytest_runner.py [--unit|--integration|--js|--e2e|--coverage]")
             print("  --unit        Run only unit tests")
             print("  --integration Run only integration tests")
             print("  --js          Run Node-based JS unit tests under tests/unit/js/")
+            print("  --e2e         Run Playwright browser tests under tests/e2e/")
+            print("                (requires `npm install` + dev server running)")
             print("  --coverage    Run with coverage report")
             print("  --verbose     Verbose output")
             return 0
