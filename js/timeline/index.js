@@ -36,6 +36,7 @@ import { attachDrillIn } from './drill-in.js';
 import { attachMediaToClip } from './drag/media-to-clip.js';
 import { attachUpload } from './upload.js';
 import { attachRecurrenceEditor } from './modals/recurrence-editor.js';
+import { attachContextMenu } from './context-menu.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -75,6 +76,7 @@ function bootstrap() {
   attachMediaToClip(store);
   attachUpload(store);
   attachRecurrenceEditor(store);
+  attachContextMenu(store);
 }
 
 if (window.__deferredAlpineStart) {

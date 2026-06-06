@@ -6,8 +6,7 @@
  *
  * Click on a .mm-clip selects it (Shift adds to multi-select). Click
  * empty timeline area clears. Del / Backspace deletes selected. Right-
- * click on a clip opens a confirm-then-delete prompt (full context
- * menu is PR-4c).
+ * click on a clip opens the context menu (context-menu.js, PR-4c T-A5).
  *
  * Clicks during/after an HTML5 drag fire a synthetic click on the
  * source element. We ignore clicks whose target sat under a clip whose
@@ -43,15 +42,5 @@ export function attachSelection(store) {
       store.deleteSchedule(id).catch(() => {});
     }
     store.clearSelection();
-  }, true);
-
-  document.addEventListener('contextmenu', (ev) => {
-    const clip = ev.target.closest('.mm-clip');
-    if (!clip) return;
-    ev.preventDefault();
-    const id = clip.dataset.scheduleId;
-    if (!id) return;
-    if (!confirm('Delete this schedule?')) return;
-    store.deleteSchedule(id).catch(() => {});
   }, true);
 }
