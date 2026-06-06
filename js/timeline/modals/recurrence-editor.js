@@ -16,6 +16,7 @@
  * Save calls store.updateSchedule (T-A2 412 branch active).
  */
 import { openModal, closeModal } from './modal-shell.js';
+import { expandSchedule } from '../util/time.js';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -106,22 +107,16 @@ function open(store, scheduleId) {
 
   function refreshPreview() {
     const draft = readDraft();
-    // Build a hypothetical schedule for the preview without committing
-    // — feed the draft into the store's expander indirectly by mutating
-    // a clone of the schedule. We attach the clone temporarily, ask for
-    // nextOccurrences, then revert.
-    const originalIdx = store.schedules.findIndex(x => x.id === scheduleId);
-    const original = store.schedules[originalIdx];
-    store.schedules[originalIdx] = { ...original, ...draft };
-    try {
-      const items = store.nextOccurrences(scheduleId, 5);
-      const ol = root.querySelector('[data-field="preview"]');
-      ol.innerHTML = items.length
-        ? items.map(p => `<li>${new Date(p.startMs).toISOString().slice(0,10)} ${formatHm(p.startMs)}&ndash;${formatHm(p.endMs)}</li>`).join('')
-        : '<li class="mm-recurrence-empty">No occurrences in the next 365 days.</li>';
-    } finally {
-      store.schedules[originalIdx] = original;
-    }
+    const synthetic = { ...s, ...draft };
+    const startIso = new Date().toISOString().slice(0, 10);
+    const [y, m, d] = startIso.split('-').map(Number);
+    const fromMs = Date.UTC(y, m - 1, d);
+    const HORIZON_MS = 365 * 24 * 60 * 60 * 1000;
+    const items = expandSchedule(synthetic, fromMs, fromMs + HORIZON_MS).slice(0, 5);
+    const ol = root.querySelector('[data-field="preview"]');
+    ol.innerHTML = items.length
+      ? items.map(p => `<li>${new Date(p.startMs).toISOString().slice(0,10)} ${formatHm(p.startMs)}–${formatHm(p.endMs)}</li>`).join('')
+      : '<li class="mm-recurrence-empty">No occurrences in the next 365 days.</li>';
   }
 
   root.addEventListener('input', () => { updateConditionals(); refreshPreview(); });
@@ -132,11 +127,9 @@ function open(store, scheduleId) {
   root.querySelector('[data-action="cancel"]').addEventListener('click', () => closeModal());
   root.querySelector('[data-action="save"]').addEventListener('click', async () => {
     const draft = readDraft();
-    // Inline validation: endTime > startTime; end.count >= 1; end.untilDate present when chosen.
-    if (draft.endTime <= draft.startTime) {
-      store.toast('End time must be after start time.', 'error');
-      return;
-    }
+    // Note: endTime <= startTime is INTENTIONALLY allowed — expandSchedule
+    // (util/time.js) treats that case as a cross-midnight schedule
+    // (e.g. 22:00-02:00 wraps). Don't add validation that rejects it.
     if (draft.end.type === 'until' && !draft.end.untilDate) {
       store.toast('Pick an "until" date or change End to Never / After N.', 'error');
       return;
