@@ -30,6 +30,7 @@ const MODULES = [
   'js/timeline/timeline/now-line.js',
   'js/timeline/bin/media-bin.js',
   'js/timeline/bin/playlist-bin.js',
+  'js/timeline/util/optimistic.js',
 ];
 
 for (const rel of MODULES) {
