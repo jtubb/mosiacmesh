@@ -17,6 +17,7 @@ import { detectConflicts } from '../util/conflicts.js';
 import { dayAxisHtml, weekAxisHtml, monthWeekdayHeaderHtml } from './grid-axis.js';
 import { trackHeaderHtml } from './track-header.js';
 import { clipDayHtml }   from './clip.js';
+import { renderWeekStripesHtml } from './conflict-stripes.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -281,9 +282,25 @@ export function mmTimelineComponent() {
         const dayStart = win.startMs + dayIdx * DAY_MS;
         const hStart = (p.startMs - dayStart) / (60*60*1000);
         const hEnd   = Math.min(24, (p.endMs   - dayStart) / (60*60*1000));
+        // Filter conflicts to ones that actually intersect THIS
+        // placement. Without the time-intersection guard, a daily-
+        // recurring schedule's `loserId === p.scheduleId` match picks
+        // up cross-day conflict entries whose overlap ranges sit in
+        // other days — clamped to 24h by hourFractionFromDayStart,
+        // they produced `top:187.5%; height:0%` stripes. The day-view
+        // path doesn't need this guard because day-view only expands
+        // placements for a single day.
         const conflictRanges = conflicts
-          .filter(c => c.loserId === p.scheduleId)
+          .filter(c => c.loserId === p.scheduleId
+                    && c.overlapStartMs < p.endMs
+                    && c.overlapEndMs   > p.startMs)
           .map(c => ({ overlapStartMs: c.overlapStartMs, overlapEndMs: c.overlapEndMs }));
+        // PR-4c gap-fix (spec §367): diagonal stripe overlay on the
+        // lower-priority clip in an overlap region. Day view already
+        // has this via clip.js; week view emits its own here with
+        // vertical orientation (top/height %, since week clips are
+        // sized vertically inside their day column).
+        const stripes = renderWeekStripesHtml(conflictRanges, dayStart, hStart, hEnd);
         // Position absolutely inside the day column. We use top/bottom %
         // relative to the (HOUR_END - HOUR_START)*100% total height.
         // Simpler: clip spans grid-row from hour h_start to h_end.
@@ -294,6 +311,7 @@ export function mmTimelineComponent() {
                style="grid-column:${dayIdx + 2}; grid-row:${rowStart} / ${rowEnd};">
             <div class="mm-clip-title">${escapeText(p.playlistName)}</div>
             <div class="mm-clip-time">${formatHm(p.startMs)}–${formatHm(p.endMs)}</div>
+            ${stripes}
           </div>
         `;
       }

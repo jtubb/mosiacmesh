@@ -22,6 +22,8 @@
  * handlers can target it.
  */
 
+import { renderDayStripesHtml } from './conflict-stripes.js';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -42,7 +44,7 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRo
   const leftPct  = (startHr - Math.floor(startHr)) * 100;
   const rightPct = (Math.ceil(endHr) - endHr) * 100;
 
-  const stripes = renderStripes(conflictRanges, viewDateMs, startHr, endHr);
+  const stripes = renderDayStripesHtml(conflictRanges, viewDateMs, startHr, endHr);
   const tStart  = formatHm(placement.startMs);
   const tEnd    = formatHm(placement.endMs);
   // PR-4b: explicit grid-row keeps the clip aligned with its track row's
@@ -60,18 +62,6 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRo
       <div class="mm-clip-resize-handle" data-edge="right" draggable="false"></div>
     </div>
   `;
-}
-
-function renderStripes(ranges, viewDateMs, clipStartHr, clipEndHr) {
-  if (!ranges.length) return '';
-  const total = clipEndHr - clipStartHr;
-  return ranges.map(r => {
-    const rStart = hourFractionFromDayStart(r.overlapStartMs, viewDateMs);
-    const rEnd   = hourFractionFromDayStart(r.overlapEndMs,   viewDateMs);
-    const leftPct  = ((rStart - clipStartHr) / total) * 100;
-    const widthPct = ((rEnd - rStart) / total) * 100;
-    return `<div class="mm-clip-stripe" style="left:${leftPct}%; width:${widthPct}%"></div>`;
-  }).join('');
 }
 
 function formatHm(ms) {

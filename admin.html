@@ -1144,6 +1144,11 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
   background: repeating-linear-gradient(45deg, rgba(255,0,0,0.2) 0 6px, transparent 6px 12px);
   pointer-events: none;
 }
+/* PR-4c gap-fix (spec §367): Week-view variant — vertical orientation
+   so the stripe extends along the clip's height rather than its width.
+   Overrides top/bottom (default fills vertically) with top/height %
+   set by the renderer; left:0 right:0 makes it span the clip's width. */
+.mm-clip-stripe-vertical { top: auto; bottom: auto; left: 0; right: 0; }
 .mm-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 0; flex-wrap: wrap; }
 .mm-toolbar-date { font-weight: 600; min-width: 220px; text-align: center; }
 .btn-active { background: var(--accent, #345); color: white; }
