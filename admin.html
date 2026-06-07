@@ -359,6 +359,8 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-drillin-item { position: absolute; top: 2px; bottom: 2px; background: var(--bg-elev, #333); border-radius: 3px; padding: 0 6px; font-size: 11px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.08); cursor: pointer; transition: outline 60ms; }
 /* PR-4c gap-fix (spec §358): selected sub-item highlight. Del removes it. */
 .mm-drillin-item.mm-drillin-item-selected { outline: 2px solid var(--warn, #fc6); outline-offset: 1px; background: rgba(255, 204, 102, 0.18); }
+/* PR-8: drop-target highlight during sub-item drag-to-reorder. */
+.mm-drillin-item.mm-drillin-drop-target { outline: 2px dashed var(--accent, #6ad); outline-offset: 1px; background: rgba(120, 170, 240, 0.22); }
 .mm-drillin-row.mm-drag-target { background: rgba(120, 170, 240, 0.2); outline: 2px dashed rgba(120, 170, 240, 0.6); outline-offset: -2px; }
 .mm-drillin-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 6px; }
 .mm-clip-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

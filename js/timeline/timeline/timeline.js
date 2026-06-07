@@ -164,7 +164,13 @@ export function mmTimelineComponent() {
           const file = (typeof it === 'string') ? it : (it && it.file) || '';
           const widthPct = widths[i];
           const cls = 'mm-drillin-item' + (i === selectedIdx ? ' mm-drillin-item-selected' : '');
-          const html = `<div class="${cls}" data-item-index="${i}" style="left:${left}%; width:${widthPct}%;" title="${escapeAttr(file)}">${escapeText(basename(file))}</div>`;
+          // PR-8: draggable=true to enable HTML5 drag-to-reorder within
+          // the row (handler in drag/subitem-reorder.js). Single-click +
+          // double-click + Del semantics from PR-4c T-B1 + PR-6 gap-1
+          // are unaffected — those listeners and the drag listener
+          // attach to the same element, the browser picks based on the
+          // gesture (mousedown→mouseup = click; mousedown→move = drag).
+          const html = `<div class="${cls}" draggable="true" data-item-index="${i}" style="left:${left}%; width:${widthPct}%;" title="${escapeAttr(file)}">${escapeText(basename(file))}</div>`;
           left += widthPct;
           return html;
         }).join('');
