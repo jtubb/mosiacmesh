@@ -25,27 +25,101 @@ async function parseJsonOrText(resp) {
   try { return text ? JSON.parse(text) : null; } catch (_) { return text; }
 }
 
+// PR-7: auto-retry on transient errors (spec §10).
+//
+// Network failures and 5xx responses get up to 3 retries with 2/5/10s
+// backoff. 4xx (including 412 stale) are NOT retried — they're
+// deterministic responses the caller already knows how to handle.
+//
+// On retry start a sticky 'Retrying…' toast surfaces the wait so the
+// operator doesn't think their click was lost. The toast is dismissed
+// when the retry chain ends — either successfully (returns) or
+// permanently (the final throw propagates up to withRollback, which
+// shows its own error toast). The spec calls for an in-toast Retry
+// button on final failure; for v1 we deliver the auto-retry machinery
+// and lean on the existing rollback-toast UX. An in-toast Retry button
+// is a small follow-up.
+// Exposed via api object so tests can shrink the delays to keep the
+// suite fast. Production reads the original 2/5/10s.
+const RETRY_DELAYS_MS = [2000, 5000, 10000];
+let _retryDelaysOverride = null;
+function _getRetryDelays() { return _retryDelaysOverride || RETRY_DELAYS_MS; }
+
+function isTransientError(e) {
+  if (!(e instanceof ApiError)) return true;          // network / fetch threw
+  return e.status >= 500 && e.status < 600;
+}
+
+// Best-effort access to the Alpine store for toasts. The store is set
+// up at admin bootstrap (index.js); api.js can be imported in Node
+// tests before any store exists. Return null in those cases.
+function _storeOrNull() {
+  try {
+    if (typeof window !== 'undefined' && window.Alpine && window.Alpine.store) {
+      return window.Alpine.store('mm') || null;
+    }
+  } catch (_) { /* fall through */ }
+  return null;
+}
+
+async function withRetry(fn) {
+  const delays = _getRetryDelays();
+  let retryToastId = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt <= delays.length; attempt++) {
+    try {
+      const result = await fn();
+      if (retryToastId != null) {
+        const s = _storeOrNull();
+        if (s) s.dismissToast(retryToastId);
+      }
+      return result;
+    } catch (e) {
+      lastErr = e;
+      const giveUp = !isTransientError(e) || attempt === delays.length;
+      if (giveUp) {
+        if (retryToastId != null) {
+          const s = _storeOrNull();
+          if (s) s.dismissToast(retryToastId);
+        }
+        throw e;
+      }
+      // First transient → surface the 'Retrying…' toast.
+      if (retryToastId == null) {
+        const s = _storeOrNull();
+        if (s) retryToastId = s.toast("Couldn't save — network issue. Retrying…", 'info', { sticky: true });
+      }
+      await new Promise((r) => setTimeout(r, delays[attempt]));
+    }
+  }
+  throw lastErr;
+}
+
 async function getJson(url) {
-  const resp = await fetch(url, {
-    method: 'GET',
-    headers: { 'Accept': 'application/json' },
-    credentials: 'same-origin',
+  return withRetry(async () => {
+    const resp = await fetch(url, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const body = await parseJsonOrText(resp);
+    if (!resp.ok) throw new ApiError(`GET ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body });
+    return body;
   });
-  const body = await parseJsonOrText(resp);
-  if (!resp.ok) throw new ApiError(`GET ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body });
-  return body;
 }
 
 async function postJson(url, body) {
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify(body),
+  return withRetry(async () => {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+    const respBody = await parseJsonOrText(resp);
+    if (!resp.ok) throw new ApiError(`POST ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body: respBody });
+    return respBody;
   });
-  const respBody = await parseJsonOrText(resp);
-  if (!resp.ok) throw new ApiError(`POST ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body: respBody });
-  return respBody;
 }
 
 async function putJson(url, body, ifMatch) {
@@ -54,28 +128,32 @@ async function putJson(url, body, ifMatch) {
     'Content-Type': 'application/json',
   };
   if (ifMatch != null) headers['If-Match'] = String(ifMatch);
-  const resp = await fetch(url, {
-    method: 'PUT',
-    headers,
-    credentials: 'same-origin',
-    body: JSON.stringify(body),
+  return withRetry(async () => {
+    const resp = await fetch(url, {
+      method: 'PUT',
+      headers,
+      credentials: 'same-origin',
+      body: JSON.stringify(body),
+    });
+    const respBody = await parseJsonOrText(resp);
+    if (!resp.ok) throw new ApiError(`PUT ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body: respBody });
+    return respBody;
   });
-  const respBody = await parseJsonOrText(resp);
-  if (!resp.ok) throw new ApiError(`PUT ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body: respBody });
-  return respBody;
 }
 
 async function deleteReq(url) {
-  const resp = await fetch(url, {
-    method: 'DELETE',
-    headers: { 'Accept': 'application/json' },
-    credentials: 'same-origin',
+  return withRetry(async () => {
+    const resp = await fetch(url, {
+      method: 'DELETE',
+      headers: { 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    if (!resp.ok && resp.status !== 204) {
+      const body = await parseJsonOrText(resp);
+      throw new ApiError(`DELETE ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body });
+    }
+    return null;
   });
-  if (!resp.ok && resp.status !== 204) {
-    const body = await parseJsonOrText(resp);
-    throw new ApiError(`DELETE ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body });
-  }
-  return null;
 }
 
 async function uploadFile(url, file) {
@@ -92,6 +170,15 @@ async function uploadFile(url, file) {
   const body = await parseJsonOrText(resp);
   if (!resp.ok) throw new ApiError(`UPLOAD ${url} -> ${resp.status} ${resp.statusText}`, { status: resp.status, body });
   return body;
+}
+
+// PR-7: tests-only — override the 2/5/10s backoff with shorter delays
+// (or [] to disable retry entirely) so the unit suite finishes in
+// milliseconds instead of 17s per retry test. Returns a restore fn.
+export function __testOverrideRetryDelays(delaysMs) {
+  const prev = _retryDelaysOverride;
+  _retryDelaysOverride = Array.isArray(delaysMs) ? delaysMs : null;
+  return () => { _retryDelaysOverride = prev; };
 }
 
 export const api = {

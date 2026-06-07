@@ -125,11 +125,22 @@ export function makeStore() {
     // ---- Toast state (PR-4b) ----
     toasts: [],
     _nextToastId: 1,
-    toast(msg, kind = 'info') {
+    /**
+     * Push a toast. opts:
+     *   sticky=true  → no auto-dismiss; caller (or a dismissToast click)
+     *                  removes it. PR-7 uses this for the 'Retrying…' toast
+     *                  that has to survive the 2/5/10s backoff cycle.
+     * Backward-compatible with the original (msg, kind) signature.
+     */
+    toast(msg, kind = 'info', opts = {}) {
       const id = this._nextToastId++;
-      this.toasts.push({ id, msg: String(msg), kind });
-      // Auto-dismiss info toasts after 4s; error toasts stick until clicked.
-      if (kind !== 'error' && typeof setTimeout === 'function') {
+      const t = { id, msg: String(msg), kind, sticky: !!opts.sticky };
+      this.toasts.push(t);
+      // Auto-dismiss everything EXCEPT error or sticky toasts. Errors
+      // stick until clicked (existing PR-4b convention); sticky opts
+      // override the default for the in-flight retry case.
+      const autoDismiss = !t.sticky && kind !== 'error';
+      if (autoDismiss && typeof setTimeout === 'function') {
         setTimeout(() => this.dismissToast(id), 4000);
       }
       return id;
