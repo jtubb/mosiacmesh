@@ -8,7 +8,7 @@
  */
 import { chromium } from 'playwright';
 import assert from 'node:assert';
-import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, seedSchedule, cleanupE2eOrphans } from './helpers.js';
+import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, seedSchedule, cleanupE2eOrphans, pickEmptyTrack } from './helpers.js';
 
 export default async function () {
   const browser = await chromium.launch();
@@ -17,6 +17,7 @@ export default async function () {
     const PLAYLIST = '__e2e_subdel_' + Date.now();
     await page.goto(TIMELINE()); await waitForHydrated(page);
     await cleanupE2eOrphans(page);
+    const TRACK = await pickEmptyTrack(page);
 
     // Seed a playlist with three items so removing the middle one is observable.
     await page.evaluate(async (pn) => {
@@ -29,7 +30,7 @@ export default async function () {
         ], loop: true }),
       });
     }, PLAYLIST);
-    await seedSchedule(page, { playlistName: PLAYLIST, displayID: 'Mobile', startTime: '09:00', endTime: '12:00' });
+    await seedSchedule(page, { playlistName: PLAYLIST, displayID: TRACK, startTime: '09:00', endTime: '12:00' });
     await page.reload(); await waitForHydrated(page);
 
     const scheduleId = await page.evaluate(

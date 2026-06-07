@@ -87,6 +87,37 @@ export async function cleanupE2eOrphans(page) {
   });
 }
 
+/**
+ * Pick a track (displayID) that currently has no schedules — useful for
+ * drag-create + clip-move specs where an existing clip on the target
+ * track would block synthetic pointer events on the .mm-track-droparea.
+ *
+ * Earlier specs hardcoded 'Mobile' because that group was empty at the
+ * time. After fleet churn (clients going offline + being swept) the
+ * Mobile group disappeared from `store.displays` entirely. This helper
+ * picks WHATEVER is empty at test time so the suite survives data
+ * drift. Throws if no track is empty (the operator should clear at
+ * least one of the dev server's tracks).
+ */
+export async function pickEmptyTrack(page) {
+  const candidates = await page.evaluate(async () => {
+    const store = Alpine.store('mm');
+    // Snapshot displayIDs + schedule counts.
+    const ids = [...new Set(store.displays.map(d => d.displayID).filter(Boolean))];
+    return ids.map(id => ({
+      id,
+      scheduleCount: store.schedules.filter(s => s.displayID === id).length,
+    }));
+  });
+  const empty = candidates.find(c => c.scheduleCount === 0);
+  if (!empty) {
+    throw new Error(
+      'pickEmptyTrack: no empty track. Existing tracks: '
+      + JSON.stringify(candidates));
+  }
+  return empty.id;
+}
+
 export async function seedSchedule(page, { playlistName, displayID, startTime, endTime }) {
   return await page.evaluate(async ({ pn, did, st, et }) => {
     const today = new Date().toISOString().slice(0, 10);

@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert';
-import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, seedSchedule, syntheticDrag, cleanupE2eOrphans } from './helpers.js';
+import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, seedSchedule, syntheticDrag, cleanupE2eOrphans, pickEmptyTrack } from './helpers.js';
 
 export default async function () {
   const browser = await chromium.launch();
@@ -9,8 +9,9 @@ export default async function () {
     const PLAYLIST = '__e2e_move_' + Date.now();
     await page.goto(TIMELINE()); await waitForHydrated(page);
     await cleanupE2eOrphans(page);
+    const TRACK = await pickEmptyTrack(page);
     await createTestPlaylist(page, PLAYLIST);
-    await seedSchedule(page, { playlistName: PLAYLIST, displayID: 'Mobile', startTime: '09:00', endTime: '10:00' });
+    await seedSchedule(page, { playlistName: PLAYLIST, displayID: TRACK, startTime: '09:00', endTime: '10:00' });
     await page.reload(); await waitForHydrated(page);
 
     const scheduleId = await page.evaluate(
@@ -22,7 +23,7 @@ export default async function () {
     await page.waitForSelector(`.mm-clip[data-schedule-id="${scheduleId}"]`, { timeout: 5000 });
     await syntheticDrag(page, {
       sourceSel: `.mm-clip[data-schedule-id="${scheduleId}"]`,
-      targetSel: '.mm-day-grid .mm-track-droparea[data-display-id="Mobile"]',
+      targetSel: `.mm-day-grid .mm-track-droparea[data-display-id="${TRACK}"]`,
       targetXFrac: 14 / 24,
     });
 

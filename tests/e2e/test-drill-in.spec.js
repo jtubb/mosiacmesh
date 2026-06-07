@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert';
-import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, seedSchedule, cleanupE2eOrphans } from './helpers.js';
+import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, seedSchedule, cleanupE2eOrphans, pickEmptyTrack } from './helpers.js';
 
 export default async function () {
   const browser = await chromium.launch();
@@ -9,8 +9,9 @@ export default async function () {
     const PLAYLIST = '__e2e_drill_' + Date.now();
     await page.goto(TIMELINE()); await waitForHydrated(page);
     await cleanupE2eOrphans(page);
+    const TRACK = await pickEmptyTrack(page);
     await createTestPlaylist(page, PLAYLIST);
-    await seedSchedule(page, { playlistName: PLAYLIST, displayID: 'Mobile', startTime: '09:00', endTime: '12:00' });
+    await seedSchedule(page, { playlistName: PLAYLIST, displayID: TRACK, startTime: '09:00', endTime: '12:00' });
     await page.reload(); await waitForHydrated(page);
 
     const scheduleId = await page.evaluate(

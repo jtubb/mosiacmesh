@@ -1,6 +1,6 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert';
-import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, syntheticDrag, cleanupE2eOrphans } from './helpers.js';
+import { TIMELINE, waitForHydrated, createTestPlaylist, deleteScheduleByPlaylist, deletePlaylist, syntheticDrag, cleanupE2eOrphans, pickEmptyTrack } from './helpers.js';
 
 export default async function () {
   const browser = await chromium.launch();
@@ -10,6 +10,7 @@ export default async function () {
     await page.goto(TIMELINE());
     await waitForHydrated(page);
     await cleanupE2eOrphans(page);
+    const TRACK = await pickEmptyTrack(page);
     await createTestPlaylist(page, PLAYLIST);
     await page.reload();
     await waitForHydrated(page);
@@ -28,7 +29,7 @@ export default async function () {
 
     await syntheticDrag(page, {
       sourceSel,
-      targetSel: '.mm-day-grid .mm-track-droparea[data-display-id="Mobile"]',
+      targetSel: `.mm-day-grid .mm-track-droparea[data-display-id="${TRACK}"]`,
       targetXFrac: 14 / 24,   // ~14:00
     });
 
@@ -41,7 +42,7 @@ export default async function () {
       PLAYLIST
     );
     assert.ok(created, 'schedule was not created');
-    assert.equal(created.displayID, 'Mobile');
+    assert.equal(created.displayID, TRACK);
     assert.match(created.startTime, /^14:(00|15|30|45)$/, `expected ~14:xx, got ${created.startTime}`);
 
     await deleteScheduleByPlaylist(page, PLAYLIST);
