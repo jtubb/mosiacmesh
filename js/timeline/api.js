@@ -292,6 +292,13 @@ export const api = {
   async deleteProfile(name) {
     return await deleteReq(`/api/profiles/${encodeURIComponent(name)}`);
   },
+  /** PR-14: move a device into a different display group. Backed by
+   *  POST /api/discovery/configure with {clientKey, displayID}. The
+   *  server validates the destination exists (404 if not). */
+  async assignDeviceToDisplay(clientKey, displayID) {
+    const b = await postJson('/api/discovery/configure', { clientKey, displayID });
+    return b;
+  },
   async assignProfile(clientKey, profileName) {
     // Server explicitly rejects empty string with 'use null to clear
     // the profile'. A <select> with <option value=""> produces ''

@@ -95,33 +95,89 @@ class TestDiscoveryAPI:
         assert 'displayGroups' in data
         assert 'cacheStats' in data
     
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_api_discovery_configure_post(self, mock_settings, mock_client):
-        """Test device configuration endpoint"""
+        """Test device configuration endpoint moves a client to an
+        existing display group (PR-14: target must exist in
+        settings.displays — Mobile is in the mock fixture)."""
         mock_settings.clients["test123"] = mock_client
         server.settings = mock_settings
-        
+
         config_data = {
             'clientKey': 'test123',
-            'displayID': 'NewDisplay',
+            'displayID': 'Mobile',
             'friendlyName': 'Updated Client'
         }
-        
+
         request = make_mocked_request('POST', '/api/discovery/configure')
         request.json = AsyncMock(return_value=config_data)
 
         with patch('mosaicmesh.api.discovery.saveSettings') as mock_save:
             response = await server.api_discovery_configure(request)
-        
+
         assert response.status == 200
         data = json.loads(response.text)
         assert data['success'] is True
-        
+
         # Check client was updated
         updated_client = mock_settings.clients["test123"]
-        assert updated_client.displayID == 'NewDisplay'
+        assert updated_client.displayID == 'Mobile'
         assert updated_client.friendlyName == 'Updated Client'
         mock_save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_api_discovery_configure_rejects_unknown_displayID(self, mock_settings, mock_client):
+        """PR-14: assigning a displayID that doesn't exist in
+        settings.displays returns 404. Without this guard, a typo
+        ('Tablt') silently sets client.displayID to a string no group
+        has — the client vanishes from the timeline."""
+        mock_settings.clients["test123"] = mock_client
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'clientKey': 'test123',
+            'displayID': 'NonExistent',
+        })
+
+        response = await server.api_discovery_configure(request)
+        assert response.status == 404
+        data = json.loads(response.text)
+        assert data['success'] is False
+        assert "NonExistent" in data['error']
+        assert "create it first" in data['error']
+        # Client untouched
+        assert mock_settings.clients["test123"].displayID == 'Desktop'
+
+    @pytest.mark.asyncio
+    async def test_api_discovery_configure_rejects_empty_displayID(self, mock_settings, mock_client):
+        """PR-14: empty/whitespace displayID rejected with 400."""
+        mock_settings.clients["test123"] = mock_client
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'clientKey': 'test123',
+            'displayID': '   ',
+        })
+        response = await server.api_discovery_configure(request)
+        assert response.status == 400
+        assert mock_settings.clients["test123"].displayID == 'Desktop'
+
+    @pytest.mark.asyncio
+    async def test_api_discovery_configure_rejects_non_string_displayID(self, mock_settings, mock_client):
+        """PR-14: non-string displayID rejected with 400."""
+        mock_settings.clients["test123"] = mock_client
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'clientKey': 'test123',
+            'displayID': 42,
+        })
+        response = await server.api_discovery_configure(request)
+        assert response.status == 400
+        assert mock_settings.clients["test123"].displayID == 'Desktop'
     
     @pytest.mark.asyncio
     async def test_api_discovery_configure_invalid_client(self, mock_settings):

@@ -44,10 +44,12 @@ export default async function () {
       null, { timeout: 5000 });
 
     // Verify the popover lists at least one client + has a profile select for it.
+    // PR-14 added a sibling Group select with the same data-client-key,
+    // so target the profile select explicitly by .mm-thp-profile class.
     const popoverState = await page.evaluate((clientKey) => {
       const pop = document.getElementById('mmTrackHeaderPopover');
-      const sel = pop.querySelector(`select[data-client-key="${clientKey}"]`);
-      if (!sel) return { error: 'no select for client', popText: pop.textContent.slice(0, 200) };
+      const sel = pop.querySelector(`select.mm-thp-profile[data-client-key="${clientKey}"]`);
+      if (!sel) return { error: 'no profile select for client', popText: pop.textContent.slice(0, 200) };
       return {
         optionValues: Array.from(sel.options).map(o => o.value),
         currentValue: sel.value,
@@ -57,11 +59,16 @@ export default async function () {
     assert.ok(popoverState.optionValues, popoverState.error);
     assert.ok(popoverState.optionValues.includes(''), 'expected (auto-match) sentinel option');
     assert.ok(popoverState.optionValues.includes('ipad1-ios5'), 'expected ipad1-ios5 profile in dropdown');
-    assert.match(popoverState.headerText, /Profile overrides for/, 'expected popover header label');
+    // PR-14 reworded the header from "Profile overrides for X" to
+    // "Devices in X" (popover now does both profile + group, so the
+    // single-purpose label doesn't fit).
+    assert.match(popoverState.headerText, /Devices in /, 'expected popover header label');
 
     // Change to ipad1-ios5 and assert the store updates + server agrees.
+    // PR-14: target the profile select specifically (the group select
+    // shares the same data-client-key attribute).
     await page.evaluate((clientKey) => {
-      const sel = document.querySelector(`#mmTrackHeaderPopover select[data-client-key="${clientKey}"]`);
+      const sel = document.querySelector(`#mmTrackHeaderPopover select.mm-thp-profile[data-client-key="${clientKey}"]`);
       sel.value = 'ipad1-ios5';
       sel.dispatchEvent(new Event('change', { bubbles: true }));
     }, target.clientKey);

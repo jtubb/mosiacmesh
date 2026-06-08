@@ -460,7 +460,22 @@ async def api_discovery_configure(request):
         logging.info("set_cache_mode: %s -> %s", client_key, mode)
     else:
         if "displayID" in data:
-            client.displayID = data["displayID"]
+            new_did = data["displayID"]
+            # PR-14: reject unknown displayIDs. Without this guard, typing
+            # "Tablt" instead of "Tablet" silently sets client.displayID
+            # to a string no group has — the client vanishes from the
+            # timeline because /api/displays only enumerates known
+            # groups. Operators have to create the group first
+            # (POST /api/displays) or pick an existing one.
+            if not isinstance(new_did, str) or not new_did.strip():
+                return web.json_response({"success": False,
+                                          "error": "displayID must be a non-empty string"},
+                                         status=400)
+            if new_did not in server.settings.displays:
+                return web.json_response({"success": False,
+                                          "error": f"display group '{new_did}' not found — create it first"},
+                                         status=404)
+            client.displayID = new_did
         if "friendlyName" in data:
             client.friendlyName = data["friendlyName"]
             client.nameIsCustom = True   # user-set name: DNS won't override it

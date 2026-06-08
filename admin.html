@@ -438,10 +438,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-thp-hint { color: var(--text-muted, #888); font-size: 10px; }
 .mm-thp-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 0; }
 .mm-thp-list { list-style: none; margin: 0; padding: 0; }
-.mm-thp-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; padding: 4px 0; }
+/* PR-14: 4-column row — name | (deviceType) | profile-select | group-select. */
+.mm-thp-list li { display: grid; grid-template-columns: 1fr auto auto auto; gap: 6px; align-items: center; padding: 4px 0; }
 .mm-thp-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-thp-meta { color: var(--text-muted, #888); font-size: 10px; }
-.mm-thp-list select { font-size: 11px; padding: 2px 4px; }
+.mm-thp-list select { font-size: 11px; padding: 2px 4px; max-width: 110px; }
+.mm-thp-list select.mm-thp-group { border-color: rgba(255,255,255,0.18); }
 .mm-track-header { cursor: pointer; }
 .mm-timeline-layout { display: flex; gap: 12px; }
 .mm-bin { width: 200px; flex: 0 0 200px; }

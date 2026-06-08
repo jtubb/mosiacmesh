@@ -372,6 +372,42 @@ export function makeStore() {
       });
     },
 
+    /**
+     * PR-14: move a single device from its current group to `newDisplayID`.
+     * Optimistic: updates client.displayID locally on the client record
+     * + nudges both groups' clientCount/onlineCount/clients[] so the
+     * track-header popover + status badges reflect the move immediately.
+     * Server confirms with 200 ({success}) or rejects with 404 ("display
+     * group not found — create it first"), in which case the slice
+     * snapshot rolls back and the toast surfaces the server's error.
+     */
+    async assignDeviceToDisplay(clientKey, newDisplayID) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      const client = this.displays.find(d => (d.clientKey || d.id) === clientKey);
+      if (!client) throw new Error(`assignDeviceToDisplay: client '${clientKey}' not in store`);
+      const oldDisplayID = client.displayID;
+      if (oldDisplayID === newDisplayID) return;   // no-op
+      return withRollback(this, ['displays', 'displayGroups'], () => {
+        client.displayID = newDisplayID;
+        const oldGroup = this.displayGroups.find(g => g.displayID === oldDisplayID);
+        const newGroup = this.displayGroups.find(g => g.displayID === newDisplayID);
+        const wasOnline = !!client.isOnline;
+        if (oldGroup) {
+          oldGroup.clients = (oldGroup.clients || []).filter(k => k !== clientKey);
+          oldGroup.clientCount = Math.max(0, (oldGroup.clientCount || 1) - 1);
+          if (wasOnline) oldGroup.onlineCount = Math.max(0, (oldGroup.onlineCount || 1) - 1);
+        }
+        if (newGroup) {
+          newGroup.clients = [...(newGroup.clients || []), clientKey];
+          newGroup.clientCount = (newGroup.clientCount || 0) + 1;
+          if (wasOnline) newGroup.onlineCount = (newGroup.onlineCount || 0) + 1;
+        }
+      }, async () => {
+        await api.assignDeviceToDisplay(clientKey, newDisplayID);
+      });
+    },
+
     async assignProfileToClient(clientKey, profileName) {
       const { withRollback } = await import('./util/optimistic.js');
       const { api } = await import('./api.js');
