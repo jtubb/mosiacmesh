@@ -51,6 +51,7 @@ const MODULES = [
   'js/timeline/modals/profile-editor.js',
   'js/timeline/modals/calibration.js',
   'js/timeline/track-header-popover.js',
+  'js/timeline/track-header-context-menu.js',
   'js/timeline/modals/fleet-confirm.js',
 ];
 
