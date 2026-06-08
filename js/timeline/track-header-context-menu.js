@@ -1,10 +1,15 @@
 /**
  * Right-click on a track header → context menu. Items:
+ *   - Login / Start / Stop / Reboot / Test (PR-13): RUN_SCRIPT scoped
+ *     to displayID. Same fleet-confirm modal as the toolbar buttons,
+ *     just pre-scoped so the operator doesn't have to set the toolbar
+ *     dropdown first when they're already pointing at a specific
+ *     track. Routes through fleet-confirm.fireFleetAction so >3-device
+ *     prompts behave identically.
  *   - Reload group (spec §361, PR-9): SockJS RELOAD scoped to displayID.
  *   - Delete group (PR-12): DELETE /api/displays/{displayID}, blocks
  *     with the server's 409+refs error if the group has any clients or
- *     schedules; the server requires the operator to reassign before
- *     the group can be removed.
+ *     schedules.
  *
  * Reuses #mmContextMenu (already populated by context-menu.js for
  * clip right-clicks) — only one menu is open at a time, so sharing the
@@ -15,6 +20,8 @@
  * the same element to open the per-client profile override popover
  * (PR-4c gap-2).
  */
+import { fireFleetAction } from './modals/fleet-confirm.js';
+
 export function attachTrackHeaderContextMenu(store) {
   const menu = document.getElementById('mmContextMenu');
   if (!menu) return;
@@ -24,6 +31,15 @@ export function attachTrackHeaderContextMenu(store) {
   function open(ev, displayID) {
     menu.innerHTML = '';
     const items = [
+      // PR-13: per-group fleet actions. Sequence matches the toolbar
+      // button order (login → start → stop → reboot → test) so the
+      // muscle memory is the same.
+      { label: 'Login',  action: () => fireFleetAction(store, 'login',  displayID) },
+      { label: 'Start',  action: () => fireFleetAction(store, 'start',  displayID) },
+      { label: 'Stop',   action: () => fireFleetAction(store, 'stop',   displayID) },
+      { label: 'Reboot', action: () => fireFleetAction(store, 'reboot', displayID) },
+      { label: 'Test',   action: () => fireFleetAction(store, 'test',   displayID) },
+      { separator: true },
       {
         label: 'Reload group',
         action: () => {
@@ -54,6 +70,13 @@ export function attachTrackHeaderContextMenu(store) {
       },
     ];
     for (const it of items) {
+      if (it.separator) {
+        const sep = document.createElement('li');
+        sep.className = 'mm-context-divider';
+        sep.setAttribute('aria-hidden', 'true');
+        menu.appendChild(sep);
+        continue;
+      }
       const li = document.createElement('li');
       li.textContent = it.label;
       li.addEventListener('click', () => { it.action(); close(); });

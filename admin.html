@@ -382,6 +382,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-clip-stripe-vertical { top: auto; bottom: auto; left: 0; right: 0; }
 .mm-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 0; flex-wrap: wrap; }
 .mm-toolbar-date { font-weight: 600; min-width: 220px; text-align: center; }
+/* PR-13: scope selector sits between "Fleet:" label and action buttons.
+   Compact so it doesn't push the action row off-screen on narrower
+   viewports — the dropdown only needs to show short displayIDs. */
+.mm-fleet-scope { font-size: 12px; padding: 2px 4px; min-width: 80px; max-width: 160px; }
 .btn-active { background: var(--accent, #345); color: white; }
 .mm-toast-stack { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 1000; max-width: 360px; }
 /* PR-4b T13: recurrence popover. Floats anchored under a clip; click
@@ -549,11 +553,18 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 
               <span style="flex:1"></span>
               <span class="size" style="color:var(--text-muted)">Fleet:</span>
-              <button class="btn btn-ghost" @click="fleetAction('login')"  title="Wake + unlock every device (SSH)">🔓</button>
-              <button class="btn btn-ghost" @click="fleetAction('start')"  title="Open the display page on every device">▶</button>
-              <button class="btn btn-ghost" @click="fleetAction('stop')"   title="Close the display on every device">⏹</button>
-              <button class="btn btn-ghost" @click="fleetAction('reboot')" title="Reboot every device">⟲</button>
-              <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg)">🐞</button>
+              <select class="input mm-fleet-scope" x-model="fleetScope"
+                      :title="fleetScope ? 'Fleet actions scoped to ' + fleetScope : 'Fleet actions target every device'">
+                <option value="">All devices</option>
+                <template x-for="id in availableDisplayIds" :key="id">
+                  <option :value="id" x-text="id"></option>
+                </template>
+              </select>
+              <button class="btn btn-ghost" @click="fleetAction('login')"  title="Wake + unlock the scoped devices (SSH)">🔓</button>
+              <button class="btn btn-ghost" @click="fleetAction('start')"  title="Open the display page on the scoped devices">▶</button>
+              <button class="btn btn-ghost" @click="fleetAction('stop')"   title="Close the display on the scoped devices">⏹</button>
+              <button class="btn btn-ghost" @click="fleetAction('reboot')" title="Reboot the scoped devices">⟲</button>
+              <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg) on the scoped devices">🐞</button>
                 <button class="btn btn-ghost" type="button" @click="openProfileEditor()" title="Edit profiles">⚙ Profiles</button>
                 <button class="btn btn-ghost" type="button" @click="openCalibration()" title="Display calibration">🎯 Calibrate</button>
                 <button class="btn btn-ghost" type="button" @click="addDisplayGroup()" title="Create a new display group">+ Group</button>

@@ -21,8 +21,17 @@ function isoDate(ms) {
 
 export function mmToolbarComponent() {
   return {
+    // PR-13: fleet-action scope. Empty string = "all devices" (the
+    // legacy behaviour). Any other value is a displayID. The fleet
+    // buttons read this on click so changing the scope doesn't fire
+    // anything by itself — explicit click semantics preserved.
+    fleetScope: '',
     get displays() { return this.$store.mm.displays; },
     get availableDisplayIds() {
+      // Prefer first-class display groups (PR-12). Falls back to
+      // client-derived list against a pre-PR-12 server.
+      const groups = this.$store.mm.displayGroups;
+      if (groups && groups.length > 0) return groups.map(g => g.displayID);
       const ids = new Set();
       for (const d of this.$store.mm.displays) if (d.displayID) ids.add(d.displayID);
       return Array.from(ids);
@@ -77,12 +86,12 @@ export function mmToolbarComponent() {
 
     // PR-4c gap-fix (spec §363): route fleet actions through the
     // confirm modal in modals/fleet-confirm.js. >3 affected devices
-    // prompts; ≤3 fires immediately. The modal sends the RUN_SCRIPT
-    // frame directly rather than calling the legacy runScriptAll —
-    // runScriptAll has its own confirm() for stop/reboot which would
-    // double-prompt under our modal.
+    // prompts; ≤3 fires immediately. PR-13 adds the scope arg —
+    // `this.fleetScope` is '' for all-devices or a displayID for
+    // group-scoped actions; the modal + on-wire payload adjust
+    // automatically.
     fleetAction(which) {
-      fireFleetAction(this.$store.mm, which);
+      fireFleetAction(this.$store.mm, which, this.fleetScope || null);
     },
 
     formatDate() {

@@ -41,7 +41,7 @@ export default async function () {
     // Click the 🔓 Login fleet button. textContent is just the emoji,
     // so look up by title.
     await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button[title*="Wake + unlock every device"]'))[0];
+      const btn = Array.from(document.querySelectorAll('button[title*="Wake + unlock"]'))[0];
       btn.click();
     });
     await page.waitForSelector('.mm-fleet-confirm', { timeout: 5000 });
@@ -70,7 +70,7 @@ export default async function () {
 
     // --- Case 2: Confirm ---
     await page.evaluate(() => {
-      const btn = Array.from(document.querySelectorAll('button[title*="Wake + unlock every device"]'))[0];
+      const btn = Array.from(document.querySelectorAll('button[title*="Wake + unlock"]'))[0];
       btn.click();
     });
     await page.waitForSelector('.mm-fleet-confirm', { timeout: 5000 });
@@ -92,7 +92,7 @@ export default async function () {
     const case3 = await page.evaluate(() => {
       Alpine.store('mm').displays = Alpine.store('mm').displays.slice(0, 2);
       window.__capturedFrames = [];
-      const btn = Array.from(document.querySelectorAll('button[title*="Wake + unlock every device"]'))[0];
+      const btn = Array.from(document.querySelectorAll('button[title*="Wake + unlock"]'))[0];
       btn.click();
       return {
         capturedCount: window.__capturedFrames.length,

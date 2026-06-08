@@ -50,12 +50,18 @@ export default async function () {
         return m && m.style.display === 'block' && m.querySelector('li');
       }, null, { timeout: 5000 });
 
-    // Menu items: "Reload group" + "Delete group" (PR-12 added the
-    // second one). Spec asserts both are present in the expected order
-    // so future additions surface as a fail-noisy diff.
+    // Menu items: 5 fleet actions (PR-13) + divider + Reload group
+    // (PR-9) + Delete group (PR-12). Asserts all are present in the
+    // expected order so future additions surface as a fail-noisy diff.
+    // .mm-context-divider is a visual separator (no action), filtered
+    // out so the label list compares cleanly.
     const itemsAfterOpen = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('#mmContextMenu li')).map(li => li.textContent.trim()));
-    assert.deepEqual(itemsAfterOpen, ['Reload group', 'Delete group']);
+      Array.from(document.querySelectorAll('#mmContextMenu li:not(.mm-context-divider)'))
+        .map(li => li.textContent.trim()));
+    assert.deepEqual(itemsAfterOpen, [
+      'Login', 'Start', 'Stop', 'Reboot', 'Test',
+      'Reload group', 'Delete group',
+    ]);
 
     // Click "Reload group" (the first li). Don't grab li:first-child
     // because the menu order is asserted above; rely on textContent.
