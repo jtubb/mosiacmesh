@@ -240,6 +240,14 @@ export const api = {
     const b = await getJson('/api/playlists');
     return (b?.playlists || []).find(p => p.name === name) ?? null;
   },
+  async refetchProfile(name) {
+    try {
+      const b = await getJson('/api/profiles/' + encodeURIComponent(name));
+      if (b?.profile) return b.profile;
+    } catch (_) { /* fall through to list */ }
+    const b = await getJson('/api/profiles');
+    return (b?.profiles || []).find(p => p.name === name) ?? null;
+  },
 
   // ---- Profiles ----
   /** POST /api/profiles — body must include name. Returns the created profile. */

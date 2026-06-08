@@ -21,6 +21,7 @@ from mosaicmesh.api._concurrency import (
 
 __all__ = [
     "api_profiles_list",
+    "api_profiles_get",
     "api_profiles_create",
     "api_profiles_update",
     "api_profiles_delete",
@@ -74,6 +75,21 @@ async def api_profiles_list(request):
     import server
     out = [_serialize(p) for p in server.settings.profiles.values()]
     return web.json_response({"success": True, "profiles": out})
+
+
+async def api_profiles_get(request):
+    """GET /api/profiles/{name} — fetch a single profile by name.
+    Returns 200 + {profile}; 404 if missing. Used by the 412 refetch path
+    in js/timeline/api.js (refetchProfile) so a conflict resolver can pull
+    the current server state without re-listing every profile."""
+    import server
+    name = request.match_info.get("name", "")
+    p = server.settings.profiles.get(name)
+    if p is None:
+        return web.json_response({"success": False,
+                                  "error": f"profile '{name}' not found"},
+                                 status=404)
+    return web.json_response({"success": True, "profile": _serialize(p)})
 
 
 async def api_profiles_create(request):

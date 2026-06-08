@@ -22,6 +22,11 @@ export async function refetchAfterConflict(store, kind, id) {
     const fresh = await api.refetchPlaylist(id);   // id = playlist name
     store.playlists[id] = fresh;
     displayName = id;
+  } else if (kind === 'profile') {
+    if (!store.profiles?.[id]) return;   // not in local store; nothing to merge
+    const fresh = await api.refetchProfile(id);    // id = profile name
+    store.profiles[id] = fresh;
+    displayName = id;
   } else {
     throw new Error(`refetchAfterConflict: unknown kind ${kind}`);
   }

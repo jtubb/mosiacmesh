@@ -305,19 +305,18 @@ export function makeStore() {
     },
 
     async updateProfile(name, patch) {
-      // No opts.conflictKind: refetch-merge.js (T-A1) doesn't yet handle
-      // the 'profile' kind. 412 here falls through to the plain-toast
-      // rollback path. Extending refetch-merge for profiles is a follow-up.
       const { withRollback } = await import('./util/optimistic.js');
       const { api } = await import('./api.js');
       const current = this.profiles[name];
       if (!current) throw new Error(`profile not found: ${name}`);
-      return withRollback(this, ['profiles'], () => {
-        this.profiles[name] = { ...current, ...patch };
-      }, async () => {
-        const fresh = await api.updateProfile(name, patch, current._serverVersion);
-        this.profiles[name] = fresh;
-      });
+      return withRollback(this, ['profiles'],
+        () => { this.profiles[name] = { ...current, ...patch }; },
+        async () => {
+          const fresh = await api.updateProfile(name, patch, current._serverVersion);
+          this.profiles[name] = fresh;
+        },
+        { conflictKind: 'profile', conflictId: name },
+      );
     },
 
     async deleteProfile(name) {
