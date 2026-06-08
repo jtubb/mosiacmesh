@@ -436,6 +436,21 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-plr-sidebar { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; }
 .mm-plr-sidebar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
 .mm-plr-remove { font-size: 11px; padding: 2px 8px; }
+/* PR-18: video-length hint under the duration field. */
+.mm-plr-duration-hint { display: block; margin-top: 2px; color: var(--text-muted, #888); font-size: 10px; }
+/* PR-18: in-modal media picker. Operators can't reach the bin behind
+   the modal; picker exposes the same library inline. */
+.mm-plr-picker { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 8px; background: rgba(0,0,0,0.12); }
+.mm-plr-picker-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
+.mm-plr-picker-search { flex: 1; font-size: 11px; padding: 2px 4px; }
+.mm-plr-picker-list { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto; }
+.mm-plr-picker-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 3px 4px; font-size: 11px; cursor: default; }
+.mm-plr-picker-row:hover { background: rgba(255,255,255,0.05); }
+.mm-plr-picker-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-plr-picker-meta { color: var(--text-muted, #888); font-size: 10px; }
+.mm-plr-picker-add { background: transparent; border: 1px solid rgba(255,255,255,0.18); color: var(--text, #eee); padding: 0 6px; cursor: pointer; border-radius: 3px; }
+.mm-plr-picker-add:hover { background: rgba(255,255,255,0.08); }
+.mm-plr-picker-empty { color: var(--text-muted, #888); font-size: 11px; padding: 8px 4px; font-style: italic; }
 .mm-recurrence-preview { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; font-size: 11px; }
 .mm-recurrence-preview ol { margin: 6px 0 0 18px; padding: 0; }
 .mm-recurrence-preview li { padding: 2px 0; }

@@ -82,6 +82,27 @@ function effectiveDuration(item, store) {
   return DEFAULT_DURATION_S;
 }
 
+/**
+ * Maximum allowable duration for an item. Videos cap at their probed
+ * natural length (extending past would just freeze on the last frame
+ * in playback — never the intent). Images have no upper bound — they
+ * stay on screen for whatever duration the operator picks.
+ *
+ * Returns null when there's no cap (image, or video the server
+ * couldn't probe — fall back to "no limit" rather than refusing to
+ * let the operator set a duration).
+ */
+function maxDuration(item, store) {
+  if (!item || !item.file) return null;
+  // We consider an item a "video" iff store probed its duration.
+  // Images don't appear in videoDurations even when listed under
+  // /api/media's `images`. This double-checks against the videos
+  // list in case the durations probe failed but we still know it's
+  // a video. PR-18: cap only when probed length is available.
+  const probed = store.media?.videoDurations?.[item.file];
+  return (probed != null && Number.isFinite(probed) && probed > 0) ? probed : null;
+}
+
 export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
   const pl = store.playlists[playlistName];
   if (!pl) return;
@@ -107,6 +128,13 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     <div class="mm-plr-ribbon-scroll">
       <ul class="mm-plr-ribbon" data-dropzone="1"></ul>
     </div>
+    <div class="mm-plr-picker">
+      <div class="mm-plr-picker-header">
+        <strong>Add item</strong>
+        <input type="search" class="mm-plr-picker-search" placeholder="Search media…" />
+      </div>
+      <ul class="mm-plr-picker-list" data-field="picker-list"></ul>
+    </div>
     <div class="mm-plr-sidebar">
       <div class="mm-plr-sidebar-header">
         <strong data-field="sel-title">No item selected</strong>
@@ -121,7 +149,9 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
           </select>
         </label>
         <label>Background color <input type="text" data-field="backgroundColor" placeholder="#000000 or rgb(0,0,0)" disabled></label>
-        <label>Duration (s) <input type="number" data-field="duration" min="0.1" step="0.1" placeholder="auto" disabled></label>
+        <label>Duration (s) <input type="number" data-field="duration" min="0.1" step="0.1" placeholder="auto" disabled>
+          <span class="mm-plr-duration-hint" data-field="duration-hint"></span>
+        </label>
       </div>
     </div>
     <div class="mm-form-actions">
@@ -160,15 +190,31 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     if (selectedIdx < 0) return;
     const v = fields.duration.value.trim();
     if (v) {
-      const n = Number(v);
+      let n = Number(v);
       if (Number.isFinite(n) && n > 0) {
+        // PR-18: cap video items to their natural length. Don't snap
+        // the input field on every keystroke (annoying to type into);
+        // store the clamped value on the draft. captureSelectedFromSidebar
+        // + the duration input's `max` attribute keep the final save
+        // honest, and the ribbon width reflects the clamped value.
+        const cap = maxDuration(draft.items[selectedIdx], store);
+        if (cap != null && n > cap) n = cap;
         draft.items[selectedIdx].duration = n;
-        renderRibbon();   // width changes when duration does
+        renderRibbon();
       }
     } else {
       delete draft.items[selectedIdx].duration;
       renderRibbon();
     }
+  });
+  // On blur, snap the input value to the clamped duration so the
+  // operator can see what was actually stored. Without this, typing
+  // "9999" into a 30s video shows "9999" in the field even though
+  // the draft has 30.
+  fields.duration.addEventListener('blur', () => {
+    if (selectedIdx < 0) return;
+    const it = draft.items[selectedIdx];
+    if (it.duration != null) fields.duration.value = String(it.duration);
   });
   removeBtn.addEventListener('click', () => {
     if (selectedIdx < 0) return;
@@ -178,6 +224,7 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     syncSidebar();
   });
 
+  const durationHint = root.querySelector('[data-field="duration-hint"]');
   function syncSidebar() {
     const enabled = selectedIdx >= 0;
     removeBtn.disabled = !enabled;
@@ -190,6 +237,8 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
       fields.playmode.value = 'loop';
       fields.backgroundColor.value = '';
       fields.duration.value = '';
+      fields.duration.removeAttribute('max');
+      durationHint.textContent = '';
       return;
     }
     const it = draft.items[selectedIdx];
@@ -198,6 +247,17 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     fields.playmode.value = it.playmode || 'loop';
     fields.backgroundColor.value = it.backgroundColor || '';
     fields.duration.value = (it.duration == null) ? '' : String(it.duration);
+    // PR-18: surface the video's natural length as both the input's
+    // `max` (so the spinner respects it) and a hint string under the
+    // field. Images have no cap.
+    const cap = maxDuration(it, store);
+    if (cap != null) {
+      fields.duration.max = String(cap);
+      durationHint.textContent = `max ${cap}s (video length)`;
+    } else {
+      fields.duration.removeAttribute('max');
+      durationHint.textContent = '';
+    }
   }
 
   // --- Ribbon render + interaction ------------------------------------
@@ -292,14 +352,9 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     } else if (drag && drag.kind === 'media') {
       // Append a media item at the drop point.
       ev.preventDefault();
-      const newItem = { file: drag.file };
-      if (drag.duration != null) newItem.duration = drag.duration;
-      draft.items.splice(targetIdx, 0, newItem);
-      selectedIdx = targetIdx;
+      appendMediaItem(drag.file, targetIdx);
       clearDrag();
       document.body.classList.remove('mm-dragging');
-      renderRibbon();
-      syncSidebar();
     }
   });
 
@@ -316,10 +371,15 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     const startDur = effectiveDuration(draft.items[idx], store);
     try { handle.setPointerCapture(ev.pointerId); } catch (_) { /* fine */ }
 
+    // PR-18: cap drags for video items at the video's natural length.
+    const cap = maxDuration(draft.items[idx], store);
+    const maxPx = (cap != null) ? Math.max(MIN_CLIP_PX, Math.round(cap * PX_PER_SECOND)) : Infinity;
     function onMove(mv) {
       const dx = mv.clientX - startX;
-      const newPx = Math.max(MIN_CLIP_PX, startWidth + dx);
-      const newDur = Math.max(0.5, Math.round((newPx / PX_PER_SECOND) * 2) / 2);   // snap to 0.5s
+      let newPx = Math.max(MIN_CLIP_PX, startWidth + dx);
+      if (newPx > maxPx) newPx = maxPx;
+      let newDur = Math.max(0.5, Math.round((newPx / PX_PER_SECOND) * 2) / 2);   // snap to 0.5s
+      if (cap != null && newDur > cap) newDur = cap;
       draft.items[idx].duration = newDur;
       li.style.width = newPx + 'px';
       // Live-update sidebar if this is the selected item.
@@ -349,12 +409,85 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     if (bg) it.backgroundColor = bg; else delete it.backgroundColor;
     const dur = fields.duration.value.trim();
     if (dur) {
-      const n = Number(dur);
-      if (Number.isFinite(n) && n > 0) it.duration = n;
+      let n = Number(dur);
+      if (Number.isFinite(n) && n > 0) {
+        // PR-18: enforce the video-length cap at save time too, in
+        // case the input event missed it (e.g. value set
+        // programmatically + Save clicked before blur).
+        const cap = maxDuration(it, store);
+        if (cap != null && n > cap) n = cap;
+        it.duration = n;
+      }
     } else {
       delete it.duration;
     }
   }
+
+  /** PR-18: shared "add this media file as a new playlist item"
+   *  helper. Used by the in-modal picker AND the drag-from-bin drop
+   *  path. inserts at `at` (default: end). Selects the new item so
+   *  the sidebar populates with its fields immediately. */
+  function appendMediaItem(file, at) {
+    if (!file) return;
+    const newItem = { file };
+    const probed = store.media?.videoDurations?.[file];
+    if (probed != null) newItem.duration = probed;
+    const insertAt = (at == null) ? draft.items.length : at;
+    draft.items.splice(insertAt, 0, newItem);
+    selectedIdx = insertAt;
+    renderRibbon();
+    syncSidebar();
+  }
+
+  // --- Media picker (PR-18) -------------------------------------------
+  const pickerList = root.querySelector('[data-field="picker-list"]');
+  const pickerSearch = root.querySelector('.mm-plr-picker-search');
+  function pickerEntries() {
+    const m = store.media || {};
+    const images = (m.images || []).map(url => ({ kind: 'image', url }));
+    const videos = (m.videos || []).map(url => ({ kind: 'video', url,
+      duration: m.videoDurations?.[url] }));
+    return [...images, ...videos];
+  }
+  function renderPicker() {
+    pickerList.innerHTML = '';
+    const q = (pickerSearch.value || '').trim().toLowerCase();
+    const entries = pickerEntries()
+      .filter(e => !q || basename(e.url).toLowerCase().includes(q));
+    if (entries.length === 0) {
+      const li = document.createElement('li');
+      li.className = 'mm-plr-picker-empty';
+      li.textContent = q ? `No media matches "${q}".` : 'No media available — upload first.';
+      pickerList.appendChild(li);
+      return;
+    }
+    for (const e of entries) {
+      const li = document.createElement('li');
+      li.className = 'mm-plr-picker-row';
+      li.dataset.url = e.url;
+      const name = document.createElement('span');
+      name.className = 'mm-plr-picker-name';
+      name.textContent = basename(e.url);
+      const meta = document.createElement('span');
+      meta.className = 'mm-plr-picker-meta';
+      meta.textContent = e.kind === 'video'
+        ? (e.duration != null ? `${e.duration}s` : 'video')
+        : 'image';
+      const addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'mm-plr-picker-add';
+      addBtn.textContent = '+';
+      addBtn.title = 'Add to playlist (end)';
+      addBtn.addEventListener('click', () => appendMediaItem(e.url));
+      li.appendChild(name);
+      li.appendChild(meta);
+      li.appendChild(addBtn);
+      // Double-click row also adds (matches the drag-onto-ribbon path).
+      li.addEventListener('dblclick', () => appendMediaItem(e.url));
+      pickerList.appendChild(li);
+    }
+  }
+  pickerSearch.addEventListener('input', renderPicker);
 
   // --- Save / Cancel ---------------------------------------------------
   root.querySelector('[data-action="cancel"]').addEventListener('click', () => closeModal());
@@ -368,6 +501,7 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
 
   openModal({ title: `Edit playlist — ${playlistName}`, contentEl: root });
   renderRibbon();
+  renderPicker();
   syncSidebar();
 }
 
