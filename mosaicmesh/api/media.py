@@ -20,8 +20,56 @@ from aiohttp import web
 
 __all__ = [
     "api_media",
+    "api_media_delete",
     "upload_handler",
 ]
+
+
+# Allowed `kind` subdirs under media/server/. Used by api_media_delete
+# to compute the on-disk path AND to reject anything else (e.g. a
+# request that tried to traverse into a per-client `media/<key>/...`
+# directory).
+_MEDIA_SUBDIRS = ("images", "videos")
+
+
+def _disk_path_from_url(url):
+    """Map a /media/server/{kind}/{filename} URL to its on-disk path.
+
+    Returns None if the URL doesn't fit the expected shape OR contains
+    a path traversal (the `..` segment is the obvious one; we also
+    reject absolute paths after the leading slash + any backslash, in
+    case a Windows-uploaded filename slipped past upload validation).
+    """
+    if not isinstance(url, str):
+        return None
+    prefix = "/media/server/"
+    if not url.startswith(prefix):
+        return None
+    rest = url[len(prefix):]
+    parts = rest.split("/")
+    if len(parts) != 2:
+        return None
+    sub, name = parts
+    if sub not in _MEDIA_SUBDIRS:
+        return None
+    if not name or name.startswith(".") or ".." in name or "\\" in name:
+        return None
+    return os.path.join("media", "server", sub, name)
+
+
+def _playlist_refs_for_media(url):
+    """Return [playlistName, ...] for every playlist whose .items[] has
+    .file == url. Used to populate the 409 refs payload so the UI can
+    surface "in use by N playlists" before forcing the operator to
+    delete those references first."""
+    import server
+    refs = []
+    for p in server.settings.playlists.values():
+        for item in getattr(p, "items", []) or []:
+            if isinstance(item, dict) and item.get("file") == url:
+                refs.append(p.name)
+                break
+    return refs
 
 
 async def api_media(request):
@@ -46,6 +94,48 @@ async def api_media(request):
     body = json.dumps({"images": _list("images"), "videos": videos,
                        "videoDurations": durations})
     return web.Response(text=body, content_type="application/json")
+
+
+async def api_media_delete(request):
+    """DELETE /api/media — body {url:"/media/server/{images|videos}/foo.mp4"}.
+
+    Pre-check: 409 + {refs:[playlistName,...]} if any playlist's
+    items[] references the URL. The operator must remove those
+    references first; there is intentionally no force-delete since
+    losing referenced media silently has broken playback before.
+
+    Success: removes the file off disk + returns 204. The file is the
+    only side effect — playlists/schedules unaffected.
+    """
+    try:
+        body = await request.json()
+    except Exception as e:
+        return web.json_response({"success": False, "error": f"Invalid JSON: {e}"}, status=400)
+    url = body.get("url")
+    disk = _disk_path_from_url(url)
+    if disk is None:
+        return web.json_response({"success": False,
+                                  "error": "url must be /media/server/{images|videos}/{filename}"},
+                                 status=400)
+    if not os.path.isfile(disk):
+        return web.json_response({"success": False,
+                                  "error": f"file not found: {url}"},
+                                 status=404)
+    refs = _playlist_refs_for_media(url)
+    if refs:
+        return web.json_response({
+            "success": False,
+            "error": f"media is in use by {len(refs)} playlist(s)",
+            "refs": refs,
+        }, status=409)
+    try:
+        os.remove(disk)
+    except OSError as e:
+        return web.json_response({"success": False,
+                                  "error": f"could not delete: {e}"},
+                                 status=500)
+    logging.info("DELETE /api/media %s", url)
+    return web.Response(status=204)
 
 
 async def upload_handler(request):

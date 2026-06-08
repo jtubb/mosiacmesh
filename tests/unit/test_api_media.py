@@ -27,7 +27,8 @@ try:
 finally:
     argparse.ArgumentParser.parse_args = _orig
 
-from mosaicmesh.api.media import api_media, upload_handler
+from mosaicmesh.api.media import api_media, api_media_delete, upload_handler
+from mosaicmesh.state import Settings, Playlist
 
 
 def test_media_handlers_importable():
@@ -106,3 +107,129 @@ class TestApiMediaResponseShape:
         data = json.loads(resp.text)
         assert "/media/server/videos/bad.mp4" in data['videos']
         assert data['videoDurations'] == {}
+
+
+# ---- PR-16: DELETE /api/media ----
+
+def _delete_request(body):
+    from unittest.mock import AsyncMock
+    req = make_mocked_request('DELETE', '/api/media')
+    req.json = AsyncMock(return_value=body)
+    return req
+
+
+def _fresh_settings():
+    """Fresh Settings() + drop it on server.settings; restored by the
+    fixture caller via the `monkeypatch` they pass in here."""
+    prev = getattr(server, 'settings', None)
+    server.settings = Settings()
+    return server.settings, prev
+
+
+def _restore_settings(prev):
+    server.settings = prev
+
+
+class TestApiMediaDelete:
+
+    @pytest.mark.asyncio
+    async def test_delete_image_happy(self, tmp_path, monkeypatch):
+        d = tmp_path / "media" / "server" / "images"
+        d.mkdir(parents=True)
+        (d / "logo.png").write_bytes(b"\x89PNG")
+        monkeypatch.chdir(tmp_path)
+        fresh, prev = _fresh_settings()
+        try:
+            resp = await api_media_delete(_delete_request({"url": "/media/server/images/logo.png"}))
+            assert resp.status == 204
+            assert not (d / "logo.png").exists()
+        finally:
+            _restore_settings(prev)
+
+    @pytest.mark.asyncio
+    async def test_delete_video_happy(self, tmp_path, monkeypatch):
+        d = tmp_path / "media" / "server" / "videos"
+        d.mkdir(parents=True)
+        (d / "clip.mp4").write_bytes(b"\x00\x00\x00\x20ftyp")
+        monkeypatch.chdir(tmp_path)
+        fresh, prev = _fresh_settings()
+        try:
+            resp = await api_media_delete(_delete_request({"url": "/media/server/videos/clip.mp4"}))
+            assert resp.status == 204
+        finally:
+            _restore_settings(prev)
+
+    @pytest.mark.asyncio
+    async def test_delete_missing_file_404(self, tmp_path, monkeypatch):
+        (tmp_path / "media" / "server" / "images").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
+        fresh, prev = _fresh_settings()
+        try:
+            resp = await api_media_delete(_delete_request({"url": "/media/server/images/ghost.png"}))
+            assert resp.status == 404
+        finally:
+            _restore_settings(prev)
+
+    @pytest.mark.asyncio
+    async def test_delete_referenced_409_with_refs(self, tmp_path, monkeypatch):
+        d = tmp_path / "media" / "server" / "videos"
+        d.mkdir(parents=True)
+        (d / "intro.mp4").write_bytes(b"\x00\x00\x00\x20ftyp")
+        monkeypatch.chdir(tmp_path)
+        fresh, prev = _fresh_settings()
+        try:
+            # Two playlists reference the file; one doesn't.
+            p1 = Playlist(); p1.name = "MorningLoop"
+            p1.items = [{"file": "/media/server/videos/intro.mp4", "duration": 10}]
+            p2 = Playlist(); p2.name = "EveningLoop"
+            p2.items = [{"file": "/media/server/videos/intro.mp4", "duration": 5},
+                        {"file": "/media/server/images/logo.png", "duration": 2}]
+            p3 = Playlist(); p3.name = "Other"
+            p3.items = [{"file": "/media/server/images/logo.png", "duration": 2}]
+            fresh.playlists["MorningLoop"] = p1
+            fresh.playlists["EveningLoop"] = p2
+            fresh.playlists["Other"] = p3
+
+            resp = await api_media_delete(_delete_request({"url": "/media/server/videos/intro.mp4"}))
+            assert resp.status == 409
+            data = json.loads(resp.text)
+            assert set(data['refs']) == {"MorningLoop", "EveningLoop"}
+            assert "Other" not in data['refs']
+            # File still present
+            assert (d / "intro.mp4").exists()
+        finally:
+            _restore_settings(prev)
+
+    @pytest.mark.asyncio
+    async def test_delete_rejects_bad_url_shape(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        fresh, prev = _fresh_settings()
+        try:
+            for bad in [
+                None,
+                "",
+                "/etc/passwd",                          # outside /media/server
+                "/media/server/videos/../../etc/passwd",  # traversal
+                "/media/server/audio/foo.mp3",          # unknown subdir
+                "/media/server/videos/",                # empty filename
+                "/media/server/videos/.hidden",         # dotfile
+                "/media/server/videos/sub/foo.mp4",    # nested
+                "/media/server/videos/foo\\bar.mp4",   # backslash
+            ]:
+                resp = await api_media_delete(_delete_request({"url": bad}))
+                assert resp.status == 400, f"expected 400 for url={bad!r}, got {resp.status}"
+        finally:
+            _restore_settings(prev)
+
+    @pytest.mark.asyncio
+    async def test_delete_invalid_json_400(self, tmp_path, monkeypatch):
+        from unittest.mock import AsyncMock
+        monkeypatch.chdir(tmp_path)
+        fresh, prev = _fresh_settings()
+        try:
+            req = make_mocked_request('DELETE', '/api/media')
+            req.json = AsyncMock(side_effect=ValueError("nope"))
+            resp = await api_media_delete(req)
+            assert resp.status == 400
+        finally:
+            _restore_settings(prev)

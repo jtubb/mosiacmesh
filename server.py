@@ -99,7 +99,7 @@ from mosaicmesh.api.profiles import (
     api_profiles_update, api_profiles_delete,
     api_clients_assign_profile,
 )
-from mosaicmesh.api.media import api_media, upload_handler
+from mosaicmesh.api.media import api_media, api_media_delete, upload_handler
 from mosaicmesh.api.displays import (
     api_displays_list, api_displays_create, api_displays_delete,
 )
@@ -2258,6 +2258,7 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
         # Discovery API endpoints (granular handlers)
         app.router.add_route('GET', '/api/media', api_media)
+        app.router.add_route('DELETE', '/api/media', api_media_delete)
         app.router.add_route('GET', '/api/effects', api_effects)
         app.router.add_route('GET', '/api/discovery/devices', api_discovery_devices)
         app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)

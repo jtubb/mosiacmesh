@@ -25,6 +25,27 @@ export function mmMediaBinComponent() {
       clearDrag();
       document.body.classList.remove('mm-dragging');
     },
+    /**
+     * PR-16: delete a media file. Confirms first; on 409+refs surfaces
+     * the blocking playlist names via toast so the operator knows
+     * which playlists to clean up before retrying.
+     */
+    async remove(item, ev) {
+      if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+      if (!window.confirm(`Delete "${item.name}"? This cannot be undone.`)) return;
+      try {
+        await this.$store.mm.deleteMedia(item.url);
+        this.$store.mm.toast(`Deleted "${item.name}".`, 'info');
+      } catch (e) {
+        const refs = e?.body?.refs;
+        if (Array.isArray(refs) && refs.length) {
+          this.$store.mm.toast(
+            `Can't delete "${item.name}" — used by ${refs.length} playlist${refs.length === 1 ? '' : 's'}: ${refs.join(', ')}.`,
+            'error');
+        }
+        // For non-409 paths, withRollback already toasted.
+      }
+    },
   };
 }
 

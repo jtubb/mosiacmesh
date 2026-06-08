@@ -318,6 +318,22 @@ export const api = {
   },
 
   // ---- Media ----
+  /** PR-16: DELETE /api/media — body {url}. 204 on success, 409+refs
+   *  if any playlist references the file, 404 if missing. */
+  async deleteMedia(url) {
+    const resp = await fetch('/api/media', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    if (resp.status === 204) return true;
+    const body = await resp.json().catch(() => ({}));
+    // ApiError ctor: (message, {status, body}) — the destructure object
+    // is what carries .status + .body onto the thrown error. Without
+    // this wrapping, callers see e.body === undefined and the refs
+    // branch in media-bin.remove() can't fire.
+    throw new ApiError(body.error || `delete failed (${resp.status})`, { status: resp.status, body });
+  },
   /** POST /upload/image or /upload/video based on extension. Returns server's response. */
   async uploadMedia(file) {
     const ext = (file.name.split('.').pop() || '').toLowerCase();

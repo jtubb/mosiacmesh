@@ -463,6 +463,30 @@ export function makeStore() {
       return result || { moved: targets.map(t => t.clientKey), missing: [] };
     },
 
+    /**
+     * PR-16: delete a media file from the shared library.
+     * Optimistic: removes the URL from store.media.images or .videos
+     * (and from videoDurations) so the bin updates instantly; rollback
+     * restores both on failure. 409+refs surfaces via the rollback +
+     * toast path with the playlist names that block the delete.
+     */
+    async deleteMedia(url) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['media'], () => {
+        const m = this.media;
+        if (m.images?.includes(url)) m.images = m.images.filter(u => u !== url);
+        if (m.videos?.includes(url)) m.videos = m.videos.filter(u => u !== url);
+        if (m.videoDurations && url in m.videoDurations) {
+          const next = { ...m.videoDurations };
+          delete next[url];
+          m.videoDurations = next;
+        }
+      }, async () => {
+        await api.deleteMedia(url);
+      });
+    },
+
     async assignProfileToClient(clientKey, profileName) {
       const { withRollback } = await import('./util/optimistic.js');
       const { api } = await import('./api.js');

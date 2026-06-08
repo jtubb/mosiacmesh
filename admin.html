@@ -459,6 +459,11 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-bin-list { list-style: none; padding: 0; margin: 0; max-height: 240px; overflow-y: auto; }
 .mm-bin-item { padding: 4px 6px; cursor: default; }
 .mm-bin-item:hover { background: rgba(255,255,255,0.05); }
+/* PR-16: media bin gains a delete × button on hover. Visible-on-hover keeps the row uncluttered. */
+.mm-bin-item-deletable { display: flex; align-items: center; gap: 6px; }
+.mm-bin-delete { opacity: 0; background: transparent; border: 0; color: var(--text-muted, #888); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.mm-bin-item-deletable:hover .mm-bin-delete { opacity: 1; }
+.mm-bin-delete:hover { color: var(--err, #f88); }
 .mm-timeline-main { flex: 1 1 auto; min-width: 0; }
 /* PR-4c T-C3: profile-editor 3-pane shell */
 .mm-profile-editor { display: grid; grid-template-columns: 200px 1fr 280px; gap: 10px; min-width: 900px; max-width: 1100px; min-height: 480px; }
@@ -518,12 +523,15 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
               <button class="btn btn-ghost" id="mmUploadBtn" type="button" style="margin-top:6px; width: 100%;">+ Upload</button>
               <ul class="mm-bin-list">
                 <template x-for="it in filtered()" :key="it.url">
-                  <li class="mm-bin-item"
+                  <li class="mm-bin-item mm-bin-item-deletable"
                       draggable="true"
                       @dragstart="dragStart(it, $event)"
                       @dragend="dragEnd()">
-                    <span x-text="it.name"></span>
+                    <span x-text="it.name" style="flex:1; overflow:hidden; text-overflow:ellipsis;"></span>
                     <span class="size" style="color:var(--text-muted)" x-text="it.duration ? ' ' + it.duration + 's' : ''"></span>
+                    <button type="button" class="mm-bin-delete" title="Delete media"
+                            @click="remove(it, $event)"
+                            @mousedown.stop @dragstart.stop.prevent>×</button>
                   </li>
                 </template>
               </ul>
