@@ -100,6 +100,9 @@ from mosaicmesh.api.profiles import (
     api_clients_assign_profile,
 )
 from mosaicmesh.api.media import api_media, upload_handler
+from mosaicmesh.api.displays import (
+    api_displays_list, api_displays_create, api_displays_delete,
+)
 from mosaicmesh.websocket.legacy import msg_response
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
@@ -2275,6 +2278,9 @@ if __name__ == '__main__':
         app.router.add_put('/api/profiles/{name}', api_profiles_update)
         app.router.add_delete('/api/profiles/{name}', api_profiles_delete)
         app.router.add_post('/api/clients/{clientKey}/profile', api_clients_assign_profile)
+        app.router.add_get('/api/displays', api_displays_list)
+        app.router.add_post('/api/displays', api_displays_create)
+        app.router.add_delete('/api/displays/{displayID}', api_displays_delete)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         
         asyncio.run(run_server())

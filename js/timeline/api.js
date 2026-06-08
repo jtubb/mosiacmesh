@@ -188,6 +188,34 @@ export const api = {
   async listProfiles()   { const b = await getJson('/api/profiles');            return b?.profiles ?? []; },
   async listMedia()      { return await getJson('/api/media'); },
   async listDevices()    { return await getJson('/api/discovery/devices'); },
+  /** PR-12: list display GROUPS (not clients). Each entry has
+   *  displayID + clientCount + onlineCount + scheduleCount + clients[].
+   *  Groups with zero clients are included — the timeline renders one
+   *  track per group so operators can pre-stage schedules for displays
+   *  that aren't online yet.
+   *
+   *  Returns [] (not throws) when the route is missing — keeps the
+   *  store hydrating cleanly against a pre-PR-12 server, where
+   *  timeline.js's `tracks` getter falls back to the old
+   *  client-deduped list. */
+  async listDisplays() {
+    try {
+      const b = await getJson('/api/displays');
+      return b?.displays ?? [];
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return [];
+      throw e;
+    }
+  },
+  /** POST /api/displays — body {displayID}. Returns the created group. */
+  async createDisplay(displayID) {
+    const b = await postJson('/api/displays', { displayID });
+    return b?.display ?? b;
+  },
+  /** DELETE /api/displays/{id} — 204 on success, 409+refs when in use. */
+  async deleteDisplay(displayID) {
+    return await deleteReq(`/api/displays/${encodeURIComponent(displayID)}`);
+  },
 
   // ---- Schedules ----
   /** POST /api/schedules — body must include playlistName + displayID. Returns the created schedule. */

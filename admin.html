@@ -556,6 +556,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
               <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg)">🐞</button>
                 <button class="btn btn-ghost" type="button" @click="openProfileEditor()" title="Edit profiles">⚙ Profiles</button>
                 <button class="btn btn-ghost" type="button" @click="openCalibration()" title="Display calibration">🎯 Calibrate</button>
+                <button class="btn btn-ghost" type="button" @click="addDisplayGroup()" title="Create a new display group">+ Group</button>
             </div>
             <div x-data="mmTimeline" x-html="render()"></div>
           </div>

@@ -1,7 +1,10 @@
 /**
- * Right-click on a track header → small context menu with one item:
- * Reload group. Sends the existing `RELOAD` SockJS broadcast scoped to
- * the clicked track's displayID (spec §361).
+ * Right-click on a track header → context menu. Items:
+ *   - Reload group (spec §361, PR-9): SockJS RELOAD scoped to displayID.
+ *   - Delete group (PR-12): DELETE /api/displays/{displayID}, blocks
+ *     with the server's 409+refs error if the group has any clients or
+ *     schedules; the server requires the operator to reassign before
+ *     the group can be removed.
  *
  * Reuses #mmContextMenu (already populated by context-menu.js for
  * clip right-clicks) — only one menu is open at a time, so sharing the
@@ -35,6 +38,18 @@ export function attachTrackHeaderContextMenu(store) {
           } catch (e) {
             store.toast(`Failed to send reload: ${e?.message || e}`, 'error');
           }
+        },
+      },
+      {
+        label: 'Delete group',
+        action: async () => {
+          // Confirm even when the group looks empty — display groups
+          // are persistent infrastructure, not throwaway. The server's
+          // 409+refs is the real backstop; this confirm is just a
+          // sanity check against an errant right-click.
+          if (!window.confirm(`Delete display group "${displayID}"? This cannot be undone.`)) return;
+          try { await store.deleteDisplayGroup(displayID); }
+          catch (_) { /* withRollback already toasted the server error */ }
         },
       },
     ];

@@ -35,6 +35,27 @@ export function mmToolbarComponent() {
     openProfileEditor()  { openProfileEditor(this.$store.mm); },
     openCalibration()    { openCalibrationModal(this.$store.mm); },
 
+    /**
+     * PR-12: create a new display group. Simple prompt() for now — the
+     * input is just an opaque string ID, no further fields needed at
+     * create time (clientCount/scheduleCount populate as references
+     * appear). Validation + 409 are surfaced via the optimistic
+     * withRollback path: toast the server's error and revert the
+     * placeholder track if the create fails.
+     */
+    async addDisplayGroup() {
+      const raw = window.prompt('New display group name (e.g. Lobby, Tablet):');
+      if (raw == null) return;
+      const name = raw.trim();
+      if (!name) return;
+      if (this.$store.mm.displayGroups.some(g => g.displayID === name)) {
+        this.$store.mm.toast(`Display group '${name}' already exists.`, 'warn');
+        return;
+      }
+      try { await this.$store.mm.createDisplayGroup(name); }
+      catch (_) { /* withRollback already toasted the server error */ }
+    },
+
     /** Step by 1 day (Day view) / 7 days (Week) / 1 month (Month). */
     step(dir) {
       const cur = this.$store.mm.viewDate;

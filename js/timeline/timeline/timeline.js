@@ -51,7 +51,15 @@ export function mmTimelineComponent() {
     },
 
     get tracks() {
-      // Unique displayIDs from the device list + 'Default' fallback
+      // PR-12: read tracks from displayGroups (first-class groups,
+      // including ones with zero clients) rather than deduping client
+      // displayIDs. Falls back to the old client-derived list if the
+      // groups endpoint hasn't populated yet (server pre-PR-12 or
+      // hydrate still in flight).
+      const groups = this.$store.mm.displayGroups;
+      if (groups && groups.length > 0) {
+        return groups.map(g => g.displayID).filter(Boolean);
+      }
       const ids = new Set();
       for (const d of this.$store.mm.displays) {
         if (d.displayID) ids.add(d.displayID);

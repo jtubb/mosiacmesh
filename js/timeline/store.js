@@ -37,6 +37,11 @@ function todayIso() {
 export function makeStore() {
   return {
     displays: [],
+    // PR-12: display GROUPS — first-class. Hydrated from GET /api/displays,
+    // includes groups with zero clients. The timeline reads tracks from here
+    // (not from deduping client.displayID), so empty groups are visible and
+    // operators can pre-stage schedules for displays not yet online.
+    displayGroups: [],
     playlists: {},
     schedules: [],
     media: { images: [], videos: [], videoDurations: {} },
@@ -59,12 +64,13 @@ export function makeStore() {
       this.hydrated = false;
       this.hydrateError = null;
       try {
-        const [pl, sc, pr, me, dv] = await Promise.all([
+        const [pl, sc, pr, me, dv, dg] = await Promise.all([
           api.listPlaylists(),
           api.listSchedules(),
           api.listProfiles(),
           api.listMedia(),
           api.listDevices(),
+          api.listDisplays(),
         ]);
         // Re-shape playlists + profiles to lookup dicts (server returns arrays).
         // Warn (don't crash) on duplicate-name anomalies — the server's POST
@@ -86,13 +92,20 @@ export function makeStore() {
         this.schedules = sc ?? [];
         this.media     = me ?? { images: [], videos: [], videoDurations: {} };
         this.displays  = (dv?.devices) ?? [];
-        // Default Week-view display = first display. Trailing `?? null` keeps
-        // the field typed as string|null (never undefined) even when the
-        // first device has neither displayID nor clientKey — anomaly state.
-        if (this.selectedDisplay == null && this.displays.length > 0) {
-          this.selectedDisplay = this.displays[0].displayID
-                              ?? this.displays[0].clientKey
-                              ?? null;
+        this.displayGroups = dg ?? [];
+        // Default Week-view display = first display group (was: first
+        // client). Groups + clients are correlated by displayID so the
+        // existing per-group views keep working. Falls back to client
+        // list if no groups yet (unusual but possible on a brand-new
+        // server before any clients ever connect).
+        if (this.selectedDisplay == null) {
+          if (this.displayGroups.length > 0) {
+            this.selectedDisplay = this.displayGroups[0].displayID ?? null;
+          } else if (this.displays.length > 0) {
+            this.selectedDisplay = this.displays[0].displayID
+                                ?? this.displays[0].clientKey
+                                ?? null;
+          }
         }
         this.hydrated = true;
       } catch (e) {
@@ -326,6 +339,36 @@ export function makeStore() {
         delete this.profiles[name];
       }, async () => {
         await api.deleteProfile(name);
+      });
+    },
+
+    // ---- Display group CRUD (PR-12) ----
+
+    async createDisplayGroup(displayID) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['displayGroups'], () => {
+        // Optimistic: insert a placeholder so the new track appears
+        // immediately. Server response replaces it with the canonical
+        // shape (which is identical for freshly-created groups).
+        this.displayGroups.push({
+          displayID, clients: [], clientCount: 0, onlineCount: 0, scheduleCount: 0,
+        });
+      }, async () => {
+        const fresh = await api.createDisplay(displayID);
+        const idx = this.displayGroups.findIndex(g => g.displayID === displayID);
+        if (idx >= 0) this.displayGroups[idx] = fresh;
+        else this.displayGroups.push(fresh);
+      });
+    },
+
+    async deleteDisplayGroup(displayID) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['displayGroups'], () => {
+        this.displayGroups = this.displayGroups.filter(g => g.displayID !== displayID);
+      }, async () => {
+        await api.deleteDisplay(displayID);
       });
     },
 
