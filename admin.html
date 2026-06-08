@@ -342,7 +342,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 /* PR-4b: 6px invisible edge handles for pointer-event resize. Hover
    shows a subtle highlight; cursor: ew-resize. draggable=false on the
    element keeps an edge-grab from kicking off the clip-move handler. */
-.mm-clip-resize-handle { position: absolute; top: 0; bottom: 0; width: 6px; cursor: ew-resize; background: transparent; z-index: 2; }
+/* PR-11: handle widened 6 → 10px. 6px was too narrow on narrow clips
+   (the default 1-hour drop is ~50px wide at 1200px viewport) and users
+   routinely missed it, kicking off a clip-move drag instead of a
+   resize. The matching EDGE_HIT_PX guard in drag/clip-move.js catches
+   any near-edge dragstart that still slips past. */
+.mm-clip-resize-handle { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; background: transparent; z-index: 2; }
 .mm-clip-resize-handle[data-edge="left"]  { left: 0; }
 .mm-clip-resize-handle[data-edge="right"] { right: 0; }
 .mm-clip-resize-handle:hover { background: rgba(255,255,255,0.15); }
@@ -398,6 +403,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 12px; }
 .mm-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
 .mm-form-grid label input, .mm-form-grid label select { font-size: 12px; padding: 4px; box-sizing: border-box; width: 100%; }
+/* Radios + checkboxes shouldn't stretch — the width:100% rule above is
+   for text/number/date inputs. Without this override the radios in
+   .mm-form-row (e.g. "Never / Until / After N times") render enormous
+   because they're inside .mm-form-grid labels. */
+.mm-form-grid input[type="radio"],
+.mm-form-grid input[type="checkbox"] { width: auto; }
 .mm-form-row { grid-column: 1 / -1; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12px; }
 .mm-form-row label { flex-direction: row; gap: 4px; }
 .mm-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 12px; }

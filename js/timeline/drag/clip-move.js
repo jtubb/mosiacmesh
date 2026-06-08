@@ -14,6 +14,13 @@ import { setDrag, getDrag, clearDrag } from './dragstate.js';
 import { pxToHour, snapTo15min, hourToHHMM } from '../util/snap.js';
 
 const LABEL_COL_PX = 110;
+// Edge zone within which a dragstart is cancelled in favour of the
+// pointer-event-driven resize handler. The visible handle is 10px
+// (admin.html .mm-clip-resize-handle width). We use 12px here so a
+// click on the boundary pixel still resolves to "resize, not move" —
+// fixes the PR-11 report where dragging a 1-hour clip's right edge
+// shifted the whole clip instead of stretching it.
+const EDGE_HIT_PX = 12;
 
 export function attachClipMove(store) {
   document.addEventListener('dragstart', (ev) => {
@@ -23,6 +30,19 @@ export function attachClipMove(store) {
     if (!id) return;
     const sched = store.schedules.find(s => s.id === id);
     if (!sched) return;
+    // Edge guard: if the dragstart originated within EDGE_HIT_PX of
+    // either edge of the clip, cancel the drag — the user almost
+    // certainly meant to resize and just missed the 10px handle.
+    // Without this guard a near-miss kicks off a clip-move that shifts
+    // start+end together, which reads to the operator as "right edge
+    // just shifts the whole playlist".
+    const edgeRect = clip.getBoundingClientRect();
+    const dxFromLeft  = ev.clientX - edgeRect.left;
+    const dxFromRight = edgeRect.right - ev.clientX;
+    if (dxFromLeft < EDGE_HIT_PX || dxFromRight < EDGE_HIT_PX) {
+      ev.preventDefault();
+      return;
+    }
     ev.dataTransfer.effectAllowed = 'move';
     ev.dataTransfer.setData('application/x-mm-clip', id);
     // Record the clip's rect + the click offset so we can compute the
