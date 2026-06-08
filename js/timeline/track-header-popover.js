@@ -7,15 +7,16 @@
  * so operators can move individual devices into different display
  * groups without leaving the timeline. Calls store.assignDeviceToDisplay.
  *
- * PR-15 adds bulk select + drag — the per-row Group dropdown got
- * clunky for 20+ devices. Each row now has a checkbox; a footer bar
- * appears when ≥1 row is checked and lets the operator move the
- * whole selection to a target group in one server call (bulk_assign
- * action). Rows are also draggable to track headers — drop drives
- * the same single-device assign as a dropdown change, but the
- * gesture is much faster when the destination is visible. The
- * per-row Group dropdown stays for keyboard/screen-reader users +
- * the single-device-at-a-time workflow.
+ * PR-15 adds bulk select — the per-row Group dropdown got clunky for
+ * 20+ devices. Each row now has a checkbox; a footer bar appears
+ * when ≥1 row is checked and lets the operator move the whole
+ * selection to a target group in one server call (bulk_assign
+ * action). The per-row Group dropdown stays for the single-device
+ * workflow.
+ *
+ * (A drag-and-drop variant was prototyped during PR-15 but removed
+ * — dragging out of a positioned popover onto a target you can
+ * barely see was more cumbersome than the bulk-bar in practice.)
  *
  * Mounted into the #mmTrackHeaderPopover element in admin.html so we
  * can style it without injecting CSS at runtime.
@@ -23,8 +24,6 @@
  * Click outside / Esc dismisses. Auto-match (server-side) is the
  * (no override) sentinel option: setting profileName='' restores it.
  */
-import { setDrag, getDrag, clearDrag } from './drag/dragstate.js';
-
 export function attachTrackHeaderPopover(store) {
   const pop = document.getElementById('mmTrackHeaderPopover');
   if (!pop) return;
@@ -52,7 +51,7 @@ export function attachTrackHeaderPopover(store) {
     header.appendChild(h);
     const hint = document.createElement('span');
     hint.className = 'mm-thp-hint';
-    hint.textContent = 'Drag a row to another track to move · check rows for bulk move';
+    hint.textContent = 'Check rows + pick a target below to bulk-move';
     header.appendChild(hint);
     pop.appendChild(header);
 
@@ -91,28 +90,12 @@ export function attachTrackHeaderPopover(store) {
       const clientKey = c.clientKey || c.id;
       const li = document.createElement('li');
       li.dataset.clientKey = clientKey;
-      // PR-15: row is draggable. The dragstart fires our `device-move`
-      // kind on dragstate so track-header's drop handler picks it up.
-      // draggable="false" on the inner checkboxes/selects keeps clicks
-      // on them from accidentally starting a drag.
-      li.draggable = true;
-      li.addEventListener('dragstart', (dev) => {
-        dev.dataTransfer.effectAllowed = 'move';
-        dev.dataTransfer.setData('application/x-mm-device', clientKey);
-        setDrag({ kind: 'device-move', clientKey, sourceDisplayID: displayID });
-        document.body.classList.add('mm-dragging');
-      });
-      li.addEventListener('dragend', () => {
-        clearDrag();
-        document.body.classList.remove('mm-dragging');
-      });
 
       // Selection checkbox.
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.className = 'mm-thp-row-check';
       cb.dataset.clientKey = clientKey;
-      cb.draggable = false;
       cb.addEventListener('change', () => {
         if (cb.checked) selected.add(clientKey);
         else selected.delete(clientKey);
@@ -134,7 +117,6 @@ export function attachTrackHeaderPopover(store) {
       profileSel.className = 'mm-thp-profile';
       profileSel.dataset.clientKey = clientKey;
       profileSel.title = 'Scripting profile override';
-      profileSel.draggable = false;
       const optAuto = document.createElement('option');
       optAuto.value = '';
       optAuto.textContent = '(auto-match)';
@@ -156,7 +138,6 @@ export function attachTrackHeaderPopover(store) {
       groupSel.className = 'mm-thp-group';
       groupSel.dataset.clientKey = clientKey;
       groupSel.title = 'Move this device to a different display group';
-      groupSel.draggable = false;
       for (const gid of groupIDs) {
         const opt = document.createElement('option');
         opt.value = gid;
@@ -287,46 +268,4 @@ export function attachTrackHeaderPopover(store) {
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape' && pop.style.display === 'block') close();
   });
-
-  // PR-15: track-header drop handler for the row-drag flow. Sees the
-  // `device-move` drag kind set by dragstart above; calls
-  // assignDeviceToDisplay on drop. Cross-track headers only — dropping
-  // back onto the source header is a no-op (handled by the
-  // sourceDisplayID === target check).
-  document.addEventListener('dragover', (ev) => {
-    const drag = getDrag();
-    if (!drag || drag.kind !== 'device-move') return;
-    const header = ev.target.closest('.mm-track-header');
-    if (!header) return;
-    const target = header.dataset.displayId;
-    if (!target || target === drag.sourceDisplayID) return;
-    ev.preventDefault();
-    ev.dataTransfer.dropEffect = 'move';
-    header.classList.add('mm-thp-drop-target');
-  }, true);
-  document.addEventListener('dragleave', (ev) => {
-    const drag = getDrag();
-    if (!drag || drag.kind !== 'device-move') return;
-    const header = ev.target.closest('.mm-track-header');
-    if (header) header.classList.remove('mm-thp-drop-target');
-  }, true);
-  document.addEventListener('drop', async (ev) => {
-    const drag = getDrag();
-    if (!drag || drag.kind !== 'device-move') return;
-    const header = ev.target.closest('.mm-track-header');
-    if (!header) return;
-    const target = header.dataset.displayId;
-    if (!target || target === drag.sourceDisplayID) return;
-    ev.preventDefault();
-    header.classList.remove('mm-thp-drop-target');
-    const ck = drag.clientKey;
-    clearDrag();
-    document.body.classList.remove('mm-dragging');
-    try {
-      await store.assignDeviceToDisplay(ck, target);
-      const c = store.displays.find(d => (d.clientKey || d.id) === ck);
-      store.toast(`Moved "${c?.friendlyName || ck}" to ${target}.`, 'info');
-      close();
-    } catch (_) { /* withRollback already toasted */ }
-  }, true);
 }

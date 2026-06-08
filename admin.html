@@ -439,8 +439,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-thp-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 0; }
 .mm-thp-list { list-style: none; margin: 0; padding: 0; }
 /* PR-14: 4-column row, PR-15 prefixed with a checkbox column — checkbox | name | (deviceType) | profile-select | group-select. */
-.mm-thp-list li { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 6px; align-items: center; padding: 4px 0; cursor: grab; }
-.mm-thp-list li[draggable="true"]:active { cursor: grabbing; }
+.mm-thp-list li { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 6px; align-items: center; padding: 4px 0; }
 .mm-thp-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mm-thp-meta { color: var(--text-muted, #888); font-size: 10px; }
 .mm-thp-list select { font-size: 11px; padding: 2px 4px; max-width: 110px; }
@@ -452,8 +451,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-thp-bulkbar { display: none; align-items: center; gap: 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); }
 .mm-thp-bulk-count { font-size: 11px; font-weight: 600; }
 .mm-thp-bulk-target { font-size: 11px; padding: 2px 4px; flex: 1; }
-/* PR-15: drop-target highlight when a row drag hovers a different track header. */
-.mm-track-header.mm-thp-drop-target { background: rgba(80,160,255,0.18); outline: 2px dashed rgba(80,160,255,0.6); outline-offset: -2px; }
 .mm-track-header { cursor: pointer; }
 .mm-timeline-layout { display: flex; gap: 12px; }
 .mm-bin { width: 200px; flex: 0 0 200px; }
