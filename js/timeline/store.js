@@ -408,6 +408,61 @@ export function makeStore() {
       });
     },
 
+    /**
+     * PR-15: atomic bulk move. Same optimistic shape as the single
+     * assignDeviceToDisplay, but iterates over `clientKeys`. Groups
+     * by source so a single call handles a heterogeneous selection
+     * (e.g. moving some Tablets + some Mobiles to Lobby at once).
+     *
+     * Returns {moved, missing} from the server so callers can toast
+     * an accurate summary. Missing keys are NOT a failure — the
+     * Promise resolves successfully; the caller decides how to
+     * surface the partial result.
+     */
+    async bulkAssignDevicesToDisplay(clientKeys, newDisplayID) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      if (!Array.isArray(clientKeys) || clientKeys.length === 0) {
+        throw new Error('bulkAssignDevicesToDisplay: clientKeys must be non-empty');
+      }
+      // Snapshot what needs to move (so the optimistic update is
+      // correct even when some keys are unknown or already in the
+      // target group). The withRollback snapshot covers `displays` +
+      // `displayGroups` for a full revert on server failure.
+      const targets = [];
+      for (const ck of clientKeys) {
+        const client = this.displays.find(d => (d.clientKey || d.id) === ck);
+        if (client && client.displayID !== newDisplayID) {
+          targets.push({ clientKey: ck, oldDisplayID: client.displayID, wasOnline: !!client.isOnline });
+        }
+      }
+      if (targets.length === 0) return { moved: [], missing: [] };
+      let result;
+      await withRollback(this, ['displays', 'displayGroups'], () => {
+        for (const t of targets) {
+          const client = this.displays.find(d => (d.clientKey || d.id) === t.clientKey);
+          client.displayID = newDisplayID;
+          const oldGroup = this.displayGroups.find(g => g.displayID === t.oldDisplayID);
+          if (oldGroup) {
+            oldGroup.clients = (oldGroup.clients || []).filter(k => k !== t.clientKey);
+            oldGroup.clientCount = Math.max(0, (oldGroup.clientCount || 1) - 1);
+            if (t.wasOnline) oldGroup.onlineCount = Math.max(0, (oldGroup.onlineCount || 1) - 1);
+          }
+        }
+        const newGroup = this.displayGroups.find(g => g.displayID === newDisplayID);
+        if (newGroup) {
+          for (const t of targets) {
+            newGroup.clients = [...(newGroup.clients || []), t.clientKey];
+            newGroup.clientCount = (newGroup.clientCount || 0) + 1;
+            if (t.wasOnline) newGroup.onlineCount = (newGroup.onlineCount || 0) + 1;
+          }
+        }
+      }, async () => {
+        result = await api.bulkAssignDevicesToDisplay(clientKeys, newDisplayID);
+      });
+      return result || { moved: targets.map(t => t.clientKey), missing: [] };
+    },
+
     async assignProfileToClient(clientKey, profileName) {
       const { withRollback } = await import('./util/optimistic.js');
       const { api } = await import('./api.js');

@@ -299,6 +299,14 @@ export const api = {
     const b = await postJson('/api/discovery/configure', { clientKey, displayID });
     return b;
   },
+  /** PR-15: atomically move many clients to one group. Server returns
+   *  {moved:[...], missing:[...], movedCount}. 404 if target group
+   *  missing, 400 if clientKeys empty or target empty. */
+  async bulkAssignDevicesToDisplay(clientKeys, displayID) {
+    const b = await postJson('/api/discovery/configure',
+      { action: 'bulk_assign', clientKeys, displayID });
+    return b;
+  },
   async assignProfile(clientKey, profileName) {
     // Server explicitly rejects empty string with 'use null to clear
     // the profile'. A <select> with <option value=""> produces ''

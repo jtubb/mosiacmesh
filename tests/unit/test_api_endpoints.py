@@ -178,6 +178,119 @@ class TestDiscoveryAPI:
         response = await server.api_discovery_configure(request)
         assert response.status == 400
         assert mock_settings.clients["test123"].displayID == 'Desktop'
+
+
+class TestBulkAssign:
+    """PR-15: POST /api/discovery/configure {action:'bulk_assign', clientKeys, displayID}."""
+
+    def _make_clients(self, mock_settings, count, displayID='Desktop'):
+        from unittest.mock import MagicMock
+        for i in range(count):
+            c = server.Client()
+            c.friendlyName = f"Client{i}"
+            c.displayID = displayID
+            c.deviceType = "tablet"
+            c.autoConfigured = True
+            mock_settings.clients[f"k{i}"] = c
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_happy(self, mock_settings):
+        self._make_clients(mock_settings, 3, displayID='Desktop')
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0', 'k1', 'k2'],
+            'displayID': 'Mobile',
+        })
+
+        with patch('mosaicmesh.api.discovery.saveSettings'):
+            resp = await server.api_discovery_configure(request)
+        assert resp.status == 200
+        data = json.loads(resp.text)
+        assert data['success'] is True
+        assert data['movedCount'] == 3
+        assert set(data['moved']) == {'k0', 'k1', 'k2'}
+        assert data['missing'] == []
+        assert all(mock_settings.clients[k].displayID == 'Mobile' for k in ['k0', 'k1', 'k2'])
+        # PR-15: explicit move clears autoConfigured so the next REGISTER
+        # doesn't undo the operator's choice via auto_configure_client.
+        assert all(mock_settings.clients[k].autoConfigured is False for k in ['k0', 'k1', 'k2'])
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_partial_with_missing(self, mock_settings):
+        self._make_clients(mock_settings, 2)
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0', 'ghost', 'k1'],
+            'displayID': 'Mobile',
+        })
+        with patch('mosaicmesh.api.discovery.saveSettings'):
+            resp = await server.api_discovery_configure(request)
+        assert resp.status == 200
+        data = json.loads(resp.text)
+        assert data['movedCount'] == 2
+        assert set(data['moved']) == {'k0', 'k1'}
+        assert data['missing'] == ['ghost']
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_unknown_target_404(self, mock_settings):
+        self._make_clients(mock_settings, 2)
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0', 'k1'],
+            'displayID': 'NonExistent',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 404
+        data = json.loads(resp.text)
+        assert 'NonExistent' in data['error']
+        assert 'create it first' in data['error']
+        # Atomic guard: clients are NOT moved when target validation fails.
+        assert all(mock_settings.clients[k].displayID == 'Desktop' for k in ['k0', 'k1'])
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_empty_keys_400(self, mock_settings):
+        server.settings = mock_settings
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': [],
+            'displayID': 'Mobile',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_missing_keys_field_400(self, mock_settings):
+        server.settings = mock_settings
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'displayID': 'Mobile',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_empty_target_400(self, mock_settings):
+        self._make_clients(mock_settings, 1)
+        server.settings = mock_settings
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0'],
+            'displayID': '  ',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 400
     
     @pytest.mark.asyncio
     async def test_api_discovery_configure_invalid_client(self, mock_settings):

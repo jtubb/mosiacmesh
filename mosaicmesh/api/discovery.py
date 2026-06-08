@@ -344,6 +344,40 @@ async def api_discovery_configure(request):
         saveSettings()
         return web.json_response({"success": True, "configured": configured})
 
+    if action == "bulk_assign":
+        # PR-15: move many clients to one display group in a single call.
+        # Atomic: we validate the target group exists FIRST, then walk
+        # the clientKeys list. Skips any keys that don't exist in
+        # settings.clients (logs them in `missing`). Returns counts so
+        # the UI can toast "Moved 22 of 24 to Lobby (2 unknown)".
+        target = data.get("displayID")
+        if not isinstance(target, str) or not target.strip():
+            return web.json_response({"success": False,
+                                      "error": "displayID must be a non-empty string"},
+                                     status=400)
+        if target not in server.settings.displays:
+            return web.json_response({"success": False,
+                                      "error": f"display group '{target}' not found — create it first"},
+                                     status=404)
+        keys = data.get("clientKeys") or []
+        if not isinstance(keys, list) or not keys:
+            return web.json_response({"success": False,
+                                      "error": "clientKeys must be a non-empty array"},
+                                     status=400)
+        moved, missing = [], []
+        for key in keys:
+            client = server.settings.clients.get(key)
+            if client is None:
+                missing.append(key)
+                continue
+            client.displayID = target
+            client.autoConfigured = False   # explicit operator move; don't let auto-config undo it
+            moved.append(key)
+        saveSettings()
+        return web.json_response({"success": True, "displayID": target,
+                                  "moved": moved, "missing": missing,
+                                  "movedCount": len(moved)})
+
     if action == "clear_cache":
         # Operator/test helper: drop a client's server-side
         # cachedSegments record so the next force_push (or
