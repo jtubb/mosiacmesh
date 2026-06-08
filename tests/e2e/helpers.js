@@ -92,17 +92,22 @@ export async function cleanupE2eOrphans(page) {
  * drag-create + clip-move specs where an existing clip on the target
  * track would block synthetic pointer events on the .mm-track-droparea.
  *
- * Earlier specs hardcoded 'Mobile' because that group was empty at the
- * time. After fleet churn (clients going offline + being swept) the
- * Mobile group disappeared from `store.displays` entirely. This helper
- * picks WHATEVER is empty at test time so the suite survives data
- * drift. Throws if no track is empty (the operator should clear at
- * least one of the dev server's tracks).
+ * Pre-PR-12 this read from `store.displays` (the client list). After
+ * PR-12 it reads from `store.displayGroups` (first-class groups,
+ * including zero-client groups like Lobby/Tablet/Mobile that are now
+ * visible on the timeline). The displayGroups path is preferred — it
+ * has scheduleCount baked in by the server, so we don't need to
+ * recompute from store.schedules. Falls back to the old client-dedup
+ * path against a pre-PR-12 server. Throws if no track is empty.
  */
 export async function pickEmptyTrack(page) {
   const candidates = await page.evaluate(async () => {
     const store = Alpine.store('mm');
-    // Snapshot displayIDs + schedule counts.
+    if (store.displayGroups && store.displayGroups.length > 0) {
+      return store.displayGroups.map(g => ({
+        id: g.displayID, scheduleCount: g.scheduleCount,
+      }));
+    }
     const ids = [...new Set(store.displays.map(d => d.displayID).filter(Boolean))];
     return ids.map(id => ({
       id,
@@ -148,11 +153,13 @@ export async function syntheticDrag(page, { sourceSel, targetSel, targetXFrac = 
     if (!source || !target) throw new Error(`syntheticDrag: missing ${!source ? 'source' : 'target'}`);
     const sr = source.getBoundingClientRect();
     const tr = target.getBoundingClientRect();
-    // dragstart at source's LEFT edge so clip-move's `offsetXInClip`
-    // ≈ 0 — then drop X maps directly to start time without an offset
-    // correction. (Real users grab somewhere in the middle and the
-    // offset matters; for an automated test, no-offset is cleaner.)
-    const sx = sr.left + 2;
+    // dragstart at 14px from the source's left edge — past PR-11's
+    // EDGE_HIT_PX=12 guard (which preventDefaults dragstarts near
+    // either edge so they route to clip-resize instead of clip-move).
+    // The 14px offsetXInClip is small enough (~0.23h ≈ 13min) that
+    // 15-min snap absorbs it; tests targeting 1-hour granularity still
+    // land where expected. Real users grab anywhere in the middle.
+    const sx = sr.left + 14;
     const sy = sr.top + sr.height / 2;
     const tx = tr.left + tr.width * xf;
     const ty = tr.top + tr.height * yf;

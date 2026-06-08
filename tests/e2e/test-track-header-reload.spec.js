@@ -50,14 +50,18 @@ export default async function () {
         return m && m.style.display === 'block' && m.querySelector('li');
       }, null, { timeout: 5000 });
 
-    // Menu should have exactly one item: "Reload group".
+    // Menu items: "Reload group" + "Delete group" (PR-12 added the
+    // second one). Spec asserts both are present in the expected order
+    // so future additions surface as a fail-noisy diff.
     const itemsAfterOpen = await page.evaluate(() =>
       Array.from(document.querySelectorAll('#mmContextMenu li')).map(li => li.textContent.trim()));
-    assert.deepEqual(itemsAfterOpen, ['Reload group']);
+    assert.deepEqual(itemsAfterOpen, ['Reload group', 'Delete group']);
 
-    // Click the item.
+    // Click "Reload group" (the first li). Don't grab li:first-child
+    // because the menu order is asserted above; rely on textContent.
     await page.evaluate(() => {
-      const li = document.querySelector('#mmContextMenu li');
+      const li = Array.from(document.querySelectorAll('#mmContextMenu li'))
+        .find(x => x.textContent.trim() === 'Reload group');
       li.click();
     });
 
