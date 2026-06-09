@@ -255,6 +255,27 @@ def msg_response(msg,session):
         # in-progress epoch). Idempotent — no-op unless the group is currently PLAY.
         sync_new_client_to_group(msg["SRC"], client)
 
+        # PR-27 (2026-06-09): notify admin UI that a client came online.
+        # Symmetric with CLIENTS_WENT_OFFLINE in server.process(): both now
+        # use {devices: [...]} as the payload shape so the admin's
+        # sockjs-status.js can handle them uniformly. Without this
+        # broadcast the timeline's per-track online count stuck at its
+        # last-hydrated value — an iPad reconnecting bumped client.isOnline
+        # server-side but the admin saw nothing until a manual reload.
+        try:
+            server.socketmanager.broadcast(jsonpickle.encode({
+                "REQUEST": "CLIENTS_CAME_ONLINE",
+                "PAYLOAD": {"devices": [{
+                    "clientKey": msg["SRC"],
+                    "displayID": client.displayID,
+                    "isOnline": True,
+                    "friendlyName": client.friendlyName,
+                }]},
+            }))
+        except Exception:
+            # Don't fail the REGISTER over a broadcast hiccup.
+            pass
+
         # Enhanced success response with configuration info
         response["PAYLOAD"] = {
             "status": "SUCCESS",

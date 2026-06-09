@@ -2081,15 +2081,19 @@ async def process():
             client.isOnline = False
             stale_clients.append({
                 "clientKey": client_key,
+                "displayID": client.displayID,
                 "friendlyName": client.friendlyName,
-                "lastSeen": client.lastSeen
+                "isOnline": False,
+                "lastSeen": client.lastSeen,
             })
-    
-    # Notify about stale clients
+
+    # Notify about stale clients. PR-27 (2026-06-09): wrap the list in
+    # a `devices` field so the payload shape matches CLIENTS_CAME_ONLINE
+    # — sockjs-status.js reads payload.devices for both events.
     if stale_clients:
         stale_notification = {
             "REQUEST": "CLIENTS_WENT_OFFLINE",
-            "PAYLOAD": stale_clients
+            "PAYLOAD": {"devices": stale_clients},
         }
         socketmanager.broadcast(jsonpickle.encode(stale_notification))
         logging.info(f"{len(stale_clients)} clients went offline")

@@ -50,29 +50,54 @@ export function startStatusSubscriber(store) {
     fn();
   }
 
+  // PR-27 (2026-06-09): apply a per-device status update. Updates the
+  // CLIENT record in store.displays (for any reactive renders that
+  // count by .filter(c => c.displayID === ... && c.isOnline)) AND the
+  // GROUP-summary fields in store.displayGroups (so the track-header
+  // "N/M online" badge updates live without waiting for the next full
+  // /api/displays refresh).
+  function applyDeviceStatus(dev) {
+    if (!dev || !dev.clientKey) return;
+    const prev = (store.displays || []).find(c => c.clientKey === dev.clientKey);
+    const prevOnline = !!prev?.isOnline;
+    const nextOnline = !!dev.isOnline;
+    store.setStatus(dev.clientKey, {
+      isOnline: nextOnline,
+      friendlyName: dev.friendlyName ?? prev?.friendlyName,
+    });
+    // Reconcile group onlineCount. Only nudge when the bit actually
+    // flipped — we don't want repeated "still-online" frames to
+    // miscount. The group lookup uses the device's displayID (preferred)
+    // or the previous record's displayID (in case a brand-new device
+    // arrived in the message without yet being in store.displays).
+    if (prevOnline === nextOnline) return;
+    const displayID = dev.displayID || prev?.displayID;
+    if (!displayID) return;
+    const group = (store.displayGroups || []).find(g => g.displayID === displayID);
+    if (!group) return;
+    const delta = nextOnline ? +1 : -1;
+    group.onlineCount = Math.max(0, Math.min(group.clientCount, (group.onlineCount || 0) + delta));
+  }
+
   function handle(msg) {
     if (!msg || typeof msg !== 'object') return;
     const req = msg.REQUEST;
     const payload = msg.PAYLOAD;
     if (req === 'DISCOVERY_HEARTBEAT') {
       // payload: {devices: [{clientKey, displayID, isOnline, ...}, ...]}
+      // Server-side currently sends an aggregate-only heartbeat (no
+      // devices array), but if a future revision starts including
+      // per-device state in the heartbeat this branch picks it up.
       const devs = payload?.devices ?? [];
-      applyMutation(() => {
-        for (const d of devs) {
-          store.setStatus(d.displayID || d.clientKey, {
-            isOnline: !!d.isOnline,
-            friendlyName: d.friendlyName,
-          });
-        }
-      });
-    } else if (req === 'CLIENTS_WENT_OFFLINE') {
-      // payload: {clientKeys: [...]} or {displayIDs: [...]}
-      const keys = payload?.clientKeys ?? [];
-      const ids  = payload?.displayIDs ?? [];
-      applyMutation(() => {
-        for (const k of keys) store.setStatus(k, { isOnline: false });
-        for (const id of ids) store.setStatus(id, { isOnline: false });
-      });
+      if (devs.length > 0) applyMutation(() => devs.forEach(applyDeviceStatus));
+    } else if (req === 'CLIENTS_CAME_ONLINE' || req === 'CLIENTS_WENT_OFFLINE') {
+      // PR-27: unified shape — both events carry {devices: [{clientKey,
+      // displayID, isOnline, friendlyName}, ...]}. CLIENTS_WENT_OFFLINE
+      // pre-PR-27 sent a raw list; the server is now updated to the
+      // {devices: ...} shape, but accept either in case operators run
+      // mixed versions during the rollout.
+      const devs = payload?.devices ?? (Array.isArray(payload) ? payload : []);
+      if (devs.length > 0) applyMutation(() => devs.forEach(applyDeviceStatus));
     } else if (req === 'RENDER_IN_PROGRESS') {
       // payload: {displayID, inProgress}
       if (payload?.displayID) {
