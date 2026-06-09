@@ -52,7 +52,18 @@ function updateOne(el, store) {
 
   const now = Date.now();
   const [y, m, d] = store.viewDate.split('-').map(Number);
-  const baseMs = Date.UTC(y, m - 1, d);
+  // PR-26 (2026-06-09): use BROWSER-LOCAL midnight as the day base. The
+  // server evaluates schedule_active_at with `datetime.datetime.now()`
+  // (server-local time), and the modal's time inputs capture browser-
+  // local HH:MM strings. The pre-PR-26 now-line used Date.UTC (i.e.
+  // UTC time-of-day fraction), which on a -4 hour offset (EDT) rendered
+  // the now-line ~4 hours ahead of what the operator's wall clock read
+  // — making schedules look "active" before the server agreed they
+  // were. Same calendar day in both interpretations on a normal day;
+  // breaks subtly only on DST transitions, which the rest of the time
+  // math (Schedule.startTime as opaque HH:MM strings) also doesn't
+  // model. Co-located server + browser is the assumed deployment.
+  const baseMs = new Date(y, m - 1, d).getTime();
 
   if (mode === 'day') {
     if (now < baseMs || now >= baseMs + DAY_MS) { el.style.display = 'none'; return; }
@@ -64,10 +75,13 @@ function updateOne(el, store) {
     const frac = (now - baseMs) / DAY_MS;
     el.style.left = (frac * 100) + '%';
   } else if (mode === 'week') {
-    const dow = (new Date(baseMs).getUTCDay() + 6) % 7;
+    // Week view: same local-midnight basis. getDay()/getMonth()/getDate
+    // (no -UTC variant) match the browser-local interpretation.
+    const baseDate = new Date(y, m - 1, d);
+    const dow = (baseDate.getDay() + 6) % 7;
     const monday = baseMs - dow * DAY_MS;
     const today = new Date();
-    const todayBase = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+    const todayBase = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
     if (todayBase < monday || todayBase >= monday + 7 * DAY_MS) {
       el.style.display = 'none'; return;
     }
