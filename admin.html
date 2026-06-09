@@ -326,6 +326,33 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
   background: var(--err, red); pointer-events: none;
   left: 0; z-index: 5;
 }
+/* PR-25: snapped-start indicator during a drag. Pinned to the
+   target track row by clip-move.js / playlist-to-track.js on
+   dragover; hidden on dragend / drop. Position fixed (viewport-
+   relative) so the drag handlers can place it directly from
+   ev.clientX without worrying about scroll offsets. */
+.mm-drag-start-marker {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1500;
+  width: 2px;
+  background: var(--warn, #fc6);
+  box-shadow: 0 0 4px rgba(252, 198, 102, 0.6);
+}
+.mm-drag-start-marker-label {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--warn, #fc6);
+  color: #000;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 /* PR-23 (2026-06-09): vertical alignment bars across the day grid.
    Bold solid line on the hour (every 1/24 of the usable area, starting
    110px in past the track-label column), fainter solid line on every
@@ -697,6 +724,13 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
         <!-- PR-4c gap-fix (spec §362): per-client profile override
              popover anchored under a clicked track header. -->
         <div id="mmTrackHeaderPopover" class="mm-thp" style="display:none"></div>
+        <!-- PR-25: drag start-time marker. A vertical accent-coloured
+             line + HH:MM label that follows the SNAPPED start position
+             during a clip-move or playlist-to-track drag. Drag handlers
+             move it in dragover; dragend / drop hide it. -->
+        <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
+          <div class="mm-drag-start-marker-label">00:00</div>
+        </div>
 
       </section>
       <!-- PR-6: legacy sections (overview / displays / media / playlists /

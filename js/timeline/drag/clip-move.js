@@ -87,6 +87,19 @@ export function attachClipMove(store) {
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'move';
     droparea.classList.add('mm-drag-target');
+    // PR-25: update the snapped-start marker so the operator sees exactly
+    // where the clip will land. Computes the same snap value the drop
+    // handler will use, then positions the marker at that X on the
+    // current droparea's row.
+    const grid = droparea.closest('.mm-day-grid');
+    if (grid) {
+      const gridRect = grid.getBoundingClientRect();
+      const usableLeft = gridRect.left + LABEL_COL_PX;
+      const usableWidth = gridRect.width - LABEL_COL_PX;
+      const startHr = snapTo15min(pxToHour((ev.clientX - drag.offsetXInClip) - usableLeft, usableWidth));
+      const markerX = usableLeft + (startHr / 24) * usableWidth;
+      showDragStartMarker(markerX, droparea.getBoundingClientRect(), hourToHHMM(startHr));
+    }
   }, true);
 
   document.addEventListener('dragleave', (ev) => {
@@ -122,6 +135,7 @@ export function attachClipMove(store) {
     if (newDisplay !== drag.originalDisplayID) patch.displayID = newDisplay;
     clearDrag();
     document.body.classList.remove('mm-dragging');
+    hideDragStartMarker();
     store.updateSchedule(drag.scheduleId, patch).catch(() => {});
   }, true);
 
@@ -130,6 +144,7 @@ export function attachClipMove(store) {
     // next drag starts clean.
     clearDrag();
     document.body.classList.remove('mm-dragging');
+    hideDragStartMarker();
   }, true);
 }
 
@@ -139,4 +154,25 @@ function hoursBetween(startHHMM, endHHMM) {
   let h = (eh + em / 60) - (sh + sm / 60);
   if (h < 0) h += 24;
   return h;
+}
+
+// PR-25: snapped-start marker helpers. Shared by clip-move (here)
+// and playlist-to-track (which imports them); centralizing the DOM
+// access keeps the marker element a single source of truth.
+export function showDragStartMarker(viewportX, rowRect, label) {
+  // eslint-disable-next-line no-undef
+  const marker = document.getElementById('mmDragStartMarker');
+  if (!marker) return;
+  marker.style.display = 'block';
+  marker.style.left = (viewportX - 1) + 'px';  // 2px-wide line centred on the snap point
+  marker.style.top = rowRect.top + 'px';
+  marker.style.height = rowRect.height + 'px';
+  const labelEl = marker.querySelector('.mm-drag-start-marker-label');
+  if (labelEl) labelEl.textContent = label;
+}
+
+export function hideDragStartMarker() {
+  // eslint-disable-next-line no-undef
+  const marker = document.getElementById('mmDragStartMarker');
+  if (marker) marker.style.display = 'none';
 }

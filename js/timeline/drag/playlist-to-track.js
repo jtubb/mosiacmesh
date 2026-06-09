@@ -10,6 +10,7 @@
  */
 import { getDrag, clearDrag } from './dragstate.js';
 import { pxToHour, snapTo15min, hourToHHMM } from '../util/snap.js';
+import { showDragStartMarker, hideDragStartMarker } from './clip-move.js';
 
 const DEFAULT_DURATION_HR = 1;
 const LABEL_COL_PX = 110;  // matches grid-template-columns: 110px in renderDay
@@ -39,6 +40,16 @@ export function attachPlaylistToTrack(store) {
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
     droparea.classList.add('mm-drag-target');
+    // PR-25: snapped-start marker on the row the cursor is over.
+    const grid = droparea.closest('.mm-day-grid');
+    if (grid) {
+      const gridRect = grid.getBoundingClientRect();
+      const usableLeft = gridRect.left + LABEL_COL_PX;
+      const usableWidth = gridRect.width - LABEL_COL_PX;
+      const startHr = snapTo15min(pxToHour(ev.clientX - usableLeft, usableWidth));
+      const markerX = usableLeft + (startHr / 24) * usableWidth;
+      showDragStartMarker(markerX, droparea.getBoundingClientRect(), hourToHHMM(startHr));
+    }
   }, true);
 
   document.addEventListener('dragleave', (ev) => {
@@ -64,6 +75,7 @@ export function attachPlaylistToTrack(store) {
     const startHr = snapTo15min(pxToHour(ev.clientX - usableLeft, usableWidth));
     const endHr = Math.min(24, startHr + DEFAULT_DURATION_HR);
     clearDrag();
+    hideDragStartMarker();
     store.createSchedule({
       playlistName: drag.playlistName,
       displayID,
@@ -72,5 +84,11 @@ export function attachPlaylistToTrack(store) {
       freq: 'DAILY',
       dtstart: store.viewDate,
     }).catch(() => {/* toast already surfaced */});
+  }, true);
+
+  // Hide marker if drag ends without dropping on a valid target.
+  document.addEventListener('dragend', () => {
+    const drag = getDrag();
+    if (drag && drag.kind === 'playlist') hideDragStartMarker();
   }, true);
 }
