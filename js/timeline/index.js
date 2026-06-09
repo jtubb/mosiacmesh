@@ -87,25 +87,28 @@ function bootstrap() {
   attachTrackHeaderContextMenu(store);
 }
 
-if (window.__deferredAlpineStart) {
-  // Path A: admin.html's deferLoadingAlpine hook caught Alpine's start.
-  // Register everything, then start Alpine — it will process the DOM
-  // with our store + components already in place.
+// PR-19 (2026-06-09): use Alpine 3's documented alpine:init event
+// instead of the deprecated deferLoadingAlpine hook. Alpine 3.13.10
+// no longer honors deferLoadingAlpine — it auto-starts on script load.
+// Our previous bootstrap relied on the hook and broke under load (24+
+// SockJS clients pushing frames at hydrate time). The new pattern:
+//
+//   1. admin.html loads this module BEFORE Alpine (script source order).
+//   2. This top-level code registers an alpine:init listener.
+//   3. Alpine loads + fires alpine:init RIGHT BEFORE walking the DOM.
+//   4. bootstrap() runs in that listener — Alpine.store/Alpine.data
+//      calls land before Alpine evaluates any x-data attribute.
+//
+// The fallback branch handles a degenerate case: Alpine has already
+// started by the time this module evaluates (e.g. someone reordered
+// the scripts in admin.html). In that case we destroyTree + initTree
+// the body to force a clean re-walk with components registered.
+if (window.Alpine && typeof window.Alpine.destroyTree === 'function'
+    && document.querySelector('[x-data]')?._x_dataStack) {
+  // Alpine already walked — force a clean re-walk now that we can register.
   bootstrap();
-  window.__deferredAlpineStart();
-  delete window.__deferredAlpineStart;
-} else if (window.Alpine) {
-  // Path B: Alpine somehow loaded and started without the defer hook
-  // (e.g. an admin variant without our inline script). Register now;
-  // Alpine.initTree re-walks the timeline section so the freshly-
-  // registered components attach to existing x-data nodes.
-  bootstrap();
-  // eslint-disable-next-line no-undef
-  Alpine.initTree(document.querySelector('[data-route="timeline"]'));
+  try { Alpine.destroyTree(document.body); } catch (_) { /* tolerate */ }
+  Alpine.initTree(document.body);
 } else {
-  // Path C: Alpine hasn't loaded yet — fall back to its alpine:init
-  // event (the documented default). This only fires if Alpine loads
-  // AFTER this module, which shouldn't happen with the current admin.html
-  // tag order, but is the safe fallback.
   document.addEventListener('alpine:init', bootstrap);
 }

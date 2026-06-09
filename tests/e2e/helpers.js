@@ -27,6 +27,15 @@ export async function waitForHydrated(page) {
     if (btn) btn.click();
   });
   await page.waitForFunction(() => document.querySelector('.mm-day-grid') != null, null, { timeout: 5_000 });
+  // PR-19 (2026-06-09): with the alpine:init bootstrap, the grid
+  // renders once with empty data then re-renders after hydrate
+  // populates the store. Specs that grab .mm-day-grid + .mm-track-droparea
+  // rects immediately can hit the mid-render window where positions
+  // haven't settled. Wait for a second paint frame so the post-hydrate
+  // re-render commits before we measure anything.
+  await page.evaluate(() => new Promise(resolve => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  }));
 }
 
 export async function deleteScheduleByPlaylist(page, playlistName) {
