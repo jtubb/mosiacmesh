@@ -37,12 +37,22 @@ export function clipDayHtml({ placement, viewDateMs, conflictRanges = [], gridRo
   if (endHr <= startHr) return '';
 
   // Use sub-hour precision via CSS percentages within a single column
-  // group. Simpler: pin to integer columns + override left/right with %.
+  // group. Pin to integer columns + override left/right with %.
   const colStart = 2 + Math.floor(startHr);
   const colEnd   = 2 + Math.ceil(endHr);
-  // sub-hour offsets (0..1) for both ends, applied via inline style:
-  const leftPct  = (startHr - Math.floor(startHr)) * 100;
-  const rightPct = (Math.ceil(endHr) - endHr) * 100;
+  // PR-22 (2026-06-09): CSS percentage margins on grid items resolve
+  // against the GRID AREA (the full N-column span), not a single
+  // column. So for a clip spanning 9 columns where we want a 75%-
+  // of-ONE-column left margin, we need leftPct = 75 / 9. Pre-PR-22
+  // we set leftPct=75 directly, which meant 75% of the 9-column area
+  // — collapsing the clip to ~0 width whenever leftPct+rightPct
+  // approached 100% (e.g. an 8:45-16:45 schedule: leftPct=75 +
+  // rightPct=25 = 100%, content width ~0). The render still looked
+  // OK for hour-aligned times because both margins were 0; the bug
+  // only bit on non-integer-hour schedules.
+  const span = Math.max(1, colEnd - colStart);
+  const leftPct  = (startHr - Math.floor(startHr)) * 100 / span;
+  const rightPct = (Math.ceil(endHr) - endHr) * 100 / span;
 
   const stripes = renderDayStripesHtml(conflictRanges, viewDateMs, startHr, endHr);
   const tStart  = formatHm(placement.startMs);
