@@ -59,10 +59,30 @@ export function attachClipMove(store) {
     document.body.classList.add('mm-dragging');
   }, true);
 
+  // PR-21 (2026-06-09): find the underlying .mm-track-droparea via
+  // elementsFromPoint when ev.target is a clip (or anything else over
+  // the droparea). Previously we relied on `body.mm-dragging .mm-clip
+  // { pointer-events: none }` to let dragover pass through to the
+  // droparea — but Chromium cancels the OS-level drag silently when
+  // the SOURCE element has pointer-events:none. With elementsFromPoint
+  // we can leave pointer-events:auto on the source and still resolve
+  // the droparea, regardless of which sibling element the cursor is
+  // currently over.
+  function findDroparea(ev) {
+    const direct = ev.target.closest && ev.target.closest('.mm-track-droparea');
+    if (direct) return direct;
+    if (typeof document.elementsFromPoint === 'function') {
+      const stack = document.elementsFromPoint(ev.clientX, ev.clientY);
+      for (const el of stack) {
+        if (el.classList && el.classList.contains('mm-track-droparea')) return el;
+      }
+    }
+    return null;
+  }
   document.addEventListener('dragover', (ev) => {
     const drag = getDrag();
     if (!drag || drag.kind !== 'clip-move') return;
-    const droparea = ev.target.closest('.mm-track-droparea');
+    const droparea = findDroparea(ev);
     if (!droparea) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'move';
@@ -72,14 +92,16 @@ export function attachClipMove(store) {
   document.addEventListener('dragleave', (ev) => {
     const drag = getDrag();
     if (!drag || drag.kind !== 'clip-move') return;
-    const droparea = ev.target.closest('.mm-track-droparea');
+    // dragleave fires on the OLD target; ev.target.closest is enough here
+    // (we don't need elementsFromPoint because we're removing a class).
+    const droparea = ev.target.closest && ev.target.closest('.mm-track-droparea');
     if (droparea) droparea.classList.remove('mm-drag-target');
   }, true);
 
   document.addEventListener('drop', (ev) => {
     const drag = getDrag();
     if (!drag || drag.kind !== 'clip-move') return;
-    const droparea = ev.target.closest('.mm-track-droparea');
+    const droparea = findDroparea(ev);
     if (!droparea) return;
     ev.preventDefault();
     droparea.classList.remove('mm-drag-target');

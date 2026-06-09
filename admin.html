@@ -342,8 +342,13 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
    receives dragover/drop. The dragging element is still grabbed by the
    browser (its own pointer-events state doesn't matter once drag began),
    so this only affects OTHER clips that the cursor crosses. */
-body.mm-dragging .mm-clip,
-body.mm-dragging-playlist .mm-clip { pointer-events: none; }
+/* PR-21 (2026-06-09): the `pointer-events: none` rule we used to put on
+   clips during drag silently cancelled Chromium's OS-level drag when
+   applied to the source element (no dragover, no drop, drag dies in
+   <5px). The reason we had it — letting dragover pass through clips to
+   reach the underlying .mm-track-droparea — is now handled in JS via
+   `document.elementsFromPoint` in clip-move.js and playlist-to-track.js
+   (see findDroparea). Just the opacity ghost is kept for visual feedback. */
 body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-clip[draggable="true"] { cursor: grab; }
 .mm-clip[draggable="true"]:active { cursor: grabbing; }

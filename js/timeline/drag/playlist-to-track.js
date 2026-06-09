@@ -15,10 +15,26 @@ const DEFAULT_DURATION_HR = 1;
 const LABEL_COL_PX = 110;  // matches grid-template-columns: 110px in renderDay
 
 export function attachPlaylistToTrack(store) {
+  // PR-21: walk the element stack at the cursor to find the droparea
+  // when ev.target is a clip on top of it. See clip-move.js for the
+  // full rationale (Chromium cancels drags when source has
+  // pointer-events:none; we needed to remove that and use this
+  // fallback to still find droparea targets reliably).
+  function findDroparea(ev) {
+    const direct = ev.target.closest && ev.target.closest('.mm-track-droparea');
+    if (direct) return direct;
+    if (typeof document.elementsFromPoint === 'function') {
+      const stack = document.elementsFromPoint(ev.clientX, ev.clientY);
+      for (const el of stack) {
+        if (el.classList && el.classList.contains('mm-track-droparea')) return el;
+      }
+    }
+    return null;
+  }
   document.addEventListener('dragover', (ev) => {
     const drag = getDrag();
     if (!drag || drag.kind !== 'playlist') return;
-    const droparea = ev.target.closest('.mm-track-droparea');
+    const droparea = findDroparea(ev);
     if (!droparea) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
@@ -28,14 +44,14 @@ export function attachPlaylistToTrack(store) {
   document.addEventListener('dragleave', (ev) => {
     const drag = getDrag();
     if (!drag) return;
-    const droparea = ev.target.closest('.mm-track-droparea');
+    const droparea = ev.target.closest && ev.target.closest('.mm-track-droparea');
     if (droparea) droparea.classList.remove('mm-drag-target');
   }, true);
 
   document.addEventListener('drop', (ev) => {
     const drag = getDrag();
     if (!drag || drag.kind !== 'playlist') return;
-    const droparea = ev.target.closest('.mm-track-droparea');
+    const droparea = findDroparea(ev);
     if (!droparea) return;
     ev.preventDefault();
     droparea.classList.remove('mm-drag-target');
