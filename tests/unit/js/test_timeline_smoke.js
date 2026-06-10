@@ -53,6 +53,7 @@ const MODULES = [
   'js/timeline/track-header-popover.js',
   'js/timeline/track-header-context-menu.js',
   'js/timeline/modals/fleet-confirm.js',
+  'js/timeline/modals/play-now.js',
 ];
 
 for (const rel of MODULES) {

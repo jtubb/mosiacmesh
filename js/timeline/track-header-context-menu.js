@@ -1,5 +1,8 @@
 /**
  * Right-click on a track header → context menu. Items:
+ *   - Play playlist now… / Stop playback (PR-29): ad-hoc playback that
+ *     bypasses the scheduler. The picker fires ASSIGN_PLAYLIST + PLAY
+ *     via SockJS; the stop item fires STOP. See modals/play-now.js.
  *   - Login / Start / Stop / Reboot / Test (PR-13): RUN_SCRIPT scoped
  *     to displayID. Same fleet-confirm modal as the toolbar buttons,
  *     just pre-scoped so the operator doesn't have to set the toolbar
@@ -21,6 +24,7 @@
  * (PR-4c gap-2).
  */
 import { fireFleetAction } from './modals/fleet-confirm.js';
+import { openPlayNowModal, fireStopNow } from './modals/play-now.js';
 
 export function attachTrackHeaderContextMenu(store) {
   const menu = document.getElementById('mmContextMenu');
@@ -31,6 +35,13 @@ export function attachTrackHeaderContextMenu(store) {
   function open(ev, displayID) {
     menu.innerHTML = '';
     const items = [
+      // PR-29: ad-hoc playback. Top of the menu so it's the closest
+      // click target — the most common "I want to show something
+      // right now" action shouldn't require scrolling past device
+      // power scripts.
+      { label: 'Play playlist now…', action: () => openPlayNowModal(store, displayID) },
+      { label: 'Stop playback',      action: () => fireStopNow(store, displayID) },
+      { separator: true },
       // PR-13: per-group fleet actions. Sequence matches the toolbar
       // button order (login → start → stop → reboot → test) so the
       // muscle memory is the same.
