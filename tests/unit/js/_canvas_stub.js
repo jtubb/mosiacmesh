@@ -8,8 +8,8 @@
  * deep-equal logs iff the animation is deterministic — which is the
  * cross-screen synchronization guarantee in testable form.
  *
- * `createLinearGradient` returns a tiny recording gradient (later
- * batches use it); its addColorStop calls are logged too.
+ * `create{Linear,Radial}Gradient` return a tiny recording gradient
+ * (later batches use it); their addColorStop calls are logged too.
  */
 export function makeRecordingCtx() {
   const ops = [];
@@ -17,6 +17,11 @@ export function makeRecordingCtx() {
   return new Proxy(target, {
     get(t, prop) {
       if (prop === '__ops') return ops;
+      // `then` must NOT return a function: a universal function-dispenser
+      // Proxy is otherwise a thenable, so `await fn(ctx)` (if an animation
+      // accidentally returns ctx) would hang until the test timeout instead
+      // of failing cleanly. Returning undefined keeps the object non-thenable.
+      if (prop === 'then') return undefined;
       if (prop in t && typeof t[prop] !== 'function') return t[prop];
       return function (...args) {
         ops.push({ op: String(prop), args });
