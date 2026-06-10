@@ -1788,6 +1788,20 @@ def calibrate(filename):
                      n_floodfill, n_threshold, n_fallback)
 
     relevantContours = []
+    # PR-28: count markers mapped to a known client so the upload handler
+    # can return a meaningful "detected N markers" number to the calibration
+    # modal. `detected_count` is the raw ArUco detection count (may include
+    # stale markers from a previous fleet or unrelated devices); `mapped`
+    # is the operationally-useful figure — markers whose arucoID we
+    # recognise + persisted measuredCenter/measuredPerimeter for.
+    #
+    # Capture detected_count NOW, before the per-marker loop below
+    # reassigns `corners` to a single marker's (4, 2) reshape on every
+    # iteration (a pre-existing shadow that didn't matter until PR-28
+    # tried to read len(corners) AFTER the loop — the post-loop read
+    # was always seeing 4, the corner-count of the last processed marker).
+    detected_count = int(len(corners)) if hasattr(corners, '__len__') else 0
+    mapped_count = 0
 
     if len(corners) > 0:
         # flatten the ArUco IDs list
@@ -1822,6 +1836,7 @@ def calibrate(filename):
                                  if getattr(c, "arucoID", None) == markerID), None)
                 if clientID is None:
                     continue  # marker for a client we no longer have
+                mapped_count += 1
                 clientLabel = settings.clients[clientID].friendlyName or clientID
                 # Label is drawn AFTER quad reconciliation below (we need the
                 # screen bbox to size the font correctly). See _draw_fitted_label.
@@ -1912,11 +1927,20 @@ def calibrate(filename):
     del image, candidate_quads, marker_to_quad
 
     assign_group_bounding_boxes()
-    # Return the *URL* (not the disk path): media_handler serves
-    # /media/<client>/<file> by inserting the images/ subdir, so the file
-    # written to media/displays/images/calibration.png is fetched as
-    # /media/displays/calibration.png.
-    return "media/displays/calibration.png","text/html"
+    # PR-28: return JSON so the calibration modal can render
+    # "Detected N markers." `imageUrl` is the *URL* (not the disk path):
+    # media_handler serves /media/<client>/<file> by inserting the images/
+    # subdir, so the file written to media/displays/images/calibration.png
+    # is fetched as /media/displays/calibration.png. `detected` and
+    # `mapped` were captured above (detected BEFORE the per-marker loop
+    # shadowed `corners`).
+    body = json.dumps({
+        "success": True,
+        "detected": detected_count,
+        "mapped": mapped_count,
+        "imageUrl": "media/displays/calibration.png",
+    })
+    return body, "application/json"
 
 async def cache_stats_handler(request):
     """Debug endpoint to view cache performance"""

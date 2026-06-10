@@ -583,21 +583,56 @@ class TestClientMerge:
 
 
 class TestCalibrate:
-    """Calibration upload must not 500 when an image has no ArUco markers."""
+    """Calibration upload must not 500 when an image has no ArUco markers,
+    and must report the true detection count when markers are present."""
 
     def test_calibrate_no_markers_returns_url_without_crashing(self, tmp_path):
-        import numpy as np, cv2
+        import numpy as np, cv2, json
         # A blank image -> zero markers -> relevantContours stays empty
         img = np.full((120, 160, 3), 240, np.uint8)
         p = tmp_path / "blank.png"
         cv2.imwrite(str(p), img)
 
         server.settings = server.Settings()
-        result = server.calibrate(str(p))
+        body_str, content_type = server.calibrate(str(p))
 
-        # Returns the 2-segment media URL (media_handler inserts images/),
-        # not the 3-segment disk path, and does not raise.
-        assert result == ("media/displays/calibration.png", "text/html")
+        # PR-28: calibrate() now returns JSON so the calibration modal can
+        # surface detected/mapped counts. Image URL is the 2-segment media
+        # URL (media_handler inserts images/), not the 3-segment disk path.
+        assert content_type == "application/json"
+        body = json.loads(body_str)
+        assert body["success"] is True
+        assert body["detected"] == 0
+        assert body["mapped"] == 0
+        assert body["imageUrl"] == "media/displays/calibration.png"
+
+    def test_calibrate_reports_actual_marker_count(self, tmp_path):
+        """Regression: PR-28 first cut read `len(corners)` AFTER the per-marker
+        loop, but the loop body reassigns `corners` to a single marker's
+        (4, 2) reshape — so detected always reported 4 regardless of the true
+        count. Synthesize a photo with 6 markers and assert detected == 6."""
+        import numpy as np, cv2, json
+        # Build a 600x400 image with 6 DICT_6X6_50 markers laid out in a grid.
+        # generateMarker (cv2 >= 4.7) replaces drawMarker (< 4.7); accept both.
+        d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
+        gen = getattr(cv2.aruco, "generateImageMarker", None) or cv2.aruco.drawMarker
+        img = np.full((400, 600, 3), 255, np.uint8)
+        marker_px = 80
+        positions = [(20, 20), (260, 20), (500, 20),
+                     (20, 300), (260, 300), (500, 300)]
+        for i, (x, y) in enumerate(positions):
+            m = gen(d, i, marker_px)
+            img[y:y+marker_px, x:x+marker_px] = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
+        p = tmp_path / "six.png"
+        cv2.imwrite(str(p), img)
+
+        server.settings = server.Settings()
+        body_str, _ = server.calibrate(str(p))
+        body = json.loads(body_str)
+        # detect_aruco_markers must see all 6; mapped is 0 because no client
+        # in Settings owns these arucoIDs.
+        assert body["detected"] == 6
+        assert body["mapped"] == 0
 
 
 class TestMediaRange:
