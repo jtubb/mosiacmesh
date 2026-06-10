@@ -451,6 +451,24 @@
 				if (i === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
 			}
 			ctx.stroke();
+		},
+		phyllotaxis: function(ctx, tMs, w, h) {
+			var N = 600, i;
+			var GOLDEN = 137.508 * Math.PI / 180;
+			var c = (Math.min(w, h) / (2 * Math.sqrt(N))) * 0.92;
+			var cx = w / 2, cy = h / 2;
+			var rot = tMs / 4000;
+			for (i = 0; i < N; i++) {
+				var theta = i * GOLDEN + rot;
+				var r = c * Math.sqrt(i);
+				var x = cx + r * Math.cos(theta);
+				var y = cy + r * Math.sin(theta);
+				var dotR = 3 + 2 * Math.sin(tMs / 1500 + i * 0.02);
+				ctx.fillStyle = 'hsl(' + ((i / N) * 360) + ', 80%, 60%)';
+				ctx.beginPath();
+				ctx.arc(x, y, dotR, 0, Math.PI * 2);
+				ctx.fill();
+			}
 		}
 	};
 
