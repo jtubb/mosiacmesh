@@ -323,7 +323,12 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     } else {
       fields.fileAnim.value = ANIM_KEYS[0];
       fields.file.parentElement.style.display = '';
-      fields.file.disabled = false;
+      // Non-SCRIPT (media) items keep the File field read-only: their
+      // file arrives via drag/drop or the picker, not free-text. Only
+      // the SCRIPT "Other…" path enables typing (handled above + in the
+      // fileAnim '?' listener), so a media clip can't silently be
+      // retargeted to a non-existent path by a typo.
+      fields.file.disabled = true;
     }
     fields.backgroundColor.value = it.backgroundColor || '';
     fields.duration.value = (it.duration == null) ? '' : String(it.duration);
