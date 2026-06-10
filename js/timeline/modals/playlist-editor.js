@@ -29,6 +29,7 @@
  */
 import { openModal, closeModal } from './modal-shell.js';
 import { getDrag, clearDrag } from '../drag/dragstate.js';
+import { ANIMATIONS } from '../animations-catalog.js';
 
 const PX_PER_SECOND = 6;     // 30s -> 180px wide; tweak for readability
 const MIN_CLIP_PX = 60;      // every clip clickable even at 1-second duration
@@ -142,10 +143,14 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
       </div>
       <div class="mm-form-grid">
         <label>File <input type="text" data-field="file" disabled></label>
+        <label data-field="anim-label" style="display:none">Animation
+          <select data-field="file-anim" disabled></select>
+        </label>
         <label>Play mode
           <select data-field="playmode" disabled>
             <option value="loop">Loop</option>
             <option value="once">Play once</option>
+            <option value="SCRIPT">Animation (SCRIPT)</option>
           </select>
         </label>
         <label>Background color <input type="text" data-field="backgroundColor" placeholder="#000000 or rgb(0,0,0)" disabled></label>
@@ -170,15 +175,71 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
   const removeBtn = root.querySelector('[data-action="remove"]');
   const fields = {
     file: root.querySelector('[data-field="file"]'),
+    fileAnim: root.querySelector('[data-field="file-anim"]'),
+    animLabel: root.querySelector('[data-field="anim-label"]'),
     playmode: root.querySelector('[data-field="playmode"]'),
     backgroundColor: root.querySelector('[data-field="backgroundColor"]'),
     duration: root.querySelector('[data-field="duration"]'),
   };
 
+  // Populate the animation <select> once: one option per catalog
+  // entry plus a "?" sentinel that drops back to free-text entry (so
+  // an operator can type a brand-new animation name not yet in the
+  // catalog — forward-compat with index.html entries that landed
+  // before the catalog was updated).
+  for (const a of ANIMATIONS) {
+    const opt = document.createElement('option');
+    opt.value = a.key;
+    opt.textContent = a.label;
+    opt.title = a.description;
+    fields.fileAnim.appendChild(opt);
+  }
+  const otherOpt = document.createElement('option');
+  otherOpt.value = '?';
+  otherOpt.textContent = 'Other (type a name)…';
+  fields.fileAnim.appendChild(otherOpt);
+  const ANIM_KEYS = ANIMATIONS.map((a) => a.key);
+
   // --- Sidebar wiring --------------------------------------------------
   fields.playmode.addEventListener('change', () => {
     if (selectedIdx < 0) return;
-    draft.items[selectedIdx].playmode = fields.playmode.value;
+    const it = draft.items[selectedIdx];
+    it.playmode = fields.playmode.value;
+    // Switching INTO SCRIPT with a non-animation file (e.g. a media
+    // URL left over from when it was a FULL item): seed the first
+    // catalog animation so the item is immediately playable.
+    if (it.playmode === 'SCRIPT' && ANIM_KEYS.indexOf(it.file) === -1) {
+      it.file = ANIM_KEYS[0];
+    }
+    syncSidebar();
+    renderRibbon();
+  });
+
+  // Free-text File input: keep it.file live (covers SCRIPT "Other…"
+  // entry AND any future free-text use). Pre-SCRIPT this input had no
+  // listener because files arrived via drag/drop; SCRIPT mode needs
+  // it editable.
+  fields.file.addEventListener('input', () => {
+    if (selectedIdx < 0) return;
+    draft.items[selectedIdx].file = fields.file.value.trim();
+    renderRibbon();
+  });
+
+  // Animation <select>: pick a catalog animation, or "?" to reveal the
+  // free-text File input for an off-catalog name.
+  fields.fileAnim.addEventListener('change', () => {
+    if (selectedIdx < 0) return;
+    const it = draft.items[selectedIdx];
+    if (fields.fileAnim.value === '?') {
+      // Reveal the free-text input; leave it.file as-is for editing.
+      fields.file.parentElement.style.display = '';
+      fields.file.disabled = false;
+      fields.file.focus();
+    } else {
+      it.file = fields.fileAnim.value;
+      fields.file.parentElement.style.display = 'none';
+      renderRibbon();
+    }
   });
   fields.backgroundColor.addEventListener('input', () => {
     if (selectedIdx < 0) return;
@@ -234,7 +295,10 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     if (!enabled) {
       selTitle.textContent = 'No item selected';
       fields.file.value = '';
+      fields.file.parentElement.style.display = '';
       fields.playmode.value = 'loop';
+      fields.animLabel.style.display = 'none';
+      fields.fileAnim.disabled = true;
       fields.backgroundColor.value = '';
       fields.duration.value = '';
       fields.duration.removeAttribute('max');
@@ -245,6 +309,22 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     selTitle.textContent = `Item ${selectedIdx + 1}: ${basename(it.file)}`;
     fields.file.value = it.file || '';
     fields.playmode.value = it.playmode || 'loop';
+    // SCRIPT items edit `file` via the animation <select>; everything
+    // else uses the free-text File input. Toggle the two controls.
+    const isScript = it.playmode === 'SCRIPT';
+    fields.animLabel.style.display = isScript ? '' : 'none';
+    fields.fileAnim.disabled = !isScript;
+    if (isScript) {
+      const known = ANIM_KEYS.indexOf(it.file) !== -1;
+      fields.fileAnim.value = known ? it.file : '?';
+      // Free-text File input visible only for the "Other…" sentinel.
+      fields.file.parentElement.style.display = known ? 'none' : '';
+      fields.file.disabled = known;
+    } else {
+      fields.fileAnim.value = ANIM_KEYS[0];
+      fields.file.parentElement.style.display = '';
+      fields.file.disabled = false;
+    }
     fields.backgroundColor.value = it.backgroundColor || '';
     fields.duration.value = (it.duration == null) ? '' : String(it.duration);
     // PR-18: surface the video's natural length as both the input's
