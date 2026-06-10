@@ -51,3 +51,31 @@ mirror.phyllotaxis = function (ctx, tMs, w, h) {
     ctx.fill();
   }
 };
+
+mirror.wireframeCube = function (ctx, tMs, w, h) {
+  var V = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
+  var E = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  var ax = tMs / 2500, ay = tMs / 3700, az = tMs / 5300;
+  var cosx = Math.cos(ax), sinx = Math.sin(ax);
+  var cosy = Math.cos(ay), siny = Math.sin(ay);
+  var cosz = Math.cos(az), sinz = Math.sin(az);
+  var s = Math.min(w, h) / 4, persp = 0.5, cx = w / 2, cy = h / 2;
+  var proj = [], i;
+  for (i = 0; i < V.length; i++) {
+    var x = V[i][0], y = V[i][1], z = V[i][2];
+    var y1 = y * cosx - z * sinx, z1 = y * sinx + z * cosx;     // Rx
+    var x2 = x * cosy + z1 * siny, z2 = -x * siny + z1 * cosy;  // Ry
+    var x3 = x2 * cosz - y1 * sinz, y3 = x2 * sinz + y1 * cosz;  // Rz
+    var d = 1 + z2 * persp;
+    proj.push([cx + s * x3 / d, cy + s * y3 / d]);
+  }
+  ctx.strokeStyle = 'hsl(' + ((tMs / 30) % 360) + ', 80%, 60%)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (i = 0; i < E.length; i++) {
+    var p0 = proj[E[i][0]], p1 = proj[E[i][1]];
+    ctx.moveTo(p0[0], p0[1]);
+    ctx.lineTo(p1[0], p1[1]);
+  }
+  ctx.stroke();
+};
