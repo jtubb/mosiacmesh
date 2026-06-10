@@ -124,6 +124,22 @@ export default async function () {
     }, null, { timeout: 5_000 }).catch(() => {});
     const probe2 = await probePixels(page);
     assert.ok(probe2.ok, `phyllotaxis drew no pixels: ${JSON.stringify(probe2)}`);
+    await stop(page);
+
+    // --- wireframeCube: the most complex ES5 copy (3D rotation + matrix
+    // math), so the highest transcription-error risk — exactly what an
+    // in-browser smoke is for. ---
+    const hadCanvas3 = await renderAndProbe(page, 'wireframeCube');
+    assert.ok(hadCanvas3, 'expected a <canvas> under #canvas after PLAY(wireframeCube)');
+    await page.waitForFunction(() => {
+      var c = document.querySelector('#canvas canvas');
+      if (!c) return false;
+      var d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      for (var i = 3; i < d.length; i += 4 * 40) { if (d[i] > 0) return true; }
+      return false;
+    }, null, { timeout: 5_000 }).catch(() => {});
+    const probe3 = await probePixels(page);
+    assert.ok(probe3.ok, `wireframeCube drew no pixels: ${JSON.stringify(probe3)}`);
 
     await stop(page);
 
