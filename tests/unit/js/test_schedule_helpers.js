@@ -152,3 +152,24 @@ test('agendaWeekHtml renders 7 day-section headers', () => {
   assert.equal(headers, 7);
   assert.match(html, /data-schedule-id="s1"/);
 });
+
+import { monthGridHtml } from '../../../js/timeline/schedule/month-grid.js';
+import { expandSchedule as expand } from '../../../js/timeline/util/time.js';
+
+test('monthGridHtml renders a weekday header + day cells with dots', () => {
+  const sched = [{
+    id: 'm1', playlistName: 'Lunch', displayID: 'Lobby', dtstart: '2026-06-01',
+    startTime: '12:00', endTime: '13:00', freq: 'DAILY', interval: 1, priority: 0,
+    end: { type: 'never' },
+  }];
+  const html = monthGridHtml({ schedules: sched, viewDate: '2026-06-15', displayID: 'Lobby', expandSchedule: expand });
+  assert.match(html, /mm-month-grid/);
+  assert.match(html, /mm-month-cell/);
+  assert.match(html, /mm-month-dot/);          // daily schedule -> dots present
+  assert.match(html, /data-day-iso="2026-06-01"/); // tappable day cells
+});
+
+test('monthGridHtml returns a prompt when no display selected', () => {
+  const html = monthGridHtml({ schedules: [], viewDate: '2026-06-15', displayID: null, expandSchedule: expand });
+  assert.match(html, /Pick a display/i);
+});

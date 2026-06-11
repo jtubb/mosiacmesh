@@ -15,6 +15,7 @@
 import { expandSchedule } from '../util/time.js';
 import { detectConflicts } from '../util/conflicts.js';
 import { dayAxisHtml, weekAxisHtml, monthWeekdayHeaderHtml } from './grid-axis.js';
+import { monthGridHtml } from '../schedule/month-grid.js';
 import { trackHeaderHtml } from './track-header.js';
 import { clipDayHtml }   from './clip.js';
 import { renderWeekStripesHtml } from './conflict-stripes.js';
@@ -197,48 +198,12 @@ export function mmTimelineComponent() {
     },
 
     renderMonth() {
-      const did = this.$store.mm.selectedDisplay;
-      if (!did) return '<div style="color:var(--text-muted)">Pick a display to view the month.</div>';
-      const win = this.monthWindow();
-      // Build a map: dayIso -> [unique playlist names]
-      const perDay = {};
-      for (const s of this.$store.mm.schedules) {
-        if (s.displayID !== did) continue;
-        const placements = expandSchedule(s, win.startMs, win.endMs);
-        for (const p of placements) {
-          const d = new Date(p.startMs);
-          const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
-          if (!perDay[iso]) perDay[iso] = new Set();
-          perDay[iso].add(p.playlistName);
-        }
-      }
-      // Render calendar cells. Use the first day of the month, align
-      // by getUTCDay (Mon=0..Sun=6).
-      const firstDow = (new Date(win.startMs).getUTCDay() + 6) % 7;
-      const daysInMonth = (new Date(win.endMs - DAY_MS).getUTCDate());
-
-      let html = `<div class="mm-month-grid" style="display:grid; grid-template-columns: repeat(7, 1fr); gap:2px;">`;
-      // Day-of-week header
-      html += monthWeekdayHeaderHtml();
-      // Leading blanks (cells before day 1)
-      for (let i = 0; i < firstDow; i++) {
-        html += `<div class="mm-month-cell mm-month-cell-blank"></div>`;
-      }
-      // Days
-      for (let day = 1; day <= daysInMonth; day++) {
-        const [y, m] = this.$store.mm.viewDate.split('-').map(Number);
-        const iso = `${y}-${String(m).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
-        const playlists = Array.from(perDay[iso] || []);
-        const dots = playlists.map(pl =>
-          `<span class="mm-month-dot" title="${escapeAttr(pl)}" style="background:${colorForPlaylist(pl)}"></span>`
-        ).join('');
-        html += `<div class="mm-month-cell">
-          <div class="mm-month-num">${day}</div>
-          <div class="mm-month-dots">${dots}</div>
-        </div>`;
-      }
-      html += `</div>`;
-      return html;
+      return monthGridHtml({
+        schedules: this.$store.mm.schedules,
+        viewDate: this.$store.mm.viewDate,
+        displayID: this.$store.mm.selectedDisplay,
+        expandSchedule,
+      });
     },
 
     weekWindow() {

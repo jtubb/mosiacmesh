@@ -11,6 +11,7 @@
  */
 import { expandSchedule } from '../util/time.js';
 import { agendaDayHtml, agendaWeekHtml } from './agenda-view.js';
+import { monthGridHtml } from './month-grid.js';
 import { openRecurrenceEditor } from '../modals/recurrence-editor.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -31,6 +32,13 @@ export function mmScheduleMobileComponent() {
       this._timer = setInterval(() => { this.nowTick++; }, 30_000);
       // Open the recurrence editor when an agenda row is tapped.
       this._onClick = (ev) => {
+        const dayCell = ev.target.closest('[data-day-iso]');
+        if (dayCell) {
+          this.$store.mm.setViewDate(dayCell.dataset.dayIso);
+          this.$store.mm.setViewMode('day');
+          this.density = 'agenda';
+          return;
+        }
         const row = ev.target.closest('[data-schedule-id]');
         if (row) openRecurrenceEditor(this.$store.mm, row.dataset.scheduleId);
       };
@@ -83,7 +91,16 @@ export function mmScheduleMobileComponent() {
         const placements = this._expandWindow(weekStartMs, weekStartMs + 7 * DAY_MS);
         return agendaWeekHtml({ weekStartMs, tracks: this.tracks, placements, playlists, schedules, nowMs });
       }
-      // Day (and Month before Phase C) -> day agenda.
+      if (mode === 'month') {
+        const did = this.$store.mm.selectedDisplay || this.tracks[0] || null;
+        return monthGridHtml({
+          schedules: this.$store.mm.schedules,
+          viewDate: this.$store.mm.viewDate,
+          displayID: did,
+          expandSchedule,
+        });
+      }
+      // Day -> day agenda.
       const win = this._dayWindow();
       const placements = this._expandWindow(win.startMs, win.endMs);
       return agendaDayHtml({ tracks: this.tracks, placements, playlists, schedules, nowMs });
