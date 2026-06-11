@@ -105,6 +105,8 @@ function open(store, scheduleId, prefill = {}) {
       <label data-field="countRow">Count <input type="number" data-field="count" min="1" value="${Number(s.end?.count || 1)}" style="width:5em"></label>
     </div>
     <div class="mm-form-actions">
+      ${isCreate ? '' : '<button type="button" class="btn mm-btn-danger" data-action="delete">Delete</button>'}
+      <span style="flex:1"></span>
       <button type="button" class="btn btn-ghost" data-action="cancel">Cancel</button>
       <button type="button" class="btn btn-primary" data-action="save">Save</button>
     </div>
@@ -168,6 +170,16 @@ function open(store, scheduleId, prefill = {}) {
   });
 
   root.querySelector('[data-action="cancel"]').addEventListener('click', () => closeModal());
+  // Delete (edit mode only). Confirm, then optimistic delete via the store.
+  if (!isCreate) {
+    root.querySelector('[data-action="delete"]').addEventListener('click', async () => {
+      if (!window.confirm(`Delete this schedule (${s.playlistName} on ${s.displayID})?`)) return;
+      try {
+        await store.deleteSchedule(scheduleId);
+        closeModal();
+      } catch (_) { /* toast already shown via withRollback */ }
+    });
+  }
   root.querySelector('[data-action="save"]').addEventListener('click', async () => {
     const draft = readDraft();
     // Note: endTime <= startTime is INTENTIONALLY allowed — expandSchedule

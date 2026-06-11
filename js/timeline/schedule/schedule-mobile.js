@@ -25,7 +25,7 @@ function isoToUtcMidnight(iso) {
 export function mmScheduleMobileComponent() {
   return {
     density: 'agenda',          // 'agenda' | 'vertical' (Day scope only)
-    vtGroup: null,             // group shown in the vertical day timeline
+    selGroup: null,            // group shown in the single-group views (vertical + month)
     nowTick: 0,                 // bumped on a 30s interval to refresh now-state
     _timer: null,
     _onClick: null,
@@ -61,8 +61,16 @@ export function mmScheduleMobileComponent() {
       for (const d of this.$store.mm.displays) if (d.displayID) ids.add(d.displayID);
       return Array.from(ids);
     },
-    get vtGroupResolved() { return this.vtGroup || this.tracks[0] || null; },
-    setVtGroup(id) { this.vtGroup = id; },
+    // The single-group views (vertical timeline + month) default to the
+    // first group that actually HAS schedules — defaulting to tracks[0]
+    // (often an empty group like "Lobby") made these views look broken.
+    _firstGroupWithSchedules() {
+      const withSched = new Set(this.$store.mm.schedules.map(s => s.displayID));
+      const t = this.tracks;
+      return t.find(did => withSched.has(did)) || t[0] || null;
+    },
+    get selGroupResolved() { return this.selGroup || this._firstGroupWithSchedules(); },
+    setSelGroup(id) { this.selGroup = id; },
 
     _dayWindow() {
       const startMs = isoToUtcMidnight(this.$store.mm.viewDate);
@@ -94,17 +102,16 @@ export function mmScheduleMobileComponent() {
         return agendaWeekHtml({ weekStartMs, tracks: this.tracks, placements, playlists, schedules, nowMs });
       }
       if (mode === 'month') {
-        const did = this.$store.mm.selectedDisplay || this.tracks[0] || null;
         return monthGridHtml({
           schedules: this.$store.mm.schedules,
           viewDate: this.$store.mm.viewDate,
-          displayID: did,
+          displayID: this.selGroupResolved,
           expandSchedule,
         });
       }
       if (mode === 'day' && this.density === 'vertical') {
         const win = this._dayWindow();
-        const did = this.vtGroupResolved;
+        const did = this.selGroupResolved;
         const placements = this._expandWindow(win.startMs, win.endMs).filter(p => p.displayID === did);
         return verticalTimelineHtml({ dayStartMs: win.startMs, placements, playlists, nowMs });
       }
