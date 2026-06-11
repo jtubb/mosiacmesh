@@ -24,19 +24,14 @@ test('buildContentItems tolerates empty inputs', () => {
   assert.deepEqual(buildContentItems({}), []);
 });
 
-test('contentItemToPlaylistItem: animation -> SCRIPT (the trigger fix)', () => {
+test('contentItemToPlaylistItem: animation -> SCRIPT, no duration (Auto)', () => {
   const it = contentItemToPlaylistItem({ kind: 'animation', ref: 'lissajous', name: 'lissajous' });
-  assert.equal(it.file, 'lissajous');
-  assert.equal(it.playmode, 'SCRIPT');
-  assert.equal(it.duration, 20);
+  assert.deepEqual(it, { file: 'lissajous', playmode: 'SCRIPT' });
 });
 
-test('contentItemToPlaylistItem: media -> loop', () => {
-  const it = contentItemToPlaylistItem({ kind: 'video', ref: '/media/server/videos/promo.mp4', duration: 30 });
-  assert.equal(it.file, '/media/server/videos/promo.mp4');
-  assert.equal(it.playmode, 'loop');
-  assert.equal(it.duration, 30);
+test('contentItemToPlaylistItem: media -> just file (Auto duration, default playmode)', () => {
+  const vid = contentItemToPlaylistItem({ kind: 'video', ref: '/media/server/videos/promo.mp4', duration: 30 });
+  assert.deepEqual(vid, { file: '/media/server/videos/promo.mp4' });
   const img = contentItemToPlaylistItem({ kind: 'image', ref: '/media/server/images/logo.png' });
-  assert.equal(img.playmode, 'loop');
-  assert.equal(img.duration, undefined);
+  assert.deepEqual(img, { file: '/media/server/images/logo.png' });
 });

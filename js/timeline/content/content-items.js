@@ -19,12 +19,12 @@ export function buildContentItems({ media = {}, animations = [] } = {}) {
   return out;
 }
 
-// The trigger fix: an animation pick becomes a SCRIPT item automatically; the
-// operator never touches play-mode for an animation. Media picks default to loop.
-const ANIMATION_DEFAULT_DURATION_S = 20;
+// A picked content item becomes a playlist item with its duration left as
+// "Auto" (no `duration` key) — the server resolves Auto to the content's
+// natural length (video) or a 20s default (image/animation). Animations
+// carry playmode:'SCRIPT' (the render-mode flag the display client reads);
+// media carry no playmode (the server defaults to FULL).
 export function contentItemToPlaylistItem(ci) {
-  if (ci.kind === 'animation') {
-    return { file: ci.ref, playmode: 'SCRIPT', duration: ANIMATION_DEFAULT_DURATION_S };
-  }
-  return { file: ci.ref, playmode: 'loop', duration: ci.duration == null ? undefined : ci.duration };
+  if (ci.kind === 'animation') return { file: ci.ref, playmode: 'SCRIPT' };
+  return { file: ci.ref };
 }
