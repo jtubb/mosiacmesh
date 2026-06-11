@@ -83,3 +83,34 @@ test('isNowPlacement is half-open [start, end)', () => {
   assert.equal(isNowPlacement({ startMs: 10, endMs: 20 }, 20), false);
   assert.equal(isNowPlacement({ startMs: 10, endMs: 20 }, 9), false);
 });
+
+import { agendaRowHtml } from '../../../js/timeline/schedule/agenda-row.js';
+
+const playlist = { name: 'Lunch', items: [{ file: 'a.mp4', duration: 30 }, { file: 'b.jpg', duration: 10 }] };
+const placement = {
+  startMs: Date.UTC(2026, 5, 1, 12), endMs: Date.UTC(2026, 5, 1, 13),
+  playlistName: 'Lunch', displayID: 'Lobby', priority: 0, scheduleId: 'sched-1',
+};
+
+test('agendaRowHtml renders time, name, data-schedule-id and a sparkline', () => {
+  const html = agendaRowHtml(placement, playlist, { isNow: false, conflict: false, recurrenceText: 'Daily' });
+  assert.match(html, /12:00–13:00/);
+  assert.match(html, /Lunch/);
+  assert.match(html, /data-schedule-id="sched-1"/);
+  assert.match(html, /mm-agenda-spark/);
+  assert.match(html, /Daily/);
+});
+
+test('agendaRowHtml flags now and conflict', () => {
+  const now = agendaRowHtml(placement, playlist, { isNow: true, conflict: false, recurrenceText: '' });
+  assert.match(now, /mm-agenda-now/);
+  const conflict = agendaRowHtml(placement, playlist, { isNow: false, conflict: true, recurrenceText: '' });
+  assert.match(conflict, /mm-agenda-conflict/);
+});
+
+test('agendaRowHtml escapes the playlist name', () => {
+  const html = agendaRowHtml({ ...placement, playlistName: '<x>' }, { name: '<x>', items: [] },
+    { isNow: false, conflict: false, recurrenceText: '' });
+  assert.doesNotMatch(html, /<x>/);
+  assert.match(html, /&lt;x&gt;/);
+});
