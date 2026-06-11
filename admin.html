@@ -537,41 +537,29 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-form-row { grid-column: 1 / -1; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12px; }
 .mm-form-row label { flex-direction: row; gap: 4px; }
 .mm-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 12px; }
-/* PR-17: horizontal-ribbon playlist editor (.mm-plr*). Replaces the
-   per-item form modal. Items render as fixed-height clips sized by
-   duration; sidebar form below edits the selected item. */
-.mm-plr { display: flex; flex-direction: column; gap: 10px; min-width: 720px; }
-.mm-plr-toolbar { display: flex; align-items: center; gap: 12px; font-size: 12px; }
-.mm-plr-summary { color: var(--text-muted, #888); }
-.mm-plr-ribbon-scroll { overflow-x: auto; padding-bottom: 4px; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; background: rgba(0,0,0,0.15); }
-.mm-plr-ribbon { display: flex; gap: 4px; list-style: none; margin: 0; padding: 6px; min-height: 64px; min-width: 100%; box-sizing: border-box; }
-.mm-plr-clip { position: relative; flex: 0 0 auto; height: 56px; padding: 4px 8px; background: var(--accent, #345); color: white; border-radius: 4px; cursor: grab; user-select: none; outline: 2px solid transparent; transition: outline-color 60ms; overflow: hidden; }
-.mm-plr-clip:active { cursor: grabbing; }
-.mm-plr-clip-selected { outline-color: var(--warn, #fc6); outline-offset: -2px; }
-.mm-plr-clip-dragging { opacity: 0.4; }
-.mm-plr-clip-title { font-weight: 500; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-plr-clip-dur { font-size: 10px; color: rgba(255,255,255,0.7); }
-.mm-plr-resize-handle { position: absolute; top: 0; right: 0; bottom: 0; width: 10px; cursor: ew-resize; background: transparent; z-index: 2; }
-.mm-plr-resize-handle:hover { background: rgba(255,255,255,0.15); }
-.mm-plr-empty { color: var(--text-muted, #888); font-style: italic; padding: 16px; flex: 1 0 auto; text-align: center; }
-.mm-plr-sidebar { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; }
-.mm-plr-sidebar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
-.mm-plr-remove { font-size: 11px; padding: 2px 8px; }
-/* PR-18: video-length hint under the duration field. */
-.mm-plr-duration-hint { display: block; margin-top: 2px; color: var(--text-muted, #888); font-size: 10px; }
-/* PR-18: in-modal media picker. Operators can't reach the bin behind
-   the modal; picker exposes the same library inline. */
-.mm-plr-picker { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 8px; background: rgba(0,0,0,0.12); }
-.mm-plr-picker-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
-.mm-plr-picker-search { flex: 1; font-size: 11px; padding: 2px 4px; }
-.mm-plr-picker-list { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto; }
-.mm-plr-picker-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 3px 4px; font-size: 11px; cursor: default; }
-.mm-plr-picker-row:hover { background: rgba(255,255,255,0.05); }
-.mm-plr-picker-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-plr-picker-meta { color: var(--text-muted, #888); font-size: 10px; }
-.mm-plr-picker-add { background: transparent; border: 1px solid rgba(255,255,255,0.18); color: var(--text, #eee); padding: 0 6px; cursor: pointer; border-radius: 3px; }
-.mm-plr-picker-add:hover { background: rgba(255,255,255,0.08); }
-.mm-plr-picker-empty { color: var(--text-muted, #888); font-size: 11px; padding: 8px 4px; font-style: italic; }
+/* Vertical-list playlist editor (.mm-ple*). Replaces the PR-17 ribbon.
+   Items render top-to-bottom; click a row to edit it in the settings
+   box; "+ Add content" opens an inline picker (media + animations). */
+.mm-ple-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.mm-ple-list { list-style:none; padding:0; margin:0 0 12px; }
+.mm-ple-row { display:flex; align-items:center; gap:8px; padding:8px; background:var(--surface-2); border:1px solid var(--border); border-radius:6px; margin-bottom:6px; cursor:pointer; }
+.mm-ple-row.sel { border-color:var(--accent); }
+.mm-ple-grip { cursor:grab; color:var(--text-muted); }
+.mm-ple-ic { width:18px; text-align:center; }
+.mm-ple-nm { flex:1; font-size:13px; }
+.mm-ple-dur { font-size:11px; color:var(--text-muted); }
+.mm-ple-del { border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:15px; }
+.mm-ple-settings { display:flex; gap:12px; flex-wrap:wrap; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; margin-bottom:10px; }
+.mm-ple-settings label { font-size:12px; display:flex; flex-direction:column; gap:3px; }
+.mm-ple-add { width:100%; border:1px dashed var(--accent); color:var(--accent); background:none; border-radius:6px; padding:9px; }
+.mm-ple-picker { border:1px solid var(--border); border-radius:6px; padding:10px; margin-top:8px; }
+.mm-ple-picker-filters { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+.mm-ple-picker-filters button { font-size:11px; padding:2px 9px; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; }
+.mm-ple-picker-filters button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.mm-ple-picker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:8px; max-height:240px; overflow-y:auto; }
+.mm-ple-picktile { display:flex; flex-direction:column; gap:4px; align-items:center; font-size:10px; padding:8px 4px; border:1px solid var(--border); border-radius:6px; background:var(--surface-2); color:var(--text); cursor:pointer; }
+.mm-ple-picktile.kind-animation { border-color:#9a7bff; }
+.mm-ple-picktile span:first-child { font-size:18px; }
 .mm-recurrence-preview { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; font-size: 11px; }
 .mm-recurrence-preview ol { margin: 6px 0 0 18px; padding: 0; }
 .mm-recurrence-preview li { padding: 2px 0; }
