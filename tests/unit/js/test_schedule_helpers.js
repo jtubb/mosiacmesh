@@ -173,3 +173,15 @@ test('monthGridHtml returns a prompt when no display selected', () => {
   const html = monthGridHtml({ schedules: [], viewDate: '2026-06-15', displayID: null, expandSchedule: expand });
   assert.match(html, /Pick a display/i);
 });
+
+import { verticalTimelineHtml } from '../../../js/timeline/schedule/vertical-timeline.js';
+
+test('verticalTimelineHtml renders 24 hour labels and positions a block', () => {
+  const day = Date.UTC(2026, 5, 1);
+  const placements = [{ startMs: day + 9 * 3600e3, endMs: day + 11 * 3600e3, displayID: 'Lobby', scheduleId: 'v1', playlistName: 'Loop', priority: 0 }];
+  const html = verticalTimelineHtml({ dayStartMs: day, placements, playlists: { Loop: { items: [] } }, nowMs: 0 });
+  // 24 hour rows.
+  assert.equal((html.match(/mm-vt-hour/g) || []).length, 24);
+  assert.match(html, /data-schedule-id="v1"/);
+  assert.match(html, /Loop/);
+});

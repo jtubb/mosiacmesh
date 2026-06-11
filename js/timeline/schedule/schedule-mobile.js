@@ -13,6 +13,7 @@ import { expandSchedule } from '../util/time.js';
 import { agendaDayHtml, agendaWeekHtml } from './agenda-view.js';
 import { monthGridHtml } from './month-grid.js';
 import { openRecurrenceEditor } from '../modals/recurrence-editor.js';
+import { verticalTimelineHtml } from './vertical-timeline.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -24,6 +25,7 @@ function isoToUtcMidnight(iso) {
 export function mmScheduleMobileComponent() {
   return {
     density: 'agenda',          // 'agenda' | 'vertical' (Day scope only)
+    vtGroup: null,             // group shown in the vertical day timeline
     nowTick: 0,                 // bumped on a 30s interval to refresh now-state
     _timer: null,
     _onClick: null,
@@ -61,6 +63,8 @@ export function mmScheduleMobileComponent() {
       for (const d of this.$store.mm.displays) if (d.displayID) ids.add(d.displayID);
       return Array.from(ids);
     },
+    get vtGroupResolved() { return this.vtGroup || this.tracks[0] || null; },
+    setVtGroup(id) { this.vtGroup = id; },
 
     _dayWindow() {
       const startMs = isoToUtcMidnight(this.$store.mm.viewDate);
@@ -99,6 +103,12 @@ export function mmScheduleMobileComponent() {
           displayID: did,
           expandSchedule,
         });
+      }
+      if (mode === 'day' && this.density === 'vertical') {
+        const win = this._dayWindow();
+        const did = this.vtGroupResolved;
+        const placements = this._expandWindow(win.startMs, win.endMs).filter(p => p.displayID === did);
+        return verticalTimelineHtml({ dayStartMs: win.startMs, placements, playlists, nowMs });
       }
       // Day -> day agenda.
       const win = this._dayWindow();

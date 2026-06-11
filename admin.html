@@ -866,6 +866,11 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                 <button class="btn btn-ghost" :class="{'btn-active': density==='vertical'}" @click="setDensity('vertical')" title="Day timeline">▤</button>
               </span>
             </template>
+            <template x-if="$store.mm.viewMode==='day' && density==='vertical'">
+              <select class="input" :value="vtGroupResolved" @change="setVtGroup($event.target.value)">
+                <template x-for="id in tracks" :key="id"><option :value="id" x-text="id"></option></template>
+              </select>
+            </template>
           </div>
           <div class="mm-sched-mobile-datenav" x-data="mmToolbar">
             <button class="btn btn-ghost" @click="step(-1)">◀</button>
