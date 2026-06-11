@@ -26,6 +26,7 @@
 import { api } from './api.js';
 import { expandSchedule } from './util/time.js';
 import { buildNowSummary } from './now-summary.js';
+import { buildContentItems } from './content/content-items.js';
 
 function todayIso() {
   const d = new Date();
@@ -148,6 +149,12 @@ export function makeStore() {
         playback: this.playback,
         renderInProgress: this.renderInProgress,
       });
+    },
+    get contentItems() {
+      const anims = (typeof window !== 'undefined' && window.MM_ANIMATIONS)
+        ? window.MM_ANIMATIONS
+        : (typeof globalThis !== 'undefined' && globalThis.MM_ANIMATIONS) || [];
+      return buildContentItems({ media: this.media, animations: anims });
     },
 
     // ---- UI-state mutations (no server calls) ----
