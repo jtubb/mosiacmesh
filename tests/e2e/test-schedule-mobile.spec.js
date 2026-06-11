@@ -62,6 +62,8 @@ async function firstGroupId(page) {
 export default async function () {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: PHONE });
+  // The editor's Delete button confirms via window.confirm — auto-accept it.
+  page.on('dialog', (dialog) => dialog.accept().catch(() => {}));
   try {
     // Up-front cleanup of orphans from a prior crashed run.
     await page.goto(BASE + '/admin.html');
@@ -144,6 +146,35 @@ export default async function () {
     const headerCount = await page.evaluate(() =>
       document.querySelectorAll('.mm-schedule-mobile .mm-agenda-day-header').length);
     assert.equal(headerCount, 7, `week view should render 7 day headers, got ${headerCount}`);
+
+    // ---- 5. Delete OUR schedule via the editor's Delete button ----
+    // Back to Day; target the exact row for the schedule we created
+    // (the dev server has other schedules — match on created.id, not "first row").
+    await page.evaluate(() => Alpine.store('mm').setViewMode('day'));
+    await page.waitForFunction(
+      (sid) => document.querySelector('.mm-schedule-mobile [data-schedule-id="' + sid + '"]') != null,
+      created.id, { timeout: 5_000 });
+    await page.evaluate((sid) => {
+      document.querySelector('.mm-schedule-mobile [data-schedule-id="' + sid + '"]').click();
+    }, created.id);
+    await page.waitForFunction(
+      () => document.querySelector('.mm-modal [data-field="freq"]') != null, null, { timeout: 5_000 });
+    // Click Delete — the window.confirm is auto-accepted by the dialog handler.
+    await page.evaluate(() => {
+      const del = Array.from(document.querySelectorAll('.mm-modal .mm-form-actions button'))
+        .find(b => b.textContent.trim() === 'Delete');
+      if (!del) throw new Error('no Delete button in the editor (edit mode)');
+      del.click();
+    });
+    await page.waitForFunction(() => document.querySelector('.mm-modal') == null, null, { timeout: 5_000 });
+    // Verify via REST: our schedule is gone.
+    let stillThere = true;
+    for (let i = 0; i < 20 && stillThere; i++) {
+      const all = await listSchedules(page);
+      stillThere = all.some(s => s.id === created.id);
+      if (stillThere) await settle(page);
+    }
+    assert.ok(!stillThere, `schedule ${created.id} should be deleted after Delete -> confirm`);
 
     return 'pass';
   } finally {

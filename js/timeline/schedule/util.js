@@ -60,13 +60,25 @@ export function groupPlacementsByGroup(placements) {
 /** { [iso]: placement[] } for exactly the days in dayIsoList (empty arrays kept). */
 export function groupPlacementsByDay(placements, dayIsoList) {
   const out = {};
-  for (const iso of dayIsoList) out[iso] = [];
-  for (const p of placements) {
-    const d = new Date(p.startMs);
-    const iso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-    if (iso in out) out[iso].push(p);
+  for (const iso of dayIsoList) {
+    const [y, m, d] = iso.split('-').map(Number);
+    const dayStart = Date.UTC(y, m - 1, d);
+    const dayEnd = Date.UTC(y, m - 1, d + 1);
+    const bucket = [];
+    for (const p of placements) {
+      // Clip each placement to this day. A cross-midnight placement
+      // (e.g. 22:00 Mon -> 02:00 Tue) lands in BOTH days it overlaps,
+      // with day-local times — so the Week view shows it under each day
+      // AND per-group conflict detection sees the real overlap on each
+      // day (a next-morning schedule would otherwise never be compared
+      // against the wrapped tail).
+      const s = Math.max(p.startMs, dayStart);
+      const e = Math.min(p.endMs, dayEnd);
+      if (e > s) bucket.push({ ...p, startMs: s, endMs: e });
+    }
+    bucket.sort((a, b) => a.startMs - b.startMs);
+    out[iso] = bucket;
   }
-  for (const iso of dayIsoList) out[iso].sort((a, b) => a.startMs - b.startMs);
   return out;
 }
 

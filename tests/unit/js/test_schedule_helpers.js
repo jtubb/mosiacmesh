@@ -38,6 +38,23 @@ test('groupPlacementsByDay buckets by UTC day iso, only for listed days', () => 
   assert.deepEqual(out['2026-06-03'], []);
 });
 
+test('groupPlacementsByDay splits a cross-midnight placement into both days', () => {
+  const mon = Date.UTC(2026, 5, 1);        // 2026-06-01 00:00Z
+  const start = mon + 22 * 3600e3;         // Mon 22:00
+  const end = mon + 26 * 3600e3;           // Tue 02:00
+  const midnight = mon + 24 * 3600e3;
+  const out = groupPlacementsByDay([P(start, end, 'A', 'sx')], ['2026-06-01', '2026-06-02']);
+  assert.equal(out['2026-06-01'].length, 1);
+  assert.equal(out['2026-06-02'].length, 1);
+  // Monday piece is clipped to end at midnight; Tuesday piece starts at midnight.
+  assert.equal(out['2026-06-01'][0].endMs, midnight);
+  assert.equal(out['2026-06-02'][0].startMs, midnight);
+  assert.equal(out['2026-06-02'][0].endMs, end);
+  // scheduleId preserved on both pieces so conflict detection + click-to-edit work.
+  assert.equal(out['2026-06-01'][0].scheduleId, 'sx');
+  assert.equal(out['2026-06-02'][0].scheduleId, 'sx');
+});
+
 test('formatRecurrence covers freq/interval/byweekday/once', () => {
   assert.equal(formatRecurrence({ freq: 'DAILY', interval: 1 }), 'Daily');
   assert.equal(formatRecurrence({ freq: 'DAILY', interval: 3 }), 'Every 3 days');
