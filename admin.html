@@ -68,19 +68,15 @@
 		// independently of this function.
 		//
 		// What survives here:
-		//   - connection-status text (the only legacy UI element still
-		//     visible: the green dot + 'connected · N online' line);
 		//   - operator-facing toasts for device-join / device-remove
 		//     (the new admin's live data pulls reflect the same events,
 		//     but the toast surfaces what changed).
-		$('#connDot').addClass('on');
-		$('#connText').text('connected');
-		if (data_obj.REQUEST == "DISCOVERY_HEARTBEAT")
-		{
-			var p = data_obj.PAYLOAD || {};
-			$('#connText').text('connected' + (p.onlineClients != null ? ' · ' + p.onlineClients + ' online' : ''));
-		}
-		else if (data_obj.REQUEST == "NEW_DEVICE_CONFIGURED")
+		//
+		// Task 12 (Section 1 overhaul): the connection dot + text are now
+		// Alpine-bound to $store.mm.connection (fed by the store's
+		// sockjs-status subscriber). The old jQuery writes to #connDot /
+		// #connText were removed so they don't fight the x-text binding.
+		if (data_obj.REQUEST == "NEW_DEVICE_CONFIGURED")
 		{
 			var nd = data_obj.PAYLOAD || {};
 			if (typeof toast === 'function') toast('Device joined: ' + (nd.friendlyName || nd.clientKey || 'unknown'), 'ok');
@@ -217,8 +213,13 @@ body { background:var(--bg); color:var(--text); font:14px/1.4 var(--font); }
 .navitem:hover { color:var(--text); }
 .navitem.active { color:var(--text); background:var(--surface-2); border-left-color:var(--accent); }
 .main { flex:1; overflow:auto; padding:var(--s4); min-width:0; }
-.section { display:none; }
-.section.active { display:block; }
+/* Task 12: x-show on each .section now owns visibility (it sets inline
+   display:none when its activeTab test is false, and clears the inline
+   style when true). The old `.section{display:none}` + `.section.active`
+   pair fought x-show: a truthy x-show clears the inline style, which then
+   fell back to the stylesheet's display:none and the section stayed
+   hidden. Dropping the base rules lets a shown <section> render at its
+   natural block display. */
 .section h2 { margin:0 0 var(--s4); font-size:18px; }
 .panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:var(--s3); box-shadow:var(--shadow); }
 .panel-title { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); margin:0 0 var(--s2); }
@@ -265,12 +266,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .jstree-anchor .badge { vertical-align:middle; line-height:1; padding:1px 6px; margin-left:4px; }
 /* the jsTree open/close arrow sprite is dark — invert it so it shows on the dark surface */
 [data-theme="dark"] .jstree-default .jstree-ocl { filter: invert(1) brightness(1.6); }
-@media (max-width:760px) {
-  .shell { flex-direction:column; }
-  .sidebar { flex:none; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border); }
-  .navitem { border-left:0; border-bottom:3px solid transparent; white-space:nowrap; }
-  .navitem.active { border-left:0; border-bottom-color:var(--accent); }
-}
+/* Task 12: the mobile sidebar layout (bottom nav bar) now lives in the
+   four-destination shell block near the end of this stylesheet. The old
+   top-horizontal-scroll rules here were removed so they don't fight the
+   new bottom bar (they set border-bottom / overflow-x / .navitem.active
+   that the new .on-based block doesn't reset). */
 /* ===== Mobile-friendly overrides ===== */
 @media (max-width: 768px) {
   .main { padding: var(--s2); }
@@ -631,26 +631,90 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-profile-editor details { margin-bottom: 8px; }
 .mm-profile-editor summary { cursor: pointer; font-size: 12px; font-weight: 600; padding: 4px 0; }
 .mm-form-row-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+/* ===== Task 12: four-destination shell + Now landing ===== */
+.navitem .ni-ic { font-size: 16px; margin-right: 8px; }
+.navitem.on { color: var(--text); background: var(--surface-2); border-left: 2px solid var(--accent); }
+.now-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.now-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 12px; }
+.now-card.playing { border-color: var(--accent); }
+.nc-head { display: flex; justify-content: space-between; align-items: center; }
+.nc-name { font-weight: 600; }
+.nc-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--surface); color: var(--text-muted); }
+.nc-pill.playing { background: rgba(74,144,217,.18); color: var(--accent); }
+.nc-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.now-glance { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+.placeholder-tab { color: var(--text-muted); padding: 40px; text-align: center; }
+
+@media (max-width: 760px) {
+  .shell { display: block; }
+  .sidebar {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    display: flex; flex-direction: row; border-top: 1px solid var(--border);
+    background: var(--surface); z-index: 1200;
+  }
+  .sidebar .navitem { display: flex; align-items: center; justify-content: center; flex: 1; flex-direction: column; gap: 2px; font-size: 10px; text-align: center; border-left: none; }
+  .sidebar .navitem.on { border-left: none; border-top: 2px solid var(--accent); background: transparent; }
+  .navitem .ni-ic { margin-right: 0; display: block; font-size: 18px; }
+  .main { padding-bottom: 64px; }
+}
   </style>
 </head>
 <body>
-<div class="app">
+<!-- Task 12: Alpine 3 only walks elements inside an x-data root. The
+     statusbar (connection indicator) and sidebar (nav) live outside the
+     per-section x-data scopes, so the whole shell is wrapped in a single
+     empty x-data root here. $store.mm is global and resolves from any
+     nested scope; the per-section x-data="{}" roots still work as nested
+     scopes. Without this, the nav :class/@click and the connText x-text
+     never evaluate. -->
+<div class="app" x-data="{}">
   <div class="statusbar">
     <span class="brand">● MosaicMesh</span>
-    <span class="dot" id="connDot"></span>
-    <span id="connText" class="size">connecting…</span>
+    <span class="dot" id="connDot" :class="{ on: $store.mm.connection.connected }"></span>
+    <span id="connText" class="size" x-text="$store.mm.connection.connected ? ('connected · ' + $store.mm.connection.onlineClients + ' online') : 'connecting…'"></span>
     <span id="nowPlaying" class="size"></span>
     <span class="spacer"></span>
     <button class="btn btn-ghost" id="themeToggle" type="button">🌙 Theme</button>
   </div>
   <div class="shell">
-    <nav class="sidebar" id="sidebar">
-      <button class="navitem" data-nav="timeline">Timeline</button>
-      <button class="navitem" data-nav="console">Console</button>
+    <nav class="sidebar" id="sidebar" role="navigation" aria-label="Sections">
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='now' }"
+              :aria-current="$store.mm.activeTab==='now' ? 'page' : false"
+              @click="$store.mm.goTo('now')"><span class="ni-ic">⚡</span><span class="ni-lbl">Now</span></button>
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='content' }"
+              :aria-current="$store.mm.activeTab==='content' ? 'page' : false"
+              @click="$store.mm.goTo('content')"><span class="ni-ic">▦</span><span class="ni-lbl">Content</span></button>
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='schedule' }"
+              :aria-current="$store.mm.activeTab==='schedule' ? 'page' : false"
+              @click="$store.mm.goTo('schedule')"><span class="ni-ic">📅</span><span class="ni-lbl">Schedule</span></button>
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='fleet' }"
+              :aria-current="$store.mm.activeTab==='fleet' ? 'page' : false"
+              @click="$store.mm.goTo('fleet')"><span class="ni-ic">📡</span><span class="ni-lbl">Fleet</span></button>
     </nav>
     <main class="main">
-      <section class="section" data-route="timeline" x-data="{}">
-        <h2>Timeline</h2>
+      <section class="section" data-route="now" x-data="{}" x-show="$store.mm.activeTab==='now'">
+        <div class="now-glance" x-text="`${$store.mm.connection.onlineClients} online · ${$store.mm.nowCards.filter(c=>c.state==='playing').length} playing`"></div>
+        <div class="now-cards">
+          <template x-for="card in $store.mm.nowCards" :key="card.displayID">
+            <div class="now-card" :class="{ playing: card.state==='playing' }">
+              <div class="nc-head">
+                <span class="nc-name" x-text="card.displayID"></span>
+                <span class="nc-pill" :class="card.state" x-text="card.state==='playing' ? '▶ playing' : card.state"></span>
+              </div>
+              <div class="nc-meta">
+                <span x-text="card.currentPlaylist || 'Idle'"></span>
+                <span x-text="`${card.onlineCount}/${card.screenCount} online`"></span>
+                <span class="nc-render" x-show="card.renderStatus==='rendering'">· rendering…</span>
+              </div>
+            </div>
+          </template>
+          <p class="now-empty" x-show="$store.mm.nowCards.length===0">No display groups yet.</p>
+        </div>
+      </section>
+      <section class="section" data-route="content" x-show="$store.mm.activeTab==='content'">
+        <div class="placeholder-tab">Content — coming soon.</div>
+      </section>
+      <section class="section" data-route="schedule" x-data="{}" x-show="$store.mm.activeTab==='schedule'">
         <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
         <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
 
@@ -754,41 +818,26 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 
       </section>
       <!-- PR-6: legacy sections (overview / displays / media / playlists /
-           schedules) deleted. Their functionality lives in the timeline
-           section + its modals + the toolbar buttons (fleet actions
-           moved out of Overview, calibration into 🎯 modal, media into
-           the mm-bin sidebar, playlists into mm-bin + playlist-editor
-           modal, schedules into the timeline grid + recurrence-editor
-           modal). console kept below for raw SockJS debugging. -->
+           schedules) deleted. Their functionality lives in the (now
+           Schedule-tab) timeline section + its modals + the toolbar
+           buttons. Task 12 (Section 1 overhaul): the old raw-SockJS
+           Console section was removed and the shell became the four
+           destinations Now / Content / Schedule / Fleet. The timeline
+           markup was relocated under data-route="schedule" (above) so
+           mmTimeline/mmToolbar/mmMediaBin/mmPlaylistBin still mount. -->
 
-      <section class="section" data-route="console"><h2>Console</h2>
-<div id="log" class="panel mono" style="width: 50em; height: 20em; overflow:auto;">
-</div>
-<form id="chatform" class="toolbar">
-  <input id="text" type="text" />
-  <input id="calibrate" class="btn" type="button" value="Submit Query" onclick="sock.send(generateMessage('SRV',$('#text').val(),'null'));"/>
-</form>
+      <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'">
+        <div class="placeholder-tab">Fleet — coming soon.</div>
       </section>
     </main>
   </div>
 </div>
 <div class="toasts" id="toasts"></div>
 <script>
-function adminRoute() {
-  // PR-5: default landing route is now the timeline (was 'overview' before
-  // PR-4). Operators reach all other sections via the nav. Bookmarked
-  // URLs with explicit hashes (#displays, #overview, etc.) still resolve.
-  var r = (location.hash || "#timeline").slice(1);
-  var found = false;
-  $('.section').each(function(){ var on = $(this).data('route') === r; $(this).toggleClass('active', on); if(on) found=true; });
-  if (!found) { $('.section[data-route=timeline]').addClass('active'); r = "timeline"; }
-  $('.navitem').each(function(){ $(this).toggleClass('active', $(this).data('nav') === r); });
-}
-$(function(){
-  $('.navitem').on('click', function(){ location.hash = $(this).data('nav'); });
-  $(window).on('hashchange', adminRoute);
-  adminRoute();
-});
+// Task 12 (Section 1 overhaul): the old jQuery adminRoute() + .navitem click
+// handlers + hashchange listener were removed. Section visibility is now
+// driven by Alpine x-show on each .section, reflecting $store.mm.activeTab,
+// which js/timeline/shell/router.js keeps in sync with location.hash.
 function adminApplyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   $('#themeToggle').text(t === 'light' ? '☀ Light' : '🌙 Dark');

@@ -41,6 +41,7 @@ import { attachContextMenu } from './context-menu.js';
 import { attachPlaylistEditor } from './modals/playlist-editor.js';
 import { attachTrackHeaderPopover } from './track-header-popover.js';
 import { attachTrackHeaderContextMenu } from './track-header-context-menu.js';
+import { startRouter } from './shell/router.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -68,6 +69,10 @@ function bootstrap() {
   store.hydrate().then(() => {
     requestAnimationFrame(() => autoscrollIntoView());
   });
+  // Section 1 (Task 12): drive section visibility from the URL hash via the
+  // store. Replaces the old jQuery adminRoute() / .active toggling in
+  // admin.html — x-show on each .section now owns visibility.
+  startRouter(store);
   startStatusSubscriber(store);
   // eslint-disable-next-line no-undef
   startNowLine(() => Alpine.store('mm'));
