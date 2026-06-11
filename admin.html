@@ -851,27 +851,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
             <div x-data="mmTimeline" x-html="render()"></div>
           </div>
         </div>
-        <div x-data="mmToast" class="mm-toast-stack" x-show="items.length > 0">
-          <template x-for="t in items" :key="t.id">
-            <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
-          </template>
-        </div>
-        <!-- PR-4c: single host element for all modals. modal-shell.js
-             appends an overlay+dialog and removes it on close. -->
-        <div id="mmModalHost"></div>
-        <!-- PR-4c: context menu overlay. context-menu.js positions this
-             at the cursor + populates items. -->
-        <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
-        <!-- PR-4c gap-fix (spec §362): per-client profile override
-             popover anchored under a clicked track header. -->
-        <div id="mmTrackHeaderPopover" class="mm-thp" style="display:none"></div>
-        <!-- PR-25: drag start-time marker. A vertical accent-coloured
-             line + HH:MM label that follows the SNAPPED start position
-             during a clip-move or playlist-to-track drag. Drag handlers
-             move it in dragover; dragend / drop hide it. -->
-        <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
-          <div class="mm-drag-start-marker-label">00:00</div>
-        </div>
 
       </section>
       <!-- PR-6: legacy sections (overview / displays / media / playlists /
@@ -887,6 +866,22 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
         <div class="placeholder-tab">Fleet — coming soon.</div>
       </section>
     </main>
+  </div>
+  <!-- Global overlay layer: lives at the .app top level, NOT inside a route
+       <section> (whose x-show toggles display:none — which hid any modal
+       mounted into #mmModalHost when its section wasn't the active tab).
+       modal-shell.js / context-menu.js / track-header-popover.js + the drag
+       marker append/position into these. -->
+  <div x-data="mmToast" class="mm-toast-stack" x-show="items.length > 0">
+    <template x-for="t in items" :key="t.id">
+      <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
+    </template>
+  </div>
+  <div id="mmModalHost"></div>
+  <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
+  <div id="mmTrackHeaderPopover" class="mm-thp" style="display:none"></div>
+  <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
+    <div class="mm-drag-start-marker-label">00:00</div>
   </div>
 </div>
 <div class="toasts" id="toasts"></div>
