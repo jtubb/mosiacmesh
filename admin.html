@@ -798,25 +798,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 
         <div x-show="$store.mm.hydrated" class="mm-timeline-layout">
           <aside class="mm-bin">
-            <div x-data="mmMediaBin" class="mm-bin-section">
-              <div class="mm-bin-title">Media (<span x-text="filtered().length"></span>)</div>
-              <input class="input" type="text" x-model="search" placeholder="Search…" />
-              <button class="btn btn-ghost" id="mmUploadBtn" type="button" style="margin-top:6px; width: 100%;">+ Upload</button>
-              <ul class="mm-bin-list">
-                <template x-for="it in filtered()" :key="it.url">
-                  <li class="mm-bin-item mm-bin-item-deletable"
-                      draggable="true"
-                      @dragstart="dragStart(it, $event)"
-                      @dragend="dragEnd()">
-                    <span x-text="it.name" style="flex:1; overflow:hidden; text-overflow:ellipsis;"></span>
-                    <span class="size" style="color:var(--text-muted)" x-text="it.duration ? ' ' + it.duration + 's' : ''"></span>
-                    <button type="button" class="mm-bin-delete" title="Delete media"
-                            @click="remove(it, $event)"
-                            @mousedown.stop @dragstart.stop.prevent>×</button>
-                  </li>
-                </template>
-              </ul>
-            </div>
             <div x-data="mmPlaylistBin" class="mm-bin-section">
               <div class="mm-bin-title">Playlists</div>
               <ul class="mm-bin-list">
@@ -875,8 +856,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
             <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
           </template>
         </div>
-        <!-- PR-4b T12: hidden file picker driven by the + Upload button in the media bin. -->
-        <input type="file" id="mmUploadInput" multiple accept="image/*,video/*" style="display:none">
         <!-- PR-4c: single host element for all modals. modal-shell.js
              appends an overlay+dialog and removes it on close. -->
         <div id="mmModalHost"></div>
@@ -902,7 +881,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
            Console section was removed and the shell became the four
            destinations Now / Content / Schedule / Fleet. The timeline
            markup was relocated under data-route="schedule" (above) so
-           mmTimeline/mmToolbar/mmMediaBin/mmPlaylistBin still mount. -->
+           mmTimeline/mmToolbar/mmPlaylistBin still mount. -->
 
       <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'">
         <div class="placeholder-tab">Fleet — coming soon.</div>

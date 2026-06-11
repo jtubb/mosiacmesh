@@ -25,7 +25,6 @@ import { mmTimelineComponent } from './timeline/timeline.js';
 import { mmToolbarComponent } from './toolbar.js';
 import { startStatusSubscriber } from './timeline/sockjs-status.js';
 import { startNowLine, autoscrollIntoView } from './timeline/now-line.js';
-import { mmMediaBinComponent } from './bin/media-bin.js';
 import { mmPlaylistBinComponent } from './bin/playlist-bin.js';
 import { mmToastComponent } from './timeline/toast.js';
 import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
@@ -35,7 +34,6 @@ import { attachSelection } from './select.js';
 import { attachDrillIn } from './drill-in.js';
 import { attachMediaToClip } from './drag/media-to-clip.js';
 import { attachSubItemReorder } from './drag/subitem-reorder.js';
-import { attachUpload } from './upload.js';
 import { attachRecurrenceEditor } from './modals/recurrence-editor.js';
 import { attachContextMenu } from './context-menu.js';
 import { attachPlaylistEditor } from './modals/playlist-editor.js';
@@ -59,8 +57,6 @@ function bootstrap() {
   Alpine.data('mmTimeline', mmTimelineComponent);
   // eslint-disable-next-line no-undef
   Alpine.data('mmToolbar', mmToolbarComponent);
-  // eslint-disable-next-line no-undef
-  Alpine.data('mmMediaBin', mmMediaBinComponent);
   // eslint-disable-next-line no-undef
   Alpine.data('mmPlaylistBin', mmPlaylistBinComponent);
   // eslint-disable-next-line no-undef
@@ -87,7 +83,6 @@ function bootstrap() {
   attachDrillIn(store);
   attachMediaToClip(store);
   attachSubItemReorder(store);
-  attachUpload(store);
   attachRecurrenceEditor(store);
   attachContextMenu(store);
   attachPlaylistEditor(store);

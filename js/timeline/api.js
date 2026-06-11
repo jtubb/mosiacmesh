@@ -342,7 +342,7 @@ export const api = {
     // ApiError ctor: (message, {status, body}) — the destructure object
     // is what carries .status + .body onto the thrown error. Without
     // this wrapping, callers see e.body === undefined and the refs
-    // branch in media-bin.remove() can't fire.
+    // branch in deleteMedia callers (e.g. content-view removeItem) can't fire.
     throw new ApiError(body.error || `delete failed (${resp.status})`, { status: resp.status, body });
   },
   /** POST /upload/image or /upload/video based on extension. Returns server's response. */
