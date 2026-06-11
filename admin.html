@@ -541,7 +541,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
    Items render top-to-bottom; click a row to edit it in the settings
    box; "+ Add content" opens an inline picker (media + animations). */
 .mm-ple-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
-.mm-ple-list { list-style:none; padding:0; margin:0 0 12px; }
+.mm-ple-list { list-style:none; padding:0; margin:0 0 12px; max-height:40vh; overflow-y:auto; }
 .mm-ple-row { display:flex; align-items:center; gap:8px; padding:8px; background:var(--surface-2); border:1px solid var(--border); border-radius:6px; margin-bottom:6px; cursor:pointer; }
 .mm-ple-row.sel { border-color:var(--accent); }
 .mm-ple-grip { cursor:grab; color:var(--text-muted); }

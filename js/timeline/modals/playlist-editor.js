@@ -89,6 +89,16 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
 
   const root = document.createElement('div');
   root.className = 'mm-ple';
+
+  // Update the selected row's duration label in place — WITHOUT a full
+  // render(). Typing in the duration field must not rebuild the DOM (that
+  // destroys the <input> and drops focus after each keystroke).
+  function updateRowMeta() {
+    const it = draft.items[selectedIdx];
+    const el = root.querySelector('.mm-ple-row[data-idx="' + selectedIdx + '"] .mm-ple-dur');
+    if (el) el.textContent = (it && it.duration != null ? it.duration + 's' : 'auto');
+  }
+
   function render() {
     root.innerHTML = '';
     // header: loop toggle + summary
@@ -138,34 +148,60 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     if (selectedIdx >= 0) {
       const it = draft.items[selectedIdx];
       const box = document.createElement('div'); box.className = 'mm-ple-settings';
-      // duration
-      const durWrap = document.createElement('label'); durWrap.textContent = 'Duration (s) ';
-      const dur = document.createElement('input'); dur.type = 'number'; dur.min = '0.1'; dur.step = '0.1';
-      dur.value = it.duration != null ? String(it.duration) : '';
-      const cap = maxDuration(it, store); if (cap != null) dur.max = String(cap);
-      dur.addEventListener('input', () => {
-        const v = dur.value.trim();
-        if (!v) { delete it.duration; render(); return; }
-        let n = Number(v); if (!Number.isFinite(n) || n <= 0) return;
-        if (cap != null && n > cap) n = cap;
-        it.duration = n; render();
-      });
-      durWrap.appendChild(dur); box.appendChild(durWrap);
+      const itIsAnim = isAnim(it);
+      const isVideo = !itIsAnim && /\.(mp4|webm|mov)$/i.test(it.file);
+      const cap = maxDuration(it, store);
+
+      // Play mode — media only (animations are implicitly SCRIPT).
+      //   'full' (video only) = play the whole clip once (duration = auto =
+      //     natural length; the duration field is hidden).
+      //   'once' = play for a custom duration (truncated).
+      //   'loop' = loop.
+      // Derived from the stored shape: loop -> 'loop'; no explicit duration ->
+      // 'full' for video / 'once' for image; explicit duration -> 'once'.
+      let mode = null;
+      if (!itIsAnim) {
+        mode = (it.playmode === 'loop') ? 'loop' : (it.duration == null ? (isVideo ? 'full' : 'once') : 'once');
+        const pmWrap = document.createElement('label'); pmWrap.textContent = 'Play mode ';
+        const pm = document.createElement('select');
+        pm.innerHTML = '<option value="loop">Loop</option><option value="once">Play once</option>'
+          + (isVideo ? '<option value="full">Play full clip</option>' : '');
+        pm.value = mode;
+        pm.addEventListener('change', () => {
+          if (pm.value === 'loop') { it.playmode = 'loop'; }
+          else if (pm.value === 'full') { it.playmode = 'once'; delete it.duration; }
+          else { it.playmode = 'once'; if (it.duration == null) it.duration = (cap != null ? cap : 10); }
+          render();   // discrete choice: re-render to show/hide the duration field
+        });
+        pmWrap.appendChild(pm); box.appendChild(pmWrap);
+      }
+
+      // Duration — hidden when a video is set to "Play full clip".
+      if (mode !== 'full') {
+        const durWrap = document.createElement('label'); durWrap.textContent = 'Duration (s) ';
+        const dur = document.createElement('input'); dur.type = 'number'; dur.min = '0.1'; dur.step = '0.1';
+        dur.value = it.duration != null ? String(it.duration) : '';
+        if (cap != null) { dur.max = String(cap); dur.title = 'max ' + cap + 's (clip length)'; }
+        dur.addEventListener('input', () => {
+          // NO render() here — rebuilding the DOM mid-typing drops focus.
+          const v = dur.value.trim();
+          if (!v) { delete it.duration; updateRowMeta(); return; }
+          let n = Number(v); if (!Number.isFinite(n) || n <= 0) return;
+          if (cap != null && n > cap) n = cap;
+          it.duration = n; updateRowMeta();
+        });
+        // On blur, snap the field to the stored (clamped) value.
+        dur.addEventListener('blur', () => { dur.value = (it.duration != null ? String(it.duration) : ''); });
+        durWrap.appendChild(dur); box.appendChild(durWrap);
+      }
+
       // backgroundColor
       const bgWrap = document.createElement('label'); bgWrap.textContent = 'Background ';
       const bg = document.createElement('input'); bg.type = 'text'; bg.placeholder = '#000000';
       bg.value = it.backgroundColor || '';
       bg.addEventListener('input', () => { const v = bg.value.trim(); if (v) it.backgroundColor = v; else delete it.backgroundColor; });
       bgWrap.appendChild(bg); box.appendChild(bgWrap);
-      // play mode — media only (animations are implicitly SCRIPT)
-      if (!isAnim(it)) {
-        const pmWrap = document.createElement('label'); pmWrap.textContent = 'Play mode ';
-        const pm = document.createElement('select');
-        pm.innerHTML = '<option value="loop">Loop</option><option value="once">Play once</option>';
-        pm.value = (it.playmode === 'once') ? 'once' : 'loop';
-        pm.addEventListener('change', () => { it.playmode = pm.value; });
-        pmWrap.appendChild(pm); box.appendChild(pmWrap);
-      }
+
       root.appendChild(box);
     }
 
