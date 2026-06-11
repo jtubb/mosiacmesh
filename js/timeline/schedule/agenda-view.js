@@ -77,7 +77,7 @@ export function agendaWeekHtml({ weekStartMs, tracks, placements, playlists, sch
     for (const did of tracks) {
       const gp = byGroup[did] || [];
       if (gp.length === 0) continue; // week view: omit empty groups to stay compact
-      html += `<section class="mm-agenda-group"><h4 class="mm-agenda-group-title">${escapeText(did)}</h4>`;
+      html += `<section class="mm-agenda-group"><h3 class="mm-agenda-group-title">${escapeText(did)}</h3>`;
       html += rowsForGroup(gp, playlists, schedules, nowMs);
       html += '</section>';
     }

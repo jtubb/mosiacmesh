@@ -11,7 +11,7 @@
  */
 import { expandSchedule } from '../util/time.js';
 import { agendaDayHtml, agendaWeekHtml } from './agenda-view.js';
-import { openRecurrenceEditor, openScheduleCreator } from '../modals/recurrence-editor.js';
+import { openRecurrenceEditor } from '../modals/recurrence-editor.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -25,19 +25,26 @@ export function mmScheduleMobileComponent() {
     density: 'agenda',          // 'agenda' | 'vertical' (Day scope only)
     nowTick: 0,                 // bumped on a 30s interval to refresh now-state
     _timer: null,
+    _onClick: null,
 
     init() {
       this._timer = setInterval(() => { this.nowTick++; }, 30_000);
       // Open the recurrence editor when an agenda row is tapped.
-      this.$root.addEventListener('click', (ev) => {
+      this._onClick = (ev) => {
         const row = ev.target.closest('[data-schedule-id]');
         if (row) openRecurrenceEditor(this.$store.mm, row.dataset.scheduleId);
-      });
+      };
+      this.$root.addEventListener('click', this._onClick);
     },
-    destroy() { if (this._timer) clearInterval(this._timer); },
+    destroy() {
+      if (this._timer) clearInterval(this._timer);
+      if (this._onClick) this.$root.removeEventListener('click', this._onClick);
+    },
 
     setDensity(d) { this.density = d; },
-    openCreate() { openScheduleCreator(this.$store.mm, {}); },
+    openCreate() {
+      import('../modals/recurrence-editor.js').then(m => m.openScheduleCreator(this.$store.mm, {}));
+    },
 
     get tracks() {
       const groups = this.$store.mm.displayGroups;
