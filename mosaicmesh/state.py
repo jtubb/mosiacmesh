@@ -34,6 +34,7 @@ class Display():
         self.loop = False
         self.currentFrame = 0
         self.action = PlayState.NOACTION
+        self.currentPlaylistName = None   # name of the playlist whose items are currently applied (None = idle)
         self.playStartEpoch = 0   # server-time ms when playback last (re)started
         self.pauseOffset = 0      # ms into the playlist when paused
         self.renderedToken = ""   # token of the last successful SEGMENT render
