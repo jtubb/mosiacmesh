@@ -685,6 +685,7 @@ def _apply_playlist(display_id, pl):
     import server
     display = server.settings.displays.setdefault(display_id, Display())
     display.mediaElements = _build_media_elements(pl.items)
+    display.currentPlaylistName = getattr(pl, "name", None)
     display.loop = bool(pl.loop)
     _broadcast_per_client_preload(display_id, display.mediaElements)
 
@@ -721,6 +722,7 @@ def _stop_group_playback(display_id):
     if display:
         display.action = PlayState.STOP
         display.currentFrame = 0
+        display.currentPlaylistName = None
         # cancel any in-flight coordinated-start prepare (don't leave stale state)
         display.prepareId = None
         display.readyClients = set()

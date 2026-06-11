@@ -54,3 +54,28 @@ class TestPlaybackStateMapping:
             "displayID": "Lobby", "state": "playing",
             "currentPlaylist": "P", "startedEpoch": 123, "renderStatus": "ready",
         }
+
+
+class TestSetClearPlaylistName:
+    def _settings_with_group(self, display_id="Lobby"):
+        s = server.Settings()
+        s.displays[display_id] = Display()
+        return s
+
+    def test_apply_playlist_sets_name(self):
+        from mosaicmesh.render import _apply_playlist
+        from mosaicmesh.state import Playlist
+        server.settings = self._settings_with_group()
+        pl = Playlist()
+        pl.name = "Lunch Menu"
+        pl.items = []
+        pl.loop = True
+        _apply_playlist("Lobby", pl)
+        assert server.settings.displays["Lobby"].currentPlaylistName == "Lunch Menu"
+
+    def test_stop_clears_name(self):
+        from mosaicmesh.render import _stop_group_playback
+        server.settings = self._settings_with_group()
+        server.settings.displays["Lobby"].currentPlaylistName = "Lunch Menu"
+        _stop_group_playback("Lobby")
+        assert server.settings.displays["Lobby"].currentPlaylistName is None
