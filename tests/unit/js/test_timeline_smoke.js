@@ -40,7 +40,6 @@ const MODULES = [
   'js/timeline/drag/clip-resize.js',
   'js/timeline/select.js',
   'js/timeline/drill-in.js',
-  'js/timeline/drag/media-to-clip.js',
   'js/timeline/drag/subitem-reorder.js',
   'js/timeline/modals/modal-shell.js',
   'js/timeline/modals/recurrence-editor.js',

@@ -32,7 +32,6 @@ import { attachClipMove } from './drag/clip-move.js';
 import { attachClipResize } from './drag/clip-resize.js';
 import { attachSelection } from './select.js';
 import { attachDrillIn } from './drill-in.js';
-import { attachMediaToClip } from './drag/media-to-clip.js';
 import { attachSubItemReorder } from './drag/subitem-reorder.js';
 import { attachRecurrenceEditor } from './modals/recurrence-editor.js';
 import { attachContextMenu } from './context-menu.js';
@@ -81,7 +80,6 @@ function bootstrap() {
   attachClipResize(store);
   attachSelection(store);
   attachDrillIn(store);
-  attachMediaToClip(store);
   attachSubItemReorder(store);
   attachRecurrenceEditor(store);
   attachContextMenu(store);

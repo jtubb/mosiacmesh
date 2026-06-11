@@ -29,7 +29,6 @@
 import { openModal, closeModal } from './modal-shell.js';
 import { buildContentItems, contentItemToPlaylistItem } from '../content/content-items.js';
 
-const DEFAULT_DURATION_S = 10;
 function basename(p) { return String(p || '').split('/').pop() || ''; }
 function asObject(it) { return (typeof it === 'string') ? { file: it } : { ...it }; }
 function isAnim(it) { return it.playmode === 'SCRIPT'; }
