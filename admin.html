@@ -487,6 +487,19 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-modal-header h2 { font-size: 14px; margin: 0; }
 .mm-modal-body { padding: 12px; overflow: auto; }
 .mm-modal-close { padding: 2px 8px; min-width: auto; }
+/* Task-11: modal → bottom sheet on mobile */
+@media (max-width: 760px) {
+  .mm-modal-overlay { align-items: flex-end; }      /* dock to bottom */
+  .mm-modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    border-radius: 14px 14px 0 0;                    /* sheet: rounded top only */
+    animation: mm-sheet-up 180ms ease-out;
+  }
+  .mm-modal-body { overflow-y: auto; }
+}
+@keyframes mm-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
 /* PR-4c T-A4: recurrence editor form + preview */
 .mm-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 12px; }
 .mm-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
