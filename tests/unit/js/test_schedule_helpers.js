@@ -114,3 +114,41 @@ test('agendaRowHtml escapes the playlist name', () => {
   assert.doesNotMatch(html, /<x>/);
   assert.match(html, /&lt;x&gt;/);
 });
+
+import { agendaDayHtml, agendaWeekHtml } from '../../../js/timeline/schedule/agenda-view.js';
+
+const day = Date.UTC(2026, 5, 1);
+const mk = (h, sid, did = 'Lobby', pl = 'Lunch') =>
+  ({ startMs: day + h * 3600e3, endMs: day + (h + 1) * 3600e3, displayID: did, scheduleId: sid, playlistName: pl, priority: 0 });
+
+const playlists = { Lunch: { name: 'Lunch', items: [{ file: 'a.mp4', duration: 30 }] } };
+
+test('agendaDayHtml renders a section per group with its rows', () => {
+  const html = agendaDayHtml({
+    tracks: ['Lobby', 'Cafe'],
+    placements: [mk(9, 's1'), mk(12, 's2'), mk(8, 's3', 'Cafe')],
+    playlists, schedules: [], nowMs: day + 9.5 * 3600e3,
+  });
+  assert.match(html, /Lobby/);
+  assert.match(html, /Cafe/);
+  assert.match(html, /data-schedule-id="s1"/);
+  assert.match(html, /data-schedule-id="s3"/);
+  // The 09:00 row is "now" at 09:30.
+  assert.match(html, /mm-agenda-now/);
+});
+
+test('agendaDayHtml shows empty-state for a group with no placements', () => {
+  const html = agendaDayHtml({ tracks: ['Empty'], placements: [], playlists, schedules: [], nowMs: 0 });
+  assert.match(html, /nothing scheduled/i);
+});
+
+test('agendaWeekHtml renders 7 day-section headers', () => {
+  const html = agendaWeekHtml({
+    weekStartMs: day, tracks: ['Lobby'],
+    placements: [mk(9, 's1')], playlists, schedules: [], nowMs: 0,
+  });
+  // 7 day headers (Mon..Sun of the week containing `day`).
+  const headers = (html.match(/mm-agenda-day-header/g) || []).length;
+  assert.equal(headers, 7);
+  assert.match(html, /data-schedule-id="s1"/);
+});
