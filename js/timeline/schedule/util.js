@@ -8,6 +8,8 @@
  */
 
 const DOW_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+/** Default seconds for an Auto (absent-duration) item in the sparkline. */
+const DEFAULT_DUR_S = 20;
 
 export function escapeText(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -90,11 +92,11 @@ export function formatRecurrence(s) {
   return '';
 }
 
-/** [{kind, frac}] for the playlist-item sparkline (duration-proportional, else equal). */
+/** [{kind, frac}] for the playlist-item sparkline (duration-proportional, Auto=20s). */
 export function sparklineSegments(playlist) {
   const items = (playlist && playlist.items) || [];
   if (items.length === 0) return [];
-  const durs = items.map(it => Number((it && it.duration) || 0));
+  const durs = items.map(it => Number((it && it.duration != null) ? it.duration : DEFAULT_DUR_S));
   const total = durs.reduce((a, b) => a + b, 0);
   return items.map((it, i) => ({
     kind: kindForItem(it),

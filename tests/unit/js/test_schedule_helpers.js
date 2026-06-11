@@ -66,6 +66,17 @@ test('sparklineSegments falls back to equal slices when no durations', () => {
   assert.ok(Math.abs(segs[0].frac - 0.5) < 1e-9);
 });
 
+test('sparklineSegments treats Auto (no duration) items as 20s, not zero', () => {
+  // image=10s explicit, video=Auto(20s) -> total 30 -> 1/3, 2/3 (Auto NOT zero)
+  const segs = sparklineSegments({ items: [
+    { file: 'a.jpg', duration: 10 },
+    { file: 'b.mp4' },
+  ] });
+  assert.ok(Math.abs(segs[0].frac - (1 / 3)) < 1e-9, `image frac ${segs[0].frac}`);
+  assert.ok(segs[1].frac > 0, 'Auto video segment must not be zero-width');
+  assert.ok(Math.abs(segs[1].frac - (2 / 3)) < 1e-9, `video frac ${segs[1].frac}`);
+});
+
 test('isNowPlacement is half-open [start, end)', () => {
   assert.equal(isNowPlacement({ startMs: 10, endMs: 20 }, 10), true);
   assert.equal(isNowPlacement({ startMs: 10, endMs: 20 }, 19), true);
