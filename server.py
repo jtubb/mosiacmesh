@@ -2009,6 +2009,12 @@ def _playback_row(display_id, display):
     }
 
 
+async def api_playback(request):
+    """Read-only per-group playback snapshot for the admin Now landing."""
+    rows = [_playback_row(did, d) for did, d in settings.displays.items()]
+    return web.json_response({"success": True, "groups": rows})
+
+
 async def api_effects(request):
     """List the registered transition effects and their parameter schemas."""
     return web.Response(text=json.dumps({"effects": effects.effect_catalog()}),
@@ -2334,6 +2340,7 @@ if __name__ == '__main__':
         app.router.add_get('/api/displays', api_displays_list)
         app.router.add_post('/api/displays', api_displays_create)
         app.router.add_delete('/api/displays/{displayID}', api_displays_delete)
+        app.router.add_get('/api/playback', api_playback)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         
         asyncio.run(run_server())

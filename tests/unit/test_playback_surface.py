@@ -79,3 +79,32 @@ class TestSetClearPlaylistName:
         server.settings.displays["Lobby"].currentPlaylistName = "Lunch Menu"
         _stop_group_playback("Lobby")
         assert server.settings.displays["Lobby"].currentPlaylistName is None
+
+
+import pytest
+from aiohttp.test_utils import make_mocked_request
+
+
+class TestApiPlayback:
+    @pytest.mark.asyncio
+    async def test_returns_group_rows(self):
+        s = server.Settings()
+        d = Display()
+        d.action = PlayState.PLAY
+        d.currentPlaylistName = "Lunch Menu"
+        d.playStartEpoch = 999
+        d.mediaElements = [object()]
+        s.displays["Lobby"] = d
+        s.displays["Idle Group"] = Display()  # NOACTION + no playlist -> idle
+        server.settings = s
+
+        req = make_mocked_request("GET", "/api/playback")
+        resp = await server.api_playback(req)
+        assert resp.status == 200
+        body = json.loads(resp.text)
+        assert body["success"] is True
+        rows = {r["displayID"]: r for r in body["groups"]}
+        assert rows["Lobby"]["state"] == "playing"
+        assert rows["Lobby"]["currentPlaylist"] == "Lunch Menu"
+        assert rows["Lobby"]["startedEpoch"] == 999
+        assert rows["Idle Group"]["state"] == "idle"
