@@ -821,6 +821,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
               <span class="mm-toolbar-date" x-text="formatDate()"></span>
               <button class="btn btn-ghost" @click="step(1)">▶</button>
               <button class="btn btn-ghost" @click="today()">Today</button>
+              <button class="btn btn-primary" @click="openCreateSchedule()" title="Schedule a playlist on a group">+ Schedule</button>
 
               <template x-if="$store.mm.viewMode !== 'day'">
                 <select class="input" :value="$store.mm.selectedDisplay"

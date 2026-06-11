@@ -11,6 +11,7 @@
 import { openProfileEditor } from './modals/profile-editor.js';
 import { openCalibrationModal } from './modals/calibration.js';
 import { fireFleetAction } from './modals/fleet-confirm.js';
+import { openScheduleCreator } from './modals/recurrence-editor.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -43,6 +44,7 @@ export function mmToolbarComponent() {
 
     openProfileEditor()  { openProfileEditor(this.$store.mm); },
     openCalibration()    { openCalibrationModal(this.$store.mm); },
+    openCreateSchedule() { openScheduleCreator(this.$store.mm, {}); },
 
     /**
      * PR-12: create a new display group. Simple prompt() for now — the
