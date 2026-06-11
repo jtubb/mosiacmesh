@@ -90,6 +90,12 @@ export function startStatusSubscriber(store) {
       // per-device state in the heartbeat this branch picks it up.
       const devs = payload?.devices ?? [];
       if (devs.length > 0) applyMutation(() => devs.forEach(applyDeviceStatus));
+      // Aggregate online count: server.py's DISCOVERY_HEARTBEAT sends
+      // PAYLOAD.onlineClients (an integer). Mirror it into the store so
+      // the connection indicator can show "N online".
+      if (payload && typeof payload.onlineClients === 'number') {
+        applyMutation(() => store.setConnection({ onlineClients: payload.onlineClients }));
+      }
     } else if (req === 'CLIENTS_CAME_ONLINE' || req === 'CLIENTS_WENT_OFFLINE') {
       // PR-27: unified shape — both events carry {devices: [{clientKey,
       // displayID, isOnline, friendlyName}, ...]}. CLIENTS_WENT_OFFLINE
@@ -105,6 +111,10 @@ export function startStatusSubscriber(store) {
           store.setRenderInProgress(payload.displayID, !!payload.inProgress);
         });
       }
+    } else if (req === 'PLAYBACK_CHANGED') {
+      // payload: {groups: [{displayID, state, currentPlaylist, startedEpoch, renderStatus}, ...]}
+      const rows = payload?.groups ?? [];
+      if (rows.length > 0) applyMutation(() => rows.forEach((r) => store.setPlayback(r)));
     }
   }
 
@@ -120,6 +130,12 @@ export function startStatusSubscriber(store) {
       } catch (e) { /* ignore parse errors — not all messages are JSON */ }
       if (prev) prev.call(this, ev);
     };
+    // Connection indicator (replaces the legacy jQuery #connDot/#connText poking).
+    if (window.sock.readyState === 1 /* OPEN */) store.setConnection({ connected: true });
+    const _prevOpen = window.sock.onopen;
+    window.sock.onopen = function (e) { store.setConnection({ connected: true }); if (_prevOpen) _prevOpen.call(this, e); };
+    const _prevClose = window.sock.onclose;
+    window.sock.onclose = function (e) { store.setConnection({ connected: false }); if (_prevClose) _prevClose.call(this, e); };
   } else if (window.jQuery) {
     window.jQuery(window).on('mm:msg', (_e, msg) => handle(msg));
   } else {
