@@ -53,6 +53,11 @@ export function makeStore() {
     viewDate: todayIso(),
     selectedDisplay: null,
 
+    // Section 3: responsive switch. Set from matchMedia in index.js.
+    // The Schedule section binds to this to choose the mobile stack
+    // (mmScheduleMobile) vs the desktop grid (mmTimeline).
+    isMobile: false,
+
     activeTab: 'now',                 // 'now' | 'content' | 'schedule' | 'fleet'
     connection: { connected: false, onlineClients: 0 },
     playback: {},                     // displayID -> {state, currentPlaylist, startedEpoch, renderStatus}
@@ -162,6 +167,7 @@ export function makeStore() {
     setViewDate(isoYmd) { this.viewDate = isoYmd; },
     goToday()           { this.viewDate = todayIso(); },
     selectDisplay(id)   { this.selectedDisplay = id; },
+    setIsMobile(b)      { this.isMobile = !!b; },
 
     // ---- Toast state (PR-4b) ----
     toasts: [],
