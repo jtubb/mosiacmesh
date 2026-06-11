@@ -16,6 +16,13 @@ Client-side reactive timeline view for the admin console, loaded into
 - **`util/conflicts.js`** — pure conflict-detection helpers.
 - **`timeline/`** — render components (grid axis, track header, clip,
   now-line, top-level timeline renderer).
+- **`schedule/`** — the responsive Schedule destination's mobile views
+  (Section 3). Pure render helpers (`util.js`, `agenda-row.js`,
+  `agenda-view.js`, `month-grid.js`, `vertical-timeline.js`) + the
+  `mmScheduleMobile` Alpine component. `<760px` (store.isMobile) renders
+  this stack; `≥760px` keeps the `timeline/` desktop grid. `month-grid.js`
+  is shared by both. Create flow is the unified "+ Schedule" →
+  `openScheduleCreator` in `modals/recurrence-editor.js`.
 - **`toolbar.js`** — view-mode toggle + date nav (UI state only — no
   server mutations).
 - **`bin/`** — left-bin sections (media library + playlist library).
