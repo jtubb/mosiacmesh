@@ -41,65 +41,38 @@
     // This is the control console, not a display. Opt out of RELOAD broadcasts so
     // reloading a display group (or "all") never reloads the operator's console.
     window._mmNoReload = true;
-    function tickcallback(currentTime,currentTarget,drift_correction)
-    {
-        if(sock == null)
-        {
-            mosiacMeshConnect();
+
+    // Task 14 (Section 1 overhaul): the dead legacy jQuery was removed here.
+    // Deleted: tickcallback + ProgrammableTimer.setup (the admin console does
+    // not tick), the raw-SockJS Console <form> submit handler (the Console
+    // section markup was removed in Task 12), and the legacy jQuery toast()
+    // helper + the bulk of mosiacMeshCallback (the jQuery UIs it drove are
+    // gone; the live message path is js/timeline/timeline/sockjs-status.js,
+    // which wraps window.sock.onmessage and feeds Alpine.store('mm')).
+    //
+    // KEPT: the SockJS connection itself. mosiacMeshConnect() (in
+    // js/mosiacmesh.js) creates window.sock + wires window.generateMessage,
+    // which the timeline modals (play-now / fleet-confirm / calibration /
+    // track-header-context-menu) and sockjs-status.js all depend on. The
+    // only surviving callback behavior is the operator-facing device
+    // join/remove toast, now routed through the Alpine store toast (the
+    // legacy jQuery toast() is gone).
+    function mosiacMeshCallback(data_obj) {
+        var store = (window.Alpine && typeof window.Alpine.store === 'function')
+            ? window.Alpine.store('mm') : null;
+        if (!store || typeof store.toast !== 'function') { return; }
+        if (data_obj.REQUEST == "NEW_DEVICE_CONFIGURED") {
+            var nd = data_obj.PAYLOAD || {};
+            store.toast('Device joined: ' + (nd.friendlyName || nd.clientKey || 'unknown'), 'info');
+        } else if (data_obj.REQUEST == "DEVICE_REMOVED") {
+            var rp = data_obj.PAYLOAD || {};
+            store.toast(rp.cleared != null ? ('Cleared ' + rp.cleared + ' offline device(s)') : 'Device removed', 'info');
         }
     }
-	
-	$('form').submit(function() {
-		var text = generateMessage("SRV",$('#text').val(),"");
-        log('Sending: ' + text);
-        sock.send(text);
-        $('#text').val('').focus();
-        return false;
-    });
-	
-	function mosiacMeshCallback(data_obj)
-	{
-		// PR-6: this legacy dispatcher used to update jQuery UIs that
-		// have all been deleted (the Displays tree, the playlists and
-		// schedules editors, the propagation bars). The new admin
-		// hydrates from REST + chains its own SockJS subscriber via
-		// js/timeline/timeline/sockjs-status.js, which handles
-		// DISCOVERY_HEARTBEAT / CLIENTS_WENT_OFFLINE / RENDER_IN_PROGRESS
-		// independently of this function.
-		//
-		// What survives here:
-		//   - operator-facing toasts for device-join / device-remove
-		//     (the new admin's live data pulls reflect the same events,
-		//     but the toast surfaces what changed).
-		//
-		// Task 12 (Section 1 overhaul): the connection dot + text are now
-		// Alpine-bound to $store.mm.connection (fed by the store's
-		// sockjs-status subscriber). The old jQuery writes to #connDot /
-		// #connText were removed so they don't fight the x-text binding.
-		if (data_obj.REQUEST == "NEW_DEVICE_CONFIGURED")
-		{
-			var nd = data_obj.PAYLOAD || {};
-			if (typeof toast === 'function') toast('Device joined: ' + (nd.friendlyName || nd.clientKey || 'unknown'), 'ok');
-		}
-		else if (data_obj.REQUEST == "DEVICE_REMOVED")
-		{
-			var rp = data_obj.PAYLOAD || {};
-			if (typeof toast === 'function') {
-				toast(rp.cleared != null ? ('Cleared ' + rp.cleared + ' offline device(s)') : 'Device removed', 'ok');
-			}
-		}
-	}
 
-	function toast(msg, kind) {
-	  var $t = $('<div class="toast">').addClass(kind || '').text(msg).appendTo('#toasts');
-	  setTimeout(function(){ $t.fadeOut(250, function(){ $(this).remove(); }); }, 3000);
-	}
-
-
-    ProgrammableTimer.setup(1000,tickcallback);
-	mosiacMeshConnect(mosiacMeshCallback);
-
-
+    // Open the SockJS connection so window.sock exists for sockjs-status.js
+    // to hook and for the timeline modals to send through.
+    mosiacMeshConnect(mosiacMeshCallback);
   </script>
   <style>
 	img{
