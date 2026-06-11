@@ -25,6 +25,7 @@
  */
 import { api } from './api.js';
 import { expandSchedule } from './util/time.js';
+import { buildNowSummary } from './now-summary.js';
 
 function todayIso() {
   const d = new Date();
@@ -51,6 +52,10 @@ export function makeStore() {
     viewDate: todayIso(),
     selectedDisplay: null,
 
+    activeTab: 'now',                 // 'now' | 'content' | 'schedule' | 'fleet'
+    connection: { connected: false, onlineClients: 0 },
+    playback: {},                     // displayID -> {state, currentPlaylist, startedEpoch, renderStatus}
+
     hydrated: false,
     hydrateError: null,
     renderInProgress: {},
@@ -64,13 +69,14 @@ export function makeStore() {
       this.hydrated = false;
       this.hydrateError = null;
       try {
-        const [pl, sc, pr, me, dv, dg] = await Promise.all([
+        const [pl, sc, pr, me, dv, dg, pb] = await Promise.all([
           api.listPlaylists(),
           api.listSchedules(),
           api.listProfiles(),
           api.listMedia(),
           api.listDevices(),
           api.listDisplays(),
+          api.getPlayback(),
         ]);
         // Re-shape playlists + profiles to lookup dicts (server returns arrays).
         // Warn (don't crash) on duplicate-name anomalies — the server's POST
@@ -93,6 +99,7 @@ export function makeStore() {
         this.media     = me ?? { images: [], videos: [], videoDurations: {} };
         this.displays  = (dv?.devices) ?? [];
         this.displayGroups = dg ?? [];
+        this.playback = Object.fromEntries((pb || []).map((r) => [r.displayID, r]));
         // Default Week-view display = first display group (was: first
         // client). Groups + clients are correlated by displayID so the
         // existing per-group views keep working. Falls back to client
@@ -127,6 +134,20 @@ export function makeStore() {
 
     setRenderInProgress(displayID, inProgress) {
       this.renderInProgress = { ...this.renderInProgress, [displayID]: !!inProgress };
+    },
+
+    // ---- Now view + connection + playback (Section 1) ----
+    setActiveTab(tab) { this.activeTab = tab; },
+    goTo(tab) { if (typeof location !== 'undefined') location.hash = '#' + tab; },
+    setConnection(patch) { this.connection = { ...this.connection, ...patch }; },
+    setPlayback(row) { if (row && row.displayID) this.playback[row.displayID] = row; },
+    get nowCards() {
+      return buildNowSummary({
+        displayGroups: this.displayGroups,
+        displays: this.displays,
+        playback: this.playback,
+        renderInProgress: this.renderInProgress,
+      });
     },
 
     // ---- UI-state mutations (no server calls) ----
