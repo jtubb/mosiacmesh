@@ -53,6 +53,13 @@ from mosaicmesh.calibration import (
 # residual AND its run-to-run spread.
 KEYFRAME_GRID_SEC = 0.25
 
+# Fallback window for an item with no explicit duration ("Auto") whose
+# natural length can't be resolved server-side (image, animation, or a
+# video that hasn't been probed). Synchronized playback needs a concrete
+# positive window upfront — a 0-ms window silently skips the item on the
+# wall — so we never emit 0 for a real item.
+DEFAULT_ITEM_DURATION_S = 20
+
 # Video encoder + concurrency configuration. Render time on a 24-iPad fleet
 # was previously: 24 sequential ffmpeg invocations, each a software (libx264)
 # encode on one CPU. With a modern GPU's hardware encoder (NVENC on NVIDIA,
@@ -505,16 +512,46 @@ async def render_group_async(display_id):
 # Duration / payload / URL helpers
 # ---------------------------------------------------------------------------
 
-def _duration_ms(me):
-    """Item duration in milliseconds. Durations are authored/stored in SECONDS
-    (the editor's 'Duration (s)' field, default 5), but the client playback
-    engine (playlistIndex vs GoTime ms, currentTime, msToNext) and the ffmpeg
-    effect filters both consume MILLISECONDS — so convert at every boundary
-    that leaves the seconds-domain."""
+def _probed_video_seconds(file):
+    """Probed natural length in SECONDS for a video URL, or None.
+
+    Reuses the EXACT cache `/api/media` populates: `server._video_duration_cache`
+    keyed by `(disk_path, mtime)`, where the disk path is
+    `media/server/videos/<basename(url)>` (mirrors `api_media`'s mapping). This
+    is a synchronous, best-effort READ of the cache — it never probes (ffprobe
+    is async/blocking and `_duration_ms` runs on the wire-build path). Any
+    non-video URL, missing file, or cache miss returns None so the caller falls
+    back to the default window."""
     try:
-        return int(round(float(me.duration) * 1000))
+        if not isinstance(file, str):
+            return None
+        if not file.startswith("/media/server/videos/"):
+            return None
+        if not file.lower().endswith((".mp4", ".mov", ".m4v", ".webm", ".ogv", ".ogg")):
+            return None
+        import server
+        disk = os.path.join("media", "server", "videos", os.path.basename(file))
+        mtime = os.path.getmtime(disk)
+        return server._video_duration_cache.get((disk, mtime))
+    except Exception:
+        return None
+
+
+def _duration_ms(me):
+    """Item duration in ms. Explicit duration (seconds) -> ms. Missing
+    ('Auto') -> the video's probed natural length if known, else a 20s
+    default. Never 0 for a real item — a 0-ms window would skip the item
+    on the wall (synchronized playback needs the window upfront)."""
+    try:
+        d = float(me.duration)
+        if d > 0:
+            return int(round(d * 1000))
     except (TypeError, ValueError):
-        return 0
+        pass
+    secs = _probed_video_seconds(getattr(me, "file", None))
+    if secs and secs > 0:
+        return int(round(secs * 1000))
+    return DEFAULT_ITEM_DURATION_S * 1000
 
 
 def _media_item_payload(me):

@@ -280,9 +280,13 @@ class TestDurationUnits:
         me = server.MediaElement(); me.duration = 596.5
         assert server._duration_ms(me) == 596500
 
-    def test_duration_ms_none_is_zero(self):
+    def test_duration_ms_none_resolves_to_default(self):
+        # Missing duration ("Auto") on a non-video item resolves to the 20s
+        # default — never 0. A 0-ms window silently skipped the item on the
+        # wall (synchronized playback needs the window upfront). See
+        # render.DEFAULT_ITEM_DURATION_S + test_item_duration.py.
         me = server.MediaElement(); me.duration = None
-        assert server._duration_ms(me) == 0
+        assert server._duration_ms(me) == 20000
 
     def test_payload_duration_is_milliseconds(self):
         me = server.MediaElement()
