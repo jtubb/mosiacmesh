@@ -51,6 +51,7 @@ function open(store, scheduleId, prefill = {}) {
   // the stored schedule.
   const s = isCreate
     ? {
+        id: '__preview__',
         playlistName: prefill.playlistName || playlistNames[0] || '',
         displayID: prefill.displayID || groupIds[0] || '',
         dtstart: prefill.dtstart || new Date().toISOString().slice(0, 10),
@@ -62,20 +63,24 @@ function open(store, scheduleId, prefill = {}) {
     : store.schedules.find(x => x.id === scheduleId);
   if (!s) return;
 
+  const playlistField = isCreate
+    ? `<label>Playlist
+        <select data-field="playlistName">
+          ${playlistNames.map(n => `<option value="${escapeAttr(n)}"${n === s.playlistName ? ' selected' : ''}>${escapeAttr(n)}</option>`).join('')}
+        </select></label>`
+    : `<label>Playlist <input type="text" disabled value="${escapeAttr(s.playlistName)}"></label>`;
+  const displayField = isCreate
+    ? `<label>Display
+        <select data-field="displayID">
+          ${groupIds.map(g => `<option value="${escapeAttr(g)}"${g === s.displayID ? ' selected' : ''}>${escapeAttr(g)}</option>`).join('')}
+        </select></label>`
+    : `<label>Display <input type="text" disabled value="${escapeAttr(s.displayID)}"></label>`;
+
   const root = document.createElement('div');
   root.innerHTML = `
     <div class="mm-form-grid">
-      ${isCreate
-        ? `<label>Playlist
-            <select data-field="playlistName">
-              ${playlistNames.map(n => `<option value="${escapeAttr(n)}"${n === s.playlistName ? ' selected' : ''}>${escapeAttr(n)}</option>`).join('')}
-            </select></label>
-          <label>Display
-            <select data-field="displayID">
-              ${groupIds.map(g => `<option value="${escapeAttr(g)}"${g === s.displayID ? ' selected' : ''}>${escapeAttr(g)}</option>`).join('')}
-            </select></label>`
-        : `<label>Playlist <input type="text" disabled value="${escapeAttr(s.playlistName)}"></label>
-          <label>Display <input type="text" disabled value="${escapeAttr(s.displayID)}"></label>`}
+      ${playlistField}
+      ${displayField}
       <label>Starts on <input type="date" data-field="dtstart" value="${escapeAttr(s.dtstart || '')}"></label>
       <label>Priority <input type="number" data-field="priority" min="0" value="${Number(s.priority || 0)}"></label>
       <label>Start time <input type="time" data-field="startTime" value="${escapeAttr(s.startTime || '00:00')}"></label>
@@ -168,12 +173,12 @@ function open(store, scheduleId, prefill = {}) {
     // Note: endTime <= startTime is INTENTIONALLY allowed — expandSchedule
     // (util/time.js) treats that case as a cross-midnight schedule
     // (e.g. 22:00-02:00 wraps). Don't add validation that rejects it.
-    if (draft.end.type === 'until' && !draft.end.untilDate) {
-      store.toast('Pick an "until" date or change End to Never / After N.', 'error');
+    if (isCreate && (draft.playlistName === '' || draft.displayID === '')) {
+      store.toast('Pick a playlist and a display group.', 'error');
       return;
     }
-    if (isCreate && (!draft.playlistName || !draft.displayID)) {
-      store.toast('Pick a playlist and a display group.', 'error');
+    if (draft.end.type === 'until' && !draft.end.untilDate) {
+      store.toast('Pick an "until" date or change End to Never / After N.', 'error');
       return;
     }
     try {
