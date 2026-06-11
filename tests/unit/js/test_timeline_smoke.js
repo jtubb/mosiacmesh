@@ -55,6 +55,8 @@ const MODULES = [
   'js/timeline/modals/fleet-confirm.js',
   'js/timeline/modals/play-now.js',
   'js/timeline/animations-catalog.js',
+  'js/timeline/now-summary.js',
+  'js/timeline/shell/router.js',
 ];
 
 for (const rel of MODULES) {
