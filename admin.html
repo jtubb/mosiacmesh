@@ -167,24 +167,62 @@
 		font-size:12px;
 	}
 
-/* ===== MosaicMesh admin design system ===== */
+/* ===== MosaicMesh admin design system — design tokens =====
+   All CSS custom properties are defined here in one place.
+   Theme overrides (light) follow immediately.
+   Rules elsewhere in this file reference these tokens; they are
+   never redefined outside this block.
+   ============================================================ */
+
+/* --- Universal tokens (theme-independent) --- */
 :root {
+  /* colors — semantic status */
+  --ok:#27ae60; --warn:#e6a23c; --danger:#e25555;
+  --err:#e25555;         /* alias for danger, used in mm-* components */
+  --playing:#4a90d9;
+
+  /* colors — interactive / accent */
   --accent:#4a90d9; --accent-hover:#3a78ba;
-  --ok:#27ae60; --warn:#e6a23c; --danger:#e25555; --playing:#4a90d9;
+
+  /* spacing scale */
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px;
-  --radius:6px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+
+  /* radius + shadow */
+  --radius:6px;
   --shadow:0 1px 3px rgba(0,0,0,.25);
+
+  /* font */
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
 }
+
+/* --- Dark theme (default) --- */
 :root, [data-theme="dark"] {
-  --bg:#13171d; --surface:#1a1f27; --surface-2:#222831; --border:#2b313c;
+  /* surfaces */
+  --bg:#13171d; --surface:#1a1f27; --surface-2:#222831;
+  --bg-elev:#2a2a2a;     /* elevated surface for modals, popovers, context menus */
+  --border:#2b313c;
+
+  /* text */
   --text:#e6eaf0; --text-muted:#8b94a2;
+
   /* PR-23 vertical alignment bars on the day grid — dark theme tones. */
   --grid-hour:rgba(255,255,255,0.22);
   --grid-quarter:rgba(255,255,255,0.07);
 }
+
+/* --- Light theme overrides --- */
 [data-theme="light"] {
-  --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5; --border:#d7dde5;
-  --text:#1c2330; --text-muted:#5a6473; --shadow:0 1px 3px rgba(0,0,0,.10);
+  /* surfaces */
+  --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5;
+  --bg-elev:#ffffff;     /* elevated surface brightens on light bg */
+  --border:#d7dde5;
+
+  /* text */
+  --text:#1c2330; --text-muted:#5a6473;
+
+  /* shadow lightens proportionally */
+  --shadow:0 1px 3px rgba(0,0,0,.10);
+
   /* PR-23 alignment bars need to be DARKER strokes on the light bg
      (the dark-theme white-with-low-alpha values disappear against
      a near-white background). Slightly higher alpha on the hour
@@ -192,10 +230,22 @@
   --grid-hour:rgba(28,35,48,0.28);
   --grid-quarter:rgba(28,35,48,0.10);
 }
+
+/* --- System light-mode fallback (no explicit data-theme set) --- */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5; --border:#d7dde5;
+    /* surfaces */
+    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5;
+    --bg-elev:#ffffff;
+    --border:#d7dde5;
+
+    /* text */
     --text:#1c2330; --text-muted:#5a6473;
+
+    /* shadow */
+    --shadow:0 1px 3px rgba(0,0,0,.10);
+
+    /* grid lines */
     --grid-hour:rgba(28,35,48,0.28);
     --grid-quarter:rgba(28,35,48,0.10);
   }
@@ -211,7 +261,7 @@ body { background:var(--bg); color:var(--text); font:14px/1.4 var(--font); }
 .sidebar { flex:0 0 168px; background:var(--surface); border-right:1px solid var(--border); padding:var(--s2) 0; overflow:auto; }
 .navitem { display:block; width:100%; text-align:left; background:none; border:0; color:var(--text-muted); padding:var(--s2) var(--s4); font:inherit; cursor:pointer; border-left:3px solid transparent; }
 .navitem:hover { color:var(--text); }
-.navitem.active { color:var(--text); background:var(--surface-2); border-left-color:var(--accent); }
+/* .navitem.active removed — nav uses .navitem.on (Task 12). */
 .main { flex:1; overflow:auto; padding:var(--s4); min-width:0; }
 /* Task 12: x-show on each .section now owns visibility (it sets inline
    display:none when its activeTab test is false, and clears the inline
@@ -643,6 +693,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .nc-pill.playing { background: rgba(74,144,217,.18); color: var(--accent); }
 .nc-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
 .now-glance { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+.now-empty { color: var(--text-muted); padding: 24px; text-align: center; }
 .placeholder-tab { color: var(--text-muted); padding: 40px; text-align: center; }
 
 @media (max-width: 760px) {
