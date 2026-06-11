@@ -13,7 +13,7 @@
  * "Next 5 occurrences" preview shown below the form, recomputed on
  * every input change so the operator can see the recurrence resolve.
  *
- * Save calls store.updateSchedule (T-A2 412 branch active).
+ * Save calls store.updateSchedule (edit mode) or store.createSchedule (create mode).
  */
 import { openModal, closeModal } from './modal-shell.js';
 import { expandSchedule } from '../util/time.js';
@@ -37,14 +37,45 @@ export function openRecurrenceEditor(store, scheduleId) {
   open(store, scheduleId);
 }
 
-function open(store, scheduleId) {
-  const s = store.schedules.find(x => x.id === scheduleId);
+export function openScheduleCreator(store, prefill = {}) {
+  open(store, null, prefill);
+}
+
+function open(store, scheduleId, prefill = {}) {
+  const isCreate = scheduleId == null;
+  const playlistNames = Object.keys(store.playlists || {}).sort();
+  const groupIds = (store.displayGroups || []).map(g => g.displayID).filter(Boolean);
+
+  // The schedule the form edits. In create mode it's a fresh default
+  // (no id, no _serverVersion) seeded from prefill; in edit mode it's
+  // the stored schedule.
+  const s = isCreate
+    ? {
+        playlistName: prefill.playlistName || playlistNames[0] || '',
+        displayID: prefill.displayID || groupIds[0] || '',
+        dtstart: prefill.dtstart || new Date().toISOString().slice(0, 10),
+        startTime: prefill.startTime || '09:00',
+        endTime: prefill.endTime || '10:00',
+        freq: 'DAILY', interval: 1, byweekday: [], priority: 0,
+        end: { type: 'never' },
+      }
+    : store.schedules.find(x => x.id === scheduleId);
   if (!s) return;
+
   const root = document.createElement('div');
   root.innerHTML = `
     <div class="mm-form-grid">
-      <label>Playlist <input type="text" disabled value="${escapeAttr(s.playlistName)}"></label>
-      <label>Display <input type="text" disabled value="${escapeAttr(s.displayID)}"></label>
+      ${isCreate
+        ? `<label>Playlist
+            <select data-field="playlistName">
+              ${playlistNames.map(n => `<option value="${escapeAttr(n)}"${n === s.playlistName ? ' selected' : ''}>${escapeAttr(n)}</option>`).join('')}
+            </select></label>
+          <label>Display
+            <select data-field="displayID">
+              ${groupIds.map(g => `<option value="${escapeAttr(g)}"${g === s.displayID ? ' selected' : ''}>${escapeAttr(g)}</option>`).join('')}
+            </select></label>`
+        : `<label>Playlist <input type="text" disabled value="${escapeAttr(s.playlistName)}"></label>
+          <label>Display <input type="text" disabled value="${escapeAttr(s.displayID)}"></label>`}
       <label>Starts on <input type="date" data-field="dtstart" value="${escapeAttr(s.dtstart || '')}"></label>
       <label>Priority <input type="number" data-field="priority" min="0" value="${Number(s.priority || 0)}"></label>
       <label>Start time <input type="time" data-field="startTime" value="${escapeAttr(s.startTime || '00:00')}"></label>
@@ -94,6 +125,10 @@ function open(store, scheduleId) {
         : [],
       end,
       priority: Math.max(0, parseInt(f('[data-field="priority"]').value, 10) || 0),
+      ...(isCreate ? {
+        playlistName: f('[data-field="playlistName"]').value,
+        displayID: f('[data-field="displayID"]').value,
+      } : {}),
     };
   }
 
@@ -122,7 +157,10 @@ function open(store, scheduleId) {
   root.addEventListener('input', () => { updateConditionals(); refreshPreview(); });
   root.addEventListener('change', () => { updateConditionals(); refreshPreview(); });
 
-  const { dialog } = openModal({ title: `Schedule: ${s.playlistName} on ${s.displayID}`, contentEl: root });
+  const { dialog } = openModal({
+    title: isCreate ? 'New schedule' : `Schedule: ${s.playlistName} on ${s.displayID}`,
+    contentEl: root,
+  });
 
   root.querySelector('[data-action="cancel"]').addEventListener('click', () => closeModal());
   root.querySelector('[data-action="save"]').addEventListener('click', async () => {
@@ -134,8 +172,13 @@ function open(store, scheduleId) {
       store.toast('Pick an "until" date or change End to Never / After N.', 'error');
       return;
     }
+    if (isCreate && (!draft.playlistName || !draft.displayID)) {
+      store.toast('Pick a playlist and a display group.', 'error');
+      return;
+    }
     try {
-      await store.updateSchedule(scheduleId, draft);
+      if (isCreate) await store.createSchedule(draft);
+      else await store.updateSchedule(scheduleId, draft);
       closeModal();
     } catch (_) { /* toast already shown via withRollback */ }
   });
