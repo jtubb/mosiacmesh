@@ -56,6 +56,12 @@ const MODULES = [
   'js/animations.js',
   'js/timeline/content/content-items.js',
   'js/timeline/content/content-view.js',
+  'js/timeline/schedule/util.js',
+  'js/timeline/schedule/agenda-row.js',
+  'js/timeline/schedule/agenda-view.js',
+  'js/timeline/schedule/month-grid.js',
+  'js/timeline/schedule/vertical-timeline.js',
+  'js/timeline/schedule/schedule-mobile.js',
 ];
 
 for (const rel of MODULES) {
