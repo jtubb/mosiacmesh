@@ -797,7 +797,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
         <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
         <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
 
-        <div x-show="$store.mm.hydrated" class="mm-timeline-layout">
+        <div x-show="$store.mm.hydrated && !$store.mm.isMobile" class="mm-timeline-layout">
           <aside class="mm-bin">
             <div x-data="mmPlaylistBin" class="mm-bin-section">
               <div class="mm-bin-title">Playlists</div>
@@ -851,6 +851,30 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
             </div>
             <div x-data="mmTimeline" x-html="render()"></div>
           </div>
+        </div>
+
+        <!-- Mobile: agenda / vertical / week / month stack (Section 3) -->
+        <div x-show="$store.mm.hydrated && $store.mm.isMobile" x-data="mmScheduleMobile" class="mm-schedule-mobile">
+          <div class="mm-sched-mobile-toolbar">
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='day'}"   @click="$store.mm.setViewMode('day')">Day</button>
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='week'}"  @click="$store.mm.setViewMode('week')">Week</button>
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='month'}" @click="$store.mm.setViewMode('month')">Month</button>
+            <span style="flex:1"></span>
+            <template x-if="$store.mm.viewMode==='day'">
+              <span class="mm-density-toggle">
+                <button class="btn btn-ghost" :class="{'btn-active': density==='agenda'}"   @click="setDensity('agenda')" title="Agenda list">☰</button>
+                <button class="btn btn-ghost" :class="{'btn-active': density==='vertical'}" @click="setDensity('vertical')" title="Day timeline">▤</button>
+              </span>
+            </template>
+          </div>
+          <div class="mm-sched-mobile-datenav" x-data="mmToolbar">
+            <button class="btn btn-ghost" @click="step(-1)">◀</button>
+            <span class="mm-toolbar-date" x-text="formatDate()"></span>
+            <button class="btn btn-ghost" @click="step(1)">▶</button>
+            <button class="btn btn-ghost" @click="today()">Today</button>
+          </div>
+          <div x-html="render()"></div>
+          <button class="btn btn-primary mm-sched-fab" @click="openCreate()" title="Schedule a playlist">+ Schedule</button>
         </div>
 
       </section>

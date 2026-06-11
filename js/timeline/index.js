@@ -40,6 +40,7 @@ import { attachTrackHeaderPopover } from './track-header-popover.js';
 import { attachTrackHeaderContextMenu } from './track-header-context-menu.js';
 import { startRouter } from './shell/router.js';
 import { mmContentComponent } from './content/content-view.js';
+import { mmScheduleMobileComponent } from './schedule/schedule-mobile.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -63,7 +64,18 @@ function bootstrap() {
   // eslint-disable-next-line no-undef
   Alpine.data('mmContent', mmContentComponent);
   // eslint-disable-next-line no-undef
+  Alpine.data('mmScheduleMobile', mmScheduleMobileComponent);
+  // eslint-disable-next-line no-undef
   const store = Alpine.store('mm');   // the reactive Proxy
+  // Section 3: drive store.isMobile from the viewport so the Schedule
+  // section can switch between the desktop grid and the mobile stack.
+  if (typeof window.matchMedia === 'function') {
+    const mq = window.matchMedia('(max-width: 759px)');
+    store.setIsMobile(mq.matches);
+    const onChange = (e) => store.setIsMobile(e.matches);
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange); // older Safari
+  }
   store.hydrate().then(() => {
     requestAnimationFrame(() => autoscrollIntoView());
   });
