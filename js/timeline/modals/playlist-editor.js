@@ -32,10 +32,6 @@ import { buildContentItems, contentItemToPlaylistItem } from '../content/content
 function basename(p) { return String(p || '').split('/').pop() || ''; }
 function asObject(it) { return (typeof it === 'string') ? { file: it } : { ...it }; }
 function isAnim(it) { return it.playmode === 'SCRIPT'; }
-function maxDuration(item, store) {
-  const probed = store.media?.videoDurations?.[item.file];
-  return (probed != null && Number.isFinite(probed) && probed > 0) ? probed : null;
-}
 
 /**
  * Wire the drilled-in (Schedule timeline) entry points. Two listeners:
@@ -144,58 +140,33 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     });
     root.appendChild(list);
 
-    // selected-item settings
+    // selected-item settings: just Duration (blank = Auto) + Background.
+    // Auto = the content's natural length (video) / 20s (image, animation),
+    // resolved server-side. There is no per-item play-mode any more.
     if (selectedIdx >= 0) {
       const it = draft.items[selectedIdx];
       const box = document.createElement('div'); box.className = 'mm-ple-settings';
-      const itIsAnim = isAnim(it);
-      const isVideo = !itIsAnim && /\.(mp4|webm|mov)$/i.test(it.file);
-      const cap = maxDuration(it, store);
 
-      // Play mode — media only (animations are implicitly SCRIPT).
-      //   'full' (video only) = play the whole clip once (duration = auto =
-      //     natural length; the duration field is hidden).
-      //   'once' = play for a custom duration (truncated).
-      //   'loop' = loop.
-      // Derived from the stored shape: loop -> 'loop'; no explicit duration ->
-      // 'full' for video / 'once' for image; explicit duration -> 'once'.
-      let mode = null;
-      if (!itIsAnim) {
-        mode = (it.playmode === 'loop') ? 'loop' : (it.duration == null ? (isVideo ? 'full' : 'once') : 'once');
-        const pmWrap = document.createElement('label'); pmWrap.textContent = 'Play mode ';
-        const pm = document.createElement('select');
-        pm.innerHTML = '<option value="loop">Loop</option><option value="once">Play once</option>'
-          + (isVideo ? '<option value="full">Play full clip</option>' : '');
-        pm.value = mode;
-        pm.addEventListener('change', () => {
-          if (pm.value === 'loop') { it.playmode = 'loop'; }
-          else if (pm.value === 'full') { it.playmode = 'once'; delete it.duration; }
-          else { it.playmode = 'once'; if (it.duration == null) it.duration = (cap != null ? cap : 10); }
-          render();   // discrete choice: re-render to show/hide the duration field
-        });
-        pmWrap.appendChild(pm); box.appendChild(pmWrap);
-      }
+      // Duration — blank means Auto (natural length / default).
+      const durWrap = document.createElement('label'); durWrap.textContent = 'Duration (s) ';
+      const dur = document.createElement('input');
+      dur.type = 'number'; dur.min = '0.1'; dur.step = '0.1';
+      dur.placeholder = 'Auto';
+      dur.value = it.duration != null ? String(it.duration) : '';
+      dur.addEventListener('input', () => {
+        // NO render() here — rebuilding mid-typing drops focus.
+        const v = dur.value.trim();
+        if (!v) { delete it.duration; updateRowMeta(); return; }
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return;
+        it.duration = n; updateRowMeta();
+      });
+      durWrap.appendChild(dur); box.appendChild(durWrap);
+      const hint = document.createElement('span'); hint.className = 'mm-ple-hint';
+      hint.textContent = 'blank = Auto (full length)';
+      durWrap.appendChild(hint);
 
-      // Duration — hidden when a video is set to "Play full clip".
-      if (mode !== 'full') {
-        const durWrap = document.createElement('label'); durWrap.textContent = 'Duration (s) ';
-        const dur = document.createElement('input'); dur.type = 'number'; dur.min = '0.1'; dur.step = '0.1';
-        dur.value = it.duration != null ? String(it.duration) : '';
-        if (cap != null) { dur.max = String(cap); dur.title = 'max ' + cap + 's (clip length)'; }
-        dur.addEventListener('input', () => {
-          // NO render() here — rebuilding the DOM mid-typing drops focus.
-          const v = dur.value.trim();
-          if (!v) { delete it.duration; updateRowMeta(); return; }
-          let n = Number(v); if (!Number.isFinite(n) || n <= 0) return;
-          if (cap != null && n > cap) n = cap;
-          it.duration = n; updateRowMeta();
-        });
-        // On blur, snap the field to the stored (clamped) value.
-        dur.addEventListener('blur', () => { dur.value = (it.duration != null ? String(it.duration) : ''); });
-        durWrap.appendChild(dur); box.appendChild(durWrap);
-      }
-
-      // backgroundColor
+      // Background color
       const bgWrap = document.createElement('label'); bgWrap.textContent = 'Background ';
       const bg = document.createElement('input'); bg.type = 'text'; bg.placeholder = '#000000';
       bg.value = it.backgroundColor || '';
