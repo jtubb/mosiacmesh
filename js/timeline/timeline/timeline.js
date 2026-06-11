@@ -22,15 +22,6 @@ import { renderWeekStripesHtml } from './conflict-stripes.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function colorForPlaylist(name) {
-  // Stable, content-derived color via a tiny string hash.
-  let h = 0;
-  for (let i = 0; i < name.length; i++) {
-    h = (h * 31 + name.charCodeAt(i)) >>> 0;
-  }
-  return `hsl(${h % 360} 65% 55%)`;
-}
-
 function escapeText(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }

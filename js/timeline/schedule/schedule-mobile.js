@@ -12,7 +12,7 @@
 import { expandSchedule } from '../util/time.js';
 import { agendaDayHtml, agendaWeekHtml } from './agenda-view.js';
 import { monthGridHtml } from './month-grid.js';
-import { openRecurrenceEditor } from '../modals/recurrence-editor.js';
+import { openRecurrenceEditor, openScheduleCreator } from '../modals/recurrence-editor.js';
 import { verticalTimelineHtml } from './vertical-timeline.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -52,9 +52,7 @@ export function mmScheduleMobileComponent() {
     },
 
     setDensity(d) { this.density = d; },
-    openCreate() {
-      import('../modals/recurrence-editor.js').then(m => m.openScheduleCreator(this.$store.mm, {}));
-    },
+    openCreate() { openScheduleCreator(this.$store.mm, {}); },
 
     get tracks() {
       const groups = this.$store.mm.displayGroups;
