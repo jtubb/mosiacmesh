@@ -42,6 +42,7 @@ import { attachPlaylistEditor } from './modals/playlist-editor.js';
 import { attachTrackHeaderPopover } from './track-header-popover.js';
 import { attachTrackHeaderContextMenu } from './track-header-context-menu.js';
 import { startRouter } from './shell/router.js';
+import { mmContentComponent } from './content/content-view.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -64,6 +65,8 @@ function bootstrap() {
   Alpine.data('mmPlaylistBin', mmPlaylistBinComponent);
   // eslint-disable-next-line no-undef
   Alpine.data('mmToast', mmToastComponent);
+  // eslint-disable-next-line no-undef
+  Alpine.data('mmContent', mmContentComponent);
   // eslint-disable-next-line no-undef
   const store = Alpine.store('mm');   // the reactive Proxy
   store.hydrate().then(() => {

@@ -284,6 +284,38 @@ export function makeStore() {
     },
 
     /**
+     * POST a new (empty) playlist. Optimistic: insert a placeholder dict
+     * entry so the Playlists list shows it immediately; on success swap in
+     * the server's authoritative object (with _serverVersion); on failure
+     * (e.g. 409 duplicate name) roll back the slice + toast the error.
+     */
+    async createPlaylist(name) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['playlists'], () => {
+        this.playlists[name] = { name, items: [], _serverVersion: 0 };
+      }, async () => {
+        const created = await api.createPlaylist({ name });
+        if (created && created.name) this.playlists[created.name] = created;
+      });
+    },
+
+    /**
+     * DELETE a playlist by name. Optimistic: drop the dict entry; on
+     * failure (e.g. 409+refs when a schedule references it) roll back +
+     * toast the server's error.
+     */
+    async deletePlaylist(name) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['playlists'], () => {
+        delete this.playlists[name];
+      }, async () => {
+        await api.deletePlaylist(name);
+      });
+    },
+
+    /**
      * PUT a partial playlist patch with If-Match. Same rollback shape
      * as updateSchedule but the slice is `playlists` (a dict, not list).
      */

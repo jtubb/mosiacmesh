@@ -9,6 +9,7 @@
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script> 
   <script src="/js/mosiacmesh.js"></script>
+  <script src="/js/animations.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
   <script>
     // Defer Alpine's auto-start so the ES module below can register the
@@ -681,6 +682,27 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
   .navitem .ni-ic { margin-right: 0; display: block; font-size: 18px; }
   .main { padding-bottom: 64px; }
 }
+
+.mm-content-subtabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px; }
+.mm-content-subtabs button { background:none; border:none; color:var(--text-muted); padding:8px 14px; border-bottom:2px solid transparent; cursor:pointer; }
+.mm-content-subtabs button.on { color:var(--text); font-weight:600; border-bottom-color:var(--accent); }
+.mm-content-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+.mm-content-filters { display:flex; gap:6px; flex-wrap:wrap; }
+.mm-content-filters button { font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; }
+.mm-content-filters button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.mm-content-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; }
+.mm-content-tile { position:relative; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px 8px; text-align:center; }
+.mm-content-tile.kind-animation { border-color:#9a7bff; }
+.mm-tile-ic { display:block; font-size:22px; margin-bottom:6px; }
+.mm-tile-name { font-size:11px; word-break:break-all; }
+.mm-tile-del { position:absolute; top:4px; right:4px; border:none; background:rgba(0,0,0,.4); color:#fff; border-radius:50%; width:18px; height:18px; line-height:16px; cursor:pointer; opacity:0; }
+.mm-content-tile:hover .mm-tile-del { opacity:1; }
+.mm-content-empty { color:var(--text-muted); padding:24px; text-align:center; }
+.mm-playlist-list { list-style:none; padding:0; margin:0; }
+.mm-playlist-row { display:flex; align-items:center; gap:10px; padding:8px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px; }
+.mm-playlist-name { flex:1; text-align:left; background:none; border:none; color:var(--text); font-size:14px; cursor:pointer; }
+.mm-playlist-meta { font-size:11px; color:var(--text-muted); }
+.mm-playlist-del { border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:16px; }
   </style>
 </head>
 <body>
@@ -734,8 +756,53 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
           <p class="now-empty" x-show="$store.mm.nowCards.length===0">No display groups yet.</p>
         </div>
       </section>
-      <section class="section" data-route="content" x-show="$store.mm.activeTab==='content'">
-        <div class="placeholder-tab">Content — coming soon.</div>
+      <section class="section" data-route="content" x-show="$store.mm.activeTab==='content'" x-data="mmContent">
+        <div class="mm-content-subtabs">
+          <button :class="{on: subview==='library'}" @click="subview='library'">Library</button>
+          <button :class="{on: subview==='playlists'}" @click="subview='playlists'">Playlists</button>
+        </div>
+
+        <!-- Library -->
+        <div x-show="subview==='library'">
+          <div class="mm-content-toolbar">
+            <div class="mm-content-filters">
+              <button :class="{on: filter==='all'}" @click="filter='all'">All</button>
+              <button :class="{on: filter==='image'}" @click="filter='image'">Images</button>
+              <button :class="{on: filter==='video'}" @click="filter='video'">Videos</button>
+              <button :class="{on: filter==='animation'}" @click="filter='animation'">Animations</button>
+            </div>
+            <label class="btn btn-primary mm-upload-label">+ Upload
+              <input type="file" accept="image/*,video/*" multiple style="display:none" @change="uploadFiles($event)">
+            </label>
+          </div>
+          <div class="mm-content-grid">
+            <template x-for="it in items" :key="it.kind + ':' + it.ref">
+              <div class="mm-content-tile" :class="'kind-' + it.kind">
+                <span class="mm-tile-ic" x-text="iconFor(it.kind)"></span>
+                <span class="mm-tile-name" x-text="it.name"></span>
+                <button class="mm-tile-del" x-show="it.kind!=='animation'" @click="removeItem(it)" title="Delete">×</button>
+              </div>
+            </template>
+            <p class="mm-content-empty" x-show="items.length===0">Nothing here yet.</p>
+          </div>
+        </div>
+
+        <!-- Playlists -->
+        <div x-show="subview==='playlists'">
+          <div class="mm-content-toolbar">
+            <button class="btn btn-primary" @click="newPlaylist()">+ New playlist</button>
+          </div>
+          <ul class="mm-playlist-list">
+            <template x-for="p in playlists" :key="p.name">
+              <li class="mm-playlist-row">
+                <button class="mm-playlist-name" @click="edit(p.name)" x-text="p.name"></button>
+                <span class="mm-playlist-meta" x-text="(p.items?.length || 0) + ' items'"></span>
+                <button class="mm-playlist-del" @click="deletePlaylist(p.name)" title="Delete">×</button>
+              </li>
+            </template>
+            <p class="mm-content-empty" x-show="playlists.length===0">No playlists yet.</p>
+          </ul>
+        </div>
       </section>
       <section class="section" data-route="schedule" x-data="{}" x-show="$store.mm.activeTab==='schedule'">
         <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>

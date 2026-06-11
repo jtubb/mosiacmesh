@@ -57,6 +57,9 @@ const MODULES = [
   'js/timeline/animations-catalog.js',
   'js/timeline/now-summary.js',
   'js/timeline/shell/router.js',
+  'js/animations.js',
+  'js/timeline/content/content-items.js',
+  'js/timeline/content/content-view.js',
 ];
 
 for (const rel of MODULES) {
