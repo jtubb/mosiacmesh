@@ -1985,6 +1985,30 @@ async def get_video_duration(path):
     return dur
 
 
+def _playback_state(display):
+    """Map a Display's playback fields to a coarse state string for the admin
+    Now landing. PLAY/PREPARING -> playing, PAUSE -> paused, STOP/NOACTION ->
+    'stopped' if a playlist is applied else 'idle'."""
+    action = getattr(display, "action", None)
+    if action in (PlayState.PLAY, PlayState.PREPARING):
+        return "playing"
+    if action == PlayState.PAUSE:
+        return "paused"
+    has_playlist = bool(getattr(display, "currentPlaylistName", None)) and bool(getattr(display, "mediaElements", None))
+    return "stopped" if has_playlist else "idle"
+
+
+def _playback_row(display_id, display):
+    """The per-group row exposed by /api/playback and the PLAYBACK_CHANGED broadcast."""
+    return {
+        "displayID": display_id,
+        "state": _playback_state(display),
+        "currentPlaylist": getattr(display, "currentPlaylistName", None),
+        "startedEpoch": getattr(display, "playStartEpoch", 0),
+        "renderStatus": getattr(display, "renderStatus", ""),
+    }
+
+
 async def api_effects(request):
     """List the registered transition effects and their parameter schemas."""
     return web.Response(text=json.dumps({"effects": effects.effect_catalog()}),
