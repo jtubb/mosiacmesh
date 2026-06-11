@@ -50,3 +50,4 @@ tools/bench_variations.py
 
 # test fixture image used ad-hoc by calibrate scripts; large + binary
 tests/calibrationimage.jpg
+graphify-out/
