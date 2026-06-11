@@ -317,6 +317,17 @@ export const api = {
     return b;
   },
 
+  // ---- Playback ----
+  /** GET /api/playback — returns the groups array (each entry has
+   *  displayID + state + current playlist info). Returns [] when the
+   *  route is missing or the body has no groups key. */
+  async getPlayback() {
+    const r = await fetch('/api/playback');
+    if (!r.ok) throw new ApiError(`GET /api/playback -> ${r.status}`, { status: r.status, body: await r.json().catch(() => ({})) });
+    const body = await r.json();
+    return body.groups || [];
+  },
+
   // ---- Media ----
   /** PR-16: DELETE /api/media — body {url}. 204 on success, 409+refs
    *  if any playlist references the file, 404 if missing. */
