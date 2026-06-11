@@ -108,3 +108,33 @@ class TestApiPlayback:
         assert rows["Lobby"]["currentPlaylist"] == "Lunch Menu"
         assert rows["Lobby"]["startedEpoch"] == 999
         assert rows["Idle Group"]["state"] == "idle"
+
+
+class TestBroadcast:
+    def test_broadcast_payload_shape(self):
+        s = server.Settings()
+        d = Display()
+        d.action = PlayState.PLAY
+        d.currentPlaylistName = "Lunch Menu"
+        d.mediaElements = [object()]
+        s.displays["Lobby"] = d
+        server.settings = s
+
+        sent = []
+        fake_mgr = MagicMock()
+        fake_mgr.broadcast = lambda payload: sent.append(json.loads(payload))
+        with patch.object(server, "socketmanager", fake_mgr):
+            server._broadcast_playback_state("Lobby")
+
+        assert len(sent) == 1
+        msg = sent[0]
+        assert msg["REQUEST"] == "PLAYBACK_CHANGED"
+        assert msg["PAYLOAD"]["groups"][0]["displayID"] == "Lobby"
+        assert msg["PAYLOAD"]["groups"][0]["state"] == "playing"
+
+    def test_broadcast_unknown_group_is_noop(self):
+        server.settings = server.Settings()
+        fake_mgr = MagicMock()
+        with patch.object(server, "socketmanager", fake_mgr):
+            server._broadcast_playback_state("Nope")
+        fake_mgr.broadcast.assert_not_called()

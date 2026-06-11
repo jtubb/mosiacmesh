@@ -709,6 +709,7 @@ def _start_group_playback(display_id, resume_epoch=None):
         broadcast_to_display_group(display_id, {
             "REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
+    server._broadcast_playback_state(display_id)
 
 
 def _stop_group_playback(display_id):
@@ -729,6 +730,7 @@ def _stop_group_playback(display_id):
         display.armPending = set()
         display.prepareDeadline = 0
     broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
+    server._broadcast_playback_state(display_id)
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +787,7 @@ def _begin_prepare(display_id):
                      display_id, n_sent, n_skipped)
         asyncio.ensure_future(_prepare_unsynced_clients(display_id,
                                                          display.prepareId))
+    server._broadcast_playback_state(display_id)
 
 
 async def _prepare_unsynced_clients(display_id, prepare_id):

@@ -2009,6 +2009,21 @@ def _playback_row(display_id, display):
     }
 
 
+def _broadcast_playback_state(display_id):
+    """Broadcast one group's playback row to all admins. Best-effort: a broadcast
+    failure must never break playback (matches the PR-27 CLIENTS_CAME_ONLINE pattern)."""
+    try:
+        display = settings.displays.get(display_id)
+        if display is None:
+            return
+        socketmanager.broadcast(jsonpickle.encode({
+            "REQUEST": "PLAYBACK_CHANGED",
+            "PAYLOAD": {"groups": [_playback_row(display_id, display)]},
+        }))
+    except Exception:
+        pass
+
+
 async def api_playback(request):
     """Read-only per-group playback snapshot for the admin Now landing."""
     rows = [_playback_row(did, d) for did, d in settings.displays.items()]

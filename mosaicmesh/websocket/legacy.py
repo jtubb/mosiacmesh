@@ -410,6 +410,7 @@ def msg_response(msg,session):
         broadcast_to_display_group(display_id, {
             "REQUEST": "PAUSE", "PAYLOAD": {"displayID": display_id}
         })
+        server._broadcast_playback_state(display_id)
         response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "RELOAD"):
