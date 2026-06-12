@@ -935,8 +935,56 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
            markup was relocated under data-route="schedule" (above) so
            mmTimeline/mmToolbar/mmPlaylistBin still mount. -->
 
-      <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'">
-        <div class="placeholder-tab">Fleet — coming soon.</div>
+      <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'" x-data="mmFleet">
+        <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
+        <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
+        <div x-show="$store.mm.hydrated" class="mm-fleet">
+          <aside class="mm-fleet-list" x-show="!$store.mm.isMobile || selectedGroupId===null">
+            <div class="mm-fleet-list-head">
+              <span class="mm-fleet-list-title">Groups</span>
+              <span style="flex:1"></span>
+              <button class="btn btn-ghost" @click="openProfiles()" title="Edit device profiles">⚙ Profiles</button>
+              <button class="btn btn-primary" @click="newGroup()">+ New group</button>
+            </div>
+            <ul class="mm-fleet-groups">
+              <template x-for="g in groups" :key="g.displayID">
+                <li class="mm-fleet-group" :class="{'sel': g.displayID===selectedGroupId}" @click="selectGroup(g.displayID)">
+                  <span class="mm-fleet-group-name" x-text="g.displayID"></span>
+                  <span class="mm-fleet-group-badges">
+                    <span class="mm-fleet-online" x-text="statusFor(g).online + '/' + statusFor(g).total"></span>
+                    <template x-if="statusFor(g).playing"><span class="mm-fleet-badge playing" title="Playing">▶</span></template>
+                    <template x-if="statusFor(g).rendering"><span class="mm-fleet-badge rendering" title="Rendering">⟳</span></template>
+                    <template x-if="calibrationFor(g).total>0 && calibrationFor(g).calibratedCount===calibrationFor(g).total"><span class="mm-fleet-badge calibrated" title="Calibrated">✓</span></template>
+                  </span>
+                </li>
+              </template>
+              <template x-if="groups.length===0">
+                <li class="mm-fleet-empty">No display groups yet. Create one with "+ New group".</li>
+              </template>
+            </ul>
+          </aside>
+          <section class="mm-fleet-detail" x-show="selectedGroup" :class="{'mm-fleet-sheet': $store.mm.isMobile}">
+            <template x-if="selectedGroup">
+              <div>
+                <div class="mm-fleet-detail-head">
+                  <button class="btn btn-ghost mm-fleet-back" x-show="$store.mm.isMobile" @click="backToList()">‹ Fleet</button>
+                  <h2 class="mm-fleet-detail-name" x-text="selectedGroup.displayID"></h2>
+                  <span style="flex:1"></span>
+                  <button class="btn mm-btn-danger" @click="deleteGroup()">Delete group</button>
+                </div>
+                <div class="mm-fleet-statusline">
+                  <span x-text="statusFor(selectedGroup).online + '/' + statusFor(selectedGroup).total + ' online'"></span>
+                  <template x-if="statusFor(selectedGroup).playing"><span> · ▶ <span x-text="statusFor(selectedGroup).playlistName || 'playing'"></span></span></template>
+                  <template x-if="!statusFor(selectedGroup).playing"><span> · idle</span></template>
+                </div>
+                <div class="mm-fleet-cards">
+                  <!-- C1 adds Playback / Calibration / Device scripts cards here -->
+                  <!-- D1 adds the Devices card here -->
+                </div>
+              </div>
+            </template>
+          </section>
+        </div>
       </section>
     </main>
   </div>

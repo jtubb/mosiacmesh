@@ -41,6 +41,7 @@ import { attachTrackHeaderContextMenu } from './track-header-context-menu.js';
 import { startRouter } from './shell/router.js';
 import { mmContentComponent } from './content/content-view.js';
 import { mmScheduleMobileComponent } from './schedule/schedule-mobile.js';
+import { mmFleetComponent } from './fleet/fleet-view.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -65,6 +66,8 @@ function bootstrap() {
   Alpine.data('mmContent', mmContentComponent);
   // eslint-disable-next-line no-undef
   Alpine.data('mmScheduleMobile', mmScheduleMobileComponent);
+  // eslint-disable-next-line no-undef
+  Alpine.data('mmFleet', mmFleetComponent);
   // eslint-disable-next-line no-undef
   const store = Alpine.store('mm');   // the reactive Proxy
   // Section 3: drive store.isMobile from the viewport so the Schedule
