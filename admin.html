@@ -1003,7 +1003,44 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                       <button class="btn" @click="runScript('test')">Test</button>
                     </div>
                   </div>
-                  <!-- D1 adds the Devices card here -->
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Devices (<span x-text="devices.length"></span>)</h3>
+                    <label class="mm-fleet-selall"><input type="checkbox" :checked="allSelected" @change="toggleBulkAll()"> Select all</label>
+                    <ul class="mm-fleet-devices">
+                      <template x-for="d in devices" :key="d.clientKey">
+                        <li class="mm-fleet-device">
+                          <input type="checkbox" :checked="bulkSelection.has(d.clientKey)" @change="toggleBulk(d.clientKey)">
+                          <span class="mm-fleet-dev-dot" :class="{online: d.isOnline}" :title="d.isOnline ? 'online' : 'offline'"></span>
+                          <span class="mm-fleet-dev-name" x-text="d.friendlyName || d.clientKey"></span>
+                          <span class="mm-fleet-dev-type" x-text="d.deviceType || ''"></span>
+                          <label class="mm-fleet-dev-field">Profile
+                            <select @change="setDeviceProfile(d.clientKey, $event.target.value)">
+                              <option value="" :selected="!d.profileName">Auto-match</option>
+                              <template x-for="p in profileNames" :key="p"><option :value="p" :selected="d.profileName===p" x-text="p"></option></template>
+                            </select>
+                          </label>
+                          <label class="mm-fleet-dev-field">Group
+                            <select @change="moveDevice(d.clientKey, $event.target.value)">
+                              <template x-for="g in groups" :key="g.displayID"><option :value="g.displayID" :selected="g.displayID===selectedGroupId" x-text="g.displayID"></option></template>
+                            </select>
+                          </label>
+                        </li>
+                      </template>
+                      <template x-if="devices.length===0">
+                        <li class="mm-fleet-empty">No devices in this group.</li>
+                      </template>
+                    </ul>
+                    <div class="mm-fleet-bulkbar" x-show="bulkSelection.size>0">
+                      <span x-text="bulkSelection.size + ' selected'"></span>
+                      <select x-model="bulkTarget">
+                        <option value="">Move selected to…</option>
+                        <template x-for="g in groups" :key="g.displayID">
+                          <template x-if="g.displayID!==selectedGroupId"><option :value="g.displayID" x-text="g.displayID"></option></template>
+                        </template>
+                      </select>
+                      <button class="btn btn-primary" :disabled="!bulkTarget" @click="bulkMove(bulkTarget)">Apply</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </template>
