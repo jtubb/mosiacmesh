@@ -19,6 +19,8 @@ export function mmFleetComponent() {
     selectedGroupId: null,
     bulkSelection: new Set(),   // clientKeys; reassigned on change for Alpine reactivity
     bulkTarget: '',
+    expandedDevice: null,       // clientKey of the inline-expanded device row (accordion)
+    selectMode: false,          // bulk-select mode: rows show checkboxes + the bulk bar
 
     // ---- derived ----
     get groups() { return this.$store.mm.displayGroups || []; },
@@ -39,8 +41,24 @@ export function mmFleetComponent() {
     },
 
     // ---- navigation ----
-    selectGroup(id) { this.selectedGroupId = id; this.bulkSelection = new Set(); this.bulkTarget = ''; },
+    selectGroup(id) {
+      this.selectedGroupId = id;
+      this.bulkSelection = new Set();
+      this.bulkTarget = '';
+      this.expandedDevice = null;
+      this.selectMode = false;
+    },
     backToList() { this.selectedGroupId = null; },
+
+    // ---- device-row UI: accordion expand + bulk-select mode ----
+    toggleExpand(clientKey) {
+      this.expandedDevice = this.expandedDevice === clientKey ? null : clientKey;
+    },
+    toggleSelectMode() {
+      this.selectMode = !this.selectMode;
+      this.expandedDevice = null;           // expand + select are mutually exclusive
+      if (!this.selectMode) { this.bulkSelection = new Set(); this.bulkTarget = ''; }
+    },
 
     // ---- group-level actions (reuse existing modals/helpers) ----
     playNow() { if (this.selectedGroupId) openPlayNowModal(this.$store.mm, this.selectedGroupId); },

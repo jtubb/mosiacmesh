@@ -30,15 +30,26 @@ test('groupStatusLine: STOP/IDLE states are not "playing"', () => {
   assert.equal(groupStatusLine(group, { Lobby: { state: 'PAUSE', currentPlaylist: 'X' } }, {}).playing, true);
 });
 
-test('deviceRowsForGroup filters by displayID and sorts online-first then name', () => {
+test('deviceRowsForGroup filters by displayID and sorts by name (case-insensitive, ignores online)', () => {
   const displays = [
-    { clientKey: 'a', displayID: 'Lobby', friendlyName: 'Zed', isOnline: false },
-    { clientKey: 'b', displayID: 'Lobby', friendlyName: 'Ann', isOnline: true },
+    { clientKey: 'a', displayID: 'Lobby', friendlyName: 'Zed', isOnline: true },
+    { clientKey: 'b', displayID: 'Lobby', friendlyName: 'ann', isOnline: false },
     { clientKey: 'c', displayID: 'Cafe',  friendlyName: 'Cy',  isOnline: true },
     { clientKey: 'd', displayID: 'Lobby', friendlyName: 'Bob', isOnline: true },
   ];
   const rows = deviceRowsForGroup({ displayID: 'Lobby' }, displays);
-  assert.deepEqual(rows.map(d => d.clientKey), ['b', 'd', 'a']); // online (Ann,Bob) then offline (Zed)
+  // Pure name sort: ann (offline!) , Bob, Zed — online status does NOT reorder.
+  assert.deepEqual(rows.map(d => d.clientKey), ['b', 'd', 'a']);
+});
+
+test('deviceRowsForGroup sorts numbered names naturally (screen2 before screen13)', () => {
+  const displays = [
+    { clientKey: 'k13', displayID: 'X', friendlyName: 'Screen13' },
+    { clientKey: 'k2',  displayID: 'X', friendlyName: 'screen2' },
+    { clientKey: 'k1',  displayID: 'X', friendlyName: 'Screen1' },
+  ];
+  const rows = deviceRowsForGroup({ displayID: 'X' }, displays);
+  assert.deepEqual(rows.map(d => d.clientKey), ['k1', 'k2', 'k13']);
 });
 
 test('calibrationSummary counts devices with a measuredPerimeter', () => {

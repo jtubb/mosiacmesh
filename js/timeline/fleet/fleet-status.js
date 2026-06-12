@@ -22,15 +22,17 @@ export function groupStatusLine(group, playback, renderInProgress) {
   return { displayID, online, total, playing, playlistName, rendering };
 }
 
-/** The devices in a group, online-first then by friendly name. */
+/**
+ * The devices in a group, sorted by friendly name. Natural + case-insensitive
+ * (so "screen2" sorts before "screen13", and case doesn't reorder).
+ */
 export function deviceRowsForGroup(group, displays) {
   const id = group && group.displayID;
   const rows = (displays || []).filter(d => d.displayID === id);
   rows.sort((a, b) => {
-    if (!!a.isOnline !== !!b.isOnline) return a.isOnline ? -1 : 1;
-    const an = (a.friendlyName || a.clientKey || '').toLowerCase();
-    const bn = (b.friendlyName || b.clientKey || '').toLowerCase();
-    return an < bn ? -1 : an > bn ? 1 : 0;
+    const an = a.friendlyName || a.clientKey || '';
+    const bn = b.friendlyName || b.clientKey || '';
+    return an.localeCompare(bn, undefined, { numeric: true, sensitivity: 'base' });
   });
   return rows;
 }

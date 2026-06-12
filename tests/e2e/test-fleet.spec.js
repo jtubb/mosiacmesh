@@ -76,7 +76,9 @@ export default async function () {
       assert.ok(cardTitles.includes(t), `expected a "${t}" card, got ${JSON.stringify(cardTitles)}`);
     }
 
-    // ---- 1b. A group WITH devices renders device rows + Profile/Group selects (non-mutating) ----
+    // ---- 1b. A group WITH devices: compact rows (no inline selects) → expand
+    //          one to reveal Profile+Move → Select mode reveals the bulk bar.
+    //          All non-mutating (no Apply, no device moved). ----
     const withDevices = restGroups.find(g => (g.clientCount || 0) > 0);
     if (withDevices) {
       await page.evaluate((id) => {
@@ -86,20 +88,36 @@ export default async function () {
       }, withDevices.displayID);
       await page.waitForFunction(
         () => document.querySelector('[data-route="fleet"] .mm-fleet-device') != null, null, { timeout: 5_000 });
-      const devCheck = await page.evaluate(() => {
+      // Compact by default: rows show a name, and NO selects are rendered yet.
+      const compact = await page.evaluate(() => {
         const rows = Array.from(document.querySelectorAll('[data-route="fleet"] .mm-fleet-device'));
         return {
           count: rows.length,
-          allHaveTwoSelects: rows.every(r => r.querySelectorAll('select').length === 2),
+          selects: document.querySelectorAll('[data-route="fleet"] .mm-fleet-device select').length,
           firstName: rows[0]?.querySelector('.mm-fleet-dev-name')?.textContent?.trim() || '',
         };
       });
-      assert.ok(devCheck.count > 0, `group ${withDevices.displayID} should show device rows`);
-      assert.ok(devCheck.allHaveTwoSelects, 'each device row should have a Profile + a Group <select>');
-      assert.ok(devCheck.firstName.length > 0, 'device row should show a name');
+      assert.ok(compact.count > 0, `group ${withDevices.displayID} should show device rows`);
+      assert.ok(compact.firstName.length > 0, 'device row should show a name');
+      assert.equal(compact.selects, 0, 'device selects should be hidden until a row is expanded');
 
-      // Bulk bar wiring (non-mutating): ticking select-all reveals the bulk-move
-      // bar (x-show="bulkSelection.size>0"). We do NOT click Apply (no real move).
+      // Expand the first row → its panel reveals exactly Profile + Move-to-group.
+      await page.evaluate(() => document.querySelector('[data-route="fleet"] .mm-fleet-dev-row').click());
+      await settle(page);
+      const expandedSelects = await page.evaluate(() =>
+        document.querySelectorAll('[data-route="fleet"] .mm-fleet-dev-panel select').length);
+      assert.equal(expandedSelects, 2, 'expanding a device row should reveal Profile + Move-to-group selects');
+      // Collapse it again.
+      await page.evaluate(() => document.querySelector('[data-route="fleet"] .mm-fleet-dev-row').click());
+      await settle(page);
+
+      // Enter Select mode → checkboxes appear; select-all reveals the bulk-move
+      // bar. We do NOT click Apply (no real device moved).
+      await page.evaluate(() => {
+        const btn = document.querySelector('[data-route="fleet"] .mm-fleet-selbtn');
+        btn.click();
+      });
+      await settle(page);
       await page.evaluate(() => {
         const sa = document.querySelector('[data-route="fleet"] .mm-fleet-selall input[type="checkbox"]');
         sa.checked = true; sa.dispatchEvent(new Event('change', { bubbles: true }));
@@ -109,12 +127,13 @@ export default async function () {
         const bar = document.querySelector('[data-route="fleet"] .mm-fleet-bulkbar');
         return bar && bar.offsetParent !== null;
       });
-      assert.ok(barShown, 'select-all should reveal the bulk-move bar');
-      // Untick to leave no selection.
+      assert.ok(barShown, 'select-all in Select mode should reveal the bulk-move bar');
+      // Exit Select mode (Done) — clears the selection, no mutation.
       await page.evaluate(() => {
-        const sa = document.querySelector('[data-route="fleet"] .mm-fleet-selall input[type="checkbox"]');
-        sa.checked = false; sa.dispatchEvent(new Event('change', { bubbles: true }));
+        const btn = document.querySelector('[data-route="fleet"] .mm-fleet-selbtn');
+        if (btn && btn.textContent.trim() === 'Done') btn.click();
       });
+      await settle(page);
     }
 
     // ---- 2. Create a group via the UI -> appears -> delete -> gone ----

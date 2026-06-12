@@ -734,14 +734,23 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-fleet-card-title { margin:0 0 8px; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
 .mm-fleet-card-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .mm-fleet-calib { color:var(--text-muted); font-size:13px; }
+.mm-fleet-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.mm-fleet-card-head .mm-fleet-card-title { margin:0; }
+.mm-fleet-selbtn { font-size:12px; padding:3px 10px; }
 .mm-fleet-selall { display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-bottom:8px; }
-.mm-fleet-devices { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
-.mm-fleet-device { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 4px; border-bottom:1px solid var(--border); font-size:13px; }
-.mm-fleet-dev-dot { width:8px; height:8px; border-radius:50%; background:#888; flex:0 0 auto; }
+.mm-fleet-devices { list-style:none; margin:0; padding:0; }
+.mm-fleet-device { border-bottom:1px solid var(--border); }
+.mm-fleet-device:last-child { border-bottom:none; }
+.mm-fleet-dev-row { display:flex; align-items:center; gap:9px; padding:10px 4px; font-size:14px; cursor:pointer; }
+.mm-fleet-dev-row:active { background:rgba(127,127,127,.08); }
+.mm-fleet-dev-dot { width:9px; height:9px; border-radius:50%; background:#888; flex:0 0 auto; }
 .mm-fleet-dev-dot.online { background:var(--ok); }
-.mm-fleet-dev-name { font-weight:600; }
-.mm-fleet-dev-type { color:var(--text-muted); }
-.mm-fleet-dev-field { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-muted); }
+.mm-fleet-dev-name { flex:1; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mm-fleet-dev-type { color:var(--text-muted); font-size:12px; flex:0 0 auto; }
+.mm-fleet-dev-chev { color:var(--text-muted); font-size:12px; flex:0 0 auto; width:14px; text-align:center; }
+.mm-fleet-dev-panel { display:flex; flex-direction:column; gap:8px; padding:4px 4px 12px 22px; }
+.mm-fleet-dev-field { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
+.mm-fleet-dev-field select { flex:1; min-width:0; }
 .mm-fleet-bulkbar { display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border); }
 /* Mobile: list is full-width; detail becomes a full-screen sheet. */
 @media (max-width:759px){
@@ -1003,33 +1012,43 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                     </div>
                   </div>
                   <div class="mm-fleet-card">
-                    <h3 class="mm-fleet-card-title">Devices (<span x-text="devices.length"></span>)</h3>
-                    <label class="mm-fleet-selall"><input type="checkbox" :checked="allSelected" @change="toggleBulkAll()"> Select all</label>
+                    <div class="mm-fleet-card-head">
+                      <h3 class="mm-fleet-card-title">Devices (<span x-text="devices.length"></span>)</h3>
+                      <button class="btn btn-ghost mm-fleet-selbtn" x-show="devices.length>0" @click="toggleSelectMode()" x-text="selectMode ? 'Done' : 'Select'"></button>
+                    </div>
+                    <label class="mm-fleet-selall" x-show="selectMode && devices.length>0"><input type="checkbox" :checked="allSelected" @change="toggleBulkAll()"> Select all</label>
                     <ul class="mm-fleet-devices">
                       <template x-for="d in devices" :key="d.clientKey">
-                        <li class="mm-fleet-device">
-                          <input type="checkbox" :checked="bulkSelection.has(d.clientKey)" @change="toggleBulk(d.clientKey)">
-                          <span class="mm-fleet-dev-dot" :class="{online: d.isOnline}" :title="d.isOnline ? 'online' : 'offline'"></span>
-                          <span class="mm-fleet-dev-name" x-text="d.friendlyName || d.clientKey"></span>
-                          <span class="mm-fleet-dev-type" x-text="d.deviceType || ''"></span>
-                          <label class="mm-fleet-dev-field">Profile
-                            <select @change="setDeviceProfile(d.clientKey, $event.target.value)">
-                              <option value="" :selected="!d.profileName">Auto-match</option>
-                              <template x-for="p in profileNames" :key="p"><option :value="p" :selected="d.profileName===p" x-text="p"></option></template>
-                            </select>
-                          </label>
-                          <label class="mm-fleet-dev-field">Group
-                            <select @change="moveDevice(d.clientKey, $event.target.value)">
-                              <template x-for="g in groups" :key="g.displayID"><option :value="g.displayID" :selected="g.displayID===selectedGroupId" x-text="g.displayID"></option></template>
-                            </select>
-                          </label>
+                        <li class="mm-fleet-device" :class="{expanded: expandedDevice===d.clientKey}">
+                          <div class="mm-fleet-dev-row" @click="!selectMode && toggleExpand(d.clientKey)">
+                            <input type="checkbox" x-show="selectMode" :checked="bulkSelection.has(d.clientKey)" @change="toggleBulk(d.clientKey)">
+                            <span class="mm-fleet-dev-dot" :class="{online: d.isOnline}" :title="d.isOnline ? 'online' : 'offline'"></span>
+                            <span class="mm-fleet-dev-name" x-text="d.friendlyName || d.clientKey"></span>
+                            <span class="mm-fleet-dev-type" x-text="d.deviceType || ''"></span>
+                            <span class="mm-fleet-dev-chev" x-show="!selectMode" x-text="expandedDevice===d.clientKey ? '▾' : '▸'"></span>
+                          </div>
+                          <template x-if="!selectMode && expandedDevice===d.clientKey">
+                            <div class="mm-fleet-dev-panel">
+                              <label class="mm-fleet-dev-field">Profile
+                                <select @change="setDeviceProfile(d.clientKey, $event.target.value)">
+                                  <option value="" :selected="!d.profileName">Auto-match</option>
+                                  <template x-for="p in profileNames" :key="p"><option :value="p" :selected="d.profileName===p" x-text="p"></option></template>
+                                </select>
+                              </label>
+                              <label class="mm-fleet-dev-field">Move to
+                                <select @change="moveDevice(d.clientKey, $event.target.value)">
+                                  <template x-for="g in groups" :key="g.displayID"><option :value="g.displayID" :selected="g.displayID===selectedGroupId" x-text="g.displayID"></option></template>
+                                </select>
+                              </label>
+                            </div>
+                          </template>
                         </li>
                       </template>
                       <template x-if="devices.length===0">
                         <li class="mm-fleet-empty">No devices in this group.</li>
                       </template>
                     </ul>
-                    <div class="mm-fleet-bulkbar" x-show="bulkSelection.size>0">
+                    <div class="mm-fleet-bulkbar" x-show="selectMode && bulkSelection.size>0">
                       <span x-text="bulkSelection.size + ' selected'"></span>
                       <select x-model="bulkTarget">
                         <option value="">Move selected to…</option>
