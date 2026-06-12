@@ -10,7 +10,8 @@
  * Server-side path is covered by tests/unit/test_api_endpoints.py::TestBulkAssign.
  *
  * (A drag-and-drop variant was prototyped during PR-15 but removed
- * — see the rationale in track-header-popover.js's module comment.)
+ * — dragging out of a positioned popover onto a barely-visible target
+ * was more cumbersome than the bulk-bar in practice.)
  */
 import { chromium } from 'playwright';
 import assert from 'node:assert';

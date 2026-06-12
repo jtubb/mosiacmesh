@@ -1,31 +1,16 @@
 /**
- * Right-click on a track header → context menu. Items:
- *   - Play playlist now… / Stop playback (PR-29): ad-hoc playback that
- *     bypasses the scheduler. The picker fires ASSIGN_PLAYLIST + PLAY
- *     via SockJS; the stop item fires STOP. See modals/play-now.js.
- *   - Login / Start / Stop / Reboot / Test (PR-13): RUN_SCRIPT scoped
- *     to displayID. Same fleet-confirm modal as the toolbar buttons,
- *     just pre-scoped so the operator doesn't have to set the toolbar
- *     dropdown first when they're already pointing at a specific
- *     track. Routes through fleet-confirm.fireFleetAction so >3-device
- *     prompts behave identically.
- *   - Reload group (spec §361, PR-9): SockJS RELOAD scoped to displayID.
- *   - Delete group (PR-12): DELETE /api/displays/{displayID}, blocks
- *     with the server's 409+refs error if the group has any clients or
- *     schedules.
+ * Right-click on a track header → context menu.
+ *
+ * Section 4 (Fleet): device/group management moved to the Fleet tab.
+ * The single item here deep-links the operator to Fleet and
+ * pre-selects the relevant display group so they land in the right
+ * place without extra navigation.
  *
  * Reuses #mmContextMenu (already populated by context-menu.js for
  * clip right-clicks) — only one menu is open at a time, so sharing the
  * element works. context-menu.js's outside-click / Esc handlers also
  * close ours; no extra dismiss wiring needed here.
- *
- * Distinct from track-header-popover.js, which handles LEFT-click on
- * the same element to open the per-client profile override popover
- * (PR-4c gap-2).
  */
-import { fireFleetAction } from './modals/fleet-confirm.js';
-import { openPlayNowModal, fireStopNow } from './modals/play-now.js';
-
 export function attachTrackHeaderContextMenu(store) {
   const menu = document.getElementById('mmContextMenu');
   if (!menu) return;
@@ -35,48 +20,16 @@ export function attachTrackHeaderContextMenu(store) {
   function open(ev, displayID) {
     menu.innerHTML = '';
     const items = [
-      // PR-29: ad-hoc playback. Top of the menu so it's the closest
-      // click target — the most common "I want to show something
-      // right now" action shouldn't require scrolling past device
-      // power scripts.
-      { label: 'Play playlist now…', action: () => openPlayNowModal(store, displayID) },
-      { label: 'Stop playback',      action: () => fireStopNow(store, displayID) },
-      { separator: true },
-      // PR-13: per-group fleet actions. Sequence matches the toolbar
-      // button order (login → start → stop → reboot → test) so the
-      // muscle memory is the same.
-      { label: 'Login',  action: () => fireFleetAction(store, 'login',  displayID) },
-      { label: 'Start',  action: () => fireFleetAction(store, 'start',  displayID) },
-      { label: 'Stop',   action: () => fireFleetAction(store, 'stop',   displayID) },
-      { label: 'Reboot', action: () => fireFleetAction(store, 'reboot', displayID) },
-      { label: 'Test',   action: () => fireFleetAction(store, 'test',   displayID) },
-      { separator: true },
       {
-        label: 'Reload group',
+        label: 'Manage in Fleet →',
         action: () => {
-          if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
-            store.toast('SockJS not available; reload the page.', 'error');
-            return;
+          // Section 4: device/group/playback management lives in the
+          // Fleet destination now. Route there and select this group.
+          store.goTo('fleet');
+          const fleet = document.querySelector('[x-data="mmFleet"]');
+          if (fleet && fleet._x_dataStack) {
+            try { window.Alpine.$data(fleet).selectGroup(displayID); } catch (_) { /* tolerate */ }
           }
-          try {
-            window.sock.send(window.generateMessage('SRV', 'RELOAD', { displayID }));
-            const count = (store.displays || []).filter(d => d.displayID === displayID).length;
-            store.toast(`Reload sent to "${displayID}" (${count} device${count === 1 ? '' : 's'}).`, 'info');
-          } catch (e) {
-            store.toast(`Failed to send reload: ${e?.message || e}`, 'error');
-          }
-        },
-      },
-      {
-        label: 'Delete group',
-        action: async () => {
-          // Confirm even when the group looks empty — display groups
-          // are persistent infrastructure, not throwaway. The server's
-          // 409+refs is the real backstop; this confirm is just a
-          // sanity check against an errant right-click.
-          if (!window.confirm(`Delete display group "${displayID}"? This cannot be undone.`)) return;
-          try { await store.deleteDisplayGroup(displayID); }
-          catch (_) { /* withRollback already toasted the server error */ }
         },
       },
     ];

@@ -874,23 +874,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                 </select>
               </template>
 
-              <span style="flex:1"></span>
-              <span class="size" style="color:var(--text-muted)">Fleet:</span>
-              <select class="input mm-fleet-scope" x-model="fleetScope"
-                      :title="fleetScope ? 'Fleet actions scoped to ' + fleetScope : 'Fleet actions target every device'">
-                <option value="">All devices</option>
-                <template x-for="id in availableDisplayIds" :key="id">
-                  <option :value="id" x-text="id"></option>
-                </template>
-              </select>
-              <button class="btn btn-ghost" @click="fleetAction('login')"  title="Wake + unlock the scoped devices (SSH)">🔓</button>
-              <button class="btn btn-ghost" @click="fleetAction('start')"  title="Open the display page on the scoped devices">▶</button>
-              <button class="btn btn-ghost" @click="fleetAction('stop')"   title="Close the display on the scoped devices">⏹</button>
-              <button class="btn btn-ghost" @click="fleetAction('reboot')" title="Reboot the scoped devices">⟲</button>
-              <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg) on the scoped devices">🐞</button>
-                <button class="btn btn-ghost" type="button" @click="openProfileEditor()" title="Edit profiles">⚙ Profiles</button>
-                <button class="btn btn-ghost" type="button" @click="openCalibration()" title="Display calibration">🎯 Calibrate</button>
-                <button class="btn btn-ghost" type="button" @click="addDisplayGroup()" title="Create a new display group">+ Group</button>
             </div>
             <div x-data="mmTimeline" x-html="render()"></div>
           </div>
@@ -1052,8 +1035,8 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
   <!-- Global overlay layer: lives at the .app top level, NOT inside a route
        <section> (whose x-show toggles display:none — which hid any modal
        mounted into #mmModalHost when its section wasn't the active tab).
-       modal-shell.js / context-menu.js / track-header-popover.js + the drag
-       marker append/position into these. -->
+       modal-shell.js / context-menu.js + the drag marker append/position
+       into these. -->
   <div x-data="mmToast" class="mm-toast-stack" x-show="items.length > 0">
     <template x-for="t in items" :key="t.id">
       <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
