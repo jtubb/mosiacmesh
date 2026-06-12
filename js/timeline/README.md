@@ -23,6 +23,13 @@ Client-side reactive timeline view for the admin console, loaded into
   this stack; `≥760px` keeps the `timeline/` desktop grid. `month-grid.js`
   is shared by both. Create flow is the unified "+ Schedule" →
   `openScheduleCreator` in `modals/recurrence-editor.js`.
+- **`fleet/`** — the Fleet destination (Section 4). Pure status helpers
+  (`fleet-status.js`) + the `mmFleet` master-detail component
+  (`fleet-view.js`). Groups list → per-group detail cards (Playback /
+  Calibration / Device scripts / Devices). Reuses the existing modals
+  (play-now, fleet-confirm, calibration, profile-editor) + store CRUD
+  mutators; device/group management was relocated here out of the
+  Schedule track-headers/toolbar.
 - **`toolbar.js`** — view-mode toggle + date nav (UI state only — no
   server mutations).
 - **`bin/`** — left-bin sections (media library + playlist library).

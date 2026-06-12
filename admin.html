@@ -490,10 +490,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-clip-stripe-vertical { top: auto; bottom: auto; left: 0; right: 0; }
 .mm-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 0; flex-wrap: wrap; }
 .mm-toolbar-date { font-weight: 600; min-width: 220px; text-align: center; }
-/* PR-13: scope selector sits between "Fleet:" label and action buttons.
-   Compact so it doesn't push the action row off-screen on narrower
-   viewports — the dropdown only needs to show short displayIDs. */
-.mm-fleet-scope { font-size: 12px; padding: 2px 4px; min-width: 80px; max-width: 160px; }
 .btn-active { background: var(--accent, #345); color: white; }
 .mm-toast-stack { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 1000; max-width: 360px; }
 /* PR-4b T13: recurrence popover. Floats anchored under a clip; click
@@ -714,6 +710,45 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-vt-block-name { display:block; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mm-vt-block-time { display:block; font-size:10px; opacity:.85; }
 .mm-vt-nowline { height:2px; background:var(--err); z-index:3; }
+
+/* ---- Section 4: Fleet ---- */
+.mm-fleet { display:flex; gap:14px; align-items:flex-start; }
+.mm-fleet-list { flex:0 0 38%; max-width:380px; }
+.mm-fleet-list-head { display:flex; align-items:center; gap:6px; padding:4px 0 8px; }
+.mm-fleet-list-title { font-weight:700; }
+.mm-fleet-groups { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.mm-fleet-group { display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); cursor:pointer; }
+.mm-fleet-group.sel { outline:2px solid var(--accent); }
+.mm-fleet-group-name { flex:1; font-weight:600; }
+.mm-fleet-group-badges { display:flex; align-items:center; gap:6px; font-size:12px; }
+.mm-fleet-online { color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.mm-fleet-badge.playing { color:var(--ok); }
+.mm-fleet-badge.calibrated { color:var(--ok); }
+.mm-fleet-empty { color:var(--text-muted); font-style:italic; padding:10px; }
+.mm-fleet-detail { flex:1; min-width:0; }
+.mm-fleet-detail-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.mm-fleet-detail-name { margin:0; font-size:18px; }
+.mm-fleet-statusline { color:var(--text-muted); font-size:13px; margin-bottom:12px; }
+.mm-fleet-cards { display:flex; flex-direction:column; gap:12px; }
+.mm-fleet-card { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); padding:10px 12px; }
+.mm-fleet-card-title { margin:0 0 8px; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
+.mm-fleet-card-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.mm-fleet-calib { color:var(--text-muted); font-size:13px; }
+.mm-fleet-selall { display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-bottom:8px; }
+.mm-fleet-devices { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.mm-fleet-device { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:6px 4px; border-bottom:1px solid var(--border); font-size:13px; }
+.mm-fleet-dev-dot { width:8px; height:8px; border-radius:50%; background:#888; flex:0 0 auto; }
+.mm-fleet-dev-dot.online { background:var(--ok); }
+.mm-fleet-dev-name { font-weight:600; }
+.mm-fleet-dev-type { color:var(--text-muted); }
+.mm-fleet-dev-field { display:inline-flex; align-items:center; gap:4px; font-size:12px; color:var(--text-muted); }
+.mm-fleet-bulkbar { display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border); }
+/* Mobile: list is full-width; detail becomes a full-screen sheet. */
+@media (max-width:759px){
+  .mm-fleet { flex-direction:column; }
+  .mm-fleet-list { flex:1 1 auto; max-width:none; }
+  .mm-fleet-detail.mm-fleet-sheet { position:fixed; inset:0; z-index:60; background:var(--bg); overflow:auto; padding:14px; }
+}
   </style>
 </head>
 <body>
