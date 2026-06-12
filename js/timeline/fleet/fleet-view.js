@@ -59,6 +59,21 @@ export function mmFleetComponent() {
         this.$store.mm.toast(`Failed to send render: ${e?.message || e}`, 'error');
       }
     },
+    reloadGroup() {
+      const id = this.selectedGroupId;
+      if (!id) return;
+      if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
+        this.$store.mm.toast('SockJS not available; reload the page.', 'error');
+        return;
+      }
+      try {
+        window.sock.send(window.generateMessage('SRV', 'RELOAD', { displayID: id }));
+        const count = (this.$store.mm.displays || []).filter(d => d.displayID === id).length;
+        this.$store.mm.toast(`Reload sent to "${id}" (${count} device${count === 1 ? '' : 's'}).`, 'info');
+      } catch (e) {
+        this.$store.mm.toast(`Failed to send reload: ${e?.message || e}`, 'error');
+      }
+    },
     calibrate() { if (this.selectedGroupId) openCalibrationModal(this.$store.mm, this.selectedGroupId); },
     runScript(which) { if (this.selectedGroupId) fireFleetAction(this.$store.mm, which, this.selectedGroupId); },
     openProfiles() { openProfileEditor(this.$store.mm); },
