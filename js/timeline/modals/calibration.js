@@ -37,9 +37,13 @@ export function openCalibrationModal(store, preGroup) {
   const select = document.createElement('select');
   select.dataset.field = 'group';
   // Populate options via DOM — no innerHTML, no escaping needed
-  const groups = Array.from(new Set(
-    store.displays.map(d => d.displayID).filter(Boolean)
-  )).sort();
+  // Section 4: build from first-class display GROUPS (incl. zero-client
+  // groups) so the Fleet "Calibrate…" pre-scope works for any group, and
+  // empty groups are still pickable. Fall back to deriving from the client
+  // list for an older server that lacks the /api/displays groups endpoint.
+  const groups = (store.displayGroups && store.displayGroups.length)
+    ? store.displayGroups.map(g => g.displayID).filter(Boolean).sort()
+    : Array.from(new Set(store.displays.map(d => d.displayID).filter(Boolean))).sort();
   groups.forEach(function(g) {
     const opt = document.createElement('option');
     opt.value = g;         // DOM property assignment — no HTML injection

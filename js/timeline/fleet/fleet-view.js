@@ -100,9 +100,11 @@ export function mmFleetComponent() {
         const res = await this.$store.mm.bulkAssignDevicesToDisplay(keys, displayID);
         const moved = (res && res.moved ? res.moved.length : keys.length);
         this.$store.mm.toast(`Moved ${moved} device${moved === 1 ? '' : 's'} to "${displayID}".`, 'info');
-      } catch (_) { /* store toasts on failure */ }
-      this.bulkSelection = new Set();
-      this.bulkTarget = '';
+        // Clear only on success — a failed move keeps the selection so the
+        // operator can retry without re-checking every device.
+        this.bulkSelection = new Set();
+        this.bulkTarget = '';
+      } catch (_) { /* store toasts on failure; selection preserved for retry */ }
     },
 
     // ---- group CRUD ----

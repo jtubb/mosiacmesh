@@ -97,6 +97,24 @@ export default async function () {
       assert.ok(devCheck.count > 0, `group ${withDevices.displayID} should show device rows`);
       assert.ok(devCheck.allHaveTwoSelects, 'each device row should have a Profile + a Group <select>');
       assert.ok(devCheck.firstName.length > 0, 'device row should show a name');
+
+      // Bulk bar wiring (non-mutating): ticking select-all reveals the bulk-move
+      // bar (x-show="bulkSelection.size>0"). We do NOT click Apply (no real move).
+      await page.evaluate(() => {
+        const sa = document.querySelector('[data-route="fleet"] .mm-fleet-selall input[type="checkbox"]');
+        sa.checked = true; sa.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await settle(page);
+      const barShown = await page.evaluate(() => {
+        const bar = document.querySelector('[data-route="fleet"] .mm-fleet-bulkbar');
+        return bar && bar.offsetParent !== null;
+      });
+      assert.ok(barShown, 'select-all should reveal the bulk-move bar');
+      // Untick to leave no selection.
+      await page.evaluate(() => {
+        const sa = document.querySelector('[data-route="fleet"] .mm-fleet-selall input[type="checkbox"]');
+        sa.checked = false; sa.dispatchEvent(new Event('change', { bubbles: true }));
+      });
     }
 
     // ---- 2. Create a group via the UI -> appears -> delete -> gone ----
