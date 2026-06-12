@@ -19,7 +19,7 @@
  */
 import { openModal, closeModal } from './modal-shell.js';
 
-export function openCalibrationModal(store) {
+export function openCalibrationModal(store, preGroup) {
   const root = document.createElement('div');
   root.className = 'mm-calibration';
 
@@ -46,6 +46,11 @@ export function openCalibrationModal(store) {
     opt.textContent = g;   // textContent — no HTML injection
     select.appendChild(opt);
   });
+  // Section 4: when opened from a group's Fleet detail, pre-select that
+  // group so the operator doesn't re-pick it. The picker stays editable.
+  if (preGroup && groups.includes(preGroup)) {
+    select.value = preGroup;
+  }
   label1.appendChild(select);
   li1.appendChild(num1);
   li1.appendChild(label1);

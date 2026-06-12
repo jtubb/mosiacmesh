@@ -978,7 +978,31 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                   <template x-if="!statusFor(selectedGroup).playing"><span> · idle</span></template>
                 </div>
                 <div class="mm-fleet-cards">
-                  <!-- C1 adds Playback / Calibration / Device scripts cards here -->
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Playback</h3>
+                    <div class="mm-fleet-card-actions">
+                      <button class="btn btn-primary" @click="playNow()">▶ Play now</button>
+                      <button class="btn" @click="stopNow()">⏹ Stop</button>
+                      <button class="btn" @click="renderNow()" title="Pre-bake mosaic segments for this group">⟳ Render now</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Calibration</h3>
+                    <div class="mm-fleet-card-actions">
+                      <span class="mm-fleet-calib" x-text="calibrationFor(selectedGroup).calibratedCount + '/' + calibrationFor(selectedGroup).total + ' calibrated'"></span>
+                      <button class="btn" @click="calibrate()">🎯 Calibrate…</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Device scripts</h3>
+                    <div class="mm-fleet-card-actions">
+                      <button class="btn" @click="runScript('login')">Login</button>
+                      <button class="btn" @click="runScript('start')">Start</button>
+                      <button class="btn" @click="runScript('stop')">Stop</button>
+                      <button class="btn" @click="runScript('reboot')">Reboot</button>
+                      <button class="btn" @click="runScript('test')">Test</button>
+                    </div>
+                  </div>
                   <!-- D1 adds the Devices card here -->
                 </div>
               </div>
