@@ -1,0 +1,44 @@
+/**
+ * Pure helpers for the Fleet view (Section 4). No DOM, no fetch —
+ * node-importable for tests.
+ *
+ *   group shape:   { displayID, clientCount, onlineCount, scheduleCount, clients[] }
+ *   device shape:  { clientKey, displayID, friendlyName, isOnline, profileName,
+ *                    deviceType, measuredPerimeter? }
+ *   playback[id]:  { state, currentPlaylist, ... }   state in PLAY|PAUSE|STOP|IDLE|PREPARING
+ */
+
+/** Group-level status for the master list + detail header. */
+export function groupStatusLine(group, playback, renderInProgress) {
+  const displayID = group && group.displayID;
+  const online = (group && group.onlineCount != null) ? group.onlineCount : 0;
+  const total = (group && group.clientCount != null) ? group.clientCount : 0;
+  const pb = (playback && displayID && playback[displayID]) || null;
+  // "playing" = an active (non-stopped, non-idle) playlist is mounted.
+  const state = pb && pb.state;
+  const playing = !!(pb && state && state !== 'STOP' && state !== 'IDLE' && state !== 'NOACTION');
+  const playlistName = (playing && pb) ? (pb.currentPlaylist || null) : null;
+  const rendering = !!(renderInProgress && displayID && renderInProgress[displayID]);
+  return { displayID, online, total, playing, playlistName, rendering };
+}
+
+/** The devices in a group, online-first then by friendly name. */
+export function deviceRowsForGroup(group, displays) {
+  const id = group && group.displayID;
+  const rows = (displays || []).filter(d => d.displayID === id);
+  rows.sort((a, b) => {
+    if (!!a.isOnline !== !!b.isOnline) return a.isOnline ? -1 : 1;
+    const an = (a.friendlyName || a.clientKey || '').toLowerCase();
+    const bn = (b.friendlyName || b.clientKey || '').toLowerCase();
+    return an < bn ? -1 : an > bn ? 1 : 0;
+  });
+  return rows;
+}
+
+/** How many of these devices report a calibration quad. */
+export function calibrationSummary(devices) {
+  const list = devices || [];
+  let calibratedCount = 0;
+  for (const d of list) if (d.measuredPerimeter != null) calibratedCount += 1;
+  return { calibratedCount, total: list.length };
+}
