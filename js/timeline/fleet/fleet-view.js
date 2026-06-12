@@ -18,9 +18,11 @@ export function mmFleetComponent() {
   return {
     selectedGroupId: null,
     bulkSelection: new Set(),   // clientKeys; reassigned on change for Alpine reactivity
-    bulkTarget: '',
+    bulkTarget: '',             // move-to-group target in the selection toolbar
+    bulkProfile: '',            // profile target: '' none, '__auto' auto-match, else name
+    bulkScript: '',             // script target: '' none, else login|start|stop|reboot|test
     expandedDevice: null,       // clientKey of the inline-expanded device row (accordion)
-    selectMode: false,          // bulk-select mode: rows show checkboxes + the bulk bar
+    selectMode: false,          // bulk-select mode: rows show checkboxes + the selection bar
 
     // ---- derived ----
     get groups() { return this.$store.mm.displayGroups || []; },
@@ -43,21 +45,21 @@ export function mmFleetComponent() {
     // ---- navigation ----
     selectGroup(id) {
       this.selectedGroupId = id;
-      this.bulkSelection = new Set();
-      this.bulkTarget = '';
+      this._resetSelection();
       this.expandedDevice = null;
       this.selectMode = false;
     },
     backToList() { this.selectedGroupId = null; },
 
     // ---- device-row UI: accordion expand + bulk-select mode ----
+    _resetSelection() { this.bulkSelection = new Set(); this.bulkTarget = ''; this.bulkProfile = ''; this.bulkScript = ''; },
     toggleExpand(clientKey) {
       this.expandedDevice = this.expandedDevice === clientKey ? null : clientKey;
     },
     toggleSelectMode() {
       this.selectMode = !this.selectMode;
       this.expandedDevice = null;           // expand + select are mutually exclusive
-      if (!this.selectMode) { this.bulkSelection = new Set(); this.bulkTarget = ''; }
+      if (!this.selectMode) this._resetSelection();
     },
 
     // ---- group-level actions (reuse existing modals/helpers) ----
@@ -120,9 +122,41 @@ export function mmFleetComponent() {
         this.$store.mm.toast(`Moved ${moved} device${moved === 1 ? '' : 's'} to "${displayID}".`, 'info');
         // Clear only on success — a failed move keeps the selection so the
         // operator can retry without re-checking every device.
-        this.bulkSelection = new Set();
-        this.bulkTarget = '';
+        this._resetSelection();
       } catch (_) { /* store toasts on failure; selection preserved for retry */ }
+    },
+    // Set a profile on every selected device. bulkProfile '__auto' => clear to
+    // auto-match (empty string). Loops the per-client assign (no bulk endpoint).
+    async bulkSetProfile() {
+      const sel = this.bulkProfile;
+      if (!sel || this.bulkSelection.size === 0) return;
+      const name = sel === '__auto' ? '' : sel;
+      const keys = [...this.bulkSelection];
+      if (!window.confirm(`Set profile "${name || 'Auto-match'}" on ${keys.length} device${keys.length === 1 ? '' : 's'}?`)) return;
+      let ok = 0;
+      for (const k of keys) {
+        try { await this.$store.mm.assignProfileToClient(k, name); ok += 1; } catch (_) { /* store toasts */ }
+      }
+      this.$store.mm.toast(`Profile set on ${ok} device${ok === 1 ? '' : 's'}.`, 'info');
+      this._resetSelection();
+    },
+    // Run a lifecycle script on every selected device via per-client
+    // RUN_SCRIPT {clientKey, script} (the WS handler supports single-client targets).
+    bulkRunScript() {
+      const which = this.bulkScript;
+      if (!which || this.bulkSelection.size === 0) return;
+      if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
+        this.$store.mm.toast('SockJS not available; reload the page.', 'error');
+        return;
+      }
+      const keys = [...this.bulkSelection];
+      if (!window.confirm(`Run "${which}" on ${keys.length} selected device${keys.length === 1 ? '' : 's'}?`)) return;
+      let sent = 0;
+      for (const k of keys) {
+        try { window.sock.send(window.generateMessage('SRV', 'RUN_SCRIPT', { clientKey: k, script: which })); sent += 1; } catch (_) { /* skip */ }
+      }
+      this.$store.mm.toast(`${which} sent to ${sent} device${sent === 1 ? '' : 's'}.`, 'info');
+      this._resetSelection();
     },
 
     // ---- group CRUD ----

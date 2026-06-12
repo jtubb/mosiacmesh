@@ -111,8 +111,9 @@ export default async function () {
       await page.evaluate(() => document.querySelector('[data-route="fleet"] .mm-fleet-dev-row').click());
       await settle(page);
 
-      // Enter Select mode → checkboxes appear; select-all reveals the bulk-move
-      // bar. We do NOT click Apply (no real device moved).
+      // Enter Select mode → checkboxes appear; select-all reveals the pinned
+      // selection toolbar with all three bulk actions (Move / Profile / Run).
+      // We do NOT click any action button (no real device mutated).
       await page.evaluate(() => {
         const btn = document.querySelector('[data-route="fleet"] .mm-fleet-selbtn');
         btn.click();
@@ -123,11 +124,19 @@ export default async function () {
         sa.checked = true; sa.dispatchEvent(new Event('change', { bubbles: true }));
       });
       await settle(page);
-      const barShown = await page.evaluate(() => {
-        const bar = document.querySelector('[data-route="fleet"] .mm-fleet-bulkbar');
-        return bar && bar.offsetParent !== null;
+      const barCheck = await page.evaluate(() => {
+        const bar = document.querySelector('[data-route="fleet"] .mm-fleet-selbar');
+        return {
+          shown: bar && bar.offsetParent !== null,
+          actionGroups: bar ? bar.querySelectorAll('.mm-fleet-selact').length : 0,
+          selects: bar ? bar.querySelectorAll('select').length : 0,
+          countText: bar ? (bar.querySelector('.mm-fleet-selcount')?.textContent || '') : '',
+        };
       });
-      assert.ok(barShown, 'select-all in Select mode should reveal the bulk-move bar');
+      assert.ok(barCheck.shown, 'select-all in Select mode should reveal the pinned selection toolbar');
+      assert.equal(barCheck.actionGroups, 3, 'selection toolbar should offer Move + Profile + Run actions');
+      assert.equal(barCheck.selects, 3, 'each bulk action should have its own picker');
+      assert.match(barCheck.countText, /\d+ selected/, 'toolbar should show the selected count');
       // Exit Select mode (Done) — clears the selection, no mutation.
       await page.evaluate(() => {
         const btn = document.querySelector('[data-route="fleet"] .mm-fleet-selbtn');

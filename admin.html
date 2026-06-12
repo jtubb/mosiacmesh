@@ -751,7 +751,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-fleet-dev-panel { display:flex; flex-direction:column; gap:8px; padding:4px 4px 12px 22px; }
 .mm-fleet-dev-field { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
 .mm-fleet-dev-field select { flex:1; min-width:0; }
-.mm-fleet-bulkbar { display:flex; align-items:center; gap:8px; margin-top:8px; padding-top:8px; border-top:1px solid var(--border); }
+.mm-fleet-selbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 10px; margin-bottom:8px; background:var(--bg-elev); border:1px solid var(--accent); border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.18); }
+.mm-fleet-selcount { font-weight:700; font-size:13px; }
+.mm-fleet-selact { display:inline-flex; align-items:center; gap:5px; }
+.mm-fleet-selact select { font-size:13px; max-width:42vw; }
 /* Mobile: list is full-width; detail becomes a full-screen sheet. */
 @media (max-width:759px){
   .mm-fleet { flex-direction:column; }
@@ -1017,6 +1020,39 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                       <button class="btn btn-ghost mm-fleet-selbtn" x-show="devices.length>0" @click="toggleSelectMode()" x-text="selectMode ? 'Done' : 'Select'"></button>
                     </div>
                     <label class="mm-fleet-selall" x-show="selectMode && devices.length>0"><input type="checkbox" :checked="allSelected" @change="toggleBulkAll()"> Select all</label>
+                    <!-- Pinned selection toolbar: appears at the top of the list the moment a
+                         selection exists, so the actions are never stranded below a long list. -->
+                    <div class="mm-fleet-selbar" x-show="selectMode && bulkSelection.size>0">
+                      <span class="mm-fleet-selcount" x-text="bulkSelection.size + ' selected'"></span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkTarget" aria-label="Move selected to group">
+                          <option value="">Move to…</option>
+                          <template x-for="g in groups" :key="g.displayID">
+                            <template x-if="g.displayID!==selectedGroupId"><option :value="g.displayID" x-text="g.displayID"></option></template>
+                          </template>
+                        </select>
+                        <button class="btn" :disabled="!bulkTarget" @click="bulkMove(bulkTarget)">Move</button>
+                      </span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkProfile" aria-label="Set profile on selected">
+                          <option value="">Profile…</option>
+                          <option value="__auto">Auto-match</option>
+                          <template x-for="p in profileNames" :key="p"><option :value="p" x-text="p"></option></template>
+                        </select>
+                        <button class="btn" :disabled="!bulkProfile" @click="bulkSetProfile()">Set</button>
+                      </span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkScript" aria-label="Run script on selected">
+                          <option value="">Run…</option>
+                          <option value="login">Login</option>
+                          <option value="start">Start</option>
+                          <option value="stop">Stop</option>
+                          <option value="reboot">Reboot</option>
+                          <option value="test">Test</option>
+                        </select>
+                        <button class="btn" :disabled="!bulkScript" @click="bulkRunScript()">Run</button>
+                      </span>
+                    </div>
                     <ul class="mm-fleet-devices">
                       <template x-for="d in devices" :key="d.clientKey">
                         <li class="mm-fleet-device" :class="{expanded: expandedDevice===d.clientKey}">
@@ -1048,16 +1084,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                         <li class="mm-fleet-empty">No devices in this group.</li>
                       </template>
                     </ul>
-                    <div class="mm-fleet-bulkbar" x-show="selectMode && bulkSelection.size>0">
-                      <span x-text="bulkSelection.size + ' selected'"></span>
-                      <select x-model="bulkTarget">
-                        <option value="">Move selected to…</option>
-                        <template x-for="g in groups" :key="g.displayID">
-                          <template x-if="g.displayID!==selectedGroupId"><option :value="g.displayID" x-text="g.displayID"></option></template>
-                        </template>
-                      </select>
-                      <button class="btn btn-primary" :disabled="!bulkTarget" @click="bulkMove(bulkTarget)">Apply</button>
-                    </div>
                   </div>
                 </div>
               </div>
