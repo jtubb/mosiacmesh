@@ -61,6 +61,8 @@ const MODULES = [
   'js/timeline/schedule/month-grid.js',
   'js/timeline/schedule/vertical-timeline.js',
   'js/timeline/schedule/schedule-mobile.js',
+  'js/timeline/fleet/fleet-status.js',
+  'js/timeline/fleet/fleet-view.js',
 ];
 
 for (const rel of MODULES) {
