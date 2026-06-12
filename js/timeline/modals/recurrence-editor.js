@@ -20,6 +20,18 @@ import { expandSchedule } from '../util/time.js';
 
 const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
+/**
+ * Local calendar date as YYYY-MM-DD — matches the store's `viewDate`
+ * ("today" the operator sees in the timeline/agenda). Using the UTC date
+ * here (`new Date().toISOString()`) was a bug: in the evening in a
+ * UTC-behind timezone, a newly-created schedule defaulted to UTC-tomorrow
+ * and never appeared in the local-today view.
+ */
+function localTodayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
 export function attachRecurrenceEditor(store) {
   // Alt+click on a clip opens the modal. (Same trigger as PR-4b T13,
   // now routes through the shell.)
@@ -54,7 +66,7 @@ function open(store, scheduleId, prefill = {}) {
         id: '__preview__',
         playlistName: prefill.playlistName || playlistNames[0] || '',
         displayID: prefill.displayID || groupIds[0] || '',
-        dtstart: prefill.dtstart || new Date().toISOString().slice(0, 10),
+        dtstart: prefill.dtstart || localTodayIso(),
         startTime: prefill.startTime || '09:00',
         endTime: prefill.endTime || '10:00',
         freq: 'DAILY', interval: 1, byweekday: [], priority: 0,
@@ -150,7 +162,7 @@ function open(store, scheduleId, prefill = {}) {
   function refreshPreview() {
     const draft = readDraft();
     const synthetic = { ...s, ...draft };
-    const startIso = new Date().toISOString().slice(0, 10);
+    const startIso = localTodayIso();
     const [y, m, d] = startIso.split('-').map(Number);
     const fromMs = Date.UTC(y, m - 1, d);
     const HORIZON_MS = 365 * 24 * 60 * 60 * 1000;
