@@ -578,26 +578,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-context-menu li:hover { background: rgba(255,255,255,0.08); }
 .mm-context-menu li.mm-context-divider { padding: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 2px 0; pointer-events: none; }
 .mm-context-menu li.mm-context-danger { color: var(--err, #f88); }
-/* PR-4c gap-fix: track-header popover for per-client profile override (spec §362). */
-.mm-thp { position: fixed; z-index: 1600; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 8px 10px; min-width: 280px; max-width: 400px; max-height: 60vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5); font-size: 12px; }
-.mm-thp-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-.mm-thp-header strong { font-size: 12px; }
-.mm-thp-hint { color: var(--text-muted, #888); font-size: 10px; }
-.mm-thp-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 0; }
-.mm-thp-list { list-style: none; margin: 0; padding: 0; }
-/* PR-14: 4-column row, PR-15 prefixed with a checkbox column — checkbox | name | (deviceType) | profile-select | group-select. */
-.mm-thp-list li { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 6px; align-items: center; padding: 4px 0; }
-.mm-thp-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-thp-meta { color: var(--text-muted, #888); font-size: 10px; }
-.mm-thp-list select { font-size: 11px; padding: 2px 4px; max-width: 110px; }
-.mm-thp-list select.mm-thp-group { border-color: rgba(255,255,255,0.18); }
-/* PR-15: select-all + count tools above the list. */
-.mm-thp-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0 6px; border-bottom: 1px dashed rgba(255,255,255,0.08); margin-bottom: 4px; font-size: 11px; }
-.mm-thp-count { color: var(--text-muted, #888); }
-/* PR-15: bulk-move footer bar, visible when ≥1 row is selected. */
-.mm-thp-bulkbar { display: none; align-items: center; gap: 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); }
-.mm-thp-bulk-count { font-size: 11px; font-weight: 600; }
-.mm-thp-bulk-target { font-size: 11px; padding: 2px 4px; flex: 1; }
 .mm-track-header { cursor: pointer; }
 .mm-timeline-layout { display: flex; gap: 12px; }
 .mm-bin { width: 200px; flex: 0 0 200px; }
@@ -1044,7 +1024,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
   </div>
   <div id="mmModalHost"></div>
   <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
-  <div id="mmTrackHeaderPopover" class="mm-thp" style="display:none"></div>
   <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
     <div class="mm-drag-start-marker-label">00:00</div>
   </div>
