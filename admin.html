@@ -770,7 +770,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-render-status { position: relative; }
 .mm-render-status-toggle { font:inherit; border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:var(--radius); padding:4px 10px; cursor:pointer; font-size:12px; }
 .mm-render-status-toggle:hover { border-color:var(--accent); }
-.mm-render-status-drawer { position: absolute; right: 0; top: calc(100% + 4px); background: var(--bg-elev); border: 1px solid var(--border); padding: .5em .75em; min-width: 280px; max-height: 50vh; overflow: auto; z-index: 50; box-shadow: var(--shadow); border-radius: var(--radius); }
+.mm-render-status-drawer { position: absolute; right: 0; top: calc(100% + 4px); background: var(--bg-elev); border: 1px solid var(--border); padding: .5em .75em; min-width: 280px; max-height: 50vh; overflow: auto; z-index: 120; box-shadow: var(--shadow); border-radius: var(--radius); }
 .mm-render-status-drawer h4 { margin: 0 0 .4em; font-size: 12px; color: var(--text-muted); }
 .mm-render-status-drawer ul { list-style: none; margin: 0; padding: 0; }
 .mm-render-status-drawer li { padding: .25em 0; border-bottom: 1px solid var(--border); font-size: .85em; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -794,10 +794,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
     <span class="spacer"></span>
     <!-- Task 20: Global Render Status panel — visible across all tabs whenever
          renders are active or queued. Binds to $store.mm which is global. -->
-    <div class="mm-render-status" x-data x-show="$store.mm.rendersList.length || $store.mm.renderQueueDepth">
+    <div class="mm-render-status" x-data x-show="$store.mm.rendersList.length || $store.mm.renderQueueDepth" @click.outside="$store.mm.renderPanelOpen = false">
       <button class="mm-render-status-toggle" @click="$store.mm.renderPanelOpen = !$store.mm.renderPanelOpen"
-              x-text="'▣ ' + $store.mm.rendersList.length + ' rendering…'"></button>
-      <div class="mm-render-status-drawer" x-show="$store.mm.renderPanelOpen" @click.outside="$store.mm.renderPanelOpen = false">
+              x-text="'▣ ' + ($store.mm.rendersList.length + $store.mm.renderQueueDepth) + ' rendering…'"></button>
+      <div class="mm-render-status-drawer" x-show="$store.mm.renderPanelOpen">
         <h4>Render status</h4>
         <template x-if="!$store.mm.rendersList.length"><p>All renders up to date.</p></template>
         <ul>
