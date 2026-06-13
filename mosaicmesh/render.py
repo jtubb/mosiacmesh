@@ -292,16 +292,18 @@ def resolve_media_path(file_url):
 # Render orchestration helpers (access server.settings / effects)
 # ---------------------------------------------------------------------------
 
-def compute_render_token(display_id):
-    """Stable hash of the inputs that affect a per-screen render (SEGMENT or INDIVIDUAL): the playlist
-    items, the group bounding box, and each client's resolution + measured quad.
-    Rendered assets are valid only while this matches Display.renderedToken."""
+def render_token(media_elements, display_id):
+    """Stable hash of the inputs that affect a per-screen render (SEGMENT or
+    INDIVIDUAL) for a GIVEN set of media elements against a group's calibration:
+    the items, the group bounding box, and each client's resolution + measured
+    quad. Generalizes the old compute_render_token so a token can be computed
+    for any playlist (not just the one currently applied to the group)."""
     import server
     display = server.settings.displays.get(display_id)
     if not display:
         return ""
     items = []
-    for me in display.mediaElements:
+    for me in media_elements:
         pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
         items.append((me.id, me.file, me.duration, pm,
                       getattr(me, "backgroundColor", "#000000"),
@@ -317,6 +319,17 @@ def compute_render_token(display_id):
     encode_ver = "grid025-cbl-v6"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
+
+
+def compute_render_token(display_id):
+    """Token for the playlist CURRENTLY applied to the group (display.mediaElements).
+    Thin wrapper over render_token — preserves the historical call site/byte-form
+    so existing Display.renderedToken values stay valid."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return ""
+    return render_token(display.mediaElements, display_id)
 
 
 def _broadcast_render_status(display_id, status):
