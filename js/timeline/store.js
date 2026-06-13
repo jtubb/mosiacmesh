@@ -65,6 +65,8 @@ export function makeStore() {
     hydrated: false,
     hydrateError: null,
     renderInProgress: {},
+    renders: {},            // displayID -> { playlistName -> entry }
+    renderQueueDepth: 0,
 
     /**
      * Fire all five GETs in parallel; populate state on success.
@@ -126,6 +128,14 @@ export function makeStore() {
         this.hydrateError = e.message || String(e);
         this.hydrated = false;
       }
+      // getRenders is a separate await so a missing /api/renders route
+      // (pre-AR server) doesn't block the main hydrate or set hydrateError.
+      try {
+        const rd = await api.getRenders();
+        this.setRenders(rd.renders, rd.queueDepth);
+      } catch (e) {
+        console.warn('[timeline] getRenders failed:', e);
+      }
     },
 
     /**
@@ -147,6 +157,32 @@ export function makeStore() {
     goTo(tab) { if (typeof location !== 'undefined') location.hash = '#' + tab; },
     setConnection(patch) { this.connection = { ...this.connection, ...patch }; },
     setPlayback(row) { if (row && row.displayID) this.playback[row.displayID] = row; },
+    setRenders(rows, queueDepth) {
+      const map = {};
+      for (const r of (rows || [])) {
+        (map[r.displayID] = map[r.displayID] || {})[r.playlist] = r;
+      }
+      this.renders = map;
+      if (typeof queueDepth === 'number') this.renderQueueDepth = queueDepth;
+    },
+    renderEntry(playlistName, displayID) {
+      return (this.renders[displayID] || {})[playlistName] || null;
+    },
+    isPlaylistReady(playlistName, displayID) {
+      const pl = this.playlists[playlistName];
+      const renderable = !!(pl && (pl.items || []).some(
+        (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL'));
+      if (!renderable) return true;
+      const e = this.renderEntry(playlistName, displayID);
+      return !!(e && e.state === 'READY');
+    },
+    get rendersList() {
+      const out = [];
+      for (const did of Object.keys(this.renders)) {
+        for (const name of Object.keys(this.renders[did])) out.push(this.renders[did][name]);
+      }
+      return out.filter((e) => e.state !== 'READY');
+    },
     get nowCards() {
       return buildNowSummary({
         displayGroups: this.displayGroups,

@@ -115,6 +115,11 @@ export function startStatusSubscriber(store) {
       // payload: {groups: [{displayID, state, currentPlaylist, startedEpoch, renderStatus}, ...]}
       const rows = payload?.groups ?? [];
       if (rows.length > 0) applyMutation(() => rows.forEach((r) => store.setPlayback(r)));
+    } else if (req === 'RENDERS_CHANGED') {
+      // payload: {renders: [{displayID, playlist, state, percent?, ...}, ...]}
+      // queueDepth is NOT included in the broadcast — leave it unchanged.
+      const rows = payload?.renders ?? [];
+      applyMutation(() => store.setRenders(rows));
     }
   }
 
