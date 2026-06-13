@@ -39,6 +39,13 @@ class Display():
         self.pauseOffset = 0      # ms into the playlist when paused
         self.renderedToken = ""   # token of the last successful SEGMENT render
         self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
+        # Per-(playlist) render registry for THIS group (PR auto-render).
+        # { playlistName: {token, state, updatedAt, error, percent, eta, startedAt} }
+        # state ∈ render.RENDER_{QUEUED,RENDERING,READY,STALE,FAILED}.
+        # Persists in settings.dat; revalidated against render_token + on-disk
+        # assets at boot. renderedToken/renderStatus above are the legacy
+        # single-applied-playlist fields, kept for the live playback path.
+        self.renders = {}
         self.defaultPlaylistName = None   # fallback playlist when no schedule is active
         self.scheduledEntryId = None      # transient: which schedule/"__default__" currently drives this group
         self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
@@ -232,6 +239,8 @@ def migrate_client_objects():
         _disp.readyClients = set()
         _disp.armPending = set()
         _disp.prepareDeadline = 0
+        if not hasattr(_disp, 'renders'):
+            _disp.renders = {}
     current_time = time.time()
     for client_key, client in settings.clients.items():
         if not hasattr(client, 'discoveryTime'):

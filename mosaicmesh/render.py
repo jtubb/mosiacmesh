@@ -84,6 +84,14 @@ DEFAULT_ITEM_DURATION_S = 20
 # set MMRENDER_ENCODER=h264_nvenc to opt back in to GPU encoding.
 _VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "libx264"
 _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
+
+# Per-(playlist, group) render lifecycle states (stored in Display.renders[name]["state"]).
+RENDER_QUEUED = "QUEUED"        # enqueued, not yet started
+RENDER_RENDERING = "RENDERING"  # ffmpeg in flight
+RENDER_READY = "READY"          # assets on disk + token current
+RENDER_STALE = "STALE"          # was READY, inputs changed (recalibrate/edit)
+RENDER_FAILED = "FAILED"        # ffmpeg errored; needs manual Retry
+
 # Default OFF after empirical regression: enabling -hwaccel cuda with 12
 # concurrent NVENC encodes ran the test fleet (24 iPads) at 397s vs 322s
 # without. The PCIe round-trip (GPU decode -> CPU filter chain (no CUDA
