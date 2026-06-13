@@ -15,8 +15,15 @@ finally:
 
 import json
 import pytest
+from unittest.mock import MagicMock
 from aiohttp.test_utils import make_mocked_request
 from mosaicmesh.state import Settings, Playlist
+
+
+def _MockSession():
+    s = MagicMock(); s.id = "s"; s.request = MagicMock()
+    s.request.remote = "127.0.0.1"; s.request.headers = {"User-Agent": "T"}
+    return s
 
 
 @pytest.fixture
@@ -119,3 +126,29 @@ def test_cleanup_playlist_renders_removes_entries(fresh_settings):
     assert "P" not in d1.renders
     assert "P" not in d2.renders
     assert "Q" in d2.renders   # untouched
+
+
+def test_render_handler_retries_failed(fresh_settings, monkeypatch):
+    from mosaicmesh.state import Display, Playlist, Client
+    from mosaicmesh import render as R
+    enq = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: enq.append((name, did)) or True)
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    R._set_render_state(d, "P", R.RENDER_FAILED, token="t", error="boom")
+
+    msg = {"REQUEST": "RENDER", "PAYLOAD": {"displayID": "G1", "name": "P"},
+           "SRC": "admin", "DEST": "SRV"}
+    sess = _MockSession()
+    out = server.msg_response(msg, sess)
+    import jsonpickle
+    out = jsonpickle.decode(out)
+    assert ("P", "G1") in enq
+    assert out["PAYLOAD"]["status"] in ("QUEUED", "rendering")

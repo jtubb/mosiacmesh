@@ -528,30 +528,34 @@ class TestIsRenderable:
             me = server.MediaElement(); me.playmode = pm
             assert server._is_renderable(me) is exp
 
-    async def test_render_accepts_individual_only_playlist(self, monkeypatch):
-        # RENDER must not reject an INDIVIDUAL-only playlist with "no renderable items".
-        # async test (running loop) + stub ensure_future so we don't actually render.
-        scheduled = []
-        def _capture(coro):
-            scheduled.append(coro); coro.close(); return None   # close() avoids un-awaited warning
-        monkeypatch.setattr(server.asyncio, "ensure_future", _capture)
+    def test_render_handler_enqueues_failed_individual_playlist(self, monkeypatch):
+        # RENDER with {displayID, name} enqueues a FAILED render — new contract.
+        # INDIVIDUAL-only playlists are accepted (no "nothing to render" guard).
+        import mosaicmesh.render as _R
+        enq = []
+        monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                            lambda name, did: enq.append((name, did)) or True)
         ms = server.Settings()
         ms.displays = {"Default": server.Display()}
         server.settings = ms
         server.socketmanager = MagicMock()
         disp = ms.displays["Default"]
-        me = server.MediaElement(); me.file = "/media/server/x.jpg"; me.duration = 1000
-        me.playmode = server.PlayMode.INDIVIDUAL
-        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        disp.boundingBox = [0, 0, 100, 100]
+        pl = server.Playlist(); pl.name = "Ind"
+        pl.items = [{"id": 0, "file": "/media/server/x.jpg", "playmode": "INDIVIDUAL",
+                     "duration": 1000}]
+        ms.playlists["Ind"] = pl
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         ms.clients = {"c1": c}
+        _R._set_render_state(disp, "Ind", _R.RENDER_FAILED, token="old", error="boom")
         sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
         sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
         ret = jsonpickle.decode(server.msg_response(
-            {"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER", "PAYLOAD": {"displayID": "Default"}}, sess))
-        assert ret["PAYLOAD"]["status"] == "rendering"   # accepted, not ERROR
-        assert len(scheduled) == 1
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER",
+             "PAYLOAD": {"displayID": "Default", "name": "Ind"}}, sess))
+        assert ret["PAYLOAD"]["status"] in ("QUEUED", "rendering")   # accepted, not ERROR
+        assert ("Ind", "Default") in enq
 
     def test_play_individual_stale_requires_render(self):
         ms = server.Settings(); ms.displays = {"Default": server.Display()}

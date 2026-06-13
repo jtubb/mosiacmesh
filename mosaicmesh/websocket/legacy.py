@@ -70,6 +70,10 @@ from mosaicmesh.render import (
     _start_group_playback,
     _stop_group_playback,
     _apply_playlist,
+    _group_is_calibrated,
+    render_token,
+    _set_render_state,
+    RENDER_QUEUED,
 )
 from mosaicmesh.calibration import (
     _group_clients,
@@ -459,22 +463,23 @@ def msg_response(msg,session):
             response["PAYLOAD"] = {"status": "SUCCESS", "script": which, "count": len(keys)}
 
     elif(msg["REQUEST"] == "RENDER"):
-        display_id = msg["PAYLOAD"]["displayID"]
+        # Manual retry of a FAILED (playlist, group) render — the ONLY manual
+        # render affordance left. PAYLOAD = {displayID, name}.
+        from mosaicmesh import render_queue
+        payload = msg["PAYLOAD"]
+        display_id = payload.get("displayID")
+        name = payload.get("name")
         display = server.settings.displays.get(display_id)
-        if not display or not display.mediaElements:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no playlist"}
-        elif not display.boundingBox:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibration"}
-        elif not any(_is_renderable(me) for me in display.mediaElements):
-            response["PAYLOAD"] = {"status": "ERROR",
-                                   "error": "nothing to render — Mirror/Animation play directly, just press Play"}
-        elif not [c for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibrated screens"}
-        elif display.renderStatus == "rendering":
-            response["PAYLOAD"] = {"status": "rendering"}
+        if not display or name not in server.settings.playlists:
+            response["PAYLOAD"] = {"status": "ERROR", "error": "unknown playlist/group"}
+        elif not _group_is_calibrated(display_id):
+            response["PAYLOAD"] = {"status": "ERROR", "error": "group not calibrated"}
         else:
-            asyncio.ensure_future(render_group_async(display_id))
-            response["PAYLOAD"] = {"status": "rendering"}
+            elements = _build_media_elements(server.settings.playlists[name].items)
+            _set_render_state(display, name, RENDER_QUEUED,
+                              token=render_token(elements, display_id))
+            render_queue.enqueue(name, display_id)
+            response["PAYLOAD"] = {"status": "QUEUED", "displayID": display_id, "name": name}
 
     elif(msg["REQUEST"] == "LIST_PLAYLISTS"):
         rows = []
