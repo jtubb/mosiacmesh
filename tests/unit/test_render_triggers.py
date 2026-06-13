@@ -81,3 +81,26 @@ def test_mark_group_recalibrated_enqueues_all(fresh_settings, monkeypatch):
     assert will == ["Seg"]                  # N/A playlist excluded
     assert ("Seg", "G1") in enq
     assert d.renders["Seg"]["state"] in (R.RENDER_QUEUED, R.RENDER_STALE)
+
+
+def test_mark_group_recalibrated_skips_ready(fresh_settings, monkeypatch):
+    from mosaicmesh.state import Display, Playlist, Client
+    from mosaicmesh import render as R
+    enq = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: enq.append((name, did)) or True)
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    seg = Playlist(); seg.name = "Seg"
+    seg.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["Seg"] = seg
+    # Mark Seg already READY with the CURRENT token → recalibrate should skip it.
+    tok = R.render_token(R._build_media_elements(seg.items), "G1")
+    R._set_render_state(d, "Seg", R.RENDER_READY, token=tok)
+
+    will = R.mark_group_recalibrated("G1")
+    assert will == []                 # already current → skipped
+    assert ("Seg", "G1") not in enq

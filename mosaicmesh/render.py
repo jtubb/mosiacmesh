@@ -789,7 +789,10 @@ def mark_group_recalibrated(display_id):
     enqueue a render of EVERY renderable playlist for this group and return the
     list of playlist names that will render (for the operator warning + ETA).
     Existing entries are reset to QUEUED with the new token. N/A playlists are
-    skipped. No-op (returns []) if the group isn't calibrated."""
+    skipped. No-op (returns []) if the group isn't calibrated.
+    Already-current renders (READY + matching token) are skipped — a genuinely
+    recalibrated group's render_token changes (perimeter is hashed in) so those
+    will re-render; untouched groups whose token is unchanged are left alone."""
     import server
     from mosaicmesh import render_queue
     if not _group_is_calibrated(display_id):
@@ -800,6 +803,8 @@ def mark_group_recalibrated(display_id):
         elements = _build_media_elements(pl.items)
         if not any(_is_renderable(me) for me in elements):
             continue
+        if is_playlist_ready(name, display_id):
+            continue   # render already current for this group — don't re-encode
         _set_render_state(display, name, RENDER_QUEUED, token=render_token(elements, display_id))
         render_queue.enqueue(name, display_id)
         will.append(name)
