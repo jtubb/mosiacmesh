@@ -444,8 +444,13 @@ async def _run_ffmpeg(cmd, label, semaphore):
                                " (" + str(proc.returncode) + ")")
 
 
-async def render_group_async(display_id):
-    """Async render of a group's SEGMENT items.
+async def _encode_group(media_elements, display_id, token, progress_cb=None):
+    """Encode all SEGMENT/INDIVIDUAL items in `media_elements` for `display_id`'s
+    calibrated screens, writing seg_<token>_<i>/ind_<token>_<i> assets. Pure
+    encode: no Display.renderStatus / renderedToken / broadcast side effects —
+    the caller owns lifecycle state (legacy wrapper or the per-playlist renderer).
+    Raises on ffmpeg failure. progress_cb(done, total) is called as video jobs
+    complete (best-effort, optional).
 
     Strategy: build the FULL list of per-client ffmpeg commands first, then
     asyncio.gather them under a Semaphore(_RENDER_CONCURRENCY) so multiple
@@ -461,105 +466,128 @@ async def render_group_async(display_id):
     import server
     display = server.settings.displays.get(display_id)
     if not display:
+        raise RuntimeError("no such display: " + str(display_id))
+    seg_items = [(i, me) for i, me in enumerate(media_elements)
+                 if _is_renderable(me)]
+    clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    # Pass 1: collect all video render commands. Pass 2: gather them.
+    # This lets us see the total job count and parallelise everything
+    # in a single batch (across items AND across clients).
+    video_jobs = []        # list of (cmd, label)
+    seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
+    for i, me in seg_items:
+        src_path = resolve_media_path(me.file)
+        if isVideoItem(me.file):
+            dims = get_video_dimensions(src_path) if src_path else None
+            if not dims:
+                raise RuntimeError("cannot read source video: " + str(me.file))
+            sw, sh = dims
+            for key, c in clients:
+                out_dir = os.path.join("media", key, "videos")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                out_w, out_h = _render_output_dims(c)
+                # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
+                # seconds-domain duration (the param name 'duration_ms' is a
+                # misnomer). Do NOT convert to ms here — only the client
+                # playback payload (_media_item_payload) needs ms.
+                evf, eaf = _resolve_effect_filters(me, me.duration,
+                                                   out_w, out_h)
+                if me.playmode == PlayMode.INDIVIDUAL:
+                    quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
+                    bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                    if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
+                        raise RuntimeError("degenerate screen quad for client " + str(key))
+                    if sw * bh >= sh * bw:                 # source wider/equal -> pad height
+                        pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
+                    else:                                  # source taller -> pad width
+                        pad_h = sh; pad_w = int(round(sh * bw / float(bh)))
+                    pad_x = (pad_w - sw) // 2; pad_y = (pad_h - sh) // 2
+                    pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
+                    out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
+                    cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
+                                                      out_w, out_h,
+                                                      pad_w, pad_h, pad_x, pad_y,
+                                                      getattr(me, "backgroundColor", "#000000"),
+                                                      extra_video_filters=evf, extra_audio_filters=eaf)
+                else:
+                    pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
+                    out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
+                    cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
+                                                       out_w, out_h,
+                                                       extra_video_filters=evf, extra_audio_filters=eaf)
+                    seg_push_targets.append((key, i))
+                video_jobs.append((cmd, key + "/" + str(i)))
+        else:
+            img = cv.imread(src_path) if src_path else None
+            if img is None:
+                raise RuntimeError("cannot read source image: " + str(me.file))
+            for key, c in clients:
+                out_dir = os.path.join("media", key, "images")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                # Output at the client's TRUE rendered viewport (canvas),
+                # falling back to reported device dims when canvas is 0/missing.
+                out_w, out_h = _render_output_dims(c)
+                if me.playmode == PlayMode.INDIVIDUAL:
+                    quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
+                    bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                    if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
+                        raise RuntimeError("degenerate screen quad for client " + str(key))
+                    bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
+                    canvas = letterbox_to_aspect(img, bw, bh, bg)
+                    warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
+                                                   out_w, out_h)
+                    cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
+                else:
+                    warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
+                                                   out_w, out_h)
+                    cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
+    # Pass 2: fire all video ffmpeg jobs in parallel, capped at
+    # _RENDER_CONCURRENCY. Any failure raises out of asyncio.gather
+    # (return_exceptions=False default) and propagates to the caller.
+    if video_jobs:
+        sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
+        logging.info("render: launching %d ffmpeg jobs concurrency=%d encoder=%s",
+                     len(video_jobs), _RENDER_CONCURRENCY, _VIDEO_ENCODER)
+        t0 = time.time()
+        total = len(video_jobs)
+        done = [0]
+
+        async def _run_and_count(cmd, lbl):
+            await _run_ffmpeg(cmd, lbl, sem)
+            done[0] += 1
+            if progress_cb:
+                try:
+                    progress_cb(done[0], total)
+                except Exception:
+                    pass
+
+        await asyncio.gather(*[_run_and_count(cmd, lbl) for cmd, lbl in video_jobs])
+        logging.info("render: %d ffmpeg jobs done in %.1fs",
+                     len(video_jobs), time.time() - t0)
+        # Cache-push: fire-and-forget scp of each seg_ file to its
+        # iPad's lighttpd cache dir. _push_segment_to_cached_clients
+        # is a no-op for clients not in lighttpd-localhost cacheMode,
+        # so it is safe to call unconditionally for every seg_ target.
+        # See docs/superpowers/specs/2026-06-03-media-cache-design.md
+        for _push_key, _push_n in seg_push_targets:
+            asyncio.ensure_future(
+                server._push_segment_to_cached_clients(_push_key, token, _push_n))
+
+
+async def render_group_async(display_id):
+    """Legacy entry point: render the playlist CURRENTLY applied to a group
+    (display.mediaElements). Sets display.renderStatus/renderedToken + broadcasts
+    RENDER_STATUS. Retained so evaluate_schedules' resume path keeps working;
+    Phase C/D route new renders through render_playlist_for_group_async."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
         return {"status": "error"}
     display.renderStatus = "rendering"
     _broadcast_render_status(display_id, "rendering")
     token = compute_render_token(display_id)
     try:
-        seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
-                     if _is_renderable(me)]
-        clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
-        # Pass 1: collect all video render commands. Pass 2: gather them.
-        # This lets us see the total job count and parallelise everything
-        # in a single batch (across items AND across clients).
-        video_jobs = []        # list of (cmd, label)
-        seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
-        for i, me in seg_items:
-            src_path = resolve_media_path(me.file)
-            if isVideoItem(me.file):
-                dims = get_video_dimensions(src_path) if src_path else None
-                if not dims:
-                    raise RuntimeError("cannot read source video: " + str(me.file))
-                sw, sh = dims
-                for key, c in clients:
-                    out_dir = os.path.join("media", key, "videos")
-                    Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    out_w, out_h = _render_output_dims(c)
-                    # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
-                    # seconds-domain duration (the param name 'duration_ms' is a
-                    # misnomer). Do NOT convert to ms here — only the client
-                    # playback payload (_media_item_payload) needs ms.
-                    evf, eaf = _resolve_effect_filters(me, me.duration,
-                                                       out_w, out_h)
-                    if me.playmode == PlayMode.INDIVIDUAL:
-                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
-                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
-                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
-                            raise RuntimeError("degenerate screen quad for client " + str(key))
-                        if sw * bh >= sh * bw:                 # source wider/equal -> pad height
-                            pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
-                        else:                                  # source taller -> pad width
-                            pad_h = sh; pad_w = int(round(sh * bw / float(bh)))
-                        pad_x = (pad_w - sw) // 2; pad_y = (pad_h - sh) // 2
-                        pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
-                        out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
-                        cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
-                                                          out_w, out_h,
-                                                          pad_w, pad_h, pad_x, pad_y,
-                                                          getattr(me, "backgroundColor", "#000000"),
-                                                          extra_video_filters=evf, extra_audio_filters=eaf)
-                    else:
-                        pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
-                        out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
-                        cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                           out_w, out_h,
-                                                           extra_video_filters=evf, extra_audio_filters=eaf)
-                        seg_push_targets.append((key, i))
-                    video_jobs.append((cmd, key + "/" + str(i)))
-            else:
-                img = cv.imread(src_path) if src_path else None
-                if img is None:
-                    raise RuntimeError("cannot read source image: " + str(me.file))
-                for key, c in clients:
-                    out_dir = os.path.join("media", key, "images")
-                    Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    # Output at the client's TRUE rendered viewport (canvas),
-                    # falling back to reported device dims when canvas is 0/missing.
-                    out_w, out_h = _render_output_dims(c)
-                    if me.playmode == PlayMode.INDIVIDUAL:
-                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
-                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
-                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
-                            raise RuntimeError("degenerate screen quad for client " + str(key))
-                        bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
-                        canvas = letterbox_to_aspect(img, bw, bh, bg)
-                        warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
-                                                       out_w, out_h)
-                        cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
-                    else:
-                        warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
-                                                       out_w, out_h)
-                        cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
-        # Pass 2: fire all video ffmpeg jobs in parallel, capped at
-        # _RENDER_CONCURRENCY. Any failure raises out of asyncio.gather
-        # (return_exceptions=False default) and gets caught by the outer
-        # try-except, which sets renderStatus='error' and broadcasts.
-        if video_jobs:
-            sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
-            logging.info("render: launching %d ffmpeg jobs concurrency=%d encoder=%s",
-                         len(video_jobs), _RENDER_CONCURRENCY, _VIDEO_ENCODER)
-            t0 = time.time()
-            await asyncio.gather(*[_run_ffmpeg(cmd, lbl, sem) for cmd, lbl in video_jobs])
-            logging.info("render: %d ffmpeg jobs done in %.1fs",
-                         len(video_jobs), time.time() - t0)
-            # Cache-push: fire-and-forget scp of each seg_ file to its
-            # iPad's lighttpd cache dir. _push_segment_to_cached_clients
-            # is a no-op for clients not in lighttpd-localhost cacheMode,
-            # so it is safe to call unconditionally for every seg_ target.
-            # See docs/superpowers/specs/2026-06-03-media-cache-design.md
-            for _push_key, _push_n in seg_push_targets:
-                asyncio.ensure_future(
-                    server._push_segment_to_cached_clients(_push_key, token, _push_n))
+        await _encode_group(display.mediaElements, display_id, token)
         display.renderedToken = token
         display.renderStatus = "ready"
         _broadcast_render_status(display_id, "ready")
