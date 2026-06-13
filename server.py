@@ -72,6 +72,7 @@ from mosaicmesh.render import (
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
     revalidate_renders_on_boot,
     mark_group_recalibrated,
+    is_playlist_ready,
 )
 from mosaicmesh.device_scripts import (
     SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
@@ -2129,10 +2130,15 @@ def evaluate_schedules(now=None):
                 display.scheduledEntryId = key
                 display.scheduledPlaying = False
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and compute_render_token(display_id) != display.renderedToken:
-                if display.renderStatus != "rendering":
-                    asyncio.ensure_future(render_group_async(display_id))
-                    display.scheduledPlaying = False
+            if has_renderable and not is_playlist_ready(playlist_name, display_id):
+                # Not ready: enqueue (idempotent) and HOLD — don't play stale/un-rendered.
+                from mosaicmesh import render_queue, render as _render
+                elements = _render._build_media_elements(
+                    settings.playlists[playlist_name].items)
+                _render._set_render_state(display, playlist_name, _render.RENDER_QUEUED,
+                                          token=_render.render_token(elements, display_id))
+                render_queue.enqueue(playlist_name, display_id)
+                display.scheduledPlaying = False
             elif not getattr(display, "scheduledPlaying", False):
                 _start_group_playback(display_id)
                 display.scheduledPlaying = True

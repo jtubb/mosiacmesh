@@ -85,3 +85,29 @@ def test_assign_reports_render_required(fresh_settings):
         {"REQUEST": "ASSIGN_PLAYLIST", "PAYLOAD": {"displayID": "G1", "name": "P"},
          "SRC": "a", "DEST": "SRV"}, _MockSession()))
     assert out["PAYLOAD"]["status"] == "RENDER_REQUIRED"
+
+
+def test_evaluate_schedules_holds_until_ready(fresh_settings, monkeypatch):
+    from mosaicmesh.state import Schedule
+    import datetime
+    d, pl = _calibrated_group_with_seg_playlist(fresh_settings)
+    s = Schedule(); s.id = "s1"; s.displayID = "G1"; s.playlistName = "P"
+    s.enabled = True; s.freq = "DAILY"; s.dtstart = "2020-01-01"
+    s.startTime = "00:00"; s.endTime = "23:59"
+    fresh_settings.schedules["s1"] = s
+
+    enq = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: enq.append((name, did)) or True)
+    started = []
+    monkeypatch.setattr(server, "_start_group_playback", lambda did: started.append(did))
+
+    server.evaluate_schedules(datetime.datetime(2020, 1, 1, 12, 0))
+    assert ("P", "G1") in enq   # not ready → enqueued, not played
+    assert started == []
+
+    # Now mark ready and re-evaluate → it plays.
+    tok = R.render_token(R._build_media_elements(pl.items), "G1")
+    R._set_render_state(d, "P", R.RENDER_READY, token=tok)
+    server.evaluate_schedules(datetime.datetime(2020, 1, 1, 12, 0))
+    assert started == ["G1"]
