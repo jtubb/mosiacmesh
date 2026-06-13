@@ -151,4 +151,4 @@ def test_render_handler_retries_failed(fresh_settings, monkeypatch):
     import jsonpickle
     out = jsonpickle.decode(out)
     assert ("P", "G1") in enq
-    assert out["PAYLOAD"]["status"] in ("QUEUED", "rendering")
+    assert out["PAYLOAD"]["status"] == "QUEUED"

@@ -559,7 +559,7 @@ class TestIsRenderable:
         ret = jsonpickle.decode(server.msg_response(
             {"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER",
              "PAYLOAD": {"displayID": "Default", "name": "Ind"}}, sess))
-        assert ret["PAYLOAD"]["status"] in ("QUEUED", "rendering")   # accepted, not ERROR
+        assert ret["PAYLOAD"]["status"] == "QUEUED"   # accepted, not ERROR
         assert ("Ind", "Default") in enq
 
     def test_play_individual_stale_requires_render(self):

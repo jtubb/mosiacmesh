@@ -14,6 +14,7 @@ Client-side reactive timeline view for the admin console, loaded into
 - **`util/time.js`** — pure recurrence-expansion functions. Importable
   in Node for tests. Mirrors `mosaicmesh.scheduling.schedule_active_at`.
 - **`util/conflicts.js`** — pure conflict-detection helpers.
+- **`util/render-helpers.js`** — pure render-state helpers (`isReadyFromEntry`, `renderBadge`, `playlistGroupSummary`). No side effects; importable in Node for tests.
 - **`timeline/`** — render components (grid axis, track header, clip,
   now-line, top-level timeline renderer).
 - **`schedule/`** — the responsive Schedule destination's mobile views
@@ -42,6 +43,16 @@ broadcasts (`DISCOVERY_HEARTBEAT`, `CLIENTS_WENT_OFFLINE`,
 `RENDER_IN_PROGRESS`) route into `store.setStatus()` for live indicator
 updates. **PR-4a is read-only.** Drag/drop and click-mutate handlers
 land in PR-4b; modals land in PR-4c.
+
+**Auto-render store additions (auto-render model).** `store.renders`
+holds the fleet-wide snapshot from `GET /api/renders` (array of
+`{displayID, playlist, state, percent, eta, error, updatedAt}`);
+`store.renderQueueDepth` is the pending-job count; `store.renderPanelOpen`
+toggles the global Render Status panel. The `RENDERS_CHANGED` SockJS
+broadcast triggers `store.refreshRenders()` (throttled — at most once
+per 2 s) so the panel stays live during long encodes. Per-playlist
+readiness in the Content tab and Play Now filter both read from
+`store.renders` via `render-helpers.js`.
 
 ## iPad-1 compatibility
 

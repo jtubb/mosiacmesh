@@ -159,3 +159,20 @@ def test_revalidate_resets_inflight(fresh_settings):
     R._set_render_state(d, "Q", R.RENDER_RENDERING, token="t")
     R.revalidate_renders_on_boot()
     assert d.renders["Q"]["state"] == R.RENDER_STALE
+
+
+def test_revalidate_keeps_ready_when_current_and_assets_exist(fresh_settings, monkeypatch):
+    from mosaicmesh.state import Display, Playlist, Client
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    tok = R.render_token(R._build_media_elements(pl.items), "G1")
+    R._set_render_state(d, "P", R.RENDER_READY, token=tok)
+    monkeypatch.setattr(R, "_render_assets_exist", lambda name, did, token: True)
+    R.revalidate_renders_on_boot()
+    assert d.renders["P"]["state"] == R.RENDER_READY   # stayed READY, not demoted
