@@ -222,11 +222,18 @@ class TestAssignPlaylist:
         assert resp["PAYLOAD"]["status"] == "NOT_CALIBRATED"
 
     def test_assign_segment_render_required(self, mock_settings):
+        # Updated for registry-based gating (Task 13): _group_is_calibrated needs
+        # a boundingBox AND a client with measuredPerimeter; is_playlist_ready checks
+        # the Display.renders registry (not the old renderedToken field directly).
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         disp.boundingBox = [[0, 0], [10, 0], [10, 10], [0, 10]]
-        disp.renderedToken = "stale"
+        # Add a calibrated client so _group_is_calibrated passes.
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+        mock_settings.clients["c1"] = c
+        # No registry READY entry → is_playlist_ready returns False → RENDER_REQUIRED
         self._save(mock_settings, "Seg", [
             {"id": "a", "file": "/media/server/videos/v.mp4", "duration": 5,
              "playmode": "SEGMENT", "backgroundColor": "#000000",

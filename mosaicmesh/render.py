@@ -1057,20 +1057,22 @@ def _broadcast_per_client_preload(display_id, media_elements=None):
 # ---------------------------------------------------------------------------
 
 def _apply_playlist(display_id, pl):
-    """Copy a saved Playlist onto a group (mediaElements, loop, PRELOAD).
-
-    Does NOT blank renderedToken eagerly: compute_render_token() is a stable
-    hash of items + bounding box + per-client perimeters, so re-assigning
-    the SAME playlist produces the same token and the existing render
-    output is still valid. Blanking unconditionally forced a "needs render"
-    state every time the user re-assigned a playlist they hadn't changed --
-    deeply confusing because they could see the render had just completed.
-    Let the natural token comparison decide."""
+    """Copy a saved Playlist onto a group (mediaElements, loop, PRELOAD) and
+    sync display.renderedToken from the render registry so the per-client PLAY
+    URLs (_per_client_items) resolve the right seg_<token> assets. Sets the
+    live token to the playlist's READY token, else "" (not ready)."""
     import server
     display = server.settings.displays.setdefault(display_id, Display())
     display.mediaElements = _build_media_elements(pl.items)
     display.currentPlaylistName = getattr(pl, "name", None)
     display.loop = bool(pl.loop)
+    name = getattr(pl, "name", None)
+    entry = (getattr(display, "renders", {}) or {}).get(name)
+    cur = render_token(display.mediaElements, display_id)
+    if entry and entry.get("state") == RENDER_READY and entry.get("token") == cur:
+        display.renderedToken = cur
+    else:
+        display.renderedToken = ""
     _broadcast_per_client_preload(display_id, display.mediaElements)
 
 

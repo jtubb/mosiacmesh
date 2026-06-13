@@ -73,7 +73,9 @@ from mosaicmesh.render import (
     _group_is_calibrated,
     render_token,
     _set_render_state,
+    is_playlist_ready,
     RENDER_QUEUED,
+    RENDER_RENDERING,
 )
 from mosaicmesh.calibration import (
     _group_clients,
@@ -388,10 +390,13 @@ def msg_response(msg,session):
         else:
             now_ms = int(time.time() * 1000)
             resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
+            name = getattr(display, "currentPlaylistName", None)
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and display.renderStatus == "rendering":
+            entry = (getattr(display, "renders", {}) or {}).get(name) if name else None
+            state = entry.get("state") if entry else None
+            if has_renderable and state in (RENDER_QUEUED, RENDER_RENDERING):
                 response["PAYLOAD"] = {"status": "RENDER_IN_PROGRESS", "displayID": display_id}
-            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
+            elif has_renderable and not is_playlist_ready(name, display_id):
                 response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
                 if display.action == PlayState.PAUSE:
@@ -521,16 +526,17 @@ def msg_response(msg,session):
     elif(msg["REQUEST"] == "ASSIGN_PLAYLIST"):
         payload = msg["PAYLOAD"]
         display_id = payload.get("displayID")
-        pl = server.settings.playlists.get(payload.get("name"))
+        name = payload.get("name")
+        pl = server.settings.playlists.get(name)
         if pl is None or display_id is None:
             response["PAYLOAD"] = {"status": "error", "displayID": display_id}
         else:
             _apply_playlist(display_id, pl)
             display = server.settings.displays.get(display_id)
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and not display.boundingBox:
+            if has_renderable and not _group_is_calibrated(display_id):
                 status = "NOT_CALIBRATED"
-            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
+            elif has_renderable and not is_playlist_ready(name, display_id):
                 status = "RENDER_REQUIRED"
             else:
                 status = "ok"

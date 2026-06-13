@@ -461,11 +461,16 @@ class TestVideoSegmentPlay:
         return s
 
     def test_play_while_rendering_emits_in_progress(self, mock_settings):
+        # Updated for registry-based gating (Task 13): old renderStatus field replaced
+        # by Display.renders[name]["state"] == RENDER_RENDERING.
         import jsonpickle
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
-        disp.renderStatus = "rendering"
+        # Set up a playlist name and registry entry in RENDERING state.
+        disp.currentPlaylistName = "Vid"
+        R._set_render_state(disp, "Vid", R.RENDER_RENDERING, token="tok")
         ret = server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
                                    "PAYLOAD": {"displayID": "Default"}}, self._sess())
         assert jsonpickle.decode(ret)["PAYLOAD"]["status"] == "RENDER_IN_PROGRESS"
@@ -575,7 +580,10 @@ class TestIsRenderable:
         assert ret["PAYLOAD"]["status"] == "RENDER_REQUIRED"
 
     def test_per_client_play_routes_individual_to_ind_file(self):
-        # Resume-from-pause path: direct per-client PLAY with individual-crop URLs
+        # Resume-from-pause path: direct per-client PLAY with individual-crop URLs.
+        # Updated for registry-based gating (Task 13): must set currentPlaylistName
+        # + a READY registry entry (replaces old direct renderedToken assignment).
+        from mosaicmesh import render as R
         ms = server.Settings(); ms.displays = {"Default": server.Display()}
         server.settings = ms; server.socketmanager = MagicMock()
         disp = ms.displays["Default"]
@@ -586,7 +594,15 @@ class TestIsRenderable:
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         ms.clients = {"c1": c}
-        disp.renderedToken = server.compute_render_token("Default")   # mark rendered
+        # Registry-based readiness: add playlist, set READY entry, sync renderedToken.
+        pl = server.Playlist(); pl.name = "Ind"
+        pl.items = [{"id": "a", "file": "/media/server/x.jpg", "playmode": "INDIVIDUAL",
+                     "duration": 1000}]
+        ms.playlists["Ind"] = pl
+        tok = server.compute_render_token("Default")
+        R._set_render_state(disp, "Ind", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "Ind"
+        disp.renderedToken = tok   # sync so _per_client_items uses the right token
         sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
         sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
         server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
