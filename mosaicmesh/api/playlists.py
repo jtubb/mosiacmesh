@@ -144,5 +144,7 @@ async def api_playlists_delete(request):
             "refs": refs,
         }, status=409)
     del server.settings.playlists[name]
+    from mosaicmesh import render as _render
+    _render.cleanup_playlist_renders(name)
     saveSettings()
     return web.Response(status=204)

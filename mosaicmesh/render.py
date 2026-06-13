@@ -813,6 +813,48 @@ def mark_group_recalibrated(display_id):
     return will
 
 
+def _delete_render_assets(playlist_name, display_id):
+    """Delete on-disk seg_/ind_ assets for a (playlist, group) for its current
+    token. Best-effort; missing files are fine."""
+    import server, glob
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return
+    token = (display.renders.get(playlist_name) or {}).get("token", "")
+    if not token:
+        return
+    for key, _c in _group_clients(display_id):
+        for sub in ("videos", "images"):
+            for prefix in ("seg_", "ind_"):
+                for path in glob.glob(os.path.join("media", key, sub, prefix + token + "_*")):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+
+
+def cleanup_playlist_renders(playlist_name):
+    """Remove a playlist's render entry + assets from every group (on delete)."""
+    import server
+    for did, display in server.settings.displays.items():
+        if playlist_name in (getattr(display, "renders", {}) or {}):
+            _delete_render_assets(playlist_name, did)
+            display.renders.pop(playlist_name, None)
+    _broadcast_renders_changed(force=True)
+
+
+def cleanup_group_renders(display_id):
+    """Drop a group's whole render registry + assets (on group delete)."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return
+    for name in list((getattr(display, "renders", {}) or {}).keys()):
+        _delete_render_assets(name, display_id)
+    display.renders = {}
+    _broadcast_renders_changed(force=True)
+
+
 # ---------------------------------------------------------------------------
 # Duration / payload / URL helpers
 # ---------------------------------------------------------------------------

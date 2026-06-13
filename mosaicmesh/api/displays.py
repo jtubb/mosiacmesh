@@ -125,6 +125,8 @@ async def api_displays_delete(request):
             "error": f"display '{display_id}' is in use by " + " and ".join(msg_parts),
             "refs": {"clients": client_refs, "schedules": schedule_refs},
         }, status=409)
+    from mosaicmesh import render as _render
+    _render.cleanup_group_renders(display_id)
     del server.settings.displays[display_id]
     saveSettings()
     return web.Response(status=204)

@@ -104,3 +104,18 @@ def test_mark_group_recalibrated_skips_ready(fresh_settings, monkeypatch):
     will = R.mark_group_recalibrated("G1")
     assert will == []                 # already current → skipped
     assert ("Seg", "G1") not in enq
+
+
+def test_cleanup_playlist_renders_removes_entries(fresh_settings):
+    from mosaicmesh.state import Display
+    from mosaicmesh import render as R
+    d1 = Display(); d2 = Display()
+    fresh_settings.displays["G1"] = d1
+    fresh_settings.displays["G2"] = d2
+    R._set_render_state(d1, "P", R.RENDER_READY, token="t")
+    R._set_render_state(d2, "P", R.RENDER_READY, token="t")
+    R._set_render_state(d2, "Q", R.RENDER_READY, token="t")
+    R.cleanup_playlist_renders("P")
+    assert "P" not in d1.renders
+    assert "P" not in d2.renders
+    assert "Q" in d2.renders   # untouched

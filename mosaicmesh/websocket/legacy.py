@@ -507,7 +507,10 @@ def msg_response(msg,session):
             response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "DELETE_PLAYLIST"):
-        server.settings.playlists.pop(msg["PAYLOAD"].get("name"), None)
+        _dp_name = msg["PAYLOAD"].get("name")
+        server.settings.playlists.pop(_dp_name, None)
+        from mosaicmesh import render as _render
+        _render.cleanup_playlist_renders(_dp_name)
         response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "ASSIGN_PLAYLIST"):
