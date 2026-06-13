@@ -599,6 +599,88 @@ async def render_group_async(display_id):
         return {"status": "error", "error": str(e)}
 
 
+# Throttled RENDERS_CHANGED broadcast (≤1/s). Module-level so all callers coalesce.
+_last_renders_broadcast = [0.0]
+
+
+def _broadcast_renders_changed(force=False):
+    """Fan a RENDERS_CHANGED snapshot to all clients, throttled to ≤1/s unless
+    force=True (terminal transitions). No-op if socketmanager isn't wired."""
+    import server
+    if server.socketmanager is None:
+        return
+    now = time.time()
+    if not force and (now - _last_renders_broadcast[0]) < 1.0:
+        return
+    _last_renders_broadcast[0] = now
+    server.socketmanager.broadcast(jsonpickle.encode(
+        {"REQUEST": "RENDERS_CHANGED", "PAYLOAD": {"renders": renders_snapshot()}}))
+
+
+def renders_snapshot():
+    """Flat list of every render entry across all groups, for the fleet-wide
+    Render Status panel + GET /api/renders."""
+    import server
+    out = []
+    for did, display in server.settings.displays.items():
+        for name, e in (getattr(display, "renders", {}) or {}).items():
+            out.append({
+                "displayID": did, "playlist": name,
+                "state": e.get("state"), "percent": e.get("percent"),
+                "eta": e.get("eta"), "startedAt": e.get("startedAt"),
+                "error": e.get("error"), "updatedAt": e.get("updatedAt"),
+            })
+    return out
+
+
+async def render_playlist_for_group_async(playlist_name, display_id):
+    """Render a NAMED playlist for a group into the registry (QUEUED→RENDERING→
+    READY/FAILED) WITHOUT touching display.mediaElements (staging-safe). Used by
+    the render queue. No-op (drops the entry) if the playlist became N/A."""
+    import server
+    pl = server.settings.playlists.get(playlist_name)
+    display = server.settings.displays.get(display_id)
+    if pl is None or display is None:
+        return
+    elements = _build_media_elements(pl.items)
+    if not any(_is_renderable(me) for me in elements):
+        display.renders.pop(playlist_name, None)   # became N/A
+        _broadcast_renders_changed(force=True)
+        return
+    token = render_token(elements, display_id)
+    _set_render_state(display, playlist_name, RENDER_RENDERING, token=token,
+                      percent=0, started=time.time())
+    _broadcast_renders_changed(force=True)
+
+    def _progress(done, total):
+        pct = int(round(100.0 * done / total)) if total else 100
+        entry = display.renders.get(playlist_name) or {}
+        started = entry.get("startedAt") or time.time()
+        elapsed = max(0.001, time.time() - started)
+        rate = done / elapsed
+        eta = int(round((total - done) / rate)) if rate > 0 else None
+        _set_render_state(display, playlist_name, RENDER_RENDERING, percent=pct, eta=eta)
+        _broadcast_renders_changed()
+
+    try:
+        await _encode_group(elements, display_id, token, progress_cb=_progress)
+        _set_render_state(display, playlist_name, RENDER_READY, token=token,
+                          percent=100, eta=0, error=None)
+        # If this playlist is the one applied to the group, sync the live token
+        # so the per-client PLAY URLs resolve the freshly-rendered assets.
+        if getattr(display, "currentPlaylistName", None) == playlist_name:
+            display.renderedToken = token
+    except Exception as e:
+        logging.error("render_playlist_for_group %s/%s failed: %s", playlist_name, display_id, e)
+        _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))
+    _broadcast_renders_changed(force=True)
+    try:
+        from mosaicmesh.persistence import save_settings_incremental
+        save_settings_incremental()
+    except Exception:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Duration / payload / URL helpers
 # ---------------------------------------------------------------------------
