@@ -71,7 +71,9 @@ param(
     # Install the standard MosaicMesh tweak set via apt over the keyed session.
     # The default set ($DEFAULT_TWEAKS below) covers the packages our automation
     # actually depends on (libactivator + skiplock + veency + terminalactivator
-    # + their dependencies). Combine with -Packages to add extras.
+    # + their dependencies) plus a shell-userland bootstrap (coreutils/gawk/
+    # curl/wget/less/nano) since the kit IPSW omits the text-processing suite.
+    # Combine with -Packages to add extras.
     [switch]$InstallTweaks,
     # Additional / replacement package list to apt-get install. If -InstallTweaks
     # is also set, the union of both lists is installed. If only -Packages is set,
@@ -168,7 +170,23 @@ $DEFAULT_TWEAKS = @(
     # Onboarding steps 5.4d/5.4e/5.4f below write the config plist,
     # the LaunchDaemon plist, and the server-side cacheMode flag.
     # See docs/superpowers/specs/2026-06-03-media-cache-design.md.
-    'lighttpd'
+    'lighttpd',
+    # --- shell userland bootstrap (2026-06-13) ---
+    # The kit IPSW ships a BARE userland: bash + sed/grep/find/xargs only.
+    # MISSING by default are the entire text suite (tr/head/tail/awk/cut/
+    # sort/uniq/wc) plus curl/wget/less/an editor -- which repeatedly broke
+    # device scripts that piped through `tr`/`head` and left us with no
+    # on-device HTTP client. These packages fill that gap so lifecycle
+    # scripts, the audit tool, and ad-hoc ops all have a normal shell.
+    # (GNU coreutils shadows a few BSD tools in /usr/bin -> the apt install
+    # below uses Dpkg::Options::=--force-overwrite to allow it; benign.)
+    # See memory ipad-shell-toolset / docs ...-wifi-psm-keepalive-design.md.
+    'coreutils',                     # tr head tail cut wc sort uniq base64 md5sum ...
+    'gawk',                          # awk
+    'curl',                          # on-device HTTP client (REST, downloads)
+    'wget',                          # HTTP fallback
+    'less',                          # pager
+    'nano'                           # editor for on-device tweaks
 )
 
 $ErrorActionPreference = "Stop"
@@ -595,9 +613,12 @@ foreach ($h in $targets) {
         # The `apt-get -f install` step repairs apt7's "installed but unconfigured"
         # state (left by the dpkg bootstrap when berkeleydb wasn't yet available)
         # and resolves any other broken deps before the main install.
+        # --force-overwrite: GNU coreutils (in the bootstrap set) ships /usr/bin
+        # tools that shadow the BSD base -- without it dpkg aborts with "trying
+        # to overwrite ... also in package". Benign here; we WANT the GNU tools.
         $aptCmd = "apt-get update -o Acquire::AllowInsecureRepositories=true -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=0 2>/dev/null || true; " +
                   "apt-get -f install -y --force-yes 2>&1; " +
-                  "apt-get install -y --force-yes $pkgArg; echo APT_RC=`$?"
+                  "apt-get install -y --force-yes -o Dpkg::Options::=--force-overwrite $pkgArg; echo APT_RC=`$?"
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
         try {
