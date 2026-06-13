@@ -71,6 +71,8 @@ async def _debounce_fire(playlist_name):
     try:
         await asyncio.sleep(DEBOUNCE_SECONDS)
     except asyncio.CancelledError:
+        if _debounce_tasks.get(playlist_name) is asyncio.current_task():
+            _debounce_tasks.pop(playlist_name, None)
         return
     _debounce_tasks.pop(playlist_name, None)
     from mosaicmesh import render as R
