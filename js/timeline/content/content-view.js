@@ -5,6 +5,7 @@
  */
 import { api } from '../api.js';
 import { openPlaylistEditor } from '../modals/playlist-editor.js';
+import { playlistGroupSummary } from '../util/render-helpers.js';
 
 export function mmContentComponent() {
   return {
@@ -46,5 +47,23 @@ export function mmContentComponent() {
       try { await this.$store.mm.deletePlaylist(name); } catch (_) {}
     },
     edit(name) { openPlaylistEditor(this.$store.mm, name); },
+
+    playlistRenderSummary(name) {
+      const pl = this.$store.mm.playlists[name];
+      const renderable = !!(pl && (pl.items || []).some(
+        (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL'));
+      return playlistGroupSummary(name, this.$store.mm.displayGroups, this.$store.mm.renders, renderable);
+    },
+    retryRender(name) {
+      const summary = this.playlistRenderSummary(name);
+      if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
+        this.$store.mm.toast('SockJS not available; reload the page.', 'error');
+        return;
+      }
+      for (const displayID of summary.failed) {
+        window.sock.send(window.generateMessage('SRV', 'RENDER', { displayID, name }));
+      }
+      this.$store.mm.toast(`Retrying render of "${name}" on ${summary.failed.length} group(s).`, 'info');
+    },
   };
 }

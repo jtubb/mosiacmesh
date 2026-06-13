@@ -855,6 +855,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
               <li class="mm-playlist-row">
                 <button class="mm-playlist-name" @click="edit(p.name)" x-text="p.name"></button>
                 <span class="mm-playlist-meta" x-text="(p.items?.length || 0) + ' items'"></span>
+                <span class="mm-playlist-render" x-show="playlistRenderSummary(p.name).total"
+                      x-text="'rendered ' + playlistRenderSummary(p.name).ready + '/' + playlistRenderSummary(p.name).total"></span>
+                <button class="mm-playlist-retry" x-show="playlistRenderSummary(p.name).failed.length"
+                        @click="retryRender(p.name)" title="Retry failed renders">Retry ⚠</button>
                 <button class="mm-playlist-del" @click="deletePlaylist(p.name)" title="Delete">×</button>
               </li>
             </template>
