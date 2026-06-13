@@ -8,7 +8,7 @@
  * Alpine templates so the device <select>/checkbox controls stay reactive.
  * Every action reuses an existing store mutator or modal.
  */
-import { groupStatusLine, deviceRowsForGroup, calibrationSummary } from './fleet-status.js';
+import { groupStatusLine, deviceRowsForGroup, calibrationSummary, playlistReadinessForGroup } from './fleet-status.js';
 import { openPlayNowModal, fireStopNow } from '../modals/play-now.js';
 import { fireFleetAction } from '../modals/fleet-confirm.js';
 import { openCalibrationModal } from '../modals/calibration.js';
@@ -34,6 +34,9 @@ export function mmFleetComponent() {
     get allSelected() {
       const d = this.devices;
       return d.length > 0 && d.every(x => this.bulkSelection.has(x.clientKey));
+    },
+    get playlistReadiness() {
+      return playlistReadinessForGroup(this.selectedGroupId, this.$store.mm.playlists, this.$store.mm.renders);
     },
     statusFor(group) {
       return groupStatusLine(group, this.$store.mm.playback, this.$store.mm.renderInProgress);
@@ -65,20 +68,6 @@ export function mmFleetComponent() {
     // ---- group-level actions (reuse existing modals/helpers) ----
     playNow() { if (this.selectedGroupId) openPlayNowModal(this.$store.mm, this.selectedGroupId); },
     stopNow() { if (this.selectedGroupId) fireStopNow(this.$store.mm, this.selectedGroupId); },
-    renderNow() {
-      const id = this.selectedGroupId;
-      if (!id) return;
-      if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
-        this.$store.mm.toast('SockJS not available; reload the page.', 'error');
-        return;
-      }
-      try {
-        window.sock.send(window.generateMessage('SRV', 'RENDER', { displayID: id }));
-        this.$store.mm.toast(`Render requested for "${id}".`, 'info');
-      } catch (e) {
-        this.$store.mm.toast(`Failed to send render: ${e?.message || e}`, 'error');
-      }
-    },
     reloadGroup() {
       const id = this.selectedGroupId;
       if (!id) return;

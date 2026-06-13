@@ -7,6 +7,7 @@
  *                    deviceType, measuredPerimeter? }
  *   playback[id]:  { state, currentPlaylist, ... }   state in PLAY|PAUSE|STOP|IDLE|PREPARING
  */
+import { isReadyFromEntry, renderBadge } from '../util/render-helpers.js';
 
 /** Group-level status for the master list + detail header. */
 export function groupStatusLine(group, playback, renderInProgress) {
@@ -43,4 +44,22 @@ export function calibrationSummary(devices) {
   let calibratedCount = 0;
   for (const d of list) if (d.measuredPerimeter != null) calibratedCount += 1;
   return { calibratedCount, total: list.length };
+}
+
+/**
+ * Per-playlist render readiness for the Fleet group-detail panel.
+ * Returns an array sorted by playlist name; each entry:
+ *   { name, label, ready }
+ * Non-renderable playlists (no SEGMENT/INDIVIDUAL items) are always "ready".
+ */
+export function playlistReadinessForGroup(displayID, playlists, renders) {
+  const reg = (renders && renders[displayID]) || {};
+  return Object.keys(playlists || {}).sort().map((name) => {
+    const pl = playlists[name];
+    const renderable = (pl.items || []).some(
+      (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL');
+    if (!renderable) return { name, label: 'ready', ready: true };
+    const entry = reg[name];
+    return { name, label: renderBadge(entry), ready: isReadyFromEntry(entry) };
+  });
 }

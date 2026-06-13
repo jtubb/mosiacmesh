@@ -993,9 +993,22 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                     <div class="mm-fleet-card-actions">
                       <button class="btn btn-primary" @click="playNow()">▶ Play now</button>
                       <button class="btn" @click="stopNow()">⏹ Stop</button>
-                      <button class="btn" @click="renderNow()" title="Pre-bake mosaic segments for this group">⟳ Render now</button>
                       <button class="btn" @click="reloadGroup()" title="Reload the display page on every device in this group">↻ Reload</button>
                     </div>
+                  </div>
+                  <div class="mm-fleet-card mm-fleet-render-readiness" x-show="selectedGroupId">
+                    <h3 class="mm-fleet-card-title">Rendered content</h3>
+                    <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;">
+                      <template x-for="r in playlistReadiness" :key="r.name">
+                        <li style="display:flex;align-items:center;gap:8px;font-size:13px;">
+                          <span x-text="r.name"></span>
+                          <span class="mm-render-badge" :class="r.ready ? 'is-ready' : 'is-pending'" x-text="r.label"></span>
+                        </li>
+                      </template>
+                      <template x-if="playlistReadiness.length===0">
+                        <li style="color:var(--text-muted);font-style:italic;">No playlists defined.</li>
+                      </template>
+                    </ul>
                   </div>
                   <div class="mm-fleet-card">
                     <h3 class="mm-fleet-card-title">Calibration</h3>
