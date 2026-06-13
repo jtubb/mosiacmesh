@@ -67,6 +67,7 @@ export function makeStore() {
     renderInProgress: {},
     renders: {},            // displayID -> { playlistName -> entry }
     renderQueueDepth: 0,
+    renderPanelOpen: false,
 
     /**
      * Fire all five GETs in parallel; populate state on success.
@@ -164,6 +165,14 @@ export function makeStore() {
       }
       this.renders = map;
       if (typeof queueDepth === 'number') this.renderQueueDepth = queueDepth;
+    },
+    retryRenderGroup(playlistName, displayID) {
+      if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
+        this.toast('SockJS not available; reload the page.', 'error');
+        return;
+      }
+      window.sock.send(window.generateMessage('SRV', 'RENDER', { displayID, name: playlistName }));
+      this.toast(`Retrying render of "${playlistName}" on "${displayID}".`, 'info');
     },
     renderEntry(playlistName, displayID) {
       return (this.renders[displayID] || {})[playlistName] || null;

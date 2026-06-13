@@ -420,7 +420,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .mm-track-name { font-weight: 600; }
 .mm-track-status { color: var(--text-muted); font-size: 11px; }
 .mm-status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; vertical-align:middle; margin-right:4px; }
-.mm-render-badge { color: var(--warn); font-size: 10px; margin-left: 6px; }
+.mm-render-badge { font-size: 0.8em; padding: 0 .4em; border-radius: 3px; margin-left: .4em; color: var(--warn); }
+.mm-render-badge.is-ready { color: var(--ok); }
+.mm-render-badge.is-pending { color: var(--warn); }
+.mm-playlist-render { font-size: 0.8em; color: var(--text-muted); margin-left: .5em; }
+.mm-playlist-retry { font-size: 0.8em; margin-left: .4em; }
 /* PR-4b: drop target overlay for drag-playlist→create-schedule. Sits in
    the same grid cell as any clips on that track row; clips are emitted
    AFTER the droparea so they paint on top. During an in-flight playlist
@@ -761,6 +765,17 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
   .mm-fleet-list { flex:1 1 auto; max-width:none; }
   .mm-fleet-detail.mm-fleet-sheet { position:fixed; inset:0; z-index:60; background:var(--bg); overflow:auto; padding:14px; }
 }
+
+/* ---- Global Render Status panel (Task 20) ---- */
+.mm-render-status { position: relative; }
+.mm-render-status-toggle { font:inherit; border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:var(--radius); padding:4px 10px; cursor:pointer; font-size:12px; }
+.mm-render-status-toggle:hover { border-color:var(--accent); }
+.mm-render-status-drawer { position: absolute; right: 0; top: calc(100% + 4px); background: var(--bg-elev); border: 1px solid var(--border); padding: .5em .75em; min-width: 280px; max-height: 50vh; overflow: auto; z-index: 50; box-shadow: var(--shadow); border-radius: var(--radius); }
+.mm-render-status-drawer h4 { margin: 0 0 .4em; font-size: 12px; color: var(--text-muted); }
+.mm-render-status-drawer ul { list-style: none; margin: 0; padding: 0; }
+.mm-render-status-drawer li { padding: .25em 0; border-bottom: 1px solid var(--border); font-size: .85em; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mm-render-status-drawer li:last-child { border-bottom: none; }
+.mm-render-status-drawer p { margin: 0; font-size: .85em; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -777,6 +792,28 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
     <span class="dot" id="connDot" :class="{ on: $store.mm.connection.connected }"></span>
     <span id="connText" class="size" x-text="$store.mm.connection.connected ? ('connected · ' + $store.mm.connection.onlineClients + ' online') : 'connecting…'"></span>
     <span class="spacer"></span>
+    <!-- Task 20: Global Render Status panel — visible across all tabs whenever
+         renders are active or queued. Binds to $store.mm which is global. -->
+    <div class="mm-render-status" x-data x-show="$store.mm.rendersList.length || $store.mm.renderQueueDepth">
+      <button class="mm-render-status-toggle" @click="$store.mm.renderPanelOpen = !$store.mm.renderPanelOpen"
+              x-text="'▣ ' + $store.mm.rendersList.length + ' rendering…'"></button>
+      <div class="mm-render-status-drawer" x-show="$store.mm.renderPanelOpen" @click.outside="$store.mm.renderPanelOpen = false">
+        <h4>Render status</h4>
+        <template x-if="!$store.mm.rendersList.length"><p>All renders up to date.</p></template>
+        <ul>
+          <template x-for="r in $store.mm.rendersList" :key="r.displayID + ':' + r.playlist">
+            <li>
+              <span x-text="r.playlist"></span>
+              <span style="color:var(--text-muted)">·</span>
+              <span x-text="r.displayID" style="color:var(--text-muted)"></span>
+              <progress x-show="r.state==='RENDERING'" :value="r.percent || 0" max="100" style="width:60px"></progress>
+              <span x-text="r.state + (r.percent!=null ? ' '+r.percent+'%' : '') + (r.eta!=null ? ' · ~'+r.eta+'s' : '')" style="color:var(--text-muted);font-size:0.8em"></span>
+              <button class="btn" style="font-size:0.8em;padding:2px 7px" x-show="r.state==='FAILED'" @click="$store.mm.retryRenderGroup(r.playlist, r.displayID)">Retry</button>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
     <button class="btn btn-ghost" id="themeToggle" type="button">🌙 Theme</button>
   </div>
   <div class="shell">

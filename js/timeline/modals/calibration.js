@@ -153,6 +153,10 @@ export function openCalibrationModal(store, preGroup) {
         const n = body.detected != null ? body.detected : (body.markers != null ? body.markers : '?');
         resultDiv.textContent = 'Detected ' + n + ' markers.';
         store.toast('Calibration: detected ' + n + ' markers.', 'info');
+        const willRender = body.willRender || [];
+        if (willRender.length) {
+          store.toast('Calibration will (re)render ' + willRender.length + ' playlist(s): ' + willRender.join(', ') + '.', 'info');
+        }
       } else {
         resultDiv.textContent = body.error || 'Calibration failed.';
       }
