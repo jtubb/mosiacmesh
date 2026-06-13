@@ -684,6 +684,41 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         pass
 
 
+def _group_is_calibrated(display_id):
+    """A group is calibrated iff it has a boundingBox AND ≥1 client with a
+    measured perimeter — the minimum needed to produce a per-screen render."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display or not display.boundingBox:
+        return False
+    return any(c.measuredPerimeter is not None for _k, c in _group_clients(display_id))
+
+
+def enqueue_playlist_for_calibrated_groups(playlist_name):
+    """For a saved renderable playlist, set QUEUED + enqueue a render against
+    every calibrated group. N/A playlists (no renderable items) are skipped."""
+    import server
+    from mosaicmesh import render_queue
+    pl = server.settings.playlists.get(playlist_name)
+    if pl is None:
+        return
+    elements = _build_media_elements(pl.items)
+    if not any(_is_renderable(me) for me in elements):
+        return
+    changed = False
+    for did, display in server.settings.displays.items():
+        if not _group_is_calibrated(did):
+            continue
+        if is_playlist_ready(playlist_name, did):
+            continue   # already current — don't re-encode
+        _set_render_state(display, playlist_name, RENDER_QUEUED,
+                          token=render_token(elements, did))
+        render_queue.enqueue(playlist_name, did)
+        changed = True
+    if changed:
+        _broadcast_renders_changed(force=True)
+
+
 # ---------------------------------------------------------------------------
 # Duration / payload / URL helpers
 # ---------------------------------------------------------------------------
