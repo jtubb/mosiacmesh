@@ -30,12 +30,18 @@ def _get_sem():
 
 def enqueue(playlist_name, display_id):
     """Idempotent enqueue of a (playlist, group) render. No-op if already
-    queued/in-flight. Returns True iff a new job was scheduled."""
+    queued/in-flight, or if there is no running event loop (a synchronous /
+    non-async caller has nothing to schedule onto). Returns True iff a new job
+    was scheduled."""
     key = (playlist_name, display_id)
     if key in _pending:
         return False
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return False
     _pending[key] = "QUEUED"
-    asyncio.ensure_future(_run(playlist_name, display_id))
+    loop.create_task(_run(playlist_name, display_id))
     return True
 
 
@@ -60,11 +66,16 @@ def queue_depth():
 def schedule_autorender(playlist_name):
     """Debounced auto-render: (re)start a DEBOUNCE_SECONDS timer for this
     playlist. On fire, enqueue it for every calibrated group. A later call
-    within the window resets the timer (coalesces a burst of edits)."""
+    within the window resets the timer (coalesces a burst of edits). No-op if
+    there is no running event loop (synchronous / non-async caller)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
     old = _debounce_tasks.get(playlist_name)
     if old and not old.done():
         old.cancel()
-    _debounce_tasks[playlist_name] = asyncio.ensure_future(_debounce_fire(playlist_name))
+    _debounce_tasks[playlist_name] = loop.create_task(_debounce_fire(playlist_name))
 
 
 async def _debounce_fire(playlist_name):
