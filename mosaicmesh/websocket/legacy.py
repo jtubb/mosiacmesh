@@ -502,6 +502,8 @@ def msg_response(msg,session):
             pl.name = name
             pl.items = payload.get("items", [])
             pl.loop = bool(payload.get("loop", False))
+            from mosaicmesh import render_queue
+            render_queue.schedule_autorender(name)
             response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "DELETE_PLAYLIST"):

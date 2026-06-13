@@ -88,6 +88,8 @@ async def api_playlists_create(request):
     p._serverVersion = 1   # first persistence
     server.settings.playlists[name] = p
     saveSettings()
+    from mosaicmesh import render_queue
+    render_queue.schedule_autorender(name)
     return web.json_response({"success": True, "playlist": _serialize(p)},
                              status=201)
 
@@ -119,6 +121,8 @@ async def api_playlists_update(request):
         p.loop = bool(body["loop"])
     bump_version(p)
     saveSettings()
+    from mosaicmesh import render_queue
+    render_queue.schedule_autorender(name)
     return web.json_response({"success": True, "playlist": _serialize(p)})
 
 
