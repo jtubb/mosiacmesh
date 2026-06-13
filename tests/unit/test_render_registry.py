@@ -113,6 +113,8 @@ def test_render_playlist_for_group_failed(fresh_settings, monkeypatch):
     entry = d.renders["P"]
     assert entry["state"] == R.RENDER_FAILED
     assert "ffmpeg exploded" in entry["error"]
+    assert "percent" not in entry        # terminal FAILED must not show stale progress
+    assert "eta" not in entry
 
 
 def test_renders_snapshot_lists_entries(fresh_settings):

@@ -634,9 +634,10 @@ def renders_snapshot():
 
 
 async def render_playlist_for_group_async(playlist_name, display_id):
-    """Render a NAMED playlist for a group into the registry (QUEUED→RENDERING→
-    READY/FAILED) WITHOUT touching display.mediaElements (staging-safe). Used by
-    the render queue. No-op (drops the entry) if the playlist became N/A."""
+    """Picks up from QUEUED (set by the caller) and transitions RENDERING→READY/
+    FAILED for a NAMED playlist WITHOUT touching display.mediaElements
+    (staging-safe). Used by the render queue. No-op (drops the entry) if the
+    playlist became N/A."""
     import server
     pl = server.settings.playlists.get(playlist_name)
     display = server.settings.displays.get(display_id)
@@ -672,7 +673,9 @@ async def render_playlist_for_group_async(playlist_name, display_id):
             display.renderedToken = token
     except Exception as e:
         logging.error("render_playlist_for_group %s/%s failed: %s", playlist_name, display_id, e)
-        _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))
+        entry = _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))
+        entry.pop("percent", None)
+        entry.pop("eta", None)
     _broadcast_renders_changed(force=True)
     try:
         from mosaicmesh.persistence import save_settings_incremental
