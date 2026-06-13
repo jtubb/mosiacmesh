@@ -64,3 +64,34 @@ def test_render_token_varies_with_items(fresh_settings):
 
 def test_render_token_empty_for_unknown_group(fresh_settings):
     assert R.render_token([_seg_elem()], "NOPE") == ""
+
+
+def test_na_playlist_always_ready(fresh_settings):
+    from mosaicmesh.state import Playlist
+    _calibrated_group(fresh_settings)
+    pl = Playlist(); pl.name = "P"; pl.items = [{"id": 0, "file": "/m/x.png", "playmode": "FULL"}]
+    fresh_settings.playlists["P"] = pl
+    assert R.is_playlist_ready("P", "G1") is True
+
+
+def test_renderable_not_ready_without_entry(fresh_settings):
+    from mosaicmesh.state import Playlist
+    _calibrated_group(fresh_settings)
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    assert R.is_playlist_ready("P", "G1") is False
+
+
+def test_renderable_ready_with_current_token(fresh_settings):
+    from mosaicmesh.state import Playlist
+    d = _calibrated_group(fresh_settings)
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    tok = R.render_token(R._build_media_elements(pl.items), "G1")
+    R._set_render_state(d, "P", R.RENDER_READY, token=tok)
+    assert R.is_playlist_ready("P", "G1") is True
+    # stale token => not ready
+    R._set_render_state(d, "P", R.RENDER_READY, token="deadbeef")
+    assert R.is_playlist_ready("P", "G1") is False

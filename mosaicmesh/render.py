@@ -85,7 +85,7 @@ DEFAULT_ITEM_DURATION_S = 20
 _VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "libx264"
 _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
 
-# Per-(playlist, group) render lifecycle states (stored in Display.renders[name]["state"]).
+# Per-playlist render lifecycle states (one entry per playlistName; registry lives on the owning Display).
 RENDER_QUEUED = "QUEUED"        # enqueued, not yet started
 RENDER_RENDERING = "RENDERING"  # ffmpeg in flight
 RENDER_READY = "READY"          # assets on disk + token current
@@ -354,6 +354,48 @@ def _broadcast_render_status(display_id, status):
 def _is_renderable(me):
     """SEGMENT and INDIVIDUAL items require a per-screen server render."""
     return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL)
+
+
+def _set_render_state(display, playlist_name, state, token=None, error=None,
+                      percent=None, eta=None, started=None):
+    """Single writer for a Display.renders[name] entry. Creates the entry if
+    absent, patches only the provided fields, stamps updatedAt. Returns the entry."""
+    reg = getattr(display, "renders", None)
+    if reg is None:
+        reg = display.renders = {}
+    entry = reg.get(playlist_name) or {}
+    entry["state"] = state
+    if token is not None:
+        entry["token"] = token
+    entry["error"] = error
+    if percent is not None:
+        entry["percent"] = percent
+    if eta is not None:
+        entry["eta"] = eta
+    if started is not None:
+        entry["startedAt"] = started
+    entry["updatedAt"] = time.time()
+    reg[playlist_name] = entry
+    return entry
+
+
+def is_playlist_ready(playlist_name, display_id):
+    """True if (playlist, group) needs no render (N/A — no renderable items) OR
+    has a READY registry entry whose token matches the playlist's current
+    render_token for that group. Used by every assignment/play/schedule gate."""
+    import server
+    pl = server.settings.playlists.get(playlist_name)
+    display = server.settings.displays.get(display_id)
+    if pl is None or display is None:
+        return False
+    elements = _build_media_elements(pl.items)
+    if not any(_is_renderable(me) for me in elements):
+        return True  # N/A — always assignable/playable
+    entry = (getattr(display, "renders", {}) or {}).get(playlist_name)
+    if not entry:
+        return False
+    return (entry.get("state") == RENDER_READY
+            and entry.get("token") == render_token(elements, display_id))
 
 
 def _normalize_effect(field):
