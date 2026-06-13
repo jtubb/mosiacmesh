@@ -57,3 +57,27 @@ async def test_rest_update_schedules_autorender(fresh_settings, monkeypatch):
     resp = await api_playlists_update(req)
     assert resp.status == 200
     assert scheduled == ["P"]
+
+
+def test_mark_group_recalibrated_enqueues_all(fresh_settings, monkeypatch):
+    from mosaicmesh.state import Display, Playlist, Client
+    from mosaicmesh import render as R
+    enq = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: enq.append((name, did)) or True)
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    seg = Playlist(); seg.name = "Seg"
+    seg.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    na = Playlist(); na.name = "Na"
+    na.items = [{"id": 0, "file": "/m/x.png", "playmode": "FULL"}]
+    fresh_settings.playlists["Seg"] = seg
+    fresh_settings.playlists["Na"] = na
+
+    will = R.mark_group_recalibrated("G1")
+    assert will == ["Seg"]                  # N/A playlist excluded
+    assert ("Seg", "G1") in enq
+    assert d.renders["Seg"]["state"] in (R.RENDER_QUEUED, R.RENDER_STALE)

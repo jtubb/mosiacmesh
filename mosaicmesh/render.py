@@ -784,6 +784,30 @@ def enqueue_playlist_for_calibrated_groups(playlist_name):
         _broadcast_renders_changed(force=True)
 
 
+def mark_group_recalibrated(display_id):
+    """Calibration changed for a group (first calibration OR recalibrate):
+    enqueue a render of EVERY renderable playlist for this group and return the
+    list of playlist names that will render (for the operator warning + ETA).
+    Existing entries are reset to QUEUED with the new token. N/A playlists are
+    skipped. No-op (returns []) if the group isn't calibrated."""
+    import server
+    from mosaicmesh import render_queue
+    if not _group_is_calibrated(display_id):
+        return []
+    display = server.settings.displays.get(display_id)
+    will = []
+    for name, pl in server.settings.playlists.items():
+        elements = _build_media_elements(pl.items)
+        if not any(_is_renderable(me) for me in elements):
+            continue
+        _set_render_state(display, name, RENDER_QUEUED, token=render_token(elements, display_id))
+        render_queue.enqueue(name, display_id)
+        will.append(name)
+    if will:
+        _broadcast_renders_changed(force=True)
+    return will
+
+
 # ---------------------------------------------------------------------------
 # Duration / payload / URL helpers
 # ---------------------------------------------------------------------------

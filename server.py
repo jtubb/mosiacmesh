@@ -71,6 +71,7 @@ from mosaicmesh.render import (
     _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL, _PUSH_CONCURRENCY,
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
     revalidate_renders_on_boot,
+    mark_group_recalibrated,
 )
 from mosaicmesh.device_scripts import (
     SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
@@ -1928,6 +1929,20 @@ def calibrate(filename):
     del image, candidate_quads, marker_to_quad
 
     assign_group_bounding_boxes()
+    # Enqueue a re-render of every renderable playlist for each affected
+    # group (first calibration OR recalibrate). "Affected" = any group that
+    # now has ≥1 client with a measuredPerimeter (i.e. was just calibrated).
+    # This runs AFTER assign_group_bounding_boxes so _group_is_calibrated
+    # sees the boundingBox. The returned list of playlist names is surfaced
+    # in the JSON response so the calibration modal can warn the operator.
+    affected = {c.displayID for c in settings.clients.values()
+                if getattr(c, "measuredPerimeter", None) is not None
+                and getattr(c, "displayID", None)}
+    will_render = []
+    for _gid in affected:
+        for _n in mark_group_recalibrated(_gid):
+            if _n not in will_render:
+                will_render.append(_n)
     # PR-28: return JSON so the calibration modal can render
     # "Detected N markers." `imageUrl` is the *URL* (not the disk path):
     # media_handler serves /media/<client>/<file> by inserting the images/
@@ -1940,6 +1955,7 @@ def calibrate(filename):
         "detected": detected_count,
         "mapped": mapped_count,
         "imageUrl": "media/displays/calibration.png",
+        "willRender": will_render,
     })
     return body, "application/json"
 
