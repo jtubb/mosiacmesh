@@ -591,10 +591,12 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
 
 
 async def render_group_async(display_id):
-    """Legacy entry point: render the playlist CURRENTLY applied to a group
-    (display.mediaElements). Sets display.renderStatus/renderedToken + broadcasts
-    RENDER_STATUS. Retained so evaluate_schedules' resume path keeps working;
-    Phase C/D route new renders through render_playlist_for_group_async."""
+    """Legacy single-applied-playlist renderer (renders display.mediaElements,
+    sets display.renderStatus/renderedToken + broadcasts RENDER_STATUS). The
+    auto-render model superseded this: production renders now flow through the
+    queue -> render_playlist_for_group_async (PLAY/ASSIGN/schedules gate on the
+    per-playlist registry). No production path calls this anymore; it is retained
+    only as a thin wrapper over _encode_group and is exercised by tests."""
     import server
     display = server.settings.displays.get(display_id)
     if not display:
