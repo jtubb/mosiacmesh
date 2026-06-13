@@ -62,6 +62,13 @@ def test_queue_depth_counts_queued(monkeypatch):
     asyncio.run(_go())
 
 
+def test_parse_ffmpeg_progress_line():
+    from mosaicmesh import render as R
+    assert R._parse_ffmpeg_progress_line("out_time_ms=2000000") == ("out_time_ms", 2000000)
+    assert R._parse_ffmpeg_progress_line("progress=end") == ("progress", "end")
+    assert R._parse_ffmpeg_progress_line("garbage") is None
+
+
 def test_debounce_coalesces(monkeypatch):
     calls = []
     monkeypatch.setattr("mosaicmesh.render.enqueue_playlist_for_calibrated_groups",

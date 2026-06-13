@@ -427,6 +427,22 @@ def _resolve_effect_filters(me, duration_ms, out_w, out_h):
     return vfs, afs
 
 
+def _parse_ffmpeg_progress_line(line):
+    """Parse one ffmpeg `-progress` key=value line. Returns (key, value) where
+    value is int for numeric keys, else the raw string; None for non key=value
+    lines. Pure — unit-tested without ffmpeg."""
+    line = (line or "").strip()
+    if "=" not in line:
+        return None
+    k, _, v = line.partition("=")
+    k = k.strip(); v = v.strip()
+    if not k:
+        return None
+    if v.lstrip("-").isdigit():
+        return (k, int(v))
+    return (k, v)
+
+
 async def _run_ffmpeg(cmd, label, semaphore):
     """Run one ffmpeg command under the concurrency semaphore. Logs and
     raises with the last few lines of stderr on non-zero exit -- ffmpeg's
