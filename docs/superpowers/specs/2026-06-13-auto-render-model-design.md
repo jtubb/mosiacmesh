@@ -49,6 +49,7 @@ state ∈ { QUEUED, RENDERING, READY, STALE, FAILED }
 
 - The legacy single `renderedToken` / `renderStatus` fields are superseded by this registry; keep them only if a migration shim needs them, else remove (and backfill an empty `renders={}` in `migrate_client_objects`).
 - A playlist is **READY for a group** iff: it has no renderable items (**N/A** — see below), OR `renders[name].state == READY and renders[name].token == render_token(playlist, group)`.
+- **Persistence:** `renders` lives on `Display` and persists in `settings.dat` (jsonpickle). On boot, each `READY` entry is **re-validated** — if its `token` still matches `render_token(playlist, group)` **and** the rendered assets exist on disk, it stays `READY` (no re-render); otherwise it's re-enqueued. Avoids a full-fleet render storm on every restart while self-healing missing/stale assets.
 
 ### `render_token(playlist, group)` refactor
 
@@ -67,16 +68,16 @@ state ∈ { QUEUED, RENDERING, READY, STALE, FAILED }
 On playlist save (`SAVE_PLAYLIST` / `PUT|POST /api/playlists`), if the playlist has renderable items:
 
 - For **every calibrated group** (group with `boundingBox` and ≥1 calibrated screen), enqueue a render of (playlist, group).
-- **Debounce:** coalesce rapid saves of the same playlist — schedule the enqueue ~2–3 s after the last edit so a burst of edits produces one render pass, not one per keystroke/save. Implemented as a per-playlist debounce timer that, on fire, enqueues the (playlist × calibrated-groups) jobs.
+- **Debounce: 60 s.** Coalesce edits of the same playlist — schedule the enqueue 60 s after the last save so a burst of edits (and a settling window) produces one render pass, not one per save. A per-playlist debounce timer, on fire, enqueues the (playlist × calibrated-groups) jobs. (A later save within the window resets the timer; the playlist's render entries show `QUEUED` meanwhile.)
 - Set each affected `renders[name]` to `QUEUED` immediately (so UI shows "rendering…" right away).
 
-### 2. Recalibrate group → warn + auto-re-render that group's playlists
+### 2. Calibrate / recalibrate group → warn + render all that group's renderable playlists
 
-When `calibrate()` (server.py) updates a group's `measuredPerimeter`/`boundingBox`:
+When `calibrate()` (server.py) sets or updates a group's `measuredPerimeter`/`boundingBox`:
 
-- Every `renders[name]` for that group whose `token != render_token(playlist, group)` becomes `STALE`.
-- The calibrate response/broadcast includes the **list of now-stale playlist names** so the UI can warn: *"Recalibrating OEB Sign 1 — these playlists will re-render: Menu, Promo."*
-- Auto-enqueue re-renders for those playlists for that group.
+- **Recalibrate:** existing `renders[name]` whose `token != render_token(playlist, group)` go `STALE`.
+- **First calibration:** the group has no renders yet and needs every renderable playlist to be usable there.
+- Either way, the calibrate flow shows a **warning listing the playlists that will render, with a rough ETA** (e.g. *"Calibrating OEB Sign 1 will render 6 playlists (~8 min)."*), then on confirm **auto-enqueues a render of every renderable playlist for that group** — refreshing stale renders and populating a freshly-calibrated group in one rule. This matches auto-render-on-save's invariant (every renderable playlist rendered for every calibrated group). The burst goes through the bounded queue (below), not all at once.
 
 ### 3. Delete playlist / delete group → housekeeping
 
@@ -95,6 +96,22 @@ Auto-render-on-save fans out to N calibrated groups; a fleet save shouldn't spaw
 - Each job: (playlist, group). On start → `RENDERING`; on success → `READY` (+ store token); on error → `FAILED`.
 - Progress per job surfaced via the existing render-progress broadcast mechanism (extended to carry playlist+group+state).
 - Enqueue is idempotent: re-enqueuing an in-flight (playlist, group) is a no-op or supersedes.
+
+---
+
+## Render status & progress (fleet-wide view)
+
+Operators must see render progress across **all** groups, not just a ready/not-ready badge. Each job reports live progress, surfaced in a **Render Status** view.
+
+**Per-job progress.** `render_group_async` runs ffmpeg; parse its progress output (`-progress pipe:` or stderr `frame=`/`time=`) to compute, per (playlist, group):
+- `percent` = encoded position ÷ total output duration,
+- `eta` = remaining ÷ smoothed encode rate,
+- `state` (QUEUED/RENDERING/READY/FAILED), `startedAt`.
+A (playlist, group) render is often several sub-encodes (per-screen perspective/segment + mosaic) — aggregate them into one percent for that pair.
+
+**Feed.** A snapshot of every active/queued job `{playlist, group, state, percent, eta, startedAt, error}` + queue depth, exposed via `GET /api/renders` and pushed on change via a throttled (`≤1/s`) `RENDERS_CHANGED` SockJS broadcast.
+
+**UI — Render Status panel.** A global, always-reachable surface (e.g. a header indicator `▣ 3 rendering…` that opens a drawer) listing every in-flight/queued render across all groups: playlist · group · **progress bar + % complete** · **ETA** · state (Retry on FAILED). Idle: "All renders up to date." This is the one place to watch a fleet-wide burst (a calibrate, or a multi-group save) drain.
 
 ---
 
@@ -143,7 +160,7 @@ When a playing group's assigned playlist is re-rendering (because of an edit or 
 - **Non-renderable playlist** (SCRIPT/FULL/image only): N/A → always ready; save triggers no render.
 - **Group not calibrated:** renderable playlists can't be ready there (can't render without calibration) → not assignable to that group; Content shows "needs calibration" rather than "rendering".
 - **Playlist edited to remove all renderable items:** becomes N/A → drop its render entries.
-- **New group calibrated:** does NOT retroactively render every existing playlist (that would be a render storm); renders are produced when a playlist is next saved, or via an explicit "stage here" if we add one later. *(Open question — see below.)*
+- **New group calibrated:** calibration renders **all** renderable playlists for it (with the warning + ETA above), through the bounded queue — an intentional, warned, throttled burst, not a silent storm.
 - **Asset cleanup:** STALE/superseded render assets are removed when their replacement reaches READY or on playlist/group delete.
 
 ---
@@ -173,8 +190,11 @@ When a playing group's assigned playlist is re-rendering (because of an edit or 
 - E2e (Playwright): Play Now hides not-ready; Content shows status; Fleet has no Render now; recalibrate warning appears.
 - Device: hot-swap keeps stale playing until the fresh render lands (verify via `?tdbg` / no blackout).
 
-## Open questions (flag at review, not blocking)
+## Resolved decisions
 
-1. **Newly-calibrated group:** retroactively render all existing playlists, or wait for next save / an explicit one-time "stage all here"? (Spec currently says *don't* auto-storm; needs a way to populate a fresh group.)
-2. **Render-state persistence:** does `renders` persist in `settings.dat` across restart, or re-derive (and re-render) on boot? (Persisting avoids re-render storms on restart; needs the assets to still be valid.)
-3. **Debounce window** exact value (2–3 s assumed).
+These were open during brainstorming and are now settled:
+
+1. **Newly-calibrated group → render all renderable playlists, with a warning.** When a group is first calibrated (or recalibrated), the server enqueues a render of *every* renderable playlist for that group and surfaces a warning + ETA so the operator knows a burst is coming. This is bounded by the render queue (so it can't storm), and it populates a fresh group without the operator having to re-save each playlist.
+2. **`renders` persists in `settings.dat`.** Render state survives restart. On boot the server re-validates each entry against the current `render_token` (playlist items + group bbox + per-client quads) **and** the on-disk assets; an entry whose token still matches and whose assets exist stays `READY`, otherwise it drops to `STALE` and re-renders lazily. This avoids a re-render storm on every restart while guaranteeing we never serve an asset that no longer matches its inputs.
+3. **Debounce window = 60 s.** A save coalesces into a single render pass after 60 s of quiet, so rapid successive edits to a playlist don't each kick off a full render.
+4. **Fleet-wide render status is first-class.** Operators need to see, across all screens, what's rendering: per-job state (running / queued / done / failed), percent complete, and ETA. This is the "Render status & progress" section above — not a follow-up. `GET /api/renders` + throttled `RENDERS_CHANGED` broadcast back the global panel.
