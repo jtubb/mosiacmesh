@@ -128,3 +128,34 @@ def test_renders_snapshot_lists_entries(fresh_settings):
     assert row["displayID"] == "G1"
     assert row["state"] == "RENDERING"
     assert row["percent"] == 42
+
+
+def test_revalidate_demotes_stale_token(fresh_settings):
+    from mosaicmesh.state import Display, Playlist, Client
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    # Persisted READY with a WRONG token (calibration changed while down).
+    R._set_render_state(d, "P", R.RENDER_READY, token="staletoken")
+    R.revalidate_renders_on_boot()
+    assert d.renders["P"]["state"] == R.RENDER_STALE
+
+
+def test_revalidate_resets_inflight(fresh_settings):
+    from mosaicmesh.state import Display, Playlist, Client
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    pl = Playlist(); pl.name = "Q"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["Q"] = pl
+    R._set_render_state(d, "Q", R.RENDER_RENDERING, token="t")
+    R.revalidate_renders_on_boot()
+    assert d.renders["Q"]["state"] == R.RENDER_STALE

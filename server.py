@@ -70,6 +70,7 @@ from mosaicmesh.render import (
     _group_online_keys, _begin_prepare, _prepare_unsynced_clients,
     _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL, _PUSH_CONCURRENCY,
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
+    revalidate_renders_on_boot,
 )
 from mosaicmesh.device_scripts import (
     SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
@@ -2231,6 +2232,10 @@ if __name__ == '__main__':
             settings = jsonpickle.decode(data)
             # Migrate old client objects to include new discovery fields
             migrate_client_objects()
+            try:
+                revalidate_renders_on_boot()
+            except Exception as e:
+                logging.error("render revalidation on boot failed: %s", e)
             # Remove any HTML-corrupted display group keys (phantom duplicates)
             sanitize_display_groups()
             # Reset stale renderStatus: a previous server run that was

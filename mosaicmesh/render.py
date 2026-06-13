@@ -710,6 +710,55 @@ def _group_is_calibrated(display_id):
     return any(c.measuredPerimeter is not None for _k, c in _group_clients(display_id))
 
 
+def _render_assets_exist(playlist_name, display_id, token):
+    """True if every renderable item's per-client asset exists on disk for this
+    token. Conservative: a single missing file demotes the entry to STALE."""
+    import server
+    pl = server.settings.playlists.get(playlist_name)
+    display = server.settings.displays.get(display_id)
+    if pl is None or display is None:
+        return False
+    elements = _build_media_elements(pl.items)
+    clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    for i, me in enumerate(elements):
+        if not _is_renderable(me):
+            continue
+        ext = ".mp4" if isVideoItem(me.file) else ".png"
+        prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
+        subdir = "videos" if ext == ".mp4" else "images"
+        for key, _c in clients:
+            path = os.path.join("media", key, subdir, prefix + token + "_" + str(i) + ext)
+            if not os.path.exists(path):
+                return False
+    return True
+
+
+def revalidate_renders_on_boot():
+    """Re-validate every persisted render entry once at startup. READY entries
+    whose token still matches AND whose assets exist stay READY; everything else
+    (stale token, missing asset, or a leftover in-flight QUEUED/RENDERING) drops
+    to STALE for lazy re-render. Never auto-storms at boot."""
+    import server
+    for did, display in server.settings.displays.items():
+        reg = getattr(display, "renders", {}) or {}
+        for name in list(reg.keys()):
+            entry = reg[name]
+            pl = server.settings.playlists.get(name)
+            if pl is None:
+                reg.pop(name, None)   # playlist gone
+                continue
+            elements = _build_media_elements(pl.items)
+            if not any(_is_renderable(me) for me in elements):
+                reg.pop(name, None)   # became N/A
+                continue
+            cur = render_token(elements, did)
+            ok = (entry.get("state") == RENDER_READY
+                  and entry.get("token") == cur
+                  and _render_assets_exist(name, did, cur))
+            if not ok:
+                _set_render_state(display, name, RENDER_STALE, token=cur)
+
+
 def enqueue_playlist_for_calibrated_groups(playlist_name):
     """For a saved renderable playlist, set QUEUED + enqueue a render against
     every calibrated group. N/A playlists (no renderable items) are skipped."""
