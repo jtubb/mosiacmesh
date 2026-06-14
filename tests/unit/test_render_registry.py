@@ -55,17 +55,15 @@ def test_encode_group_callable_signature(fresh_settings):
     assert "progress_cb" in params
 
 
-@pytest.mark.skip(reason="FULL routing completed in PT-T4: _encode_group must handle FULL as a shared-asset transcode before this test can pass")
 def test_render_group_async_no_clients_returns_ready_token(fresh_settings):
-    # Originally: FULL was non-renderable, so _encode_group had nothing to do and
-    # returned "ready" regardless of clients. PT-T3 made FULL renderable, so
-    # _encode_group now tries to process it but lacks the shared-asset path (T4).
-    # T4 will add FULL routing so that no-clients means "nothing to warp" and still
-    # produces a ready token.
+    # Intent: render_group_async with no renderable work (SCRIPT animation, no
+    # encode needed) returns status="ready" immediately. Migrated from a FULL item
+    # (PT-T4: FULL is now renderable and needs a real file) to a SCRIPT item so
+    # the "no encode work -> ready" path is exercised without real media.
     from mosaicmesh.state import Display, MediaElement, PlayMode
     import asyncio
     d = Display(); d.boundingBox = [0, 0, 10, 10]
-    me = MediaElement(); me.id = 0; me.file = "/m/x.png"; me.playmode = PlayMode.FULL
+    me = MediaElement(); me.id = 0; me.file = "bouncingBalls"; me.playmode = PlayMode.SCRIPT
     d.mediaElements = [me]
     fresh_settings.displays["G1"] = d
     out = asyncio.run(R.render_group_async("G1"))

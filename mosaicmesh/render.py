@@ -536,6 +536,34 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
     video_jobs = []        # list of (cmd, label)
     seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
     for i, me in seg_items:
+        if me.playmode == PlayMode.FULL:
+            # ONE shared device-decodable asset for the whole group.
+            src_path = resolve_media_path(me.file)
+            if isVideoItem(me.file):
+                dims = get_video_dimensions(src_path) if src_path else None
+                if not dims:
+                    raise RuntimeError("cannot read source video: " + str(me.file))
+                tw, th = _fit_within(dims[0], dims[1], DEVICE_DECODE_CAP)
+                out_dir = os.path.join("media", "server", "videos")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                out_path = os.path.join(out_dir, "full_" + token + "_" + str(i) + ".mp4")
+                evf, eaf = _resolve_effect_filters(me, me.duration, tw, th)
+                cmd = build_ffmpeg_transcode_cmd(src_path, out_path, tw, th,
+                                                 extra_video_filters=evf, extra_audio_filters=eaf)
+                video_jobs.append((cmd, "server/full_" + str(i)))
+            else:
+                img = cv.imread(src_path) if src_path else None
+                if img is None:
+                    raise RuntimeError("cannot read source image: " + str(me.file))
+                sh, sw = img.shape[:2]
+                tw, th = _fit_within(sw, sh, DEVICE_DECODE_CAP)
+                out_dir = os.path.join("media", "server", "images")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                out_path = os.path.join(out_dir, "full_" + token + "_" + str(i) + ".png")
+                if (tw, th) != (sw, sh):
+                    img = cv.resize(img, (tw, th), interpolation=cv.INTER_AREA)
+                cv.imwrite(out_path, img)
+            continue
         src_path = resolve_media_path(me.file)
         if isVideoItem(me.file):
             dims = get_video_dimensions(src_path) if src_path else None
