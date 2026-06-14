@@ -212,6 +212,7 @@ def get_discovered_devices():
             "cachePushProgress": getattr(client, "cachePushProgress", None),
             "expectedSegments": _expected_segments_for_client(client),
             "propagationPercent": _propagation_percent_for_client(client),
+            "cacheProbedMs": getattr(client, "cacheProbedMs", None),
         }
         discovered.append(device_info)
 

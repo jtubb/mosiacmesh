@@ -693,6 +693,18 @@ def test_maybe_fire_skips_ineligible(monkeypatch):
     assert fired == []
 
 
+def test_devices_payload_includes_cacheProbedMs():
+    import server
+    from mosaicmesh.state import Client
+    from mosaicmesh.api.discovery import get_discovered_devices
+    server.settings = server.Settings()
+    c = Client(); c.cacheProbedMs = 1234567
+    server.settings.clients = {"ipad1": c}
+    devs = get_discovered_devices()
+    d = next(x for x in devs if x["clientKey"] == "ipad1")
+    assert d["cacheProbedMs"] == 1234567
+
+
 def test_maybe_fire_no_loop_is_safe(monkeypatch):
     import server
     from mosaicmesh.state import Client
