@@ -63,6 +63,20 @@ Expose a single client predicate `clockReady()` combining the two.
 - **Extend `PREPARE_TIMEOUT_MS`** (currently 25 s) to a longer bounded window (e.g. **45 s**, env-overridable) so PSM-jittery clocks have time to re-settle after the PREPARE resync burst before the best-effort release. Trade-off: a slightly longer worst-case start latency in exchange for a synchronized wall; documented.
 - No new server message types — the change rides the existing READY/PREPARE/GO protocol.
 
+### Part 4 — `tdbg` clock observability (`index.html`)
+
+The clock-ready logic is iPad-1 ES5 (inline `index.html` + classic-script `GoTime.js`) and not cleanly node-unit-testable, so **`?tdbg` is the verification mechanism** for this change — but its current `dbg()` payload is video-centric and carries no clock-quality fields. Extend the `dbg()` CLIENTLOG payload with the clock metrics this design turns on, so per-screen convergence is observable in the server log (and a "stably wrong" screen is diagnosable):
+
+- `offset` — `GoTime.getOffset()`
+- `prec` — `GoTime.getPrecision()` (RTT/2 of the locked sample)
+- `accAge` — `GoTime.msSinceAccept()` (offset freshness; from Part 1)
+- `phStd`, `phMean` — phase std-dev and mean over `_phaseHistory` (the inputs to `clockSettled()`)
+- `synced` — `ProgrammableTimer.isSynced()` (the loose flag)
+- `settled` — `clockSettled()` (the strict std-dev flag)
+- `cready` — `clockReady()` (the new combined gate)
+
+These are added to the existing payload (alongside `tag`/`elapsed`/video fields), ES5-safe, opt-in under `?tdbg` exactly as today. No new transport — same CLIENTLOG path.
+
 ### Constants (one place, tunable)
 
 `CLOCK_PRECISION_MS` (~50), `CLOCK_FRESH_MS` (~30000, ≈ PREPARE window), `CLOCK_RESYNC_SAMPLES` (~4), `CLOCK_RESYNC_SPACING_MS` (~400), extended `PREPARE_TIMEOUT_MS` (~45000). Tunable; defaults chosen to converge a healthy client in a few seconds while tolerating jitter.
@@ -93,7 +107,7 @@ server: online ⊆ readyClients → _release_group → GO(startEpoch)
 ## Components to change
 
 - `js/GoTime.js` — `resync(n)`, `msSinceAccept()` (small additive public methods; ES5, no new deps).
-- `index.html` (inline ES5) — `clockReady()` predicate; PREPARE handler calls `resync`; READY emission gated on `clockReady()`; constants.
+- `index.html` (inline ES5) — `clockReady()` predicate; PREPARE handler calls `resync`; READY emission gated on `clockReady()`; constants; **extend the `dbg()` CLIENTLOG payload with the clock metrics (Part 4)**.
 - `server.py` / `mosaicmesh/render.py` — extend `PREPARE_TIMEOUT_MS` (and confirm `_release_expired_prepares` best-effort path covers armed-but-not-clock-ready; no logic change expected).
 
 ## Testing
@@ -101,9 +115,11 @@ server: online ⊆ readyClients → _release_group → GO(startEpoch)
 - **Server (pytest):** `_release_expired_prepares` releases an armed-but-not-yet-READY client after the (extended) timeout; `_maybe_release` still requires all-READY; the human-tap (`armPending`) hold is preserved. These are unit-testable against the existing prepare/release helpers.
 - **Client clock-ready math:** `clockReady()` combines `clockSettled()` (std-dev/mean) + precision + freshness. The display client is inline ES5 in `index.html` (not a module) and GoTime is a classic script, so direct node unit testing is limited. Where feasible, extract the pure `clockReady` comparison (given precision, msSinceAccept, stddev, mean, thresholds) into a tiny ES5-safe testable form; otherwise verify via the e2e/manual path. Document this constraint rather than over-engineering a harness for iPad-1 ES5 code.
 - **E2e / manual:** with the dev server, confirm a PLAY does not GO until the simulated client reports clock-ready; confirm best-effort release after the timeout. Manual fleet check: a coordinated PLAY on OEB Sign 1 starts only once screens are settled, and starts in sync.
+- **`tdbg` observability (Part 4) is the primary live-verification lever:** with `?tdbg` on, the server log shows each screen's `prec`/`accAge`/`phStd`/`phMean`/`settled`/`cready`, so you can confirm a screen only emits READY once `cready` is true, and identify a "stably wrong" screen (settled but stale/imprecise offset). This compensates for the limited node-unit-testability of the ES5 client clock code.
 
 ## Resolved decisions (from brainstorming)
 
 1. **Need the fresh-offset dimension** on top of the existing `clockSettled()` std-dev flag — the flag proves stability, not accuracy ("stably wrong" is possible because the offset re-samples only every 15 min). Agreed.
 2. **Non-converging fallback = extend the window** (longer bounded `PREPARE_TIMEOUT_MS`, then best-effort release), not hold-out or start-anyway-immediately.
 3. **Mid-playback re-sync cadence = follow-up**, not in this spec.
+4. **`tdbg` clock-metrics extension is IN scope** (Part 4) — it's the live-verification mechanism for this otherwise-hard-to-unit-test ES5 client change, not a separate effort.
