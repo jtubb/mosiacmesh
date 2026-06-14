@@ -118,12 +118,15 @@ from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
-PREPARE_TIMEOUT_MS = 25000  # Safety-net timeout for SILENT/stuck clients only. A
-                            # client that reported NEEDS_ARM (iOS-5 awaiting a human
-                            # tap) is waited on indefinitely (_release_expired_prepares
-                            # holds the GO while any online client is arm-pending), so
-                            # the whole wall starts together once all are armed. This
-                            # timeout only releases past clients that never responded.
+PREPARE_TIMEOUT_MS = 45000  # Safety-net timeout. Lengthened (was 25000) so PSM-
+                            # jittery clocks have time to re-converge after the PREPARE
+                            # resync burst before the best-effort release (sync-gated
+                            # play). Covers SILENT/stuck clients too. A client that
+                            # reported NEEDS_ARM (iOS-5 awaiting a human tap) is waited
+                            # on indefinitely (_release_expired_prepares holds the GO
+                            # while any online client is arm-pending), so the whole wall
+                            # starts together once all are armed. This timeout only
+                            # releases past clients that never responded.
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
 # MUST match the password baked into the fleet's Veency plist by the
