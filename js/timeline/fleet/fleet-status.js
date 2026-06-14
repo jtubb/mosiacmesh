@@ -38,11 +38,14 @@ export function deviceRowsForGroup(group, displays) {
   return rows;
 }
 
-/** How many of these devices report a calibration quad. */
+/** How many of these devices are calibrated. Reads the derived `calibrated`
+ * flag from /api/discovery/devices (the serializer does NOT ship the raw
+ * measuredPerimeter array); falls back to measuredPerimeter for any caller
+ * that passes raw client objects. */
 export function calibrationSummary(devices) {
   const list = devices || [];
   let calibratedCount = 0;
-  for (const d of list) if (d.measuredPerimeter != null) calibratedCount += 1;
+  for (const d of list) if (d.calibrated || d.measuredPerimeter != null) calibratedCount += 1;
   return { calibratedCount, total: list.length };
 }
 

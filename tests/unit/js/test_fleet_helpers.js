@@ -52,12 +52,22 @@ test('deviceRowsForGroup sorts numbered names naturally (screen2 before screen13
   assert.deepEqual(rows.map(d => d.clientKey), ['k1', 'k2', 'k13']);
 });
 
-test('calibrationSummary counts devices with a measuredPerimeter', () => {
+test('calibrationSummary counts devices with the derived calibrated flag', () => {
+  // /api/discovery/devices ships a derived `calibrated` boolean (not the raw
+  // measuredPerimeter array). The summary must count that.
   const rows = [
-    { clientKey: 'a', measuredPerimeter: [[0, 0]] },
-    { clientKey: 'b', measuredPerimeter: null },
+    { clientKey: 'a', calibrated: true },
+    { clientKey: 'b', calibrated: false },
     { clientKey: 'c' },
   ];
   assert.deepEqual(calibrationSummary(rows), { calibratedCount: 1, total: 3 });
   assert.deepEqual(calibrationSummary([]), { calibratedCount: 0, total: 0 });
+});
+
+test('calibrationSummary falls back to measuredPerimeter for raw client objects', () => {
+  const rows = [
+    { clientKey: 'a', measuredPerimeter: [[0, 0]] },
+    { clientKey: 'b', measuredPerimeter: null },
+  ];
+  assert.deepEqual(calibrationSummary(rows), { calibratedCount: 1, total: 2 });
 });

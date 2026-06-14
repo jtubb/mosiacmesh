@@ -188,6 +188,10 @@ def get_discovered_devices():
             "isOnline": client.isOnline,
             "synced": client.synced,
             "readyToDisplay": client.ready,
+            # Derived calibration flag: the Fleet UI's calibrationSummary needs
+            # to know a screen is calibrated without shipping the full
+            # measuredPerimeter coordinate array on every discovery poll.
+            "calibrated": getattr(client, "measuredPerimeter", None) is not None,
             "timeSinceLastSeen": current_time - client.lastSeen,
             "capabilities": client.capabilities,
             "autoConfigured": client.autoConfigured,
