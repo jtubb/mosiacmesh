@@ -699,6 +699,8 @@
 	var SETTLE_SAMPLES = 5;
 	var SETTLE_STDDEV_MS = 10;  // beat is steady (low jitter) ...
 	var SETTLE_MEAN_MS = 20;    // ... and centered on the second start
+	var CLOCK_PRECISION_MS = 50;     // max accepted offset precision (RTT/2)
+	var CLOCK_FRESH_MS = 30000;      // offset must have been (re)locked this recently
 
 	function recordTickPhase(currentTime) {
 		var ph = currentTime % 1000;
@@ -707,18 +709,31 @@
 		if (_phaseHistory.length > SETTLE_SAMPLES) { _phaseHistory.shift(); }
 	}
 
+	// Returns {n, mean, std} of the recent tick phases, or null if too few samples.
+	function phaseStats() {
+		var n = _phaseHistory.length, i, sum = 0;
+		if (n < SETTLE_SAMPLES) { return null; }
+		for (i = 0; i < n; i++) { sum += _phaseHistory[i]; }
+		var mean = sum / n, sq = 0;
+		for (i = 0; i < n; i++) { var d = _phaseHistory[i] - mean; sq += d * d; }
+		return { n: n, mean: mean, std: Math.sqrt(sq / n) };
+	}
 	// "settled" = the synchronized beat has stopped wandering (low std dev) AND
 	// sits around the second start (mean near zero). Stricter than isSynced(),
 	// which only checks the tick isn't badly late.
 	function clockSettled() {
-		var n = _phaseHistory.length, i, sum = 0;
-		if (n < SETTLE_SAMPLES) { return false; }
-		for (i = 0; i < n; i++) { sum += _phaseHistory[i]; }
-		var mean = sum / n;
-		var sq = 0;
-		for (i = 0; i < n; i++) { var d = _phaseHistory[i] - mean; sq += d * d; }
-		var stddev = Math.sqrt(sq / n);
-		return (stddev <= SETTLE_STDDEV_MS) && (Math.abs(mean) <= SETTLE_MEAN_MS);
+		var s = phaseStats();
+		return !!s && (s.std <= SETTLE_STDDEV_MS) && (Math.abs(s.mean) <= SETTLE_MEAN_MS);
+	}
+	// True only when the GoTime offset is FRESH + PRECISE *and* the beat is stable.
+	// This is the gate the coordinated-start play-release waits on.
+	function clockReady() {
+		var s = phaseStats();
+		if (!s) { return false; }
+		return GoTime.readyVerdict(GoTime.getPrecision(), GoTime.msSinceAccept(),
+			s.std, s.mean,
+			{ maxPrecisionMs: CLOCK_PRECISION_MS, maxAgeMs: CLOCK_FRESH_MS,
+			  maxStdMs: SETTLE_STDDEV_MS, maxMeanMs: SETTLE_MEAN_MS });
 	}
 
 	// Restart the one-shot beat animation. Whoever calls this sets the pulse
