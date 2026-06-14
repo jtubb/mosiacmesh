@@ -184,6 +184,26 @@ def _video_encoder_args():
             "-x264-params", "scenecut=0"]
 
 
+# Largest frame iPad-1 (iOS 5 / WebKit 534) reliably decodes: ~720p H.264
+# Constrained Baseline. FULL-mode media is transcoded/downscaled to fit within
+# this so raw source is never served to the wall.
+DEVICE_DECODE_CAP = (1280, 720)
+
+
+def _fit_within(src_w, src_h, cap):
+    """Scale (src_w, src_h) to fit within cap=(W,H) preserving aspect, never
+    upscaling. Returns even integer dims (H.264 requires even W/H)."""
+    cw, ch = cap
+    sw, sh = int(src_w or 0), int(src_h or 0)
+    if sw <= 0 or sh <= 0:
+        return (cw, ch)
+    scale = min(cw / sw, ch / sh, 1.0)   # 1.0 cap → never upscale
+    w = max(2, int(sw * scale)); h = max(2, int(sh * scale))
+    if w % 2: w -= 1
+    if h % 2: h -= 1
+    return (w, h)
+
+
 def _get_push_sem():
     """Return the module-level push semaphore, creating it on first
     use inside the running event loop. Safe to call from any
