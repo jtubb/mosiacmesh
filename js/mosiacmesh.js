@@ -190,9 +190,10 @@ function getUDID() {
 		WhenSynced: updateData, // Is called for the first sync
 		OnSync: goTimeSync, // Calls on ever sync starting with the second sync
 		SyncInitialTimeouts: [500, 3000, 9000, 15000],
-		// Re-sync every 60s (was 15min). With the decaying precision threshold this
-		// re-locks the clock offset to fresh low-RTT samples, tracking oscillator
-		// drift over a long wall session and keeping displays mutually aligned.
+		// Re-sync every 60s (was 15min) so a lower-RTT sample can ratchet the offset
+		// precision down. The offset itself is HELD (monotonic ratchet, see GoTime
+		// _reviseOffset); ongoing oscillator drift is corrected at the beat by
+		// ProgrammableTimer's median drift loop, which is what keeps displays aligned.
 		SyncInterval: 60000
 	});
 
@@ -262,6 +263,12 @@ function getUDID() {
 		precisionElement.text(GoTime.getPrecision());
 
 		appendHistory(t, method, off, precision);
+
+		// First clock lock — surface it to ?tdbg too (OnSync only fires from the 2nd
+		// sample on, so without this the very first sync is invisible in the log).
+		if (typeof dbg === 'function') {
+			dbg('clock-sync-first', { m: method, sOff: Math.round(off), sPrec: Math.round(precision) });
+		}
 	}
 	
 	function goTimeSync(t, method, off, precision) {
@@ -277,6 +284,16 @@ function getUDID() {
 		serverElement.text(GoTime.now());
 		offsetElement.text(GoTime.getOffset());
 		precisionElement.text(GoTime.getPrecision());
+
+		// Surface every clock sync to ?tdbg from page load (not just during playback).
+		// OnSync fires on EVERY sample (~60s SyncInterval + bursts); dbg() self-gates on
+		// _mmDbg and already carries off/prec/accAge/synced/settled/cready, so we just add
+		// this sample's raw method/offset/precision. accAge≈0 next to a changed off means
+		// this sample was accepted (re-locked); a large accAge means it was rejected.
+		// dbg lives in index.html's global <script>; guard so other pages can't break.
+		if (typeof dbg === 'function') {
+			dbg('clock-sync', { m: method, sOff: Math.round(off), sPrec: Math.round(precision) });
+		}
 	}
 
 	function generateMessage(dest, request, payload)
