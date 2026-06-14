@@ -291,6 +291,28 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     return cmd
 
 
+def build_ffmpeg_transcode_cmd(src_path, out_path, out_w, out_h,
+                               extra_video_filters=None, extra_audio_filters=None):
+    """ffmpeg args for FULL (mirror): scale the source to fit out_w x out_h
+    preserving aspect, letterbox-pad to exactly out_w x out_h, encode iPad-1
+    Constrained Baseline H.264 + AAC. No perspective warp. Mirrors the encode
+    conventions of build_ffmpeg_perspective_cmd."""
+    vf = ("scale=" + str(out_w) + ":" + str(out_h) +
+          ":force_original_aspect_ratio=decrease," +
+          "pad=" + str(out_w) + ":" + str(out_h) + ":(ow-iw)/2:(oh-ih)/2:color=0x000000")
+    for f in (extra_video_filters or []):
+        vf += "," + f
+    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
+    cmd += _video_encoder_args()
+    cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k"]
+    if extra_audio_filters:
+        cmd += ["-af", ",".join(extra_audio_filters)]
+    cmd += _keyframe_grid_args()
+    cmd += ["-movflags", "+faststart", out_path]
+    return cmd
+
+
 def get_video_dimensions(path):
     """Return (width, height) of a video via OpenCV, or None if unreadable."""
     cap = cv.VideoCapture(path)

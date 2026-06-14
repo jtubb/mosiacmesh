@@ -30,3 +30,18 @@ def test_fit_within_no_upscale():
 def test_fit_within_even_dims():
     w, h = R._fit_within(1001, 333, (1280, 720))
     assert w % 2 == 0 and h % 2 == 0
+
+
+def test_build_transcode_cmd_shape():
+    cmd = R.build_ffmpeg_transcode_cmd("/src/a.mp4", "/out/full_tok_0.mp4", 1280, 720)
+    assert cmd[0] == "ffmpeg"
+    assert "/src/a.mp4" in cmd and "/out/full_tok_0.mp4" == cmd[-1]
+    j = " ".join(cmd)
+    assert "scale=1280:720:force_original_aspect_ratio=decrease" in j
+    assert "pad=1280:720" in j
+    assert "-profile:v baseline" in j
+
+def test_build_transcode_cmd_extra_filters():
+    cmd = R.build_ffmpeg_transcode_cmd("/s.mp4", "/o.mp4", 640, 480,
+                                       extra_video_filters=["fade=in:0:30"])
+    assert "fade=in:0:30" in " ".join(cmd)
