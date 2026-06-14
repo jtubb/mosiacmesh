@@ -70,7 +70,9 @@ export function playlistReadinessForGroup(displayID, playlists, renders) {
 /**
  * Per-device cache download status for the Fleet Devices card. Pure — reads the
  * fields /api/discovery/devices already returns. Returns:
- *   { applicable, percent, cached, expected, inFlight, stalled, mbps, label }
+ *   { applicable, percent, cached, expected, inFlight, stalled, mbps, label, state }
+ * `state` is a three-way discriminator: 'network' (streams, no local cache) |
+ * 'caching' (download in progress) | 'local' (fully cached).
  * `applicable` is false when the device isn't locally caching (cacheMode 'none')
  * or has nothing to cache (expectedSegments 0) — the chip is hidden in those cases.
  */
