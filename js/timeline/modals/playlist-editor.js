@@ -27,7 +27,7 @@
  *   - drill-in DOUBLE-click on a .mm-drillin-item -> openPlaylistEditor(store, name, idx)
  */
 import { openModal, closeModal } from './modal-shell.js';
-import { buildContentItems, contentItemToPlaylistItem } from '../content/content-items.js';
+import { buildContentItems, contentItemToPlaylistItem, mediaItemsMissingPlayType, playTypeLabel } from '../content/content-items.js';
 
 function basename(p) { return String(p || '').split('/').pop() || ''; }
 function asObject(it) { return (typeof it === 'string') ? { file: it } : { ...it }; }
@@ -124,6 +124,11 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
         '<button class="mm-ple-del" title="Remove">×</button>';
       li.querySelector('.mm-ple-nm').textContent = basename(it.file);
       li.querySelector('.mm-ple-dur').textContent = (it.duration != null ? it.duration + 's' : 'auto');
+      if (!isAnim(it) && !['SEGMENT', 'FULL', 'INDIVIDUAL'].includes(it.playmode)) {
+        const warn = document.createElement('span');
+        warn.className = 'mm-ple-warn'; warn.textContent = ' ⚠'; warn.title = 'pick a play type';
+        li.appendChild(warn);
+      }
       li.addEventListener('click', (e) => { if (e.target.closest('.mm-ple-del')) return; selectedIdx = idx; render(); });
       li.querySelector('.mm-ple-del').addEventListener('click', () => { draft.items.splice(idx, 1); selectedIdx = Math.min(selectedIdx, draft.items.length - 1); render(); });
       // drag-reorder
@@ -146,6 +151,29 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     if (selectedIdx >= 0) {
       const it = draft.items[selectedIdx];
       const box = document.createElement('div'); box.className = 'mm-ple-settings';
+
+      // Play type — media only (animations are implicitly SCRIPT). Mesh=SEGMENT,
+      // Mirror=FULL, Per-screen=INDIVIDUAL. No silent default: an unchosen media
+      // item blocks Save (mediaItemsMissingPlayType) and shows a ⚠ on its row.
+      if (!isAnim(it)) {
+        const ptWrap = document.createElement('label'); ptWrap.textContent = 'Play type ';
+        const pt = document.createElement('select');
+        const opts = [['', '— pick play type —'], ['SEGMENT', 'Mesh (across the wall)'],
+                      ['FULL', 'Mirror (same on every screen)'], ['INDIVIDUAL', 'Per-screen (warped to calibration)']];
+        for (const [val, label] of opts) {
+          const o = document.createElement('option');
+          o.value = val; o.textContent = label;
+          if (val === '') o.disabled = true;
+          if ((it.playmode || '') === val) o.selected = true;
+          pt.appendChild(o);
+        }
+        if (!['SEGMENT', 'FULL', 'INDIVIDUAL'].includes(it.playmode)) pt.value = '';
+        pt.addEventListener('change', () => {
+          if (pt.value) it.playmode = pt.value; else delete it.playmode;
+          render();
+        });
+        ptWrap.appendChild(pt); box.appendChild(ptWrap);
+      }
 
       // Duration — blank means Auto (natural length / default).
       const durWrap = document.createElement('label'); durWrap.textContent = 'Duration (s) ';
@@ -221,9 +249,18 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
     cancel.addEventListener('click', () => closeModal());
     const save = document.createElement('button'); save.className = 'btn btn-primary'; save.textContent = 'Save';
     save.addEventListener('click', () => {
+      const _missing = mediaItemsMissingPlayType(draft.items);
+      if (_missing.length > 0) {
+        store.toast('Pick a play type for ' + _missing.length + ' item(s) before saving');
+        return;
+      }
       store.updatePlaylist(playlistName, { items: draft.items, loop: draft.loop })
         .then(() => closeModal()).catch(() => {/* store toasts 412 */});
     });
+    // Disable Save when any media item lacks a play type.
+    const _missing = mediaItemsMissingPlayType(draft.items);
+    save.disabled = _missing.length > 0;
+    save.title = _missing.length ? ('Pick a play type for ' + _missing.length + ' item(s)') : '';
     actions.appendChild(cancel); actions.appendChild(save);
     root.appendChild(actions);
   }
