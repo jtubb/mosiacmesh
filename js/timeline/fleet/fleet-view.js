@@ -8,7 +8,7 @@
  * Alpine templates so the device <select>/checkbox controls stay reactive.
  * Every action reuses an existing store mutator or modal.
  */
-import { groupStatusLine, deviceRowsForGroup, calibrationSummary, playlistReadinessForGroup } from './fleet-status.js';
+import { groupStatusLine, deviceRowsForGroup, calibrationSummary, playlistReadinessForGroup, deviceCacheStatus } from './fleet-status.js';
 import { openPlayNowModal, fireStopNow } from '../modals/play-now.js';
 import { fireFleetAction } from '../modals/fleet-confirm.js';
 import { openCalibrationModal } from '../modals/calibration.js';
@@ -44,6 +44,7 @@ export function mmFleetComponent() {
     calibrationFor(group) {
       return calibrationSummary(deviceRowsForGroup(group, this.$store.mm.displays));
     },
+    cacheStatus(device) { return deviceCacheStatus(device); },
 
     // ---- navigation ----
     selectGroup(id) {

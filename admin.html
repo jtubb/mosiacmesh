@@ -752,6 +752,13 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-fleet-dev-name { flex:1; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .mm-fleet-dev-type { color:var(--text-muted); font-size:12px; flex:0 0 auto; }
 .mm-fleet-dev-chev { color:var(--text-muted); font-size:12px; flex:0 0 auto; width:14px; text-align:center; }
+.mm-dev-cache { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--text-muted); margin-left:auto; }
+.mm-dev-cache-bar { position:relative; width:46px; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+.mm-dev-cache-fill { position:absolute; top:0; bottom:0; left:0; height:100%; background:#2e7d32; transition:width 250ms ease-out; }
+.mm-dev-cache.inflight .mm-dev-cache-fill { background:#81c784; }
+.mm-dev-cache.stalled .mm-dev-cache-fill { background:#d32f2f; }
+.mm-dev-cache.stalled .mm-dev-cache-pct { color:#d32f2f; font-weight:600; }
+.mm-dev-cache-detail { display:flex; justify-content:space-between; }
 .mm-fleet-dev-panel { display:flex; flex-direction:column; gap:8px; padding:4px 4px 12px 22px; }
 .mm-fleet-dev-field { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
 .mm-fleet-dev-field select { flex:1; min-width:0; }
@@ -1115,6 +1122,12 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                             <span class="mm-fleet-dev-dot" :class="{online: d.isOnline}" :title="d.isOnline ? 'online' : 'offline'"></span>
                             <span class="mm-fleet-dev-name" x-text="d.friendlyName || d.clientKey"></span>
                             <span class="mm-fleet-dev-type" x-text="d.deviceType || ''"></span>
+                            <span class="mm-dev-cache" x-show="cacheStatus(d).applicable || cacheStatus(d).stalled"
+                                  :class="{ stalled: cacheStatus(d).stalled, inflight: cacheStatus(d).inFlight }"
+                                  :title="cacheStatus(d).label">
+                              <span class="mm-dev-cache-bar"><span class="mm-dev-cache-fill" :style="'width:' + cacheStatus(d).percent + '%'"></span></span>
+                              <span class="mm-dev-cache-pct" x-text="cacheStatus(d).percent + '%'"></span>
+                            </span>
                             <span class="mm-fleet-dev-chev" x-show="!selectMode" x-text="expandedDevice===d.clientKey ? '▾' : '▸'"></span>
                           </div>
                           <template x-if="!selectMode && expandedDevice===d.clientKey">
@@ -1130,6 +1143,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                                   <template x-for="g in groups" :key="g.displayID"><option :value="g.displayID" :selected="g.displayID===selectedGroupId" x-text="g.displayID"></option></template>
                                 </select>
                               </label>
+                              <div class="mm-fleet-dev-field mm-dev-cache-detail">
+                                <span>Cache</span>
+                                <span x-text="cacheStatus(d).label"></span>
+                              </div>
                             </div>
                           </template>
                         </li>
