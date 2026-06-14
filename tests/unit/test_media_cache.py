@@ -599,6 +599,25 @@ def test_probe_sets_lighttpd_localhost_on_ok(monkeypatch):
     assert c.cacheProbedMs is not None
 
 
+def test_probe_timeout_kills_and_stays_none(monkeypatch):
+    import server, asyncio as _a
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.ip = "192.168.1.50"; c.cacheMode = "none"
+    server.settings.clients = {"ipad1": c}
+    killed = {"n": 0}
+    class _Hang(_FakeProc):
+        def kill(self): killed["n"] += 1
+    async def fake_exec(*a, **k): return _Hang(None)
+    async def fake_wait_for(*a, **k): raise _a.TimeoutError()
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(server.asyncio, "wait_for", fake_wait_for)
+    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
+    _run(server._probe_cache_capability("ipad1"))
+    assert killed["n"] == 1
+    assert c.cacheMode == "none"
+
+
 def test_probe_no_ip_skips(monkeypatch):
     import server
     from mosaicmesh.state import Client

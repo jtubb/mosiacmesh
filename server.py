@@ -321,6 +321,11 @@ async def _probe_cache_capability(client_key):
                 out, _err = await asyncio.wait_for(
                     proc.communicate(), timeout=_PROBE_TIMEOUT_S)
                 ok = (proc.returncode == 0 and b"MM_CACHE_OK" in (out or b""))
+                if not ok:
+                    logging.warning(
+                        "cache-probe %s not capable (rc=%s): %s",
+                        client_key, getattr(proc, "returncode", "?"),
+                        (_err or b"").decode("utf-8", "replace").strip()[-200:])
             except asyncio.TimeoutError:
                 try:
                     proc.kill()
