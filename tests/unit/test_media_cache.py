@@ -15,6 +15,23 @@ class _Item:
         self.seg_n = seg_n
 
 
+def test_client_has_cacheProbedMs_default():
+    from mosaicmesh.state import Client
+    c = Client()
+    assert c.cacheProbedMs is None
+
+
+def test_migrate_backfills_cacheProbedMs():
+    from mosaicmesh.state import Client, migrate_client_objects
+    import server
+    server.settings = server.Settings()
+    c = Client()
+    del c.cacheProbedMs            # simulate an older pickled client
+    server.settings.clients = {"old": c}
+    migrate_client_objects()
+    assert server.settings.clients["old"].cacheProbedMs is None
+
+
 def test_resolve_media_url_returns_localhost_for_cached_ipad1():
     client = server.Client()
     client.clientKey = "abc"

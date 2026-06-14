@@ -210,6 +210,9 @@ class Client():
         # pipeline). Populated by _push_segment_to_cached_clients on
         # successful scp; pruned by _reconcile_ipad_cache.
         self.cachedSegments = set()
+        # Wall-clock ms of the last server-side cache-capability SSH probe
+        # (None = never probed). Observability only; nothing gates on it.
+        self.cacheProbedMs = None
         # In-memory only (does not persist; meaningful only during a
         # push). Set to a dict by _push_segment_to_cached_clients when
         # a push starts; cleared to None when the push ends (success
@@ -279,6 +282,8 @@ def migrate_client_objects():
             client.cacheMode = "none"
         if not hasattr(client, 'cachedSegments'):
             client.cachedSegments = set()
+        if not hasattr(client, 'cacheProbedMs'):
+            client.cacheProbedMs = None
         # cachePushProgress is transient (a push is meaningful only
         # while the process is live), so unconditionally reset on
         # startup -- any state in settings.dat is stale.
