@@ -328,6 +328,19 @@ export const api = {
     return body.groups || [];
   },
 
+  // ---- Renders ----
+  /** GET /api/renders — returns {renders: [...], queueDepth: N}.
+   *  Each entry has displayID + playlist + state (READY/QUEUED/RENDERING/
+   *  STALE/FAILED) + optional percent. Returns empty renders + 0 queue
+   *  depth when the route is missing so the store hydrates cleanly
+   *  against an older server that hasn't deployed the render registry. */
+  async getRenders() {
+    const r = await fetch('/api/renders');
+    if (!r.ok) throw new ApiError(`GET /api/renders -> ${r.status}`, { status: r.status, body: await r.json().catch(() => ({})) });
+    const body = await r.json();
+    return { renders: body.renders || [], queueDepth: body.queueDepth || 0 };
+  },
+
   // ---- Media ----
   /** PR-16: DELETE /api/media — body {url}. 204 on success, 409+refs
    *  if any playlist references the file, 404 if missing. */
@@ -342,7 +355,7 @@ export const api = {
     // ApiError ctor: (message, {status, body}) — the destructure object
     // is what carries .status + .body onto the thrown error. Without
     // this wrapping, callers see e.body === undefined and the refs
-    // branch in media-bin.remove() can't fire.
+    // branch in deleteMedia callers (e.g. content-view removeItem) can't fire.
     throw new ApiError(body.error || `delete failed (${resp.status})`, { status: resp.status, body });
   },
   /** POST /upload/image or /upload/video based on extension. Returns server's response. */

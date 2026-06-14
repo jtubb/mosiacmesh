@@ -7,11 +7,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 
-function makeStore() {
+function makeStore({ playlistReady = true } = {}) {
   return {
     playlists: { Alpha: { name: 'Alpha' }, Beta: { name: 'Beta' } },
     toasts: [],
     toast(msg, kind) { this.toasts.push({ msg, kind }); },
+    isPlaylistReady(name, displayID) { return playlistReady; },
+    renderEntry(name, displayID) { return null; },
   };
 }
 
@@ -66,4 +68,15 @@ test('fireStopNow — no SockJS → toasts error and emits no frames', async () 
   fireStopNow(store, 'OEB Sign 1');
   assert.equal(store.toasts.length, 1);
   assert.equal(store.toasts[0].kind, 'error');
+});
+
+test('firePlayNow — un-ready playlist → toasts error, emits no frames', async () => {
+  const captured = captureSocket();
+  const { firePlayNow } = await import('../../../js/timeline/modals/play-now.js?cache=' + (Date.now() + 4));
+  const store = makeStore({ playlistReady: false });
+  firePlayNow(store, 'OEB Sign 1', 'Alpha');
+  assert.equal(captured.length, 0, 'expected no frames when playlist not ready');
+  assert.equal(store.toasts.length, 1);
+  assert.equal(store.toasts[0].kind, 'error');
+  assert.match(store.toasts[0].msg, /isn't rendered/);
 });

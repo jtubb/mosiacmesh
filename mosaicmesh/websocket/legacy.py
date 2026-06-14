@@ -61,7 +61,6 @@ from mosaicmesh.scheduling import (
     _hhmm_to_min,
 )
 from mosaicmesh.render import (
-    compute_render_token,
     _broadcast_per_client_preload,
     _build_media_elements,
     _is_renderable,
@@ -70,6 +69,12 @@ from mosaicmesh.render import (
     _start_group_playback,
     _stop_group_playback,
     _apply_playlist,
+    _group_is_calibrated,
+    render_token,
+    _set_render_state,
+    is_playlist_ready,
+    RENDER_QUEUED,
+    RENDER_RENDERING,
 )
 from mosaicmesh.calibration import (
     _group_clients,
@@ -232,6 +237,10 @@ def msg_response(msg,session):
             logging.info(f"Reclassified {msg['SRC']} as iPad (Apple+desktop UA, "
                          f"touch, {client.deviceWidth}x{client.deviceHeight})")
 
+        # Auto-onboard local cache: probe eligible (iPad/tablet) devices for
+        # lighttpd + cache dir and flip cacheMode so the post-render push engages.
+        server._maybe_fire_cache_probe(msg["SRC"], client)
+
         # Auto-configuration for new clients
         if is_new_client:
             client.discoveryTime = time.time()
@@ -384,10 +393,13 @@ def msg_response(msg,session):
         else:
             now_ms = int(time.time() * 1000)
             resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
+            name = getattr(display, "currentPlaylistName", None)
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and display.renderStatus == "rendering":
+            entry = (getattr(display, "renders", {}) or {}).get(name) if name else None
+            state = entry.get("state") if entry else None
+            if has_renderable and state in (RENDER_QUEUED, RENDER_RENDERING):
                 response["PAYLOAD"] = {"status": "RENDER_IN_PROGRESS", "displayID": display_id}
-            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
+            elif has_renderable and not is_playlist_ready(name, display_id):
                 response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
             else:
                 if display.action == PlayState.PAUSE:
@@ -459,22 +471,23 @@ def msg_response(msg,session):
             response["PAYLOAD"] = {"status": "SUCCESS", "script": which, "count": len(keys)}
 
     elif(msg["REQUEST"] == "RENDER"):
-        display_id = msg["PAYLOAD"]["displayID"]
+        # Manual retry of a FAILED (playlist, group) render — the ONLY manual
+        # render affordance left. PAYLOAD = {displayID, name}.
+        from mosaicmesh import render_queue
+        payload = msg["PAYLOAD"]
+        display_id = payload.get("displayID")
+        name = payload.get("name")
         display = server.settings.displays.get(display_id)
-        if not display or not display.mediaElements:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no playlist"}
-        elif not display.boundingBox:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibration"}
-        elif not any(_is_renderable(me) for me in display.mediaElements):
-            response["PAYLOAD"] = {"status": "ERROR",
-                                   "error": "nothing to render — Mirror/Animation play directly, just press Play"}
-        elif not [c for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibrated screens"}
-        elif display.renderStatus == "rendering":
-            response["PAYLOAD"] = {"status": "rendering"}
+        if not display or name not in server.settings.playlists:
+            response["PAYLOAD"] = {"status": "ERROR", "error": "unknown playlist/group"}
+        elif not _group_is_calibrated(display_id):
+            response["PAYLOAD"] = {"status": "ERROR", "error": "group not calibrated"}
         else:
-            asyncio.ensure_future(render_group_async(display_id))
-            response["PAYLOAD"] = {"status": "rendering"}
+            elements = _build_media_elements(server.settings.playlists[name].items)
+            _set_render_state(display, name, RENDER_QUEUED,
+                              token=render_token(elements, display_id))
+            render_queue.enqueue(name, display_id)
+            response["PAYLOAD"] = {"status": "QUEUED", "displayID": display_id, "name": name}
 
     elif(msg["REQUEST"] == "LIST_PLAYLISTS"):
         rows = []
@@ -502,25 +515,31 @@ def msg_response(msg,session):
             pl.name = name
             pl.items = payload.get("items", [])
             pl.loop = bool(payload.get("loop", False))
+            from mosaicmesh import render_queue
+            render_queue.schedule_autorender(name)
             response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "DELETE_PLAYLIST"):
-        server.settings.playlists.pop(msg["PAYLOAD"].get("name"), None)
+        _dp_name = msg["PAYLOAD"].get("name")
+        server.settings.playlists.pop(_dp_name, None)
+        from mosaicmesh import render as _render
+        _render.cleanup_playlist_renders(_dp_name)
         response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "ASSIGN_PLAYLIST"):
         payload = msg["PAYLOAD"]
         display_id = payload.get("displayID")
-        pl = server.settings.playlists.get(payload.get("name"))
+        name = payload.get("name")
+        pl = server.settings.playlists.get(name)
         if pl is None or display_id is None:
             response["PAYLOAD"] = {"status": "error", "displayID": display_id}
         else:
             _apply_playlist(display_id, pl)
             display = server.settings.displays.get(display_id)
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and not display.boundingBox:
+            if has_renderable and not _group_is_calibrated(display_id):
                 status = "NOT_CALIBRATED"
-            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
+            elif has_renderable and not is_playlist_ready(name, display_id):
                 status = "RENDER_REQUIRED"
             else:
                 status = "ok"

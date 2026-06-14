@@ -15,6 +15,7 @@ Response shape per group:
     clients:   ["abcd123", ...],   # clientKeys assigned to this group
     clientCount: 3,                # len(clients)
     onlineCount: 1,                # # of clients currently online
+    calibratedCount: 2,           # # of clients with a measured perimeter
     scheduleCount: 2,              # # of schedules targeting this group
   }
 
@@ -51,11 +52,17 @@ def _serialize(display_id, display):
               if getattr(server.settings.clients[k], "isOnline", False)]
     schedules = [s for s in server.settings.schedules.values()
                  if getattr(s, "displayID", None) == display_id]
+    # # of clients with a measured perimeter — i.e. screens this group can
+    # render mesh/per-screen content for. The admin's render-readiness badge
+    # uses this to scope its denominator to renderable groups.
+    calibrated = [k for k in clients
+                  if getattr(server.settings.clients[k], "measuredPerimeter", None) is not None]
     return {
         "displayID": display_id,
         "clients": clients,
         "clientCount": len(clients),
         "onlineCount": len(online),
+        "calibratedCount": len(calibrated),
         "scheduleCount": len(schedules),
     }
 
@@ -125,6 +132,8 @@ async def api_displays_delete(request):
             "error": f"display '{display_id}' is in use by " + " and ".join(msg_parts),
             "refs": {"clients": client_refs, "schedules": schedule_refs},
         }, status=409)
+    from mosaicmesh import render as _render
+    _render.cleanup_group_renders(display_id)
     del server.settings.displays[display_id]
     saveSettings()
     return web.Response(status=204)

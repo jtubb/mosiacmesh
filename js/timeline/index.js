@@ -25,7 +25,6 @@ import { mmTimelineComponent } from './timeline/timeline.js';
 import { mmToolbarComponent } from './toolbar.js';
 import { startStatusSubscriber } from './timeline/sockjs-status.js';
 import { startNowLine, autoscrollIntoView } from './timeline/now-line.js';
-import { mmMediaBinComponent } from './bin/media-bin.js';
 import { mmPlaylistBinComponent } from './bin/playlist-bin.js';
 import { mmToastComponent } from './timeline/toast.js';
 import { attachPlaylistToTrack } from './drag/playlist-to-track.js';
@@ -33,15 +32,15 @@ import { attachClipMove } from './drag/clip-move.js';
 import { attachClipResize } from './drag/clip-resize.js';
 import { attachSelection } from './select.js';
 import { attachDrillIn } from './drill-in.js';
-import { attachMediaToClip } from './drag/media-to-clip.js';
 import { attachSubItemReorder } from './drag/subitem-reorder.js';
-import { attachUpload } from './upload.js';
 import { attachRecurrenceEditor } from './modals/recurrence-editor.js';
 import { attachContextMenu } from './context-menu.js';
 import { attachPlaylistEditor } from './modals/playlist-editor.js';
-import { attachTrackHeaderPopover } from './track-header-popover.js';
 import { attachTrackHeaderContextMenu } from './track-header-context-menu.js';
 import { startRouter } from './shell/router.js';
+import { mmContentComponent } from './content/content-view.js';
+import { mmScheduleMobileComponent } from './schedule/schedule-mobile.js';
+import { mmFleetComponent } from './fleet/fleet-view.js';
 
 function bootstrap() {
   // CRITICAL: `Alpine.store(name, obj)` wraps `obj` in a reactive Proxy
@@ -59,13 +58,26 @@ function bootstrap() {
   // eslint-disable-next-line no-undef
   Alpine.data('mmToolbar', mmToolbarComponent);
   // eslint-disable-next-line no-undef
-  Alpine.data('mmMediaBin', mmMediaBinComponent);
-  // eslint-disable-next-line no-undef
   Alpine.data('mmPlaylistBin', mmPlaylistBinComponent);
   // eslint-disable-next-line no-undef
   Alpine.data('mmToast', mmToastComponent);
   // eslint-disable-next-line no-undef
+  Alpine.data('mmContent', mmContentComponent);
+  // eslint-disable-next-line no-undef
+  Alpine.data('mmScheduleMobile', mmScheduleMobileComponent);
+  // eslint-disable-next-line no-undef
+  Alpine.data('mmFleet', mmFleetComponent);
+  // eslint-disable-next-line no-undef
   const store = Alpine.store('mm');   // the reactive Proxy
+  // Section 3: drive store.isMobile from the viewport so the Schedule
+  // section can switch between the desktop grid and the mobile stack.
+  if (typeof window.matchMedia === 'function') {
+    const mq = window.matchMedia('(max-width: 759px)');
+    store.setIsMobile(mq.matches);
+    const onChange = (e) => store.setIsMobile(e.matches);
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange); // older Safari
+  }
   store.hydrate().then(() => {
     requestAnimationFrame(() => autoscrollIntoView());
   });
@@ -82,13 +94,10 @@ function bootstrap() {
   attachClipResize(store);
   attachSelection(store);
   attachDrillIn(store);
-  attachMediaToClip(store);
   attachSubItemReorder(store);
-  attachUpload(store);
   attachRecurrenceEditor(store);
   attachContextMenu(store);
   attachPlaylistEditor(store);
-  attachTrackHeaderPopover(store);
   attachTrackHeaderContextMenu(store);
 }
 

@@ -57,7 +57,7 @@ from mosaicmesh.calibration import (
 )
 from mosaicmesh.render import (
     _keyframe_grid_args, _video_input_args, _video_encoder_args,
-    _get_push_sem, compute_render_token, _broadcast_render_status,
+    _get_push_sem, render_token, compute_render_token, _broadcast_render_status,
     _is_renderable, _normalize_effect, _resolve_effect_filters,
     _run_ffmpeg, render_group_async,
     _per_client_items, _broadcast_per_client_play, _broadcast_per_client_preload,
@@ -70,6 +70,9 @@ from mosaicmesh.render import (
     _group_online_keys, _begin_prepare, _prepare_unsynced_clients,
     _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL, _PUSH_CONCURRENCY,
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
+    revalidate_renders_on_boot,
+    mark_group_recalibrated,
+    is_playlist_ready,
 )
 from mosaicmesh.device_scripts import (
     SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
@@ -103,6 +106,7 @@ from mosaicmesh.api.media import api_media, api_media_delete, upload_handler
 from mosaicmesh.api.displays import (
     api_displays_list, api_displays_create, api_displays_delete,
 )
+from mosaicmesh.api.renders import api_renders_list
 from mosaicmesh.websocket.legacy import msg_response
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
@@ -114,12 +118,15 @@ from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
-PREPARE_TIMEOUT_MS = 25000  # Safety-net timeout for SILENT/stuck clients only. A
-                            # client that reported NEEDS_ARM (iOS-5 awaiting a human
-                            # tap) is waited on indefinitely (_release_expired_prepares
-                            # holds the GO while any online client is arm-pending), so
-                            # the whole wall starts together once all are armed. This
-                            # timeout only releases past clients that never responded.
+PREPARE_TIMEOUT_MS = 45000  # Safety-net timeout. Lengthened (was 25000) so PSM-
+                            # jittery clocks have time to re-converge after the PREPARE
+                            # resync burst before the best-effort release (sync-gated
+                            # play). Covers SILENT/stuck clients too. A client that
+                            # reported NEEDS_ARM (iOS-5 awaiting a human tap) is waited
+                            # on indefinitely (_release_expired_prepares holds the GO
+                            # while any online client is arm-pending), so the whole wall
+                            # starts together once all are armed. This timeout only
+                            # releases past clients that never responded.
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
 # MUST match the password baked into the fleet's Veency plist by the
@@ -157,6 +164,19 @@ _veency_lock = asyncio.Lock()
 # env vars for tuning per-fleet without code changes.
 _PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
 _PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
+
+_PROBE_CONCURRENCY = 4          # max concurrent cache-capability SSH probes
+_PROBE_TIMEOUT_S = 20           # overall ceiling per probe
+_PROBE_CONNECT_TIMEOUT_S = 10   # ssh ConnectTimeout
+_probe_sem = None
+_probe_inflight = set()         # client_keys with a probe currently running
+
+
+def _get_probe_sem():
+    global _probe_sem
+    if _probe_sem is None:
+        _probe_sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+    return _probe_sem
 
 
 def parse_args():
@@ -260,6 +280,94 @@ async def _get_pooled_vnc(client_key, ip):
             return existing
         _veency_pool[client_key] = proxy
     return proxy
+
+
+def _is_probe_eligible(client):
+    """True for the provisioned display devices we SSH-probe for cache
+    capability: Apple touch devices (iPad-1 reclassifies to deviceType
+    'tablet'; iOS phones report 'smartphone') that have an IP. Everything
+    else never gets cacheMode and always serves centrally."""
+    if not getattr(client, "ip", ""):
+        return False
+    dt = (getattr(client, "deviceType", "") or "").lower()
+    osn = (getattr(client, "osName", "") or "").lower()
+    return dt in ("tablet", "smartphone") or osn == "ios"
+
+
+async def _probe_cache_capability(client_key):
+    """SSH-probe a device for the two real push prerequisites (cache dir exists +
+    lighttpd alive) and flip cacheMode accordingly. Fire-and-forget; never blocks
+    the caller, never raises. Upgrade: none -> lighttpd-localhost when 'MM_CACHE_OK'
+    comes back. Downgrade: lighttpd-localhost -> none (and clear cachedSegments)
+    when the probe fails on a previously-capable device.
+
+    Liveness is checked with shell builtins only (`kill -0` on lighttpd's pid
+    file) -- the iPad-1 userland has no curl/wget/nc/ps, so an HTTP/process check
+    would always fail with 127 ('command not found') and wrongly report the
+    device not-capable even while lighttpd is serving."""
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        return
+    if client_key in _probe_inflight:
+        return                                  # no duplicate concurrent probe
+    _probe_inflight.add(client_key)
+    try:
+        remote = ("test -d /var/mobile/Media/MosaicMeshCache && "
+                  "kill -0 \"$(cat /var/run/lighttpd.pid 2>/dev/null)\" 2>/dev/null && "
+                  "echo MM_CACHE_OK")
+        cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
+               + ["-T", "-o", "ConnectTimeout=%d" % _PROBE_CONNECT_TIMEOUT_S,
+                  "%s@%s" % (SSH_USER, client.ip), remote])
+        ok = False
+        async with _get_probe_sem():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE)
+                out, _err = await asyncio.wait_for(
+                    proc.communicate(), timeout=_PROBE_TIMEOUT_S)
+                ok = (proc.returncode == 0 and b"MM_CACHE_OK" in (out or b""))
+                if not ok:
+                    logging.warning(
+                        "cache-probe %s not capable (rc=%s): %s",
+                        client_key, getattr(proc, "returncode", "?"),
+                        (_err or b"").decode("utf-8", "replace").strip()[-200:])
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                ok = False
+            except Exception as e:            # noqa: BLE001
+                logging.warning("cache-probe %s: %s", client_key, e)
+                ok = False
+        client.cacheProbedMs = int(time.time() * 1000)
+        if ok and client.cacheMode != "lighttpd-localhost":
+            client.cacheMode = "lighttpd-localhost"
+            logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
+                         client_key)
+            saveSettings()
+        elif not ok and client.cacheMode == "lighttpd-localhost":
+            client.cacheMode = "none"
+            client.cachedSegments = set()   # unreachable now; stop emitting dead localhost URLs
+            logging.info("cache-probe: %s no longer cache-capable -> none (cleared cache)",
+                         client_key)
+            saveSettings()
+    finally:
+        _probe_inflight.discard(client_key)
+
+
+def _maybe_fire_cache_probe(client_key, client):
+    """Fire-and-forget the cache-capability probe for an eligible device.
+    No-op for ineligible devices, and safe to call from a synchronous context
+    with no running event loop (returns without scheduling)."""
+    if not _is_probe_eligible(client):
+        return
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return   # no running loop (sync context) -> don't construct/schedule
+    asyncio.ensure_future(_probe_cache_capability(client_key))
 
 
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
@@ -1927,6 +2035,20 @@ def calibrate(filename):
     del image, candidate_quads, marker_to_quad
 
     assign_group_bounding_boxes()
+    # Enqueue a re-render of every renderable playlist for each affected
+    # group (first calibration OR recalibrate). "Affected" = any group that
+    # now has ≥1 client with a measuredPerimeter (i.e. was just calibrated).
+    # This runs AFTER assign_group_bounding_boxes so _group_is_calibrated
+    # sees the boundingBox. The returned list of playlist names is surfaced
+    # in the JSON response so the calibration modal can warn the operator.
+    affected = {c.displayID for c in settings.clients.values()
+                if getattr(c, "measuredPerimeter", None) is not None
+                and getattr(c, "displayID", None)}
+    will_render = []
+    for _gid in affected:
+        for _n in mark_group_recalibrated(_gid):
+            if _n not in will_render:
+                will_render.append(_n)
     # PR-28: return JSON so the calibration modal can render
     # "Detected N markers." `imageUrl` is the *URL* (not the disk path):
     # media_handler serves /media/<client>/<file> by inserting the images/
@@ -1939,6 +2061,7 @@ def calibrate(filename):
         "detected": detected_count,
         "mapped": mapped_count,
         "imageUrl": "media/displays/calibration.png",
+        "willRender": will_render,
     })
     return body, "application/json"
 
@@ -2112,10 +2235,15 @@ def evaluate_schedules(now=None):
                 display.scheduledEntryId = key
                 display.scheduledPlaying = False
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and compute_render_token(display_id) != display.renderedToken:
-                if display.renderStatus != "rendering":
-                    asyncio.ensure_future(render_group_async(display_id))
-                    display.scheduledPlaying = False
+            if has_renderable and not is_playlist_ready(playlist_name, display_id):
+                # Not ready: enqueue (idempotent) and HOLD — don't play stale/un-rendered.
+                from mosaicmesh import render_queue, render as _render
+                elements = _render._build_media_elements(
+                    settings.playlists[playlist_name].items)
+                _render._set_render_state(display, playlist_name, _render.RENDER_QUEUED,
+                                          token=_render.render_token(elements, display_id))
+                render_queue.enqueue(playlist_name, display_id)
+                display.scheduledPlaying = False
             elif not getattr(display, "scheduledPlaying", False):
                 _start_group_playback(display_id)
                 display.scheduledPlaying = True
@@ -2231,6 +2359,10 @@ if __name__ == '__main__':
             settings = jsonpickle.decode(data)
             # Migrate old client objects to include new discovery fields
             migrate_client_objects()
+            try:
+                revalidate_renders_on_boot()
+            except Exception as e:
+                logging.error("render revalidation on boot failed: %s", e)
             # Remove any HTML-corrupted display group keys (phantom duplicates)
             sanitize_display_groups()
             # Reset stale renderStatus: a previous server run that was
@@ -2355,6 +2487,7 @@ if __name__ == '__main__':
         app.router.add_get('/api/displays', api_displays_list)
         app.router.add_post('/api/displays', api_displays_create)
         app.router.add_delete('/api/displays/{displayID}', api_displays_delete)
+        app.router.add_get('/api/renders', api_renders_list)
         app.router.add_get('/api/playback', api_playback)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         

@@ -53,6 +53,13 @@ from mosaicmesh.calibration import (
 # residual AND its run-to-run spread.
 KEYFRAME_GRID_SEC = 0.25
 
+# Fallback window for an item with no explicit duration ("Auto") whose
+# natural length can't be resolved server-side (image, animation, or a
+# video that hasn't been probed). Synchronized playback needs a concrete
+# positive window upfront — a 0-ms window silently skips the item on the
+# wall — so we never emit 0 for a real item.
+DEFAULT_ITEM_DURATION_S = 20
+
 # Video encoder + concurrency configuration. Render time on a 24-iPad fleet
 # was previously: 24 sequential ffmpeg invocations, each a software (libx264)
 # encode on one CPU. With a modern GPU's hardware encoder (NVENC on NVIDIA,
@@ -77,6 +84,14 @@ KEYFRAME_GRID_SEC = 0.25
 # set MMRENDER_ENCODER=h264_nvenc to opt back in to GPU encoding.
 _VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "libx264"
 _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
+
+# Per-playlist render lifecycle states (one entry per playlistName; registry lives on the owning Display).
+RENDER_QUEUED = "QUEUED"        # enqueued, not yet started
+RENDER_RENDERING = "RENDERING"  # ffmpeg in flight
+RENDER_READY = "READY"          # assets on disk + token current
+RENDER_STALE = "STALE"          # was READY, inputs changed (recalibrate/edit)
+RENDER_FAILED = "FAILED"        # ffmpeg errored; needs manual Retry
+
 # Default OFF after empirical regression: enabling -hwaccel cuda with 12
 # concurrent NVENC encodes ran the test fleet (24 iPads) at 397s vs 322s
 # without. The PCIe round-trip (GPU decode -> CPU filter chain (no CUDA
@@ -169,6 +184,26 @@ def _video_encoder_args():
             "-x264-params", "scenecut=0"]
 
 
+# Largest frame iPad-1 (iOS 5 / WebKit 534) reliably decodes: ~720p H.264
+# Constrained Baseline. FULL-mode media is transcoded/downscaled to fit within
+# this so raw source is never served to the wall.
+DEVICE_DECODE_CAP = (1280, 720)
+
+
+def _fit_within(src_w, src_h, cap):
+    """Scale (src_w, src_h) to fit within cap=(W,H) preserving aspect, never
+    upscaling. Returns even integer dims (H.264 requires even W/H)."""
+    cw, ch = cap
+    sw, sh = int(src_w or 0), int(src_h or 0)
+    if sw <= 0 or sh <= 0:
+        return (cw, ch)
+    scale = min(cw / sw, ch / sh, 1.0)   # 1.0 cap → never upscale
+    w = max(2, int(sw * scale)); h = max(2, int(sh * scale))
+    if w % 2: w -= 1
+    if h % 2: h -= 1
+    return (w, h)
+
+
 def _get_push_sem():
     """Return the module-level push semaphore, creating it on first
     use inside the running event loop. Safe to call from any
@@ -256,6 +291,28 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     return cmd
 
 
+def build_ffmpeg_transcode_cmd(src_path, out_path, out_w, out_h,
+                               extra_video_filters=None, extra_audio_filters=None):
+    """ffmpeg args for FULL (mirror): scale the source to fit out_w x out_h
+    preserving aspect, letterbox-pad to exactly out_w x out_h, encode iPad-1
+    Constrained Baseline H.264 + AAC. No perspective warp. Mirrors the encode
+    conventions of build_ffmpeg_perspective_cmd."""
+    vf = ("scale=" + str(out_w) + ":" + str(out_h) +
+          ":force_original_aspect_ratio=decrease," +
+          "pad=" + str(out_w) + ":" + str(out_h) + ":(ow-iw)/2:(oh-ih)/2:color=0x000000")
+    for f in (extra_video_filters or []):
+        vf += "," + f
+    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
+    cmd += _video_encoder_args()
+    cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "128k"]
+    if extra_audio_filters:
+        cmd += ["-af", ",".join(extra_audio_filters)]
+    cmd += _keyframe_grid_args()
+    cmd += ["-movflags", "+faststart", out_path]
+    return cmd
+
+
 def get_video_dimensions(path):
     """Return (width, height) of a video via OpenCV, or None if unreadable."""
     cap = cv.VideoCapture(path)
@@ -285,16 +342,18 @@ def resolve_media_path(file_url):
 # Render orchestration helpers (access server.settings / effects)
 # ---------------------------------------------------------------------------
 
-def compute_render_token(display_id):
-    """Stable hash of the inputs that affect a per-screen render (SEGMENT or INDIVIDUAL): the playlist
-    items, the group bounding box, and each client's resolution + measured quad.
-    Rendered assets are valid only while this matches Display.renderedToken."""
+def render_token(media_elements, display_id):
+    """Stable hash of the inputs that affect a per-screen render (SEGMENT or
+    INDIVIDUAL) for a GIVEN set of media elements against a group's calibration:
+    the items, the group bounding box, and each client's resolution + measured
+    quad. Generalizes the old compute_render_token so a token can be computed
+    for any playlist (not just the one currently applied to the group)."""
     import server
     display = server.settings.displays.get(display_id)
     if not display:
         return ""
     items = []
-    for me in display.mediaElements:
+    for me in media_elements:
         pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
         items.append((me.id, me.file, me.duration, pm,
                       getattr(me, "backgroundColor", "#000000"),
@@ -312,6 +371,17 @@ def compute_render_token(display_id):
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 
 
+def compute_render_token(display_id):
+    """Token for the playlist CURRENTLY applied to the group (display.mediaElements).
+    Thin wrapper over render_token — preserves the historical call site/byte-form
+    so existing Display.renderedToken values stay valid."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return ""
+    return render_token(display.mediaElements, display_id)
+
+
 def _broadcast_render_status(display_id, status):
     """Fan a RENDER_STATUS notification out to every connected client so
     the admin UI's render-progress indicators (and any other listeners)
@@ -324,8 +394,52 @@ def _broadcast_render_status(display_id, status):
 
 
 def _is_renderable(me):
-    """SEGMENT and INDIVIDUAL items require a per-screen server render."""
-    return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL)
+    """SEGMENT, INDIVIDUAL, and FULL all require a server-side encode for the
+    device (per-screen warp for SEGMENT/INDIVIDUAL; a shared device transcode/
+    downscale for FULL). SCRIPT (animations) and bare DEFAULT do not render."""
+    return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL, PlayMode.FULL)
+
+
+def _set_render_state(display, playlist_name, state, token=None, error=None,
+                      percent=None, eta=None, started=None):
+    """Single writer for a Display.renders[name] entry. Creates the entry if
+    absent, patches only the provided fields, stamps updatedAt. Returns the entry."""
+    reg = getattr(display, "renders", None)
+    if reg is None:
+        reg = display.renders = {}
+    entry = reg.get(playlist_name) or {}
+    entry["state"] = state
+    if token is not None:
+        entry["token"] = token
+    entry["error"] = error
+    if percent is not None:
+        entry["percent"] = percent
+    if eta is not None:
+        entry["eta"] = eta
+    if started is not None:
+        entry["startedAt"] = started
+    entry["updatedAt"] = time.time()
+    reg[playlist_name] = entry
+    return entry
+
+
+def is_playlist_ready(playlist_name, display_id):
+    """True if (playlist, group) needs no render (N/A — no renderable items) OR
+    has a READY registry entry whose token matches the playlist's current
+    render_token for that group. Used by every assignment/play/schedule gate."""
+    import server
+    pl = server.settings.playlists.get(playlist_name)
+    display = server.settings.displays.get(display_id)
+    if pl is None or display is None:
+        return False
+    elements = _build_media_elements(pl.items)
+    if not any(_is_renderable(me) for me in elements):
+        return True  # N/A — always assignable/playable
+    entry = (getattr(display, "renders", {}) or {}).get(playlist_name)
+    if not entry:
+        return False
+    return (entry.get("state") == RENDER_READY
+            and entry.get("token") == render_token(elements, display_id))
 
 
 def _normalize_effect(field):
@@ -357,6 +471,22 @@ def _resolve_effect_filters(me, duration_ms, out_w, out_h):
     return vfs, afs
 
 
+def _parse_ffmpeg_progress_line(line):
+    """Parse one ffmpeg `-progress` key=value line. Returns (key, value) where
+    value is int for numeric keys, else the raw string; None for non key=value
+    lines. Pure — unit-tested without ffmpeg."""
+    line = (line or "").strip()
+    if "=" not in line:
+        return None
+    k, _, v = line.partition("=")
+    k = k.strip(); v = v.strip()
+    if not k:
+        return None
+    if v.lstrip("-").isdigit():
+        return (k, int(v))
+    return (k, v)
+
+
 async def _run_ffmpeg(cmd, label, semaphore):
     """Run one ffmpeg command under the concurrency semaphore. Logs and
     raises with the last few lines of stderr on non-zero exit -- ffmpeg's
@@ -374,8 +504,13 @@ async def _run_ffmpeg(cmd, label, semaphore):
                                " (" + str(proc.returncode) + ")")
 
 
-async def render_group_async(display_id):
-    """Async render of a group's SEGMENT items.
+async def _encode_group(media_elements, display_id, token, progress_cb=None):
+    """Encode all SEGMENT/INDIVIDUAL items in `media_elements` for `display_id`'s
+    calibrated screens, writing seg_<token>_<i>/ind_<token>_<i> assets. Pure
+    encode: no Display.renderStatus / renderedToken / broadcast side effects —
+    the caller owns lifecycle state (legacy wrapper or the per-playlist renderer).
+    Raises on ffmpeg failure. progress_cb(done, total) is called as video jobs
+    complete (best-effort, optional).
 
     Strategy: build the FULL list of per-client ffmpeg commands first, then
     asyncio.gather them under a Semaphore(_RENDER_CONCURRENCY) so multiple
@@ -391,105 +526,158 @@ async def render_group_async(display_id):
     import server
     display = server.settings.displays.get(display_id)
     if not display:
-        return {"status": "error"}
-    display.renderStatus = "rendering"
-    _broadcast_render_status(display_id, "rendering")
-    token = compute_render_token(display_id)
-    try:
-        seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
-                     if _is_renderable(me)]
-        clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
-        # Pass 1: collect all video render commands. Pass 2: gather them.
-        # This lets us see the total job count and parallelise everything
-        # in a single batch (across items AND across clients).
-        video_jobs = []        # list of (cmd, label)
-        seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
-        for i, me in seg_items:
+        raise RuntimeError("no such display: " + str(display_id))
+    seg_items = [(i, me) for i, me in enumerate(media_elements)
+                 if _is_renderable(me)]
+    clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    # Pass 1: collect all video render commands. Pass 2: gather them.
+    # This lets us see the total job count and parallelise everything
+    # in a single batch (across items AND across clients).
+    video_jobs = []        # list of (cmd, label)
+    seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
+    for i, me in seg_items:
+        if me.playmode == PlayMode.FULL:
+            # ONE shared device-decodable asset for the whole group.
             src_path = resolve_media_path(me.file)
             if isVideoItem(me.file):
                 dims = get_video_dimensions(src_path) if src_path else None
                 if not dims:
                     raise RuntimeError("cannot read source video: " + str(me.file))
-                sw, sh = dims
-                for key, c in clients:
-                    out_dir = os.path.join("media", key, "videos")
-                    Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    out_w, out_h = _render_output_dims(c)
-                    # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
-                    # seconds-domain duration (the param name 'duration_ms' is a
-                    # misnomer). Do NOT convert to ms here — only the client
-                    # playback payload (_media_item_payload) needs ms.
-                    evf, eaf = _resolve_effect_filters(me, me.duration,
-                                                       out_w, out_h)
-                    if me.playmode == PlayMode.INDIVIDUAL:
-                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
-                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
-                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
-                            raise RuntimeError("degenerate screen quad for client " + str(key))
-                        if sw * bh >= sh * bw:                 # source wider/equal -> pad height
-                            pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
-                        else:                                  # source taller -> pad width
-                            pad_h = sh; pad_w = int(round(sh * bw / float(bh)))
-                        pad_x = (pad_w - sw) // 2; pad_y = (pad_h - sh) // 2
-                        pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
-                        out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
-                        cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
-                                                          out_w, out_h,
-                                                          pad_w, pad_h, pad_x, pad_y,
-                                                          getattr(me, "backgroundColor", "#000000"),
-                                                          extra_video_filters=evf, extra_audio_filters=eaf)
-                    else:
-                        pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
-                        out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
-                        cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                           out_w, out_h,
-                                                           extra_video_filters=evf, extra_audio_filters=eaf)
-                        seg_push_targets.append((key, i))
-                    video_jobs.append((cmd, key + "/" + str(i)))
+                tw, th = _fit_within(dims[0], dims[1], DEVICE_DECODE_CAP)
+                out_dir = os.path.join("media", "server", "videos")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                out_path = os.path.join(out_dir, "full_" + token + "_" + str(i) + ".mp4")
+                evf, eaf = _resolve_effect_filters(me, me.duration, tw, th)
+                cmd = build_ffmpeg_transcode_cmd(src_path, out_path, tw, th,
+                                                 extra_video_filters=evf, extra_audio_filters=eaf)
+                video_jobs.append((cmd, "server/full_" + str(i)))
             else:
                 img = cv.imread(src_path) if src_path else None
                 if img is None:
                     raise RuntimeError("cannot read source image: " + str(me.file))
-                for key, c in clients:
-                    out_dir = os.path.join("media", key, "images")
-                    Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    # Output at the client's TRUE rendered viewport (canvas),
-                    # falling back to reported device dims when canvas is 0/missing.
-                    out_w, out_h = _render_output_dims(c)
-                    if me.playmode == PlayMode.INDIVIDUAL:
-                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
-                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
-                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
-                            raise RuntimeError("degenerate screen quad for client " + str(key))
-                        bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
-                        canvas = letterbox_to_aspect(img, bw, bh, bg)
-                        warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
-                                                       out_w, out_h)
-                        cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
-                    else:
-                        warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
-                                                       out_w, out_h)
-                        cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
-        # Pass 2: fire all video ffmpeg jobs in parallel, capped at
-        # _RENDER_CONCURRENCY. Any failure raises out of asyncio.gather
-        # (return_exceptions=False default) and gets caught by the outer
-        # try-except, which sets renderStatus='error' and broadcasts.
-        if video_jobs:
-            sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
-            logging.info("render: launching %d ffmpeg jobs concurrency=%d encoder=%s",
-                         len(video_jobs), _RENDER_CONCURRENCY, _VIDEO_ENCODER)
-            t0 = time.time()
-            await asyncio.gather(*[_run_ffmpeg(cmd, lbl, sem) for cmd, lbl in video_jobs])
-            logging.info("render: %d ffmpeg jobs done in %.1fs",
-                         len(video_jobs), time.time() - t0)
-            # Cache-push: fire-and-forget scp of each seg_ file to its
-            # iPad's lighttpd cache dir. _push_segment_to_cached_clients
-            # is a no-op for clients not in lighttpd-localhost cacheMode,
-            # so it is safe to call unconditionally for every seg_ target.
-            # See docs/superpowers/specs/2026-06-03-media-cache-design.md
-            for _push_key, _push_n in seg_push_targets:
-                asyncio.ensure_future(
-                    server._push_segment_to_cached_clients(_push_key, token, _push_n))
+                sh, sw = img.shape[:2]
+                tw, th = _fit_within(sw, sh, DEVICE_DECODE_CAP)
+                out_dir = os.path.join("media", "server", "images")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                out_path = os.path.join(out_dir, "full_" + token + "_" + str(i) + ".png")
+                if (tw, th) != (sw, sh):
+                    img = cv.resize(img, (tw, th), interpolation=cv.INTER_AREA)
+                cv.imwrite(out_path, img)
+            continue
+        src_path = resolve_media_path(me.file)
+        if isVideoItem(me.file):
+            dims = get_video_dimensions(src_path) if src_path else None
+            if not dims:
+                raise RuntimeError("cannot read source video: " + str(me.file))
+            sw, sh = dims
+            for key, c in clients:
+                out_dir = os.path.join("media", key, "videos")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                out_w, out_h = _render_output_dims(c)
+                # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
+                # seconds-domain duration (the param name 'duration_ms' is a
+                # misnomer). Do NOT convert to ms here — only the client
+                # playback payload (_media_item_payload) needs ms.
+                evf, eaf = _resolve_effect_filters(me, me.duration,
+                                                   out_w, out_h)
+                if me.playmode == PlayMode.INDIVIDUAL:
+                    quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
+                    bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                    if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
+                        raise RuntimeError("degenerate screen quad for client " + str(key))
+                    if sw * bh >= sh * bw:                 # source wider/equal -> pad height
+                        pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
+                    else:                                  # source taller -> pad width
+                        pad_h = sh; pad_w = int(round(sh * bw / float(bh)))
+                    pad_x = (pad_w - sw) // 2; pad_y = (pad_h - sh) // 2
+                    pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
+                    out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
+                    cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
+                                                      out_w, out_h,
+                                                      pad_w, pad_h, pad_x, pad_y,
+                                                      getattr(me, "backgroundColor", "#000000"),
+                                                      extra_video_filters=evf, extra_audio_filters=eaf)
+                else:
+                    pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
+                    out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
+                    cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
+                                                       out_w, out_h,
+                                                       extra_video_filters=evf, extra_audio_filters=eaf)
+                    seg_push_targets.append((key, i))
+                video_jobs.append((cmd, key + "/" + str(i)))
+        else:
+            img = cv.imread(src_path) if src_path else None
+            if img is None:
+                raise RuntimeError("cannot read source image: " + str(me.file))
+            for key, c in clients:
+                out_dir = os.path.join("media", key, "images")
+                Path(out_dir).mkdir(parents=True, exist_ok=True)
+                # Output at the client's TRUE rendered viewport (canvas),
+                # falling back to reported device dims when canvas is 0/missing.
+                out_w, out_h = _render_output_dims(c)
+                if me.playmode == PlayMode.INDIVIDUAL:
+                    quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
+                    bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
+                    if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
+                        raise RuntimeError("degenerate screen quad for client " + str(key))
+                    bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
+                    canvas = letterbox_to_aspect(img, bw, bh, bg)
+                    warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
+                                                   out_w, out_h)
+                    cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
+                else:
+                    warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
+                                                   out_w, out_h)
+                    cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
+    # Pass 2: fire all video ffmpeg jobs in parallel, capped at
+    # _RENDER_CONCURRENCY. Any failure raises out of asyncio.gather
+    # (return_exceptions=False default) and propagates to the caller.
+    if video_jobs:
+        sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
+        logging.info("render: launching %d ffmpeg jobs concurrency=%d encoder=%s",
+                     len(video_jobs), _RENDER_CONCURRENCY, _VIDEO_ENCODER)
+        t0 = time.time()
+        total = len(video_jobs)
+        done = [0]
+
+        async def _run_and_count(cmd, lbl):
+            await _run_ffmpeg(cmd, lbl, sem)
+            done[0] += 1
+            if progress_cb:
+                try:
+                    progress_cb(done[0], total)
+                except Exception:
+                    pass
+
+        await asyncio.gather(*[_run_and_count(cmd, lbl) for cmd, lbl in video_jobs])
+        logging.info("render: %d ffmpeg jobs done in %.1fs",
+                     len(video_jobs), time.time() - t0)
+        # Cache-push: fire-and-forget scp of each seg_ file to its
+        # iPad's lighttpd cache dir. _push_segment_to_cached_clients
+        # is a no-op for clients not in lighttpd-localhost cacheMode,
+        # so it is safe to call unconditionally for every seg_ target.
+        # See docs/superpowers/specs/2026-06-03-media-cache-design.md
+        for _push_key, _push_n in seg_push_targets:
+            asyncio.ensure_future(
+                server._push_segment_to_cached_clients(_push_key, token, _push_n))
+
+
+async def render_group_async(display_id):
+    """Legacy single-applied-playlist renderer (renders display.mediaElements,
+    sets display.renderStatus/renderedToken + broadcasts RENDER_STATUS). The
+    auto-render model superseded this: production renders now flow through the
+    queue -> render_playlist_for_group_async (PLAY/ASSIGN/schedules gate on the
+    per-playlist registry). No production path calls this anymore; it is retained
+    only as a thin wrapper over _encode_group and is exercised by tests."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return {"status": "error"}
+    display.renderStatus = "rendering"
+    _broadcast_render_status(display_id, "rendering")
+    token = compute_render_token(display_id)
+    try:
+        await _encode_group(display.mediaElements, display_id, token)
         display.renderedToken = token
         display.renderStatus = "ready"
         _broadcast_render_status(display_id, "ready")
@@ -501,20 +689,303 @@ async def render_group_async(display_id):
         return {"status": "error", "error": str(e)}
 
 
+# Throttled RENDERS_CHANGED broadcast (≤1/s). Module-level so all callers coalesce.
+_last_renders_broadcast = [0.0]
+
+
+def _broadcast_renders_changed(force=False):
+    """Fan a RENDERS_CHANGED snapshot to all clients, throttled to ≤1/s unless
+    force=True (terminal transitions). No-op if socketmanager isn't wired."""
+    import server
+    if server.socketmanager is None:
+        return
+    now = time.time()
+    if not force and (now - _last_renders_broadcast[0]) < 1.0:
+        return
+    _last_renders_broadcast[0] = now
+    server.socketmanager.broadcast(jsonpickle.encode(
+        {"REQUEST": "RENDERS_CHANGED", "PAYLOAD": {"renders": renders_snapshot()}}))
+
+
+def renders_snapshot():
+    """Flat list of every render entry across all groups, for the fleet-wide
+    Render Status panel + GET /api/renders."""
+    import server
+    out = []
+    for did, display in server.settings.displays.items():
+        for name, e in (getattr(display, "renders", {}) or {}).items():
+            out.append({
+                "displayID": did, "playlist": name,
+                "state": e.get("state"), "percent": e.get("percent"),
+                "eta": e.get("eta"), "startedAt": e.get("startedAt"),
+                "error": e.get("error"), "updatedAt": e.get("updatedAt"),
+            })
+    return out
+
+
+async def render_playlist_for_group_async(playlist_name, display_id):
+    """Picks up from QUEUED (set by the caller) and transitions RENDERING→READY/
+    FAILED for a NAMED playlist WITHOUT touching display.mediaElements
+    (staging-safe). Used by the render queue. No-op (drops the entry) if the
+    playlist became N/A."""
+    import server
+    pl = server.settings.playlists.get(playlist_name)
+    display = server.settings.displays.get(display_id)
+    if pl is None or display is None:
+        return
+    elements = _build_media_elements(pl.items)
+    if not any(_is_renderable(me) for me in elements):
+        display.renders.pop(playlist_name, None)   # became N/A
+        _broadcast_renders_changed(force=True)
+        return
+    token = render_token(elements, display_id)
+    _set_render_state(display, playlist_name, RENDER_RENDERING, token=token,
+                      percent=0, started=time.time())
+    _broadcast_renders_changed(force=True)
+
+    def _progress(done, total):
+        pct = int(round(100.0 * done / total)) if total else 100
+        entry = display.renders.get(playlist_name) or {}
+        started = entry.get("startedAt") or time.time()
+        elapsed = max(0.001, time.time() - started)
+        rate = done / elapsed
+        eta = int(round((total - done) / rate)) if rate > 0 else None
+        _set_render_state(display, playlist_name, RENDER_RENDERING, percent=pct, eta=eta)
+        _broadcast_renders_changed()
+
+    try:
+        await _encode_group(elements, display_id, token, progress_cb=_progress)
+        _set_render_state(display, playlist_name, RENDER_READY, token=token,
+                          percent=100, eta=0, error=None)
+        # If this playlist is the one applied to the group, sync the live token
+        # so the per-client PLAY URLs resolve the freshly-rendered assets.
+        if getattr(display, "currentPlaylistName", None) == playlist_name:
+            display.renderedToken = token
+    except Exception as e:
+        logging.error("render_playlist_for_group %s/%s failed: %s", playlist_name, display_id, e)
+        entry = _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))
+        entry.pop("percent", None)
+        entry.pop("eta", None)
+    _broadcast_renders_changed(force=True)
+    try:
+        from mosaicmesh.persistence import save_settings_incremental
+        save_settings_incremental()
+    except Exception:
+        pass
+
+
+def _group_is_calibrated(display_id):
+    """A group is calibrated iff it has a boundingBox AND ≥1 client with a
+    measured perimeter — the minimum needed to produce a per-screen render."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display or not display.boundingBox:
+        return False
+    return any(c.measuredPerimeter is not None for _k, c in _group_clients(display_id))
+
+
+def _render_assets_exist(playlist_name, display_id, token):
+    """True if every renderable item's per-client asset exists on disk for this
+    token. Conservative: a single missing file demotes the entry to STALE."""
+    import server
+    pl = server.settings.playlists.get(playlist_name)
+    display = server.settings.displays.get(display_id)
+    if pl is None or display is None:
+        return False
+    elements = _build_media_elements(pl.items)
+    clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    for i, me in enumerate(elements):
+        if me.playmode == PlayMode.FULL:
+            ext = ".mp4" if isVideoItem(me.file) else ".png"
+            sub = "videos" if ext == ".mp4" else "images"
+            path = os.path.join("media", "server", sub, "full_" + token + "_" + str(i) + ext)
+            if not os.path.exists(path):
+                return False
+            continue
+        if not _is_renderable(me):
+            continue
+        ext = ".mp4" if isVideoItem(me.file) else ".png"
+        prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
+        subdir = "videos" if ext == ".mp4" else "images"
+        for key, _c in clients:
+            path = os.path.join("media", key, subdir, prefix + token + "_" + str(i) + ext)
+            if not os.path.exists(path):
+                return False
+    return True
+
+
+def revalidate_renders_on_boot():
+    """Re-validate every persisted render entry once at startup. READY entries
+    whose token still matches AND whose assets exist stay READY; everything else
+    (stale token, missing asset, or a leftover in-flight QUEUED/RENDERING) drops
+    to STALE for lazy re-render. Never auto-storms at boot."""
+    import server
+    for did, display in server.settings.displays.items():
+        reg = getattr(display, "renders", {}) or {}
+        for name in list(reg.keys()):
+            entry = reg[name]
+            pl = server.settings.playlists.get(name)
+            if pl is None:
+                reg.pop(name, None)   # playlist gone
+                continue
+            elements = _build_media_elements(pl.items)
+            if not any(_is_renderable(me) for me in elements):
+                reg.pop(name, None)   # became N/A
+                continue
+            cur = render_token(elements, did)
+            ok = (entry.get("state") == RENDER_READY
+                  and entry.get("token") == cur
+                  and _render_assets_exist(name, did, cur))
+            if not ok:
+                _set_render_state(display, name, RENDER_STALE, token=cur)
+
+
+def enqueue_playlist_for_calibrated_groups(playlist_name):
+    """For a saved renderable playlist, set QUEUED + enqueue a render against
+    every calibrated group. N/A playlists (no renderable items) are skipped."""
+    import server
+    from mosaicmesh import render_queue
+    pl = server.settings.playlists.get(playlist_name)
+    if pl is None:
+        return
+    elements = _build_media_elements(pl.items)
+    if not any(_is_renderable(me) for me in elements):
+        return
+    changed = False
+    for did, display in server.settings.displays.items():
+        if not _group_is_calibrated(did):
+            continue
+        if is_playlist_ready(playlist_name, did):
+            continue   # already current — don't re-encode
+        _set_render_state(display, playlist_name, RENDER_QUEUED,
+                          token=render_token(elements, did))
+        render_queue.enqueue(playlist_name, did)
+        changed = True
+    if changed:
+        _broadcast_renders_changed(force=True)
+
+
+def mark_group_recalibrated(display_id):
+    """Calibration changed for a group (first calibration OR recalibrate):
+    enqueue a render of EVERY renderable playlist for this group and return the
+    list of playlist names that will render (for the operator warning + ETA).
+    Existing entries are reset to QUEUED with the new token. N/A playlists are
+    skipped. No-op (returns []) if the group isn't calibrated.
+    Already-current renders (READY + matching token) are skipped — a genuinely
+    recalibrated group's render_token changes (perimeter is hashed in) so those
+    will re-render; untouched groups whose token is unchanged are left alone."""
+    import server
+    from mosaicmesh import render_queue
+    if not _group_is_calibrated(display_id):
+        return []
+    display = server.settings.displays.get(display_id)
+    will = []
+    for name, pl in server.settings.playlists.items():
+        elements = _build_media_elements(pl.items)
+        if not any(_is_renderable(me) for me in elements):
+            continue
+        if is_playlist_ready(name, display_id):
+            continue   # render already current for this group — don't re-encode
+        _set_render_state(display, name, RENDER_QUEUED, token=render_token(elements, display_id))
+        render_queue.enqueue(name, display_id)
+        will.append(name)
+    if will:
+        _broadcast_renders_changed(force=True)
+    return will
+
+
+def _delete_render_assets(playlist_name, display_id):
+    """Delete on-disk seg_/ind_ assets for a (playlist, group) for its current
+    token. Best-effort; missing files are fine."""
+    import server, glob
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return
+    token = (display.renders.get(playlist_name) or {}).get("token", "")
+    if not token:
+        return
+    for key, _c in _group_clients(display_id):
+        for sub in ("videos", "images"):
+            for prefix in ("seg_", "ind_"):
+                for path in glob.glob(os.path.join("media", key, sub, prefix + token + "_*")):
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        pass
+    for sub in ("videos", "images"):
+        for path in glob.glob(os.path.join("media", "server", sub, "full_" + token + "_*")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+def cleanup_playlist_renders(playlist_name):
+    """Remove a playlist's render entry + assets from every group (on delete)."""
+    import server
+    for did, display in server.settings.displays.items():
+        if playlist_name in (getattr(display, "renders", {}) or {}):
+            _delete_render_assets(playlist_name, did)
+            display.renders.pop(playlist_name, None)
+    _broadcast_renders_changed(force=True)
+
+
+def cleanup_group_renders(display_id):
+    """Drop a group's whole render registry + assets (on group delete)."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return
+    for name in list((getattr(display, "renders", {}) or {}).keys()):
+        _delete_render_assets(name, display_id)
+    display.renders = {}
+    _broadcast_renders_changed(force=True)
+
+
 # ---------------------------------------------------------------------------
 # Duration / payload / URL helpers
 # ---------------------------------------------------------------------------
 
-def _duration_ms(me):
-    """Item duration in milliseconds. Durations are authored/stored in SECONDS
-    (the editor's 'Duration (s)' field, default 5), but the client playback
-    engine (playlistIndex vs GoTime ms, currentTime, msToNext) and the ffmpeg
-    effect filters both consume MILLISECONDS — so convert at every boundary
-    that leaves the seconds-domain."""
+def _probed_video_seconds(file):
+    """Probed natural length in SECONDS for a video URL, or None.
+
+    Reuses the EXACT cache `/api/media` populates: `server._video_duration_cache`
+    keyed by `(disk_path, mtime)`, where the disk path is
+    `media/server/videos/<basename(url)>` (mirrors `api_media`'s mapping). This
+    is a synchronous, best-effort READ of the cache — it never probes (ffprobe
+    is async/blocking and `_duration_ms` runs on the wire-build path). Any
+    non-video URL, missing file, or cache miss returns None so the caller falls
+    back to the default window."""
     try:
-        return int(round(float(me.duration) * 1000))
+        if not isinstance(file, str):
+            return None
+        if not file.startswith("/media/server/videos/"):
+            return None
+        if not file.lower().endswith((".mp4", ".mov", ".m4v", ".webm", ".ogv", ".ogg")):
+            return None
+        import server
+        disk = os.path.join("media", "server", "videos", os.path.basename(file))
+        mtime = os.path.getmtime(disk)
+        return server._video_duration_cache.get((disk, mtime))
+    except Exception:
+        return None
+
+
+def _duration_ms(me):
+    """Item duration in ms. Explicit duration (seconds) -> ms. Missing
+    ('Auto') -> the video's probed natural length if known, else a 20s
+    default. Never 0 for a real item — a 0-ms window would skip the item
+    on the wall (synchronized playback needs the window upfront)."""
+    try:
+        d = float(me.duration)
+        if d > 0:
+            return int(round(d * 1000))
     except (TypeError, ValueError):
-        return 0
+        pass
+    secs = _probed_video_seconds(getattr(me, "file", None))
+    if secs and secs > 0:
+        return int(round(secs * 1000))
+    return DEFAULT_ITEM_DURATION_S * 1000
 
 
 def _media_item_payload(me):
@@ -621,7 +1092,14 @@ def _per_client_items(display, key, c):
     cache_on = (getattr(c, "cacheMode", "none") == "lighttpd-localhost")
     cached = getattr(c, "cachedSegments", set()) if cache_on else set()
     for i, me in enumerate(display.mediaElements):
-        if _is_renderable(me) and c.measuredPerimeter is not None:
+        if me.playmode == PlayMode.FULL:
+            # Shared central device asset written by _encode_group (Task 4).
+            # All clients in the group share this one file — never raw, never
+            # per-client seg_/ind_ path.
+            ext = ".mp4" if isVideoItem(me.file) else ".png"
+            sub = "videos" if ext == ".mp4" else "images"
+            f = "/media/server/" + sub + "/full_" + token + "_" + str(i) + ext
+        elif _is_renderable(me) and c.measuredPerimeter is not None:
             prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
             ext = ".mp4" if isVideoItem(me.file) else ".png"
             seg_key = "%s_%d" % (token, i)
@@ -631,7 +1109,7 @@ def _per_client_items(display, key, c):
             else:
                 f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
         else:
-            f = me.file  # FULL item, or uncalibrated fallback to full source
+            f = me.file  # SCRIPT animation ref, or uncalibrated fallback
         item = _media_item_payload(me)
         item["file"] = f
         items.append(item)
@@ -673,20 +1151,22 @@ def _broadcast_per_client_preload(display_id, media_elements=None):
 # ---------------------------------------------------------------------------
 
 def _apply_playlist(display_id, pl):
-    """Copy a saved Playlist onto a group (mediaElements, loop, PRELOAD).
-
-    Does NOT blank renderedToken eagerly: compute_render_token() is a stable
-    hash of items + bounding box + per-client perimeters, so re-assigning
-    the SAME playlist produces the same token and the existing render
-    output is still valid. Blanking unconditionally forced a "needs render"
-    state every time the user re-assigned a playlist they hadn't changed --
-    deeply confusing because they could see the render had just completed.
-    Let the natural token comparison decide."""
+    """Copy a saved Playlist onto a group (mediaElements, loop, PRELOAD) and
+    sync display.renderedToken from the render registry so the per-client PLAY
+    URLs (_per_client_items) resolve the right seg_<token> assets. Sets the
+    live token to the playlist's READY token, else "" (not ready)."""
     import server
     display = server.settings.displays.setdefault(display_id, Display())
     display.mediaElements = _build_media_elements(pl.items)
     display.currentPlaylistName = getattr(pl, "name", None)
     display.loop = bool(pl.loop)
+    name = getattr(pl, "name", None)
+    entry = (getattr(display, "renders", {}) or {}).get(name)
+    cur = render_token(display.mediaElements, display_id)
+    if entry and entry.get("state") == RENDER_READY and entry.get("token") == cur:
+        display.renderedToken = cur
+    else:
+        display.renderedToken = ""
     _broadcast_per_client_preload(display_id, display.mediaElements)
 
 

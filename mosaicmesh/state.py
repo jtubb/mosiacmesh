@@ -39,6 +39,13 @@ class Display():
         self.pauseOffset = 0      # ms into the playlist when paused
         self.renderedToken = ""   # token of the last successful SEGMENT render
         self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
+        # Per-(playlist) render registry for THIS group (PR auto-render).
+        # { playlistName: {token, state, updatedAt, error, percent, eta, startedAt} }
+        # state ∈ render.RENDER_{QUEUED,RENDERING,READY,STALE,FAILED}.
+        # Persists in settings.dat; revalidated against render_token + on-disk
+        # assets at boot. renderedToken/renderStatus above are the legacy
+        # single-applied-playlist fields, kept for the live playback path.
+        self.renders = {}
         self.defaultPlaylistName = None   # fallback playlist when no schedule is active
         self.scheduledEntryId = None      # transient: which schedule/"__default__" currently drives this group
         self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
@@ -203,6 +210,9 @@ class Client():
         # pipeline). Populated by _push_segment_to_cached_clients on
         # successful scp; pruned by _reconcile_ipad_cache.
         self.cachedSegments = set()
+        # Wall-clock ms of the last server-side cache-capability SSH probe
+        # (None = never probed). Observability only; nothing gates on it.
+        self.cacheProbedMs = None
         # In-memory only (does not persist; meaningful only during a
         # push). Set to a dict by _push_segment_to_cached_clients when
         # a push starts; cleared to None when the push ends (success
@@ -232,6 +242,8 @@ def migrate_client_objects():
         _disp.readyClients = set()
         _disp.armPending = set()
         _disp.prepareDeadline = 0
+        if not hasattr(_disp, 'renders'):
+            _disp.renders = {}
     current_time = time.time()
     for client_key, client in settings.clients.items():
         if not hasattr(client, 'discoveryTime'):
@@ -270,6 +282,8 @@ def migrate_client_objects():
             client.cacheMode = "none"
         if not hasattr(client, 'cachedSegments'):
             client.cachedSegments = set()
+        if not hasattr(client, 'cacheProbedMs'):
+            client.cacheProbedMs = None
         # cachePushProgress is transient (a push is meaningful only
         # while the process is live), so unconditionally reset on
         # startup -- any state in settings.dat is stale.

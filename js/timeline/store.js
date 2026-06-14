@@ -26,6 +26,7 @@
 import { api } from './api.js';
 import { expandSchedule } from './util/time.js';
 import { buildNowSummary } from './now-summary.js';
+import { buildContentItems } from './content/content-items.js';
 
 function todayIso() {
   const d = new Date();
@@ -52,6 +53,11 @@ export function makeStore() {
     viewDate: todayIso(),
     selectedDisplay: null,
 
+    // Section 3: responsive switch. Set from matchMedia in index.js.
+    // The Schedule section binds to this to choose the mobile stack
+    // (mmScheduleMobile) vs the desktop grid (mmTimeline).
+    isMobile: false,
+
     activeTab: 'now',                 // 'now' | 'content' | 'schedule' | 'fleet'
     connection: { connected: false, onlineClients: 0 },
     playback: {},                     // displayID -> {state, currentPlaylist, startedEpoch, renderStatus}
@@ -59,6 +65,9 @@ export function makeStore() {
     hydrated: false,
     hydrateError: null,
     renderInProgress: {},
+    renders: {},            // displayID -> { playlistName -> entry }
+    renderQueueDepth: 0,
+    renderPanelOpen: false,
 
     /**
      * Fire all five GETs in parallel; populate state on success.
@@ -120,6 +129,14 @@ export function makeStore() {
         this.hydrateError = e.message || String(e);
         this.hydrated = false;
       }
+      // getRenders is a separate await so a missing /api/renders route
+      // (pre-AR server) doesn't block the main hydrate or set hydrateError.
+      try {
+        const rd = await api.getRenders();
+        this.setRenders(rd.renders, rd.queueDepth);
+      } catch (e) {
+        console.warn('[timeline] getRenders failed:', e);
+      }
     },
 
     /**
@@ -132,6 +149,31 @@ export function makeStore() {
       if (d) Object.assign(d, patch);
     },
 
+    /**
+     * CACHE_PROGRESS SockJS hook (2026-06-14). Live-updates one device's
+     * cache fields so the Fleet cache chip climbs without a page reload —
+     * the chip reads store.displays, which is otherwise only refreshed at
+     * hydrate(). payload: {clientKey, token, n, percent, mbps, status,
+     * bytesSent, totalBytes}. On status 'cached' the segment finished, so we
+     * record its seg_key (`<token>_<n>`) — deviceCacheStatus recomputes the
+     * propagation % from cachedSegments/expectedSegments. Other statuses
+     * ('pushing'/'stalled') just reflect the in-flight progress.
+     */
+    setCacheProgress(p) {
+      if (!p || !p.clientKey) return;
+      const d = this.displays.find(x => x.clientKey === p.clientKey);
+      if (!d) return;
+      d.cachePushProgress = {
+        status: p.status, percent: p.percent, mbps: p.mbps,
+        bytesSent: p.bytesSent, totalBytes: p.totalBytes,
+      };
+      if (p.status === 'cached' && p.token != null && p.n != null) {
+        const segKey = `${p.token}_${p.n}`;
+        if (!Array.isArray(d.cachedSegments)) d.cachedSegments = [];
+        if (d.cachedSegments.indexOf(segKey) === -1) d.cachedSegments.push(segKey);
+      }
+    },
+
     setRenderInProgress(displayID, inProgress) {
       this.renderInProgress = { ...this.renderInProgress, [displayID]: !!inProgress };
     },
@@ -141,6 +183,40 @@ export function makeStore() {
     goTo(tab) { if (typeof location !== 'undefined') location.hash = '#' + tab; },
     setConnection(patch) { this.connection = { ...this.connection, ...patch }; },
     setPlayback(row) { if (row && row.displayID) this.playback[row.displayID] = row; },
+    setRenders(rows, queueDepth) {
+      const map = {};
+      for (const r of (rows || [])) {
+        (map[r.displayID] = map[r.displayID] || {})[r.playlist] = r;
+      }
+      this.renders = map;
+      if (typeof queueDepth === 'number') this.renderQueueDepth = queueDepth;
+    },
+    retryRenderGroup(playlistName, displayID) {
+      if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
+        this.toast('SockJS not available; reload the page.', 'error');
+        return;
+      }
+      window.sock.send(window.generateMessage('SRV', 'RENDER', { displayID, name: playlistName }));
+      this.toast(`Retrying render of "${playlistName}" on "${displayID}".`, 'info');
+    },
+    renderEntry(playlistName, displayID) {
+      return (this.renders[displayID] || {})[playlistName] || null;
+    },
+    isPlaylistReady(playlistName, displayID) {
+      const pl = this.playlists[playlistName];
+      const renderable = !!(pl && (pl.items || []).some(
+        (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL'));
+      if (!renderable) return true;
+      const e = this.renderEntry(playlistName, displayID);
+      return !!(e && e.state === 'READY');
+    },
+    get rendersList() {
+      const out = [];
+      for (const did of Object.keys(this.renders)) {
+        for (const name of Object.keys(this.renders[did])) out.push(this.renders[did][name]);
+      }
+      return out.filter((e) => e.state !== 'READY');
+    },
     get nowCards() {
       return buildNowSummary({
         displayGroups: this.displayGroups,
@@ -149,12 +225,19 @@ export function makeStore() {
         renderInProgress: this.renderInProgress,
       });
     },
+    get contentItems() {
+      const anims = (typeof window !== 'undefined' && window.MM_ANIMATIONS)
+        ? window.MM_ANIMATIONS
+        : (typeof globalThis !== 'undefined' && globalThis.MM_ANIMATIONS) || [];
+      return buildContentItems({ media: this.media, animations: anims });
+    },
 
     // ---- UI-state mutations (no server calls) ----
     setViewMode(mode)   { this.viewMode = mode; },
     setViewDate(isoYmd) { this.viewDate = isoYmd; },
     goToday()           { this.viewDate = todayIso(); },
     selectDisplay(id)   { this.selectedDisplay = id; },
+    setIsMobile(b)      { this.isMobile = !!b; },
 
     // ---- Toast state (PR-4b) ----
     toasts: [],
@@ -274,6 +357,38 @@ export function makeStore() {
         () => { this.schedules = this.schedules.filter(s => s.id !== id); },
         async () => { await api.deleteSchedule(id); },
       );
+    },
+
+    /**
+     * POST a new (empty) playlist. Optimistic: insert a placeholder dict
+     * entry so the Playlists list shows it immediately; on success swap in
+     * the server's authoritative object (with _serverVersion); on failure
+     * (e.g. 409 duplicate name) roll back the slice + toast the error.
+     */
+    async createPlaylist(name) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['playlists'], () => {
+        this.playlists[name] = { name, items: [], _serverVersion: 0 };
+      }, async () => {
+        const created = await api.createPlaylist({ name });
+        if (created && created.name) this.playlists[created.name] = created;
+      });
+    },
+
+    /**
+     * DELETE a playlist by name. Optimistic: drop the dict entry; on
+     * failure (e.g. 409+refs when a schedule references it) roll back +
+     * toast the server's error.
+     */
+    async deletePlaylist(name) {
+      const { withRollback } = await import('./util/optimistic.js');
+      const { api } = await import('./api.js');
+      return withRollback(this, ['playlists'], () => {
+        delete this.playlists[name];
+      }, async () => {
+        await api.deletePlaylist(name);
+      });
     },
 
     /**

@@ -18,8 +18,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, minimum-scale=1, maximum-scale=1">
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
-  <script src="/js/GoTime.js"></script> 
+  <script src="/js/GoTime.js"></script>
   <script src="/js/mosiacmesh.js"></script>
+  <script src="/js/animations.js"></script>
   <script>
     var blink = true;
     // Tracks whether we have already told the server "my
@@ -308,7 +309,16 @@
 			ct: v ? Math.round(v.currentTime * 1000) : null,
 			src: (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')).split('/').pop() : null,
 			idx: playback.videoIndex,
-			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null
+			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null,
+			off: (typeof GoTime.getOffset === 'function') ? GoTime.getOffset() : null,
+			prec: (typeof GoTime.getPrecision === 'function') ? GoTime.getPrecision() : null,
+			accAge: (typeof GoTime.msSinceAccept === 'function' && GoTime.msSinceAccept() !== Infinity) ? Math.round(GoTime.msSinceAccept()) : null,
+			phStd: (function () { var s = phaseStats(); return s ? Math.round(s.std) : null; })(),
+			phMean: (function () { var s = phaseStats(); return s ? Math.round(s.mean) : null; })(),
+			phMedAbs: (function () { var s = phaseStats(); return s ? Math.round(s.medAbs) : null; })(),
+			synced: (typeof ProgrammableTimer !== 'undefined') ? ProgrammableTimer.isSynced() : null,
+			settled: clockSettled(),
+			cready: clockReady()
 		};
 		if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { payload[k] = extra[k]; } } }
 		sendMsg("CLIENTLOG", payload);
@@ -320,6 +330,25 @@
 		$('html').css({ width: '', height: '', border: '', position: '', 'z-index': '', overflow: '' });
 		$('html, body').css('background-color', '');
 		$('#canvas').css({ color: '' });
+	}
+
+	// Emit READY only once the clock is converged (clockReady). Re-checks on a
+	// short timer until then; the server's extended PREPARE_TIMEOUT is the
+	// bounded fallback if a client never converges. Guarded by the current
+	// prepareId so a stopped/superseded PREPARE can't later emit a stale READY.
+	function sendReadyWhenClockReady(prepareId) {
+		if (playback.readyWaitTimer) { clearTimeout(playback.readyWaitTimer); playback.readyWaitTimer = null; }
+		function attempt() {
+			if (playback.prepareId !== prepareId) { return; }   // superseded/stopped
+			if (clockReady()) {
+				dbg("send-READY");
+				sendMsg("READY", { prepareId: prepareId });
+				return;
+			}
+			dbg("hold-READY-clock");
+			playback.readyWaitTimer = setTimeout(attempt, 500);
+		}
+		attempt();
 	}
 
 	// Coordinated-start phase 1: buffer the first item and HOLD frame 0 (paused).
@@ -338,7 +367,7 @@
 		for (i = 0; i < playback.items.length; i++) {
 			if (isVideoItem(playback.items[i].file)) { item = playback.items[i]; break; }
 		}
-		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }  // no video -> nothing to arm
+		if (!item) { sendReadyWhenClockReady(prepareId); return; }  // no video to arm; still wait for clock
 		var v = getPersistentVideo();
 		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = VIDEO_MUTED;
 		playback.videoSrc = item.file;
@@ -346,7 +375,7 @@
 			try { v.pause(); } catch (e) {}
 			try { v.currentTime = 0; } catch (e) {}
 		};
-		var reportReady = function () { dbg("send-READY"); sendMsg("READY", { prepareId: prepareId }); };
+		var reportReady = function () { sendReadyWhenClockReady(prepareId); };
 		var onArmed = function () {            // 'playing' fired => armed (autoplay or tap)
 			if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
 			playback.activated = true; hideTapStart();
@@ -420,84 +449,14 @@
 	var _caf = window.cancelAnimationFrame || window.webkitCancelAnimationFrame ||
 		function(id){ clearTimeout(id); };
 
-	// Built-in animations: each is a PURE function of elapsed time (tMs) and canvas
-	// size, so every display draws the same frame at the same shared-clock instant.
-	var animations = {
-		bouncingBalls: function(ctx, tMs, w, h) {
-			var colors = ['#e74c3c', '#27ae60', '#2980b9', '#f1c40f'];
-			var r = Math.max(12, Math.min(w, h) * 0.06), n = 4, i;
-			for (i = 0; i < n; i++) {
-				var px = (Math.sin(tMs / (900 + i * 220) + i) + 1) / 2;        // 0..1
-				var py = (Math.sin(tMs / (700 + i * 180) + i * 1.7) + 1) / 2;  // 0..1
-				ctx.fillStyle = colors[i % colors.length];
-				ctx.beginPath();
-				ctx.arc(r + px * (w - 2 * r), r + py * (h - 2 * r), r, 0, Math.PI * 2);
-				ctx.fill();
-			}
-		},
-		lissajous: function(ctx, tMs, w, h) {
-			var N = 300, i;
-			var a = 3 + 2 * Math.sin(tMs / 8000);
-			var b = 4 + 2 * Math.sin(tMs / 11000);
-			var phi = tMs / 3000;
-			var cx = w / 2, cy = h / 2, ax = w * 0.35, ay = h * 0.35;
-			ctx.strokeStyle = 'hsl(' + ((tMs / 40) % 360) + ', 70%, 60%)';
-			ctx.lineWidth = 2;
-			ctx.beginPath();
-			for (i = 0; i <= N; i++) {
-				var s = (i / N) * Math.PI * 2;
-				var x = cx + ax * Math.sin(a * s + phi);
-				var y = cy + ay * Math.sin(b * s);
-				if (i === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
-			}
-			ctx.stroke();
-		},
-		phyllotaxis: function(ctx, tMs, w, h) {
-			var N = 600, i;
-			var GOLDEN = 137.508 * Math.PI / 180;
-			var c = (Math.min(w, h) / (2 * Math.sqrt(N))) * 0.92;
-			var cx = w / 2, cy = h / 2;
-			var rot = tMs / 4000;
-			for (i = 0; i < N; i++) {
-				var theta = i * GOLDEN + rot;
-				var r = c * Math.sqrt(i);
-				var x = cx + r * Math.cos(theta);
-				var y = cy + r * Math.sin(theta);
-				var dotR = 3 + 2 * Math.sin(tMs / 1500 + i * 0.02);
-				ctx.fillStyle = 'hsl(' + ((i / N) * 360) + ', 80%, 60%)';
-				ctx.beginPath();
-				ctx.arc(x, y, dotR, 0, Math.PI * 2);
-				ctx.fill();
-			}
-		},
-		wireframeCube: function(ctx, tMs, w, h) {
-			var V = [[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1],[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1]];
-			var E = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-			var ax = tMs / 2500, ay = tMs / 3700, az = tMs / 5300;
-			var cosx = Math.cos(ax), sinx = Math.sin(ax);
-			var cosy = Math.cos(ay), siny = Math.sin(ay);
-			var cosz = Math.cos(az), sinz = Math.sin(az);
-			var s = Math.min(w, h) / 4, persp = 0.5, cx = w / 2, cy = h / 2;
-			var proj = [], i;
-			for (i = 0; i < V.length; i++) {
-				var x = V[i][0], y = V[i][1], z = V[i][2];
-				var y1 = y * cosx - z * sinx, z1 = y * sinx + z * cosx;
-				var x2 = x * cosy + z1 * siny, z2 = -x * siny + z1 * cosy;
-				var x3 = x2 * cosz - y1 * sinz, y3 = x2 * sinz + y1 * cosz;
-				var d = 1 + z2 * persp;
-				proj.push([cx + s * x3 / d, cy + s * y3 / d]);
-			}
-			ctx.strokeStyle = 'hsl(' + ((tMs / 30) % 360) + ', 80%, 60%)';
-			ctx.lineWidth = 3;
-			ctx.beginPath();
-			for (i = 0; i < E.length; i++) {
-				var p0 = proj[E[i][0]], p1 = proj[E[i][1]];
-				ctx.moveTo(p0[0], p0[1]);
-				ctx.lineTo(p1[0], p1[1]);
-			}
-			ctx.stroke();
-		}
-	};
+	// Animations now live in the shared ES5 module js/animations.js (loaded above
+	// via <script>), so the admin + tests use the exact same code. Rebuild the
+	// name->draw map runScriptLoop/showItem already consume (signature unchanged).
+	var animations = {};
+	(function () {
+		var list = (typeof window !== 'undefined' && window.MM_ANIMATIONS) ? window.MM_ANIMATIONS : [];
+		for (var i = 0; i < list.length; i++) { animations[list[i].key] = list[i].draw; }
+	})();
 
 	function clearScript() {
 		if (playback.scriptRaf) { _caf(playback.scriptRaf); playback.scriptRaf = null; }
@@ -720,6 +679,7 @@
 		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+		if (playback.readyWaitTimer) { clearTimeout(playback.readyWaitTimer); playback.readyWaitTimer = null; }
 		if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
 		clearScript();
 		$('#canvas').empty();
@@ -766,8 +726,13 @@
 	var _phaseHistory = [];     // recent tick phases: signed ms from nearest second
 	var _lastTickAt = 0;        // wall-clock time of the last synchronized tick
 	var SETTLE_SAMPLES = 5;
-	var SETTLE_STDDEV_MS = 10;  // beat is steady (low jitter) ...
-	var SETTLE_MEAN_MS = 20;    // ... and centered on the second start
+	// "Settled" = at least half of the recent ticks landed within one ~30fps frame of
+	// the second boundary. Measured as MEDIAN absolute phase (robust to PSM-stall
+	// outliers, matching ProgrammableTimer's original median-drift design) — NOT
+	// std-dev, which a single dozing-radio tick inflates past any sane bar. 50ms ≈ 1.5
+	// frames at 30fps; the display can't render finer than its 33ms frame anyway, so a
+	// tighter bar gates on precision the wall can never show.
+	var SETTLE_TOL_MS = 50;
 
 	function recordTickPhase(currentTime) {
 		var ph = currentTime % 1000;
@@ -776,18 +741,42 @@
 		if (_phaseHistory.length > SETTLE_SAMPLES) { _phaseHistory.shift(); }
 	}
 
-	// "settled" = the synchronized beat has stopped wandering (low std dev) AND
-	// sits around the second start (mean near zero). Stricter than isSynced(),
-	// which only checks the tick isn't badly late.
-	function clockSettled() {
+	// Returns {n, mean, std, medAbs} of the recent tick phases, or null if too few
+	// samples. medAbs (median absolute phase) is the settle measure; mean/std are kept
+	// for ?tdbg observability only.
+	function phaseStats() {
 		var n = _phaseHistory.length, i, sum = 0;
-		if (n < SETTLE_SAMPLES) { return false; }
+		if (n < SETTLE_SAMPLES) { return null; }
 		for (i = 0; i < n; i++) { sum += _phaseHistory[i]; }
-		var mean = sum / n;
-		var sq = 0;
+		var mean = sum / n, sq = 0;
 		for (i = 0; i < n; i++) { var d = _phaseHistory[i] - mean; sq += d * d; }
-		var stddev = Math.sqrt(sq / n);
-		return (stddev <= SETTLE_STDDEV_MS) && (Math.abs(mean) <= SETTLE_MEAN_MS);
+		// Median of |phase|: a single dozing-radio tick is one huge outlier the median
+		// ignores (where std-dev/mean cannot). This is the robust "settled" measure.
+		var abs = [];
+		for (i = 0; i < n; i++) { abs.push(Math.abs(_phaseHistory[i])); }
+		abs.sort(function (a, b) { return a - b; });
+		var half = Math.floor(abs.length / 2);
+		var medAbs = (abs.length % 2) ? abs[half] : (abs[half - 1] + abs[half]) / 2;
+		return { n: n, mean: mean, std: Math.sqrt(sq / n), medAbs: medAbs };
+	}
+	// "settled" = at least half the recent ticks land within one ~30fps frame of the
+	// second boundary (median |phase| <= SETTLE_TOL_MS). Robust to PSM-stall outliers,
+	// mirroring ProgrammableTimer's original median-drift convergence.
+	function clockSettled() {
+		var s = phaseStats();
+		return !!s && (s.medAbs <= SETTLE_TOL_MS);
+	}
+	// The gate the coordinated-start play-release waits on. This is the ORIGINAL,
+	// field-proven drift-loop convergence flag: the ProgrammableTimer beat is firing at
+	// a regular ~1000ms cadence (median-drift corrected). That — not absolute whole-second
+	// phase alignment — is what keeps the wall in sync, since playback position derives
+	// from GoTime.now()-startEpoch (continuous) and every device shares the beat. On the
+	// PSM fleet isSynced() is 48/48 stable at idle, where the phase-alignment metrics
+	// (clockSettled/phMedAbs, kept for ?tdbg observability only) decay. The prec/accAge
+	// offset guard and the std-dev/median phase gate both gated the fleet to ~1/24 and
+	// are NOT used here. (GoTime.readyVerdict remains a unit-tested pure helper, unused.)
+	function clockReady() {
+		return ProgrammableTimer.isSynced();
 	}
 
 	// Restart the one-shot beat animation. Whoever calls this sets the pulse
@@ -943,6 +932,7 @@
 				// Phase 1 of coordinated start: buffer + HOLD frame 0, then report
 				// READY (or NEEDS_ARM). Do NOT start the clock — the GO (a PLAY with a
 				// future startEpoch) releases us at the shared instant.
+				if (playback.readyWaitTimer) { clearTimeout(playback.readyWaitTimer); playback.readyWaitTimer = null; }
 				blink = false;
 				exitCalibrateView();
 				hideBlackout();
@@ -950,6 +940,8 @@
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.active = false;
 				playback.paused = false;
+				playback.prepareId = data_obj.PAYLOAD.prepareId;
+				if (typeof GoTime.resync === 'function') { GoTime.resync(4, 400); }
 				dbg("recv-PREPARE");
 				prepareFirstItem(data_obj.PAYLOAD.prepareId);
 			}

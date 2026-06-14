@@ -198,17 +198,31 @@ class TestAssignPlaylist:
              "PAYLOAD": {"name": name, "displayID": display_id}}, _make_session()))
 
     def test_assign_ok_no_segment(self, mock_settings):
+        # PT-T5: FULL is renderable + render-gated. ASSIGN returns "ok" when the
+        # group is calibrated AND a READY registry entry exists for the playlist.
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
-        self._save(mock_settings, "Imgs", [
-            {"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
-             "playmode": "FULL", "backgroundColor": "#000000",
-             "startEffect": None, "endEffect": None}])
+        # Calibrate the display group (boundingBox + client with measuredPerimeter).
+        disp = mock_settings.displays["Default"]
+        disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"
+        c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = [0, 0, 10, 0, 10, 10, 0, 10]
+        mock_settings.clients["c1"] = c
+        # Save the FULL playlist so ASSIGN can find it.
+        items = [{"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
+                  "playmode": "FULL", "backgroundColor": "#000000",
+                  "startEffect": None, "endEffect": None}]
+        self._save(mock_settings, "Imgs", items, loop=False)
+        # Seed a READY registry entry with the correct render token so the gate passes.
+        elements = R._build_media_elements(items)
+        tok = R.render_token(elements, "Default")
+        R._set_render_state(disp, "Imgs", R.RENDER_READY, token=tok)
         resp = self._assign("Imgs")
         assert resp["PAYLOAD"]["status"] == "ok"
         assert len(mock_settings.displays["Default"].mediaElements) == 1
         assert mock_settings.displays["Default"].loop is False
-        assert mock_settings.displays["Default"].renderedToken == ""
 
     def test_assign_segment_not_calibrated(self, mock_settings):
         server.settings = mock_settings
@@ -222,11 +236,18 @@ class TestAssignPlaylist:
         assert resp["PAYLOAD"]["status"] == "NOT_CALIBRATED"
 
     def test_assign_segment_render_required(self, mock_settings):
+        # Updated for registry-based gating (Task 13): _group_is_calibrated needs
+        # a boundingBox AND a client with measuredPerimeter; is_playlist_ready checks
+        # the Display.renders registry (not the old renderedToken field directly).
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         disp.boundingBox = [[0, 0], [10, 0], [10, 10], [0, 10]]
-        disp.renderedToken = "stale"
+        # Add a calibrated client so _group_is_calibrated passes.
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+        mock_settings.clients["c1"] = c
+        # No registry READY entry → is_playlist_ready returns False → RENDER_REQUIRED
         self._save(mock_settings, "Seg", [
             {"id": "a", "file": "/media/server/videos/v.mp4", "duration": 5,
              "playmode": "SEGMENT", "backgroundColor": "#000000",
@@ -280,9 +301,13 @@ class TestDurationUnits:
         me = server.MediaElement(); me.duration = 596.5
         assert server._duration_ms(me) == 596500
 
-    def test_duration_ms_none_is_zero(self):
+    def test_duration_ms_none_resolves_to_default(self):
+        # Missing duration ("Auto") on a non-video item resolves to the 20s
+        # default — never 0. A 0-ms window silently skipped the item on the
+        # wall (synchronized playback needs the window upfront). See
+        # render.DEFAULT_ITEM_DURATION_S + test_item_duration.py.
         me = server.MediaElement(); me.duration = None
-        assert server._duration_ms(me) == 0
+        assert server._duration_ms(me) == 20000
 
     def test_payload_duration_is_milliseconds(self):
         me = server.MediaElement()

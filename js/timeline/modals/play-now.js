@@ -27,6 +27,10 @@ function sockReady(store) {
 
 export function firePlayNow(store, displayID, playlistName) {
   if (!sockReady(store)) return;
+  if (!store.isPlaylistReady(playlistName, displayID)) {
+    store.toast(`"${playlistName}" isn't rendered for "${displayID}" yet.`, 'error');
+    return;
+  }
   try {
     window.sock.send(window.generateMessage('SRV', 'ASSIGN_PLAYLIST', { displayID, name: playlistName }));
     window.sock.send(window.generateMessage('SRV', 'PLAY', { displayID }));
@@ -68,12 +72,23 @@ export function openPlayNowModal(store, displayID) {
       const li = document.createElement('li');
       const btn = document.createElement('button');
       btn.type = 'button';
+      const ready = store.isPlaylistReady(name, displayID);
       btn.className = 'btn mm-play-now-pick';
       btn.textContent = name;
-      btn.addEventListener('click', function () {
-        firePlayNow(store, displayID, name);
-        closeModal();
-      });
+      if (!ready) {
+        const entry = store.renderEntry(name, displayID);
+        const why = entry && entry.state === 'FAILED' ? 'render failed'
+          : entry && (entry.state === 'RENDERING' || entry.state === 'QUEUED') ? 'rendering…'
+          : 'not rendered for this group';
+        btn.disabled = true;
+        btn.title = why;
+        btn.textContent = `${name} — ${why}`;
+      } else {
+        btn.addEventListener('click', function () {
+          firePlayNow(store, displayID, name);
+          closeModal();
+        });
+      }
       li.appendChild(btn);
       ul.appendChild(li);
     }

@@ -9,6 +9,7 @@
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script> 
   <script src="/js/mosiacmesh.js"></script>
+  <script src="/js/animations.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
   <script>
     // Defer Alpine's auto-start so the ES module below can register the
@@ -419,7 +420,11 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .mm-track-name { font-weight: 600; }
 .mm-track-status { color: var(--text-muted); font-size: 11px; }
 .mm-status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; vertical-align:middle; margin-right:4px; }
-.mm-render-badge { color: var(--warn); font-size: 10px; margin-left: 6px; }
+.mm-render-badge { font-size: 0.8em; padding: 0 .4em; border-radius: 3px; margin-left: .4em; color: var(--warn); }
+.mm-render-badge.is-ready { color: var(--ok); }
+.mm-render-badge.is-pending { color: var(--warn); }
+.mm-playlist-render { font-size: 0.8em; color: var(--text-muted); margin-left: .5em; }
+.mm-playlist-retry { font-size: 0.8em; margin-left: .4em; }
 /* PR-4b: drop target overlay for drag-playlist→create-schedule. Sits in
    the same grid cell as any clips on that track row; clips are emitted
    AFTER the droparea so they paint on top. During an in-flight playlist
@@ -489,10 +494,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-clip-stripe-vertical { top: auto; bottom: auto; left: 0; right: 0; }
 .mm-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 0; flex-wrap: wrap; }
 .mm-toolbar-date { font-weight: 600; min-width: 220px; text-align: center; }
-/* PR-13: scope selector sits between "Fleet:" label and action buttons.
-   Compact so it doesn't push the action row off-screen on narrower
-   viewports — the dropdown only needs to show short displayIDs. */
-.mm-fleet-scope { font-size: 12px; padding: 2px 4px; min-width: 80px; max-width: 160px; }
 .btn-active { background: var(--accent, #345); color: white; }
 .mm-toast-stack { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 1000; max-width: 360px; }
 /* PR-4b T13: recurrence popover. Floats anchored under a clip; click
@@ -536,41 +537,32 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-form-row { grid-column: 1 / -1; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12px; }
 .mm-form-row label { flex-direction: row; gap: 4px; }
 .mm-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 12px; }
-/* PR-17: horizontal-ribbon playlist editor (.mm-plr*). Replaces the
-   per-item form modal. Items render as fixed-height clips sized by
-   duration; sidebar form below edits the selected item. */
-.mm-plr { display: flex; flex-direction: column; gap: 10px; min-width: 720px; }
-.mm-plr-toolbar { display: flex; align-items: center; gap: 12px; font-size: 12px; }
-.mm-plr-summary { color: var(--text-muted, #888); }
-.mm-plr-ribbon-scroll { overflow-x: auto; padding-bottom: 4px; border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; background: rgba(0,0,0,0.15); }
-.mm-plr-ribbon { display: flex; gap: 4px; list-style: none; margin: 0; padding: 6px; min-height: 64px; min-width: 100%; box-sizing: border-box; }
-.mm-plr-clip { position: relative; flex: 0 0 auto; height: 56px; padding: 4px 8px; background: var(--accent, #345); color: white; border-radius: 4px; cursor: grab; user-select: none; outline: 2px solid transparent; transition: outline-color 60ms; overflow: hidden; }
-.mm-plr-clip:active { cursor: grabbing; }
-.mm-plr-clip-selected { outline-color: var(--warn, #fc6); outline-offset: -2px; }
-.mm-plr-clip-dragging { opacity: 0.4; }
-.mm-plr-clip-title { font-weight: 500; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-plr-clip-dur { font-size: 10px; color: rgba(255,255,255,0.7); }
-.mm-plr-resize-handle { position: absolute; top: 0; right: 0; bottom: 0; width: 10px; cursor: ew-resize; background: transparent; z-index: 2; }
-.mm-plr-resize-handle:hover { background: rgba(255,255,255,0.15); }
-.mm-plr-empty { color: var(--text-muted, #888); font-style: italic; padding: 16px; flex: 1 0 auto; text-align: center; }
-.mm-plr-sidebar { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; }
-.mm-plr-sidebar-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 12px; }
-.mm-plr-remove { font-size: 11px; padding: 2px 8px; }
-/* PR-18: video-length hint under the duration field. */
-.mm-plr-duration-hint { display: block; margin-top: 2px; color: var(--text-muted, #888); font-size: 10px; }
-/* PR-18: in-modal media picker. Operators can't reach the bin behind
-   the modal; picker exposes the same library inline. */
-.mm-plr-picker { border: 1px solid rgba(255,255,255,0.08); border-radius: 4px; padding: 8px; background: rgba(0,0,0,0.12); }
-.mm-plr-picker-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; font-size: 12px; }
-.mm-plr-picker-search { flex: 1; font-size: 11px; padding: 2px 4px; }
-.mm-plr-picker-list { list-style: none; margin: 0; padding: 0; max-height: 140px; overflow-y: auto; }
-.mm-plr-picker-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center; padding: 3px 4px; font-size: 11px; cursor: default; }
-.mm-plr-picker-row:hover { background: rgba(255,255,255,0.05); }
-.mm-plr-picker-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-plr-picker-meta { color: var(--text-muted, #888); font-size: 10px; }
-.mm-plr-picker-add { background: transparent; border: 1px solid rgba(255,255,255,0.18); color: var(--text, #eee); padding: 0 6px; cursor: pointer; border-radius: 3px; }
-.mm-plr-picker-add:hover { background: rgba(255,255,255,0.08); }
-.mm-plr-picker-empty { color: var(--text-muted, #888); font-size: 11px; padding: 8px 4px; font-style: italic; }
+.mm-btn-danger { background: var(--err); color: #fff; border-color: var(--err); }
+.mm-btn-danger:hover { filter: brightness(1.08); }
+/* Vertical-list playlist editor (.mm-ple*). Replaces the PR-17 ribbon.
+   Items render top-to-bottom; click a row to edit it in the settings
+   box; "+ Add content" opens an inline picker (media + animations). */
+.mm-ple-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.mm-ple-list { list-style:none; padding:0; margin:0 0 12px; max-height:40vh; overflow-y:auto; }
+.mm-ple-row { display:flex; align-items:center; gap:8px; padding:8px; background:var(--surface-2); border:1px solid var(--border); border-radius:6px; margin-bottom:6px; cursor:pointer; }
+.mm-ple-row.sel { border-color:var(--accent); }
+.mm-ple-grip { cursor:grab; color:var(--text-muted); }
+.mm-ple-ic { width:18px; text-align:center; }
+.mm-ple-nm { flex:1; font-size:13px; }
+.mm-ple-dur { font-size:11px; color:var(--text-muted); }
+.mm-ple-del { border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:15px; }
+.mm-ple-settings { display:flex; gap:12px; flex-wrap:wrap; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; margin-bottom:10px; }
+.mm-ple-settings label { font-size:12px; display:flex; flex-direction:column; gap:3px; }
+.mm-ple-hint { font-size: 10px; color: var(--text-muted); }
+.mm-ple-add { width:100%; border:1px dashed var(--accent); color:var(--accent); background:none; border-radius:6px; padding:9px; }
+.mm-ple-picker { border:1px solid var(--border); border-radius:6px; padding:10px; margin-top:8px; }
+.mm-ple-picker-filters { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+.mm-ple-picker-filters button { font-size:11px; padding:2px 9px; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; }
+.mm-ple-picker-filters button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.mm-ple-picker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:8px; max-height:240px; overflow-y:auto; }
+.mm-ple-picktile { display:flex; flex-direction:column; gap:4px; align-items:center; font-size:10px; padding:8px 4px; border:1px solid var(--border); border-radius:6px; background:var(--surface-2); color:var(--text); cursor:pointer; }
+.mm-ple-picktile.kind-animation { border-color:#9a7bff; }
+.mm-ple-picktile span:first-child { font-size:18px; }
 .mm-recurrence-preview { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; font-size: 11px; }
 .mm-recurrence-preview ol { margin: 6px 0 0 18px; padding: 0; }
 .mm-recurrence-preview li { padding: 2px 0; }
@@ -586,26 +578,6 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-context-menu li:hover { background: rgba(255,255,255,0.08); }
 .mm-context-menu li.mm-context-divider { padding: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 2px 0; pointer-events: none; }
 .mm-context-menu li.mm-context-danger { color: var(--err, #f88); }
-/* PR-4c gap-fix: track-header popover for per-client profile override (spec §362). */
-.mm-thp { position: fixed; z-index: 1600; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 8px 10px; min-width: 280px; max-width: 400px; max-height: 60vh; overflow-y: auto; box-shadow: 0 4px 20px rgba(0,0,0,0.5); font-size: 12px; }
-.mm-thp-header { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px solid rgba(255,255,255,0.08); }
-.mm-thp-header strong { font-size: 12px; }
-.mm-thp-hint { color: var(--text-muted, #888); font-size: 10px; }
-.mm-thp-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 0; }
-.mm-thp-list { list-style: none; margin: 0; padding: 0; }
-/* PR-14: 4-column row, PR-15 prefixed with a checkbox column — checkbox | name | (deviceType) | profile-select | group-select. */
-.mm-thp-list li { display: grid; grid-template-columns: auto 1fr auto auto auto; gap: 6px; align-items: center; padding: 4px 0; }
-.mm-thp-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.mm-thp-meta { color: var(--text-muted, #888); font-size: 10px; }
-.mm-thp-list select { font-size: 11px; padding: 2px 4px; max-width: 110px; }
-.mm-thp-list select.mm-thp-group { border-color: rgba(255,255,255,0.18); }
-/* PR-15: select-all + count tools above the list. */
-.mm-thp-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0 6px; border-bottom: 1px dashed rgba(255,255,255,0.08); margin-bottom: 4px; font-size: 11px; }
-.mm-thp-count { color: var(--text-muted, #888); }
-/* PR-15: bulk-move footer bar, visible when ≥1 row is selected. */
-.mm-thp-bulkbar { display: none; align-items: center; gap: 8px; padding-top: 8px; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.08); }
-.mm-thp-bulk-count { font-size: 11px; font-weight: 600; }
-.mm-thp-bulk-target { font-size: 11px; padding: 2px 4px; flex: 1; }
 .mm-track-header { cursor: pointer; }
 .mm-timeline-layout { display: flex; gap: 12px; }
 .mm-bin { width: 200px; flex: 0 0 200px; }
@@ -681,6 +653,139 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
   .navitem .ni-ic { margin-right: 0; display: block; font-size: 18px; }
   .main { padding-bottom: 64px; }
 }
+
+.mm-content-subtabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px; }
+.mm-content-subtabs button { background:none; border:none; color:var(--text-muted); padding:8px 14px; border-bottom:2px solid transparent; cursor:pointer; }
+.mm-content-subtabs button.on { color:var(--text); font-weight:600; border-bottom-color:var(--accent); }
+.mm-content-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+.mm-content-filters { display:flex; gap:6px; flex-wrap:wrap; }
+.mm-content-filters button { font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; }
+.mm-content-filters button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.mm-content-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; }
+.mm-content-tile { position:relative; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px 8px; text-align:center; }
+.mm-content-tile.kind-animation { border-color:#9a7bff; }
+.mm-tile-ic { display:block; font-size:22px; margin-bottom:6px; }
+.mm-tile-name { font-size:11px; word-break:break-all; }
+.mm-tile-del { position:absolute; top:4px; right:4px; border:none; background:rgba(0,0,0,.4); color:#fff; border-radius:50%; width:18px; height:18px; line-height:16px; cursor:pointer; opacity:0; }
+.mm-content-tile:hover .mm-tile-del { opacity:1; }
+.mm-content-empty { color:var(--text-muted); padding:24px; text-align:center; }
+.mm-playlist-list { list-style:none; padding:0; margin:0; }
+.mm-playlist-row { display:flex; align-items:center; gap:10px; padding:8px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px; }
+.mm-playlist-name { flex:1; text-align:left; background:none; border:none; color:var(--text); font-size:14px; cursor:pointer; }
+.mm-playlist-meta { font-size:11px; color:var(--text-muted); }
+.mm-playlist-del { border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:16px; }
+
+/* ---- Section 3: mobile Schedule stack ---- */
+.mm-schedule-mobile { padding-bottom:88px; }
+.mm-sched-mobile-toolbar { display:flex; align-items:center; gap:6px; padding:8px 0; flex-wrap:wrap; }
+.mm-density-toggle { display:inline-flex; gap:2px; }
+.mm-sched-group { max-width:46vw; }
+.mm-sched-mobile-datenav { display:flex; align-items:center; gap:8px; padding:4px 0 10px; }
+.mm-sched-mobile-datenav .mm-toolbar-date { flex:1; text-align:center; font-weight:600; }
+.mm-sched-fab { position:fixed; right:16px; bottom:76px; z-index:50; border-radius:22px; padding:10px 18px; box-shadow:0 3px 10px rgba(0,0,0,.35); font-weight:600; }
+
+/* Agenda (Day + day-sectioned Week) */
+.mm-agenda { display:flex; flex-direction:column; gap:14px; }
+.mm-agenda-group { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); overflow:hidden; }
+.mm-agenda-group-title { margin:0; padding:8px 12px; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); background:rgba(127,127,127,.08); border-bottom:1px solid var(--border); }
+.mm-agenda-day-header { margin:16px 0 6px; padding:6px 4px; font-size:13px; font-weight:700; color:var(--text); border-bottom:2px solid var(--accent); position:sticky; top:0; background:var(--bg); z-index:1; }
+.mm-agenda-empty { padding:10px 12px; color:var(--text-muted); font-size:12px; font-style:italic; }
+.mm-agenda-row { padding:9px 12px; border-bottom:1px solid var(--border); cursor:pointer; }
+.mm-agenda-group .mm-agenda-row:last-child { border-bottom:none; }
+.mm-agenda-row:active { background:rgba(127,127,127,.10); }
+.mm-agenda-row.mm-agenda-now { background:color-mix(in srgb, var(--warn) 14%, transparent); }
+.mm-agenda-main { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size:14px; }
+.mm-agenda-ic { opacity:.8; }
+.mm-agenda-time { font-variant-numeric:tabular-nums; color:var(--text-muted); font-size:13px; }
+.mm-agenda-name { font-weight:600; }
+.mm-agenda-live { font-size:10px; font-weight:700; color:#fff; background:var(--warn); border-radius:8px; padding:1px 6px; }
+.mm-agenda-conflict { font-size:10px; font-weight:700; color:#fff; background:var(--err); border-radius:8px; padding:1px 6px; }
+.mm-agenda-recur { font-size:11px; color:var(--text-muted); }
+.mm-agenda-spark { display:flex; gap:1px; height:5px; margin-top:6px; border-radius:3px; overflow:hidden; }
+.mm-agenda-seg { display:block; height:100%; }
+
+/* Vertical day timeline */
+.mm-vt { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); margin-top:4px; }
+.mm-vt-hour { border-top:1px solid var(--border); box-sizing:border-box; left:0; right:0; }
+.mm-vt-hour:first-child { border-top:none; }
+.mm-vt-label { position:absolute; left:4px; top:1px; font-size:10px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.mm-vt-block { background:var(--accent); color:#fff; border-radius:5px; padding:3px 6px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.3); cursor:pointer; box-sizing:border-box; }
+.mm-vt-block-now { outline:2px solid var(--warn); }
+.mm-vt-block-name { display:block; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mm-vt-block-time { display:block; font-size:10px; opacity:.85; }
+.mm-vt-nowline { height:2px; background:var(--err); z-index:3; }
+
+/* ---- Section 4: Fleet ---- */
+.mm-fleet { display:flex; gap:14px; align-items:flex-start; }
+.mm-fleet-list { flex:0 0 38%; max-width:380px; }
+.mm-fleet-list-head { display:flex; align-items:center; gap:6px; padding:4px 0 8px; }
+.mm-fleet-list-title { font-weight:700; }
+.mm-fleet-groups { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.mm-fleet-group { display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); cursor:pointer; }
+.mm-fleet-group.sel { outline:2px solid var(--accent); }
+.mm-fleet-group-name { flex:1; font-weight:600; }
+.mm-fleet-group-badges { display:flex; align-items:center; gap:6px; font-size:12px; }
+.mm-fleet-online { color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.mm-fleet-badge.playing { color:var(--ok); }
+.mm-fleet-badge.calibrated { color:var(--ok); }
+.mm-fleet-empty { color:var(--text-muted); font-style:italic; padding:10px; }
+.mm-fleet-detail { flex:1; min-width:0; }
+.mm-fleet-detail-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.mm-fleet-detail-name { margin:0; font-size:18px; }
+.mm-fleet-statusline { color:var(--text-muted); font-size:13px; margin-bottom:12px; }
+.mm-fleet-cards { display:flex; flex-direction:column; gap:12px; }
+.mm-fleet-card { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); padding:10px 12px; }
+.mm-fleet-card-title { margin:0 0 8px; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
+.mm-fleet-card-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.mm-fleet-calib { color:var(--text-muted); font-size:13px; }
+.mm-fleet-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.mm-fleet-card-head .mm-fleet-card-title { margin:0; }
+.mm-fleet-selbtn { font-size:12px; padding:3px 10px; }
+.mm-fleet-selall { display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-bottom:8px; }
+.mm-fleet-devices { list-style:none; margin:0; padding:0; }
+.mm-fleet-device { border-bottom:1px solid var(--border); }
+.mm-fleet-device:last-child { border-bottom:none; }
+.mm-fleet-dev-row { display:flex; align-items:center; gap:9px; padding:10px 4px; font-size:14px; cursor:pointer; }
+.mm-fleet-dev-row:active { background:rgba(127,127,127,.08); }
+.mm-fleet-dev-dot { width:9px; height:9px; border-radius:50%; background:#888; flex:0 0 auto; }
+.mm-fleet-dev-dot.online { background:var(--ok); }
+.mm-fleet-dev-name { flex:1; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mm-fleet-dev-type { color:var(--text-muted); font-size:12px; flex:0 0 auto; }
+.mm-fleet-dev-chev { color:var(--text-muted); font-size:12px; flex:0 0 auto; width:14px; text-align:center; }
+.mm-dev-cache { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--text-muted); margin-left:auto; }
+.mm-dev-cache-bar { position:relative; width:46px; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+.mm-dev-cache-fill { position:absolute; top:0; bottom:0; left:0; height:100%; background:#2e7d32; transition:width 250ms ease-out; }
+.mm-dev-cache.inflight .mm-dev-cache-fill { background:#81c784; }
+.mm-dev-cache.stalled .mm-dev-cache-fill { background:#d32f2f; }
+.mm-dev-cache.stalled .mm-dev-cache-pct { color:#d32f2f; font-weight:600; }
+.mm-dev-cache-detail { display:flex; justify-content:space-between; }
+.mm-fleet-dev-panel { display:flex; flex-direction:column; gap:8px; padding:4px 4px 12px 22px; }
+.mm-fleet-dev-field { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
+.mm-fleet-dev-field select { flex:1; min-width:0; }
+.mm-fleet-selbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 10px; margin-bottom:8px; background:var(--bg-elev); border:1px solid var(--accent); border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.18); }
+.mm-fleet-selcount { font-weight:700; font-size:13px; }
+.mm-fleet-selact { display:inline-flex; align-items:center; gap:5px; }
+.mm-fleet-selact select { font-size:13px; max-width:42vw; }
+/* Mobile: list is full-width; detail becomes a full-screen sheet. */
+@media (max-width:759px){
+  .mm-fleet { flex-direction:column; }
+  .mm-fleet-list { flex:1 1 auto; max-width:none; }
+  /* padding-bottom clears the fixed bottom nav bar (.sidebar, z-index 1200,
+     ~64px) which sits ABOVE this sheet (z-index 60) — without it the last
+     device row hides behind the bar and can't be scrolled into view. */
+  .mm-fleet-detail.mm-fleet-sheet { position:fixed; inset:0; z-index:60; background:var(--bg); overflow:auto; padding:14px 14px 76px; }
+}
+
+/* ---- Global Render Status panel (Task 20) ---- */
+.mm-render-status { position: relative; }
+.mm-render-status-toggle { font:inherit; border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:var(--radius); padding:4px 10px; cursor:pointer; font-size:12px; }
+.mm-render-status-toggle:hover { border-color:var(--accent); }
+.mm-render-status-drawer { position: absolute; right: 0; top: calc(100% + 4px); background: var(--bg-elev); border: 1px solid var(--border); padding: .5em .75em; min-width: 280px; max-height: 50vh; overflow: auto; z-index: 120; box-shadow: var(--shadow); border-radius: var(--radius); }
+.mm-render-status-drawer h4 { margin: 0 0 .4em; font-size: 12px; color: var(--text-muted); }
+.mm-render-status-drawer ul { list-style: none; margin: 0; padding: 0; }
+.mm-render-status-drawer li { padding: .25em 0; border-bottom: 1px solid var(--border); font-size: .85em; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mm-render-status-drawer li:last-child { border-bottom: none; }
+.mm-render-status-drawer p { margin: 0; font-size: .85em; color: var(--text-muted); }
   </style>
 </head>
 <body>
@@ -697,6 +802,28 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
     <span class="dot" id="connDot" :class="{ on: $store.mm.connection.connected }"></span>
     <span id="connText" class="size" x-text="$store.mm.connection.connected ? ('connected · ' + $store.mm.connection.onlineClients + ' online') : 'connecting…'"></span>
     <span class="spacer"></span>
+    <!-- Task 20: Global Render Status panel — visible across all tabs whenever
+         renders are active or queued. Binds to $store.mm which is global. -->
+    <div class="mm-render-status" x-data x-show="$store.mm.rendersList.length || $store.mm.renderQueueDepth" @click.outside="$store.mm.renderPanelOpen = false">
+      <button class="mm-render-status-toggle" @click="$store.mm.renderPanelOpen = !$store.mm.renderPanelOpen"
+              x-text="'▣ ' + ($store.mm.rendersList.length + $store.mm.renderQueueDepth) + ' rendering…'"></button>
+      <div class="mm-render-status-drawer" x-show="$store.mm.renderPanelOpen">
+        <h4>Render status</h4>
+        <template x-if="!$store.mm.rendersList.length"><p>All renders up to date.</p></template>
+        <ul>
+          <template x-for="r in $store.mm.rendersList" :key="r.displayID + ':' + r.playlist">
+            <li>
+              <span x-text="r.playlist"></span>
+              <span style="color:var(--text-muted)">·</span>
+              <span x-text="r.displayID" style="color:var(--text-muted)"></span>
+              <progress x-show="r.state==='RENDERING'" :value="r.percent || 0" max="100" style="width:60px"></progress>
+              <span x-text="r.state + (r.percent!=null ? ' '+r.percent+'%' : '') + (r.eta!=null ? ' · ~'+r.eta+'s' : '')" style="color:var(--text-muted);font-size:0.8em"></span>
+              <button class="btn" style="font-size:0.8em;padding:2px 7px" x-show="r.state==='FAILED'" @click="$store.mm.retryRenderGroup(r.playlist, r.displayID)">Retry</button>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
     <button class="btn btn-ghost" id="themeToggle" type="button">🌙 Theme</button>
   </div>
   <div class="shell">
@@ -734,34 +861,64 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
           <p class="now-empty" x-show="$store.mm.nowCards.length===0">No display groups yet.</p>
         </div>
       </section>
-      <section class="section" data-route="content" x-show="$store.mm.activeTab==='content'">
-        <div class="placeholder-tab">Content — coming soon.</div>
+      <section class="section" data-route="content" x-show="$store.mm.activeTab==='content'" x-data="mmContent">
+        <div class="mm-content-subtabs">
+          <button :class="{on: subview==='library'}" @click="subview='library'">Library</button>
+          <button :class="{on: subview==='playlists'}" @click="subview='playlists'">Playlists</button>
+        </div>
+
+        <!-- Library -->
+        <div x-show="subview==='library'">
+          <div class="mm-content-toolbar">
+            <div class="mm-content-filters">
+              <button :class="{on: filter==='all'}" @click="filter='all'">All</button>
+              <button :class="{on: filter==='image'}" @click="filter='image'">Images</button>
+              <button :class="{on: filter==='video'}" @click="filter='video'">Videos</button>
+              <button :class="{on: filter==='animation'}" @click="filter='animation'">Animations</button>
+            </div>
+            <label class="btn btn-primary mm-upload-label">+ Upload
+              <input type="file" accept="image/*,video/*" multiple style="display:none" @change="uploadFiles($event)">
+            </label>
+          </div>
+          <div class="mm-content-grid">
+            <template x-for="it in items" :key="it.kind + ':' + it.ref">
+              <div class="mm-content-tile" :class="'kind-' + it.kind">
+                <span class="mm-tile-ic" x-text="iconFor(it.kind)"></span>
+                <span class="mm-tile-name" x-text="it.name"></span>
+                <button class="mm-tile-del" x-show="it.kind!=='animation'" @click="removeItem(it)" title="Delete">×</button>
+              </div>
+            </template>
+            <p class="mm-content-empty" x-show="items.length===0">Nothing here yet.</p>
+          </div>
+        </div>
+
+        <!-- Playlists -->
+        <div x-show="subview==='playlists'">
+          <div class="mm-content-toolbar">
+            <button class="btn btn-primary" @click="newPlaylist()">+ New playlist</button>
+          </div>
+          <ul class="mm-playlist-list">
+            <template x-for="p in playlists" :key="p.name">
+              <li class="mm-playlist-row">
+                <button class="mm-playlist-name" @click="edit(p.name)" x-text="p.name"></button>
+                <span class="mm-playlist-meta" x-text="(p.items?.length || 0) + ' items'"></span>
+                <span class="mm-playlist-render" x-show="playlistRenderSummary(p.name).total"
+                      x-text="'rendered ' + playlistRenderSummary(p.name).ready + '/' + playlistRenderSummary(p.name).total"></span>
+                <button class="mm-playlist-retry" x-show="playlistRenderSummary(p.name).failed.length"
+                        @click="retryRender(p.name)" title="Retry failed renders">Retry ⚠</button>
+                <button class="mm-playlist-del" @click="deletePlaylist(p.name)" title="Delete">×</button>
+              </li>
+            </template>
+            <p class="mm-content-empty" x-show="playlists.length===0">No playlists yet.</p>
+          </ul>
+        </div>
       </section>
       <section class="section" data-route="schedule" x-data="{}" x-show="$store.mm.activeTab==='schedule'">
         <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
         <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
 
-        <div x-show="$store.mm.hydrated" class="mm-timeline-layout">
+        <div x-show="$store.mm.hydrated && !$store.mm.isMobile" class="mm-timeline-layout">
           <aside class="mm-bin">
-            <div x-data="mmMediaBin" class="mm-bin-section">
-              <div class="mm-bin-title">Media (<span x-text="filtered().length"></span>)</div>
-              <input class="input" type="text" x-model="search" placeholder="Search…" />
-              <button class="btn btn-ghost" id="mmUploadBtn" type="button" style="margin-top:6px; width: 100%;">+ Upload</button>
-              <ul class="mm-bin-list">
-                <template x-for="it in filtered()" :key="it.url">
-                  <li class="mm-bin-item mm-bin-item-deletable"
-                      draggable="true"
-                      @dragstart="dragStart(it, $event)"
-                      @dragend="dragEnd()">
-                    <span x-text="it.name" style="flex:1; overflow:hidden; text-overflow:ellipsis;"></span>
-                    <span class="size" style="color:var(--text-muted)" x-text="it.duration ? ' ' + it.duration + 's' : ''"></span>
-                    <button type="button" class="mm-bin-delete" title="Delete media"
-                            @click="remove(it, $event)"
-                            @mousedown.stop @dragstart.stop.prevent>×</button>
-                  </li>
-                </template>
-              </ul>
-            </div>
             <div x-data="mmPlaylistBin" class="mm-bin-section">
               <div class="mm-bin-title">Playlists</div>
               <ul class="mm-bin-list">
@@ -784,6 +941,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
               <span class="mm-toolbar-date" x-text="formatDate()"></span>
               <button class="btn btn-ghost" @click="step(1)">▶</button>
               <button class="btn btn-ghost" @click="today()">Today</button>
+              <button class="btn btn-primary" @click="openCreateSchedule()" title="Schedule a playlist on a group">+ Schedule</button>
 
               <template x-if="$store.mm.viewMode !== 'day'">
                 <select class="input" :value="$store.mm.selectedDisplay"
@@ -794,49 +952,38 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                 </select>
               </template>
 
-              <span style="flex:1"></span>
-              <span class="size" style="color:var(--text-muted)">Fleet:</span>
-              <select class="input mm-fleet-scope" x-model="fleetScope"
-                      :title="fleetScope ? 'Fleet actions scoped to ' + fleetScope : 'Fleet actions target every device'">
-                <option value="">All devices</option>
-                <template x-for="id in availableDisplayIds" :key="id">
-                  <option :value="id" x-text="id"></option>
-                </template>
-              </select>
-              <button class="btn btn-ghost" @click="fleetAction('login')"  title="Wake + unlock the scoped devices (SSH)">🔓</button>
-              <button class="btn btn-ghost" @click="fleetAction('start')"  title="Open the display page on the scoped devices">▶</button>
-              <button class="btn btn-ghost" @click="fleetAction('stop')"   title="Close the display on the scoped devices">⏹</button>
-              <button class="btn btn-ghost" @click="fleetAction('reboot')" title="Reboot the scoped devices">⟲</button>
-              <button class="btn btn-ghost" @click="fleetAction('test')"   title="Open in diagnostics (?tdbg) on the scoped devices">🐞</button>
-                <button class="btn btn-ghost" type="button" @click="openProfileEditor()" title="Edit profiles">⚙ Profiles</button>
-                <button class="btn btn-ghost" type="button" @click="openCalibration()" title="Display calibration">🎯 Calibrate</button>
-                <button class="btn btn-ghost" type="button" @click="addDisplayGroup()" title="Create a new display group">+ Group</button>
             </div>
             <div x-data="mmTimeline" x-html="render()"></div>
           </div>
         </div>
-        <div x-data="mmToast" class="mm-toast-stack" x-show="items.length > 0">
-          <template x-for="t in items" :key="t.id">
-            <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
-          </template>
-        </div>
-        <!-- PR-4b T12: hidden file picker driven by the + Upload button in the media bin. -->
-        <input type="file" id="mmUploadInput" multiple accept="image/*,video/*" style="display:none">
-        <!-- PR-4c: single host element for all modals. modal-shell.js
-             appends an overlay+dialog and removes it on close. -->
-        <div id="mmModalHost"></div>
-        <!-- PR-4c: context menu overlay. context-menu.js positions this
-             at the cursor + populates items. -->
-        <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
-        <!-- PR-4c gap-fix (spec §362): per-client profile override
-             popover anchored under a clicked track header. -->
-        <div id="mmTrackHeaderPopover" class="mm-thp" style="display:none"></div>
-        <!-- PR-25: drag start-time marker. A vertical accent-coloured
-             line + HH:MM label that follows the SNAPPED start position
-             during a clip-move or playlist-to-track drag. Drag handlers
-             move it in dragover; dragend / drop hide it. -->
-        <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
-          <div class="mm-drag-start-marker-label">00:00</div>
+
+        <!-- Mobile: agenda / vertical / week / month stack (Section 3) -->
+        <div x-show="$store.mm.hydrated && $store.mm.isMobile" x-data="mmScheduleMobile" class="mm-schedule-mobile">
+          <div class="mm-sched-mobile-toolbar">
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='day'}"   @click="$store.mm.setViewMode('day')">Day</button>
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='week'}"  @click="$store.mm.setViewMode('week')">Week</button>
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='month'}" @click="$store.mm.setViewMode('month')">Month</button>
+            <span style="flex:1"></span>
+            <template x-if="$store.mm.viewMode==='day'">
+              <span class="mm-density-toggle">
+                <button class="btn btn-ghost" :class="{'btn-active': density==='agenda'}"   @click="setDensity('agenda')" title="Agenda list">☰</button>
+                <button class="btn btn-ghost" :class="{'btn-active': density==='vertical'}" @click="setDensity('vertical')" title="Day timeline">▤</button>
+              </span>
+            </template>
+            <template x-if="$store.mm.viewMode==='month' || ($store.mm.viewMode==='day' && density==='vertical')">
+              <select class="input mm-sched-group" @change="setSelGroup($event.target.value)" title="Display group">
+                <template x-for="id in tracks" :key="id"><option :value="id" :selected="id === selGroupResolved" x-text="id"></option></template>
+              </select>
+            </template>
+          </div>
+          <div class="mm-sched-mobile-datenav" x-data="mmToolbar">
+            <button class="btn btn-ghost" @click="step(-1)">◀</button>
+            <span class="mm-toolbar-date" x-text="formatDate()"></span>
+            <button class="btn btn-ghost" @click="step(1)">▶</button>
+            <button class="btn btn-ghost" @click="today()">Today</button>
+          </div>
+          <div x-html="render()"></div>
+          <button class="btn btn-primary mm-sched-fab" @click="openCreate()" title="Schedule a playlist">+ Schedule</button>
         </div>
 
       </section>
@@ -847,12 +994,193 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
            Console section was removed and the shell became the four
            destinations Now / Content / Schedule / Fleet. The timeline
            markup was relocated under data-route="schedule" (above) so
-           mmTimeline/mmToolbar/mmMediaBin/mmPlaylistBin still mount. -->
+           mmTimeline/mmToolbar/mmPlaylistBin still mount. -->
 
-      <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'">
-        <div class="placeholder-tab">Fleet — coming soon.</div>
+      <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'" x-data="mmFleet">
+        <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
+        <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
+        <div x-show="$store.mm.hydrated" class="mm-fleet">
+          <aside class="mm-fleet-list" x-show="!$store.mm.isMobile || selectedGroupId===null">
+            <div class="mm-fleet-list-head">
+              <span class="mm-fleet-list-title">Groups</span>
+              <span style="flex:1"></span>
+              <button class="btn btn-ghost" @click="openProfiles()" title="Edit device profiles">⚙ Profiles</button>
+              <button class="btn btn-primary" @click="newGroup()">+ New group</button>
+            </div>
+            <ul class="mm-fleet-groups">
+              <template x-for="g in groups" :key="g.displayID">
+                <li class="mm-fleet-group" :class="{'sel': g.displayID===selectedGroupId}" @click="selectGroup(g.displayID)">
+                  <span class="mm-fleet-group-name" x-text="g.displayID"></span>
+                  <span class="mm-fleet-group-badges">
+                    <span class="mm-fleet-online" x-text="statusFor(g).online + '/' + statusFor(g).total"></span>
+                    <template x-if="statusFor(g).playing"><span class="mm-fleet-badge playing" title="Playing">▶</span></template>
+                    <template x-if="statusFor(g).rendering"><span class="mm-fleet-badge rendering" title="Rendering">⟳</span></template>
+                    <template x-if="calibrationFor(g).total>0 && calibrationFor(g).calibratedCount===calibrationFor(g).total"><span class="mm-fleet-badge calibrated" title="Calibrated">✓</span></template>
+                  </span>
+                </li>
+              </template>
+              <template x-if="groups.length===0">
+                <li class="mm-fleet-empty">No display groups yet. Create one with "+ New group".</li>
+              </template>
+            </ul>
+          </aside>
+          <section class="mm-fleet-detail" x-show="selectedGroup" :class="{'mm-fleet-sheet': $store.mm.isMobile}">
+            <template x-if="selectedGroup">
+              <div>
+                <div class="mm-fleet-detail-head">
+                  <button class="btn btn-ghost mm-fleet-back" x-show="$store.mm.isMobile" @click="backToList()">‹ Fleet</button>
+                  <h2 class="mm-fleet-detail-name" x-text="selectedGroup.displayID"></h2>
+                  <span style="flex:1"></span>
+                  <button class="btn mm-btn-danger" @click="deleteGroup()">Delete group</button>
+                </div>
+                <div class="mm-fleet-statusline">
+                  <span x-text="statusFor(selectedGroup).online + '/' + statusFor(selectedGroup).total + ' online'"></span>
+                  <template x-if="statusFor(selectedGroup).playing"><span> · ▶ <span x-text="statusFor(selectedGroup).playlistName || 'playing'"></span></span></template>
+                  <template x-if="!statusFor(selectedGroup).playing"><span> · idle</span></template>
+                </div>
+                <div class="mm-fleet-cards">
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Playback</h3>
+                    <div class="mm-fleet-card-actions">
+                      <button class="btn btn-primary" @click="playNow()">▶ Play now</button>
+                      <button class="btn" @click="stopNow()">⏹ Stop</button>
+                      <button class="btn" @click="reloadGroup()" title="Reload the display page on every device in this group">↻ Reload</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card mm-fleet-render-readiness" x-show="selectedGroupId">
+                    <h3 class="mm-fleet-card-title">Rendered content</h3>
+                    <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;">
+                      <template x-for="r in playlistReadiness" :key="r.name">
+                        <li style="display:flex;align-items:center;gap:8px;font-size:13px;">
+                          <span x-text="r.name"></span>
+                          <span class="mm-render-badge" :class="r.ready ? 'is-ready' : 'is-pending'" x-text="r.label"></span>
+                        </li>
+                      </template>
+                      <template x-if="playlistReadiness.length===0">
+                        <li style="color:var(--text-muted);font-style:italic;">No playlists defined.</li>
+                      </template>
+                    </ul>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Calibration</h3>
+                    <div class="mm-fleet-card-actions">
+                      <span class="mm-fleet-calib" x-text="calibrationFor(selectedGroup).calibratedCount + '/' + calibrationFor(selectedGroup).total + ' calibrated'"></span>
+                      <button class="btn" @click="calibrate()">🎯 Calibrate…</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Device scripts</h3>
+                    <div class="mm-fleet-card-actions">
+                      <button class="btn" @click="runScript('login')">Login</button>
+                      <button class="btn" @click="runScript('start')">Start</button>
+                      <button class="btn" @click="runScript('stop')">Stop</button>
+                      <button class="btn" @click="runScript('reboot')">Reboot</button>
+                      <button class="btn" @click="runScript('test')">Test</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <div class="mm-fleet-card-head">
+                      <h3 class="mm-fleet-card-title">Devices (<span x-text="devices.length"></span>)</h3>
+                      <button class="btn btn-ghost mm-fleet-selbtn" x-show="devices.length>0" @click="toggleSelectMode()" x-text="selectMode ? 'Done' : 'Select'"></button>
+                    </div>
+                    <label class="mm-fleet-selall" x-show="selectMode && devices.length>0"><input type="checkbox" :checked="allSelected" @change="toggleBulkAll()"> Select all</label>
+                    <!-- Pinned selection toolbar: appears at the top of the list the moment a
+                         selection exists, so the actions are never stranded below a long list. -->
+                    <div class="mm-fleet-selbar" x-show="selectMode && bulkSelection.size>0">
+                      <span class="mm-fleet-selcount" x-text="bulkSelection.size + ' selected'"></span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkTarget" aria-label="Move selected to group">
+                          <option value="">Move to…</option>
+                          <template x-for="g in groups" :key="g.displayID">
+                            <template x-if="g.displayID!==selectedGroupId"><option :value="g.displayID" x-text="g.displayID"></option></template>
+                          </template>
+                        </select>
+                        <button class="btn" :disabled="!bulkTarget" @click="bulkMove(bulkTarget)">Move</button>
+                      </span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkProfile" aria-label="Set profile on selected">
+                          <option value="">Profile…</option>
+                          <option value="__auto">Auto-match</option>
+                          <template x-for="p in profileNames" :key="p"><option :value="p" x-text="p"></option></template>
+                        </select>
+                        <button class="btn" :disabled="!bulkProfile" @click="bulkSetProfile()">Set</button>
+                      </span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkScript" aria-label="Run script on selected">
+                          <option value="">Run…</option>
+                          <option value="login">Login</option>
+                          <option value="start">Start</option>
+                          <option value="stop">Stop</option>
+                          <option value="reboot">Reboot</option>
+                          <option value="test">Test</option>
+                        </select>
+                        <button class="btn" :disabled="!bulkScript" @click="bulkRunScript()">Run</button>
+                      </span>
+                    </div>
+                    <ul class="mm-fleet-devices">
+                      <template x-for="d in devices" :key="d.clientKey">
+                        <li class="mm-fleet-device" :class="{expanded: expandedDevice===d.clientKey}">
+                          <div class="mm-fleet-dev-row" @click="!selectMode && toggleExpand(d.clientKey)">
+                            <input type="checkbox" x-show="selectMode" :checked="bulkSelection.has(d.clientKey)" @change="toggleBulk(d.clientKey)">
+                            <span class="mm-fleet-dev-dot" :class="{online: d.isOnline}" :title="d.isOnline ? 'online' : 'offline'"></span>
+                            <span class="mm-fleet-dev-name" x-text="d.friendlyName || d.clientKey"></span>
+                            <span class="mm-fleet-dev-type" x-text="d.deviceType || ''"></span>
+                            <span class="mm-dev-cache" x-show="cacheStatus(d).applicable || cacheStatus(d).stalled"
+                                  :class="{ stalled: cacheStatus(d).stalled, inflight: cacheStatus(d).inFlight }"
+                                  :title="cacheStatus(d).label">
+                              <span class="mm-dev-cache-bar"><span class="mm-dev-cache-fill" :style="'width:' + cacheStatus(d).percent + '%'"></span></span>
+                              <span class="mm-dev-cache-pct" x-text="cacheStatus(d).percent + '%'"></span>
+                            </span>
+                            <span class="mm-fleet-dev-chev" x-show="!selectMode" x-text="expandedDevice===d.clientKey ? '▾' : '▸'"></span>
+                          </div>
+                          <template x-if="!selectMode && expandedDevice===d.clientKey">
+                            <div class="mm-fleet-dev-panel">
+                              <label class="mm-fleet-dev-field">Profile
+                                <select @change="setDeviceProfile(d.clientKey, $event.target.value)">
+                                  <option value="" :selected="!d.profileName">Auto-match</option>
+                                  <template x-for="p in profileNames" :key="p"><option :value="p" :selected="d.profileName===p" x-text="p"></option></template>
+                                </select>
+                              </label>
+                              <label class="mm-fleet-dev-field">Move to
+                                <select @change="moveDevice(d.clientKey, $event.target.value)">
+                                  <template x-for="g in groups" :key="g.displayID"><option :value="g.displayID" :selected="g.displayID===selectedGroupId" x-text="g.displayID"></option></template>
+                                </select>
+                              </label>
+                              <div class="mm-fleet-dev-field mm-dev-cache-detail">
+                                <span>Cache</span>
+                                <span x-text="cacheStatus(d).label"></span>
+                              </div>
+                            </div>
+                          </template>
+                        </li>
+                      </template>
+                      <template x-if="devices.length===0">
+                        <li class="mm-fleet-empty">No devices in this group.</li>
+                      </template>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </section>
+        </div>
       </section>
     </main>
+  </div>
+  <!-- Global overlay layer: lives at the .app top level, NOT inside a route
+       <section> (whose x-show toggles display:none — which hid any modal
+       mounted into #mmModalHost when its section wasn't the active tab).
+       modal-shell.js / context-menu.js + the drag marker append/position
+       into these. -->
+  <div x-data="mmToast" class="mm-toast-stack" x-show="items.length > 0">
+    <template x-for="t in items" :key="t.id">
+      <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
+    </template>
+  </div>
+  <div id="mmModalHost"></div>
+  <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
+  <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
+    <div class="mm-drag-start-marker-label">00:00</div>
   </div>
 </div>
 <div class="toasts" id="toasts"></div>

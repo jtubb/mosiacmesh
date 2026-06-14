@@ -5,30 +5,31 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { mirror } from './_animations_mirror.js';
 import { makeRecordingCtx } from './_canvas_stub.js';
+await import('../../../js/animations.js');
+const byKey = Object.fromEntries(globalThis.MM_ANIMATIONS.map((a) => [a.key, a.draw]));
 
 const W = 1024, H = 768;
 
 test('wireframeCube — deterministic at same tMs', () => {
   const a = makeRecordingCtx();
   const b = makeRecordingCtx();
-  mirror.wireframeCube(a, 44444, W, H);
-  mirror.wireframeCube(b, 44444, W, H);
+  byKey.wireframeCube(a, 44444, W, H);
+  byKey.wireframeCube(b, 44444, W, H);
   assert.deepStrictEqual(a.__ops, b.__ops);
 });
 
 test('wireframeCube — animates (different tMs ⇒ different output)', () => {
   const a = makeRecordingCtx();
   const b = makeRecordingCtx();
-  mirror.wireframeCube(a, 1000, W, H);
-  mirror.wireframeCube(b, 8000, W, H);
+  byKey.wireframeCube(a, 1000, W, H);
+  byKey.wireframeCube(b, 8000, W, H);
   assert.notDeepStrictEqual(a.__ops, b.__ops);
 });
 
 test('wireframeCube — strokes 12 edges', () => {
   const c = makeRecordingCtx();
-  mirror.wireframeCube(c, 5000, W, H);
+  byKey.wireframeCube(c, 5000, W, H);
   const moves = c.__ops.filter((o) => o.op === 'moveTo').length;
   const lines = c.__ops.filter((o) => o.op === 'lineTo').length;
   assert.equal(moves, 12);

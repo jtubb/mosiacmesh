@@ -19,7 +19,7 @@
  */
 import { openModal, closeModal } from './modal-shell.js';
 
-export function openCalibrationModal(store) {
+export function openCalibrationModal(store, preGroup) {
   const root = document.createElement('div');
   root.className = 'mm-calibration';
 
@@ -37,15 +37,24 @@ export function openCalibrationModal(store) {
   const select = document.createElement('select');
   select.dataset.field = 'group';
   // Populate options via DOM — no innerHTML, no escaping needed
-  const groups = Array.from(new Set(
-    store.displays.map(d => d.displayID).filter(Boolean)
-  )).sort();
+  // Section 4: build from first-class display GROUPS (incl. zero-client
+  // groups) so the Fleet "Calibrate…" pre-scope works for any group, and
+  // empty groups are still pickable. Fall back to deriving from the client
+  // list for an older server that lacks the /api/displays groups endpoint.
+  const groups = (store.displayGroups && store.displayGroups.length)
+    ? store.displayGroups.map(g => g.displayID).filter(Boolean).sort()
+    : Array.from(new Set(store.displays.map(d => d.displayID).filter(Boolean))).sort();
   groups.forEach(function(g) {
     const opt = document.createElement('option');
     opt.value = g;         // DOM property assignment — no HTML injection
     opt.textContent = g;   // textContent — no HTML injection
     select.appendChild(opt);
   });
+  // Section 4: when opened from a group's Fleet detail, pre-select that
+  // group so the operator doesn't re-pick it. The picker stays editable.
+  if (preGroup && groups.includes(preGroup)) {
+    select.value = preGroup;
+  }
   label1.appendChild(select);
   li1.appendChild(num1);
   li1.appendChild(label1);
@@ -144,6 +153,10 @@ export function openCalibrationModal(store) {
         const n = body.detected != null ? body.detected : (body.markers != null ? body.markers : '?');
         resultDiv.textContent = 'Detected ' + n + ' markers.';
         store.toast('Calibration: detected ' + n + ' markers.', 'info');
+        const willRender = body.willRender || [];
+        if (willRender.length) {
+          store.toast('Calibration will (re)render ' + willRender.length + ' playlist(s): ' + willRender.join(', ') + '.', 'info');
+        }
       } else {
         resultDiv.textContent = body.error || 'Calibration failed.';
       }

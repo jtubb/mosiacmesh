@@ -115,6 +115,17 @@ export function startStatusSubscriber(store) {
       // payload: {groups: [{displayID, state, currentPlaylist, startedEpoch, renderStatus}, ...]}
       const rows = payload?.groups ?? [];
       if (rows.length > 0) applyMutation(() => rows.forEach((r) => store.setPlayback(r)));
+    } else if (req === 'RENDERS_CHANGED') {
+      // payload: {renders: [{displayID, playlist, state, percent?, ...}, ...]}
+      // queueDepth is NOT included in the broadcast — leave it unchanged.
+      const rows = payload?.renders ?? [];
+      applyMutation(() => store.setRenders(rows));
+    } else if (req === 'CACHE_PROGRESS') {
+      // payload: {clientKey, token, n, percent, mbps, status, ...} — live
+      // per-device segment-push progress (server _broadcast_cache_progress).
+      // Without this, store.displays' cache fields are frozen at hydrate()
+      // and the Fleet cache chip stays at its page-load %.
+      if (payload?.clientKey) applyMutation(() => store.setCacheProgress(payload));
     }
   }
 
