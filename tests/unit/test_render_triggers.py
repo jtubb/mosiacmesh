@@ -67,6 +67,8 @@ async def test_rest_update_schedules_autorender(fresh_settings, monkeypatch):
 
 
 def test_mark_group_recalibrated_enqueues_all(fresh_settings, monkeypatch):
+    # PT-T3: FULL is now renderable, so both Seg and Na (FULL) are enqueued
+    # after recalibration. Old contract excluded FULL as "N/A"; that no longer holds.
     from mosaicmesh.state import Display, Playlist, Client
     from mosaicmesh import render as R
     enq = []
@@ -85,9 +87,11 @@ def test_mark_group_recalibrated_enqueues_all(fresh_settings, monkeypatch):
     fresh_settings.playlists["Na"] = na
 
     will = R.mark_group_recalibrated("G1")
-    assert will == ["Seg"]                  # N/A playlist excluded
+    assert set(will) == {"Seg", "Na"}              # FULL is now renderable, not excluded
     assert ("Seg", "G1") in enq
+    assert ("Na", "G1") in enq
     assert d.renders["Seg"]["state"] in (R.RENDER_QUEUED, R.RENDER_STALE)
+    assert d.renders["Na"]["state"] in (R.RENDER_QUEUED, R.RENDER_STALE)
 
 
 def test_mark_group_recalibrated_skips_ready(fresh_settings, monkeypatch):

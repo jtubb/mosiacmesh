@@ -394,8 +394,10 @@ def _broadcast_render_status(display_id, status):
 
 
 def _is_renderable(me):
-    """SEGMENT and INDIVIDUAL items require a per-screen server render."""
-    return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL)
+    """SEGMENT, INDIVIDUAL, and FULL all require a server-side encode for the
+    device (per-screen warp for SEGMENT/INDIVIDUAL; a shared device transcode/
+    downscale for FULL). SCRIPT (animations) and bare DEFAULT do not render."""
+    return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL, PlayMode.FULL)
 
 
 def _set_render_state(display, playlist_name, state, token=None, error=None,

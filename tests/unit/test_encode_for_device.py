@@ -45,3 +45,14 @@ def test_build_transcode_cmd_extra_filters():
     cmd = R.build_ffmpeg_transcode_cmd("/s.mp4", "/o.mp4", 640, 480,
                                        extra_video_filters=["fade=in:0:30"])
     assert "fade=in:0:30" in " ".join(cmd)
+
+
+def test_is_renderable_includes_full():
+    from mosaicmesh.state import MediaElement, PlayMode
+    def me(pm):
+        m = MediaElement(); m.playmode = pm; m.file = "/media/server/videos/a.mp4"; return m
+    assert R._is_renderable(me(PlayMode.SEGMENT)) is True
+    assert R._is_renderable(me(PlayMode.INDIVIDUAL)) is True
+    assert R._is_renderable(me(PlayMode.FULL)) is True
+    assert R._is_renderable(me(PlayMode.SCRIPT)) is False
+    assert R._is_renderable(me(PlayMode.DEFAULT)) is False

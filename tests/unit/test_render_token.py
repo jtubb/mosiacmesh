@@ -66,12 +66,15 @@ def test_render_token_empty_for_unknown_group(fresh_settings):
     assert R.render_token([_seg_elem()], "NOPE") == ""
 
 
-def test_na_playlist_always_ready(fresh_settings):
+def test_full_playlist_not_ready_without_entry(fresh_settings):
+    # PT-T3: FULL is now renderable (device transcode/downscale); without a
+    # READY registry entry, is_playlist_ready must return False — same contract
+    # as SEGMENT/INDIVIDUAL. The old "N/A = always ready" logic no longer applies.
     from mosaicmesh.state import Playlist
     _calibrated_group(fresh_settings)
     pl = Playlist(); pl.name = "P"; pl.items = [{"id": 0, "file": "/m/x.png", "playmode": "FULL"}]
     fresh_settings.playlists["P"] = pl
-    assert R.is_playlist_ready("P", "G1") is True
+    assert R.is_playlist_ready("P", "G1") is False
 
 
 def test_renderable_not_ready_without_entry(fresh_settings):
