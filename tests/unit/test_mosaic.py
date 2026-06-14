@@ -358,8 +358,8 @@ class TestSegmentPlay:
         disp.renderedToken = tok  # sync so _per_client_items resolves correctly
         msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
         server.msg_response(msg, self._sess())
-        # Per-client broadcast: one PLAY per client (broadcast_to_client)
-        assert server.socketmanager.broadcast.call_count >= 1
+        # Per-client broadcast: one PLAY per client (c1) + one PLAYBACK_CHANGED state broadcast
+        assert server.socketmanager.broadcast.call_count == 2
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         f = sent["PAYLOAD"]["items"][0]["file"]
         assert "/full_" in f                             # shared central asset

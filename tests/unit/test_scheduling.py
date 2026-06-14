@@ -197,6 +197,15 @@ class TestScheduleCRUD:
         assert "error" in resp["PAYLOAD"]
 
 
+def _seed_ready(settings, display, playlist_name, display_id):
+    """Seed a READY render-registry entry so FULL/renderable playlists pass the
+    is_playlist_ready gate in evaluate_schedules."""
+    from mosaicmesh import render as R
+    elements = R._build_media_elements(settings.playlists[playlist_name].items)
+    R._set_render_state(display, playlist_name, R.RENDER_READY,
+                        token=R.render_token(elements, display_id))
+
+
 class TestEvaluator:
     def _setup(self, mock_settings, monkeypatch, default=None):
         server.settings = mock_settings
@@ -220,12 +229,9 @@ class TestEvaluator:
     def test_window_open_assigns_and_plays(self, mock_settings, monkeypatch):
         # PT-T5: FULL is renderable + render-gated. Seed a READY registry entry so
         # evaluate_schedules sees is_playlist_ready=True and proceeds to PLAY.
-        from mosaicmesh import render as R
         disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
         # Seed READY entry for playlist "P" on "Default" so the render gate passes.
-        elements = R._build_media_elements(mock_settings.playlists["P"].items)
-        tok = R.render_token(elements, "Default")
-        R._set_render_state(disp, "P", R.RENDER_READY, token=tok)
+        _seed_ready(mock_settings, disp, "P", "Default")
         mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
                                                    startTime="00:00", endTime="23:59")}
         server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
@@ -246,12 +252,9 @@ class TestEvaluator:
         # PT-T5: FULL is renderable + render-gated. Seed a READY registry entry for the
         # default playlist "P" so evaluate_schedules proceeds to PLAY when the schedule
         # window is closed and the default playlist takes over.
-        from mosaicmesh import render as R
         disp = self._setup(mock_settings, monkeypatch, default="P"); self._no_real_render(monkeypatch)
         # Seed READY entry for playlist "P" on "Default" so the render gate passes.
-        elements = R._build_media_elements(mock_settings.playlists["P"].items)
-        tok = R.render_token(elements, "Default")
-        R._set_render_state(disp, "P", R.RENDER_READY, token=tok)
+        _seed_ready(mock_settings, disp, "P", "Default")
         mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
                                                    startTime="09:00", endTime="17:00")}
         server.evaluate_schedules(datetime.datetime(2026, 6, 1, 20, 0))
@@ -294,12 +297,9 @@ class TestEvaluator:
         # PT-T5: FULL is renderable + render-gated. Seed a READY registry entry for the
         # good group's playlist "P" so evaluate_schedules proceeds to PLAY for "Default"
         # independently of Mobile's broken schedule ("MISSING" playlist).
-        from mosaicmesh import render as R
         disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
         # Seed READY entry for playlist "P" on "Default" so the render gate passes.
-        elements = R._build_media_elements(mock_settings.playlists["P"].items)
-        tok = R.render_token(elements, "Default")
-        R._set_render_state(disp, "P", R.RENDER_READY, token=tok)
+        _seed_ready(mock_settings, disp, "P", "Default")
         # second group (bad: references a missing playlist — must not block the good group)
         mock_settings.displays["Mobile"] = server.Display()
         mock_settings.displays["Mobile"].scheduledEntryId = None
