@@ -31,6 +31,15 @@ Client-side reactive timeline view for the admin console, loaded into
   (play-now, fleet-confirm, calibration, profile-editor) + store CRUD
   mutators; device/group management was relocated here out of the
   Schedule track-headers/toolbar.
+  - `fleet-status.js` exports `deviceCacheStatus(device)` — reads the
+    `cacheMode`, `cachedSegments`, `expectedSegments`, and
+    `cachePushProgress` fields from `/api/discovery/devices` to produce
+    `{ applicable, percent, cached, expected, inFlight, stalled, mbps, label }`.
+    In the Devices card: a collapsed-row chip (`.mm-dev-cache`) is shown
+    only when `applicable || stalled` (i.e. hidden for streaming-only
+    devices); the expanded-panel row (`.mm-dev-cache-detail`) always shows
+    a human label — `"streams (no local cache)"`, `"nothing to cache"`,
+    `"cached N/M"`, `"downloading X.X MB/s"`, or `"stalled"`.
 - **`toolbar.js`** — view-mode toggle + date nav (UI state only — no
   server mutations).
 - **`bin/`** — left-bin sections (media library + playlist library).

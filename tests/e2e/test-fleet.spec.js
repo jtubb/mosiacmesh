@@ -107,6 +107,23 @@ export default async function () {
       const expandedSelects = await page.evaluate(() =>
         document.querySelectorAll('[data-route="fleet"] .mm-fleet-dev-panel select').length);
       assert.equal(expandedSelects, 2, 'expanding a device row should reveal Profile + Move-to-group selects');
+
+      // Cache detail line is always rendered in the expanded panel (even for
+      // cacheMode='none' devices, which show "streams (no local cache)").
+      // Assert the .mm-dev-cache-detail element exists and its label span is non-empty.
+      const cacheDetail = await page.evaluate(() => {
+        const panel = document.querySelector('[data-route="fleet"] .mm-fleet-dev-panel');
+        if (!panel) return { found: false, label: '' };
+        const row = panel.querySelector('.mm-dev-cache-detail');
+        if (!row) return { found: false, label: '' };
+        const spans = row.querySelectorAll('span');
+        // First span: "Cache" heading; second span: the label text.
+        const label = spans.length >= 2 ? spans[1].textContent.trim() : '';
+        return { found: true, label };
+      });
+      assert.ok(cacheDetail.found, 'expanded panel should contain a .mm-dev-cache-detail Cache row');
+      assert.ok(cacheDetail.label.length > 0, `Cache detail label should be non-empty (got "${cacheDetail.label}")`);
+
       // Collapse it again.
       await page.evaluate(() => document.querySelector('[data-route="fleet"] .mm-fleet-dev-row').click());
       await settle(page);
