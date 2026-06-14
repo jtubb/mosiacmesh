@@ -341,7 +341,12 @@ async def _probe_cache_capability(client_key):
             logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
                          client_key)
             saveSettings()
-        # (downgrade path added in Task 4)
+        elif not ok and client.cacheMode == "lighttpd-localhost":
+            client.cacheMode = "none"
+            client.cachedSegments = set()   # unreachable now; stop emitting dead localhost URLs
+            logging.info("cache-probe: %s no longer cache-capable -> none (cleared cache)",
+                         client_key)
+            saveSettings()
     finally:
         _probe_inflight.discard(client_key)
 

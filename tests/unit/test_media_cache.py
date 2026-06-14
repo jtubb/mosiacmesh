@@ -631,3 +631,34 @@ def test_probe_no_ip_skips(monkeypatch):
     _run(server._probe_cache_capability("x"))
     assert called["n"] == 0
     assert c.cacheMode == "none"
+
+
+def test_probe_downgrades_and_clears_on_failure(monkeypatch):
+    import server
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"
+    c.cachedSegments = {"abc123_0", "abc123_1"}
+    server.settings.clients = {"ipad1": c}
+    async def fake_exec(*a, **k):
+        return _FakeProc(1, out=b"", err=b"curl: connection refused")
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
+    _run(server._probe_cache_capability("ipad1"))
+    assert c.cacheMode == "none"
+    assert c.cachedSegments == set()
+
+
+def test_probe_failure_leaves_none_untouched(monkeypatch):
+    import server
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.ip = "192.168.1.50"; c.cacheMode = "none"
+    server.settings.clients = {"ipad1": c}
+    async def fake_exec(*a, **k):
+        return _FakeProc(1)
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
+    _run(server._probe_cache_capability("ipad1"))
+    assert c.cacheMode == "none"
