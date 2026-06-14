@@ -298,7 +298,8 @@ async def _probe_cache_capability(client_key):
     """SSH-probe a device for the two real push prerequisites (cache dir +
     lighttpd serving on :8080) and flip cacheMode accordingly. Fire-and-forget;
     never blocks the caller, never raises. Upgrade: none -> lighttpd-localhost
-    when 'MM_CACHE_OK' comes back. Downgrade handled in a later task."""
+    when 'MM_CACHE_OK' comes back. Downgrade: lighttpd-localhost -> none (and
+    clear cachedSegments) when the probe fails on a previously-capable device."""
     client = settings.clients.get(client_key)
     if not client or not getattr(client, "ip", ""):
         return
