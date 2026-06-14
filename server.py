@@ -354,13 +354,15 @@ async def _probe_cache_capability(client_key):
 
 def _maybe_fire_cache_probe(client_key, client):
     """Fire-and-forget the cache-capability probe for an eligible device.
-    Safe to call when no event loop is running (tests) -- silently skips."""
+    No-op for ineligible devices, and safe to call from a synchronous context
+    with no running event loop (returns without scheduling)."""
     if not _is_probe_eligible(client):
         return
     try:
-        asyncio.ensure_future(_probe_cache_capability(client_key))
+        asyncio.get_running_loop()
     except RuntimeError:
-        pass   # no running loop (sync test context)
+        return   # no running loop (sync context) -> don't construct/schedule
+    asyncio.ensure_future(_probe_cache_capability(client_key))
 
 
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):

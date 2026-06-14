@@ -691,3 +691,15 @@ def test_maybe_fire_skips_ineligible(monkeypatch):
         await _a.sleep(0)
     _run(drive())
     assert fired == []
+
+
+def test_maybe_fire_no_loop_is_safe(monkeypatch):
+    import server
+    from mosaicmesh.state import Client
+    fired = []
+    async def fake_probe(key): fired.append(key)
+    monkeypatch.setattr(server, "_probe_cache_capability", fake_probe)
+    c = Client(); c.ip = "192.168.1.50"; c.deviceType = "tablet"
+    # No running loop here -> must return without raising and without firing.
+    server._maybe_fire_cache_probe("ipad1", c)
+    assert fired == []
