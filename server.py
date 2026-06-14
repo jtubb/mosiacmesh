@@ -269,6 +269,18 @@ async def _get_pooled_vnc(client_key, ip):
     return proxy
 
 
+def _is_probe_eligible(client):
+    """True for the provisioned display devices we SSH-probe for cache
+    capability: Apple touch devices (iPad-1 reclassifies to deviceType
+    'tablet'; iOS phones report 'smartphone') that have an IP. Everything
+    else never gets cacheMode and always serves centrally."""
+    if not getattr(client, "ip", ""):
+        return False
+    dt = (getattr(client, "deviceType", "") or "").lower()
+    osn = (getattr(client, "osName", "") or "").lower()
+    return dt in ("tablet", "smartphone") or osn == "ios"
+
+
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     """Scp a freshly-rendered per-iPad mp4 to the iPad's lighttpd cache
     directory. Called from the render pipeline's success path for each

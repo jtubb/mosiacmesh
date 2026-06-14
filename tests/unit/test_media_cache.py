@@ -15,6 +15,17 @@ class _Item:
         self.seg_n = seg_n
 
 
+def test_is_probe_eligible():
+    import server
+    from mosaicmesh.state import Client
+    def mk(dt, ip, osn="iOS"):
+        c = Client(); c.deviceType = dt; c.ip = ip; c.osName = osn; return c
+    assert server._is_probe_eligible(mk("tablet", "192.168.1.50")) is True
+    assert server._is_probe_eligible(mk("smartphone", "192.168.1.51", "iOS")) is True
+    assert server._is_probe_eligible(mk("desktop", "192.168.1.52", "Windows")) is False
+    assert server._is_probe_eligible(mk("tablet", "")) is False          # no ip
+
+
 def test_client_has_cacheProbedMs_default():
     from mosaicmesh.state import Client
     c = Client()
