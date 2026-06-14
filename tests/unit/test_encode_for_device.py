@@ -58,6 +58,26 @@ def test_is_renderable_includes_full():
     assert R._is_renderable(me(PlayMode.DEFAULT)) is False
 
 
+def test_per_client_items_full_uses_shared_central_asset():
+    from mosaicmesh.state import Settings, Display, Client, MediaElement, PlayMode
+    prev = getattr(server, 'settings', None)
+    server.settings = Settings()
+    try:
+        d = Display(); d.boundingBox = [0, 0, 10, 10]; d.renderedToken = "tok9"; d.loop = False
+        server.settings.displays["G1"] = d
+        c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]; c.cacheMode = "none"
+        server.settings.clients["c1"] = c
+        me = MediaElement(); me.id = 0; me.file = "/media/server/videos/big.mov"
+        me.playmode = PlayMode.FULL; me.duration = 5
+        d.mediaElements = [me]
+        items = R._per_client_items(d, "c1", c)
+        assert items[0]["file"] == "/media/server/videos/full_tok9_0.mp4"
+        assert items[0]["file"] != me.file
+    finally:
+        server.settings = prev
+
+
 import asyncio
 
 def test_encode_group_full_writes_shared_asset(tmp_path, monkeypatch):

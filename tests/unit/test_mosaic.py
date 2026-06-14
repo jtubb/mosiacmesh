@@ -327,24 +327,44 @@ class TestSegmentPlay:
         assert decoded["PAYLOAD"]["status"] == "RENDER_REQUIRED"
         assert server.socketmanager.broadcast.call_count == 0
 
-    @pytest.mark.skip(reason="FULL routing completed in PT-T4/T5: FULL is now renderable and render-gated; play path via per-client URLs restored in T5")
-    def test_play_full_only_uses_group_path(self, mock_settings):
-        # PT-T3: FULL is now renderable so the PLAY handler gates on is_playlist_ready.
-        # Without a READY registry entry this returns RENDER_REQUIRED, not SUCCESS.
-        # PT-T4 adds the shared-asset encode; PT-T5 wires _per_client_items for FULL
-        # so this test can be updated to assert per-client FULL URLs (not group broadcast).
+    def test_play_full_uses_shared_central_asset(self, mock_settings):
+        # PT-T5: FULL is now renderable + render-gated. Once a READY registry entry
+        # exists, PLAY routes through per-client broadcast (_broadcast_per_client_play)
+        # and each client receives the shared central full_<token>_<i> URL — never
+        # the raw source file, never a per-client seg_ URL.
+        # Using PAUSE resume path (bypasses coordinated _begin_prepare) so the PLAY
+        # broadcast fires synchronously and we can inspect the payload.
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
         me.duration = 1000; me.playmode = server.PlayMode.FULL
-        disp.mediaElements = [me]; disp.loop = True; disp.action = server.PlayState.STOP
+        disp.mediaElements = [me]; disp.loop = True
+        disp.action = server.PlayState.PAUSE  # resume path: direct per-client PLAY
         c1 = server.Client(); c1.displayID = "Default"
         mock_settings.clients = {"c1": c1}
+        # Save the playlist so is_playlist_ready can resolve it.
+        pl = server.Playlist(); pl.name = "Full"
+        pl.items = [{"id": "a", "file": "/media/server/x.jpg", "playmode": "FULL",
+                     "duration": 1000, "backgroundColor": "#000000",
+                     "startEffect": None, "endEffect": None}]
+        mock_settings.playlists["Full"] = pl
+        # Seed a READY registry entry so the render gate passes.
+        elements = R._build_media_elements(pl.items)
+        tok = R.render_token(elements, "Default")
+        R._set_render_state(disp, "Full", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "Full"
+        disp.renderedToken = tok  # sync so _per_client_items resolves correctly
         msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
-        ret = server.msg_response(msg, self._sess())
-        assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"
-        assert server.socketmanager.broadcast.call_count == 1  # group broadcast, one client
+        server.msg_response(msg, self._sess())
+        # Per-client broadcast: one PLAY per client (broadcast_to_client)
+        assert server.socketmanager.broadcast.call_count >= 1
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        f = sent["PAYLOAD"]["items"][0]["file"]
+        assert "/full_" in f                             # shared central asset
+        assert f.endswith(".png")                        # image → .png
+        assert f != me.file                              # never raw source
 
 
 class TestReloadCommand:

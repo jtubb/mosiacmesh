@@ -1079,7 +1079,14 @@ def _per_client_items(display, key, c):
     cache_on = (getattr(c, "cacheMode", "none") == "lighttpd-localhost")
     cached = getattr(c, "cachedSegments", set()) if cache_on else set()
     for i, me in enumerate(display.mediaElements):
-        if _is_renderable(me) and c.measuredPerimeter is not None:
+        if me.playmode == PlayMode.FULL:
+            # Shared central device asset written by _encode_group (Task 4).
+            # All clients in the group share this one file — never raw, never
+            # per-client seg_/ind_ path.
+            ext = ".mp4" if isVideoItem(me.file) else ".png"
+            sub = "videos" if ext == ".mp4" else "images"
+            f = "/media/server/" + sub + "/full_" + token + "_" + str(i) + ext
+        elif _is_renderable(me) and c.measuredPerimeter is not None:
             prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
             ext = ".mp4" if isVideoItem(me.file) else ".png"
             seg_key = "%s_%d" % (token, i)
@@ -1089,7 +1096,7 @@ def _per_client_items(display, key, c):
             else:
                 f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
         else:
-            f = me.file  # FULL item, or uncalibrated fallback to full source
+            f = me.file  # SCRIPT animation ref, or uncalibrated fallback
         item = _media_item_payload(me)
         item["file"] = f
         items.append(item)

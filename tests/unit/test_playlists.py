@@ -197,24 +197,32 @@ class TestAssignPlaylist:
             {"SRC": "a", "DEST": "SRV", "REQUEST": "ASSIGN_PLAYLIST",
              "PAYLOAD": {"name": name, "displayID": display_id}}, _make_session()))
 
-    @pytest.mark.skip(reason="FULL routing completed in PT-T4/T5: FULL is now renderable and ASSIGN is render-gated; ok status restored once FULL has a ready encode path")
     def test_assign_ok_no_segment(self, mock_settings):
-        # PT-T3: FULL is now renderable, so ASSIGN_PLAYLIST returns RENDER_REQUIRED
-        # when no READY registry entry exists — same contract as SEGMENT. The old
-        # "no segment = always ok" path no longer applies. PT-T4 adds the shared-asset
-        # encode; once T4 is complete and a READY entry exists, this test should assert
-        # status == "ok" again (possibly after monkeypatching is_playlist_ready to True).
+        # PT-T5: FULL is renderable + render-gated. ASSIGN returns "ok" when the
+        # group is calibrated AND a READY registry entry exists for the playlist.
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
-        self._save(mock_settings, "Imgs", [
-            {"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
-             "playmode": "FULL", "backgroundColor": "#000000",
-             "startEffect": None, "endEffect": None}])
+        # Calibrate the display group (boundingBox + client with measuredPerimeter).
+        disp = mock_settings.displays["Default"]
+        disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"
+        c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = [0, 0, 10, 0, 10, 10, 0, 10]
+        mock_settings.clients["c1"] = c
+        # Save the FULL playlist so ASSIGN can find it.
+        items = [{"id": "a", "file": "/media/server/images/x.jpg", "duration": 5,
+                  "playmode": "FULL", "backgroundColor": "#000000",
+                  "startEffect": None, "endEffect": None}]
+        self._save(mock_settings, "Imgs", items, loop=False)
+        # Seed a READY registry entry with the correct render token so the gate passes.
+        elements = R._build_media_elements(items)
+        tok = R.render_token(elements, "Default")
+        R._set_render_state(disp, "Imgs", R.RENDER_READY, token=tok)
         resp = self._assign("Imgs")
         assert resp["PAYLOAD"]["status"] == "ok"
         assert len(mock_settings.displays["Default"].mediaElements) == 1
         assert mock_settings.displays["Default"].loop is False
-        assert mock_settings.displays["Default"].renderedToken == ""
 
     def test_assign_segment_not_calibrated(self, mock_settings):
         server.settings = mock_settings
