@@ -28,3 +28,18 @@ export function contentItemToPlaylistItem(ci) {
   if (ci.kind === 'animation') return { file: ci.ref, playmode: 'SCRIPT' };
   return { file: ci.ref };
 }
+
+// Play-type vocabulary shared by the editor. Maps PlayMode → operator label.
+const PLAY_TYPE_LABELS = { SEGMENT: 'Mesh', FULL: 'Mirror', INDIVIDUAL: 'Per-screen', SCRIPT: 'Animation' };
+const MEDIA_PLAY_TYPES = ['SEGMENT', 'FULL', 'INDIVIDUAL'];
+
+export function playTypeLabel(mode) {
+  return PLAY_TYPE_LABELS[mode] || '— pick play type —';
+}
+
+// Media items (non-animation) must have an explicit, valid play type before a
+// playlist can be saved/played. Returns the items still needing a choice.
+export function mediaItemsMissingPlayType(items) {
+  return (items || []).filter(
+    (it) => it.playmode !== 'SCRIPT' && !MEDIA_PLAY_TYPES.includes(it.playmode));
+}
