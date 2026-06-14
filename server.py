@@ -295,11 +295,16 @@ def _is_probe_eligible(client):
 
 
 async def _probe_cache_capability(client_key):
-    """SSH-probe a device for the two real push prerequisites (cache dir +
-    lighttpd serving on :8080) and flip cacheMode accordingly. Fire-and-forget;
-    never blocks the caller, never raises. Upgrade: none -> lighttpd-localhost
-    when 'MM_CACHE_OK' comes back. Downgrade: lighttpd-localhost -> none (and
-    clear cachedSegments) when the probe fails on a previously-capable device."""
+    """SSH-probe a device for the two real push prerequisites (cache dir exists +
+    lighttpd alive) and flip cacheMode accordingly. Fire-and-forget; never blocks
+    the caller, never raises. Upgrade: none -> lighttpd-localhost when 'MM_CACHE_OK'
+    comes back. Downgrade: lighttpd-localhost -> none (and clear cachedSegments)
+    when the probe fails on a previously-capable device.
+
+    Liveness is checked with shell builtins only (`kill -0` on lighttpd's pid
+    file) -- the iPad-1 userland has no curl/wget/nc/ps, so an HTTP/process check
+    would always fail with 127 ('command not found') and wrongly report the
+    device not-capable even while lighttpd is serving."""
     client = settings.clients.get(client_key)
     if not client or not getattr(client, "ip", ""):
         return
@@ -308,7 +313,7 @@ async def _probe_cache_capability(client_key):
     _probe_inflight.add(client_key)
     try:
         remote = ("test -d /var/mobile/Media/MosaicMeshCache && "
-                  "curl -sf -m 3 http://localhost:8080/ >/dev/null && "
+                  "kill -0 \"$(cat /var/run/lighttpd.pid 2>/dev/null)\" 2>/dev/null && "
                   "echo MM_CACHE_OK")
         cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
                + ["-T", "-o", "ConnectTimeout=%d" % _PROBE_CONNECT_TIMEOUT_S,

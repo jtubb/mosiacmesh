@@ -66,11 +66,18 @@ Runs one SSH command verifying **both** real prerequisites the push needs:
 
 ```
 ssh -i <SSH_KEY_PATH> <SSH_LEGACY_OPTS> <SSH_USER>@<ip> \
-  'test -d /var/mobile/Media/MosaicMeshCache && curl -sf -m 3 localhost:8080/ >/dev/null && echo MM_CACHE_OK'
+  'test -d /var/mobile/Media/MosaicMeshCache && kill -0 "$(cat /var/run/lighttpd.pid 2>/dev/null)" 2>/dev/null && echo MM_CACHE_OK'
 ```
 
-(The cache dir path and lighttpd port match `_push_segment_to_cached_clients`'s
-destination and the `_per_client_items` localhost URL.)
+(The cache dir path matches `_push_segment_to_cached_clients`'s scp destination;
+the pid-file path matches `lighttpd.conf`'s `server.pid-file`.)
+
+**Liveness uses shell builtins only.** The original design used `curl
+localhost:8080`, but live verification (2026-06-14) found the iPad-1 userland has
+**no curl/wget/nc/ps** — any external-binary check returns 127 ("command not
+found") and would wrongly report a serving device as not-capable. `kill -0` on
+lighttpd's pid file confirms the daemon is alive (hence bound to its configured
+:8080) using only the `kill` builtin + `cat`.
 
 Outcome handling (mutates `settings.clients[client_key]`, then persists +
 broadcasts only on a state change):
