@@ -770,7 +770,10 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 @media (max-width:759px){
   .mm-fleet { flex-direction:column; }
   .mm-fleet-list { flex:1 1 auto; max-width:none; }
-  .mm-fleet-detail.mm-fleet-sheet { position:fixed; inset:0; z-index:60; background:var(--bg); overflow:auto; padding:14px; }
+  /* padding-bottom clears the fixed bottom nav bar (.sidebar, z-index 1200,
+     ~64px) which sits ABOVE this sheet (z-index 60) — without it the last
+     device row hides behind the bar and can't be scrolled into view. */
+  .mm-fleet-detail.mm-fleet-sheet { position:fixed; inset:0; z-index:60; background:var(--bg); overflow:auto; padding:14px 14px 76px; }
 }
 
 /* ---- Global Render Status panel (Task 20) ---- */
