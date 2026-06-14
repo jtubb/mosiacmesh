@@ -303,6 +303,31 @@ var GoTime = (function f() {
 			sample = _calculateOffset(options._wsRequestTime, responseTime, serverTime);
 			return _reviseOffset(sample, "websocket");
 		},
+
+		// Force fresh clock samples now (used on PREPARE so the offset isn't
+		// up-to-15-min stale). Fires n _sync() calls spaced spacingMs apart.
+		resync: function(n, spacingMs) {
+			n = n || 4; spacingMs = spacingMs || 400;
+			for (var i = 0; i < n; i++) { setTimeout(_sync, i * spacingMs); }
+		},
+
+		// Age (ms) of the currently-locked offset sample; Infinity if none yet.
+		msSinceAccept: function() {
+			return (options._lastAcceptTime == null) ? Infinity : (GoTime.now() - options._lastAcceptTime);
+		},
+
+		// PURE clock-ready decision (no closure state) so it is unit-testable:
+		// offset must be fresh (accAgeMs) AND precise (precisionMs) AND the beat
+		// stable (phaseStd) AND centered (phaseMean). Thresholds overridable.
+		readyVerdict: function(precisionMs, accAgeMs, phaseStd, phaseMean, opts) {
+			opts = opts || {};
+			var maxPrec = (opts.maxPrecisionMs != null) ? opts.maxPrecisionMs : 50;
+			var maxAge  = (opts.maxAgeMs       != null) ? opts.maxAgeMs       : 30000;
+			var maxStd  = (opts.maxStdMs       != null) ? opts.maxStdMs       : 10;
+			var maxMean = (opts.maxMeanMs      != null) ? opts.maxMeanMs      : 20;
+			return (precisionMs <= maxPrec) && (accAgeMs <= maxAge) &&
+			       (phaseStd <= maxStd) && (Math.abs(phaseMean) <= maxMean);
+		}
 	}
     
 })();
