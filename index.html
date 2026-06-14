@@ -309,7 +309,15 @@
 			ct: v ? Math.round(v.currentTime * 1000) : null,
 			src: (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')).split('/').pop() : null,
 			idx: playback.videoIndex,
-			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null
+			elapsed: playback.startEpoch ? Math.round(GoTime.now() - playback.startEpoch) : null,
+			off: (typeof GoTime.getOffset === 'function') ? GoTime.getOffset() : null,
+			prec: (typeof GoTime.getPrecision === 'function') ? GoTime.getPrecision() : null,
+			accAge: (typeof GoTime.msSinceAccept === 'function' && GoTime.msSinceAccept() !== Infinity) ? Math.round(GoTime.msSinceAccept()) : null,
+			phStd: (function () { var s = phaseStats(); return s ? Math.round(s.std) : null; })(),
+			phMean: (function () { var s = phaseStats(); return s ? Math.round(s.mean) : null; })(),
+			synced: (typeof ProgrammableTimer !== 'undefined') ? ProgrammableTimer.isSynced() : null,
+			settled: clockSettled(),
+			cready: clockReady()
 		};
 		if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { payload[k] = extra[k]; } } }
 		sendMsg("CLIENTLOG", payload);
