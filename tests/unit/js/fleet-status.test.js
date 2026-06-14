@@ -36,6 +36,26 @@ test('deviceCacheStatus: caching mode, expected 0 → applicable false, idle', (
   assert.equal(s.label, 'nothing to cache');
 });
 
+test('deviceCacheStatus: none -> network state', () => {
+  const s = deviceCacheStatus({ cacheMode: 'none' });
+  assert.equal(s.state, 'network');
+  assert.equal(s.applicable, false);
+});
+
+test('deviceCacheStatus: capable + partial -> caching state', () => {
+  const s = deviceCacheStatus({ cacheMode: 'lighttpd-localhost',
+    cachedSegments: ['t_0'], expectedSegments: 4 });
+  assert.equal(s.state, 'caching');
+  assert.equal(s.percent, 25);
+});
+
+test('deviceCacheStatus: capable + full -> local state', () => {
+  const s = deviceCacheStatus({ cacheMode: 'lighttpd-localhost',
+    cachedSegments: ['t_0','t_1','t_2','t_3'], expectedSegments: 4 });
+  assert.equal(s.state, 'local');
+  assert.equal(s.percent, 100);
+});
+
 test('playlistReadinessForGroup labels each playlist', () => {
   const playlists = { A: { items: [{ playmode: 'SEGMENT' }] }, B: { items: [{ playmode: 'FULL' }] } };
   const renders = { G1: { A: { state: 'RENDERING', percent: 50 } } };

@@ -82,11 +82,11 @@ export function deviceCacheStatus(device) {
   const prog = d.cachePushProgress || null;
   if (mode === 'none') {
     return { applicable: false, percent: 100, cached, expected, inFlight: false,
-             stalled: false, mbps: null, label: 'streams (no local cache)' };
+             stalled: false, mbps: null, label: 'streams (no local cache)', state: 'network' };
   }
   if (!expected) {
     return { applicable: false, percent: 100, cached, expected: 0, inFlight: false,
-             stalled: false, mbps: null, label: 'nothing to cache' };
+             stalled: false, mbps: null, label: 'nothing to cache', state: 'network' };
   }
   const percent = Math.max(0, Math.min(100, Math.round((cached / expected) * 100)));
   const stalled = !!(prog && prog.status === 'stalled');
@@ -96,5 +96,6 @@ export function deviceCacheStatus(device) {
   if (stalled) label = 'stalled';
   else if (inFlight) label = `downloading ${(Math.floor((mbps || 0) * 10) / 10).toFixed(1)} MB/s`;
   else label = `cached ${cached}/${expected}`;
-  return { applicable: true, percent, cached, expected, inFlight, stalled, mbps, label };
+  const state = percent >= 100 ? 'local' : 'caching';
+  return { applicable: true, percent, cached, expected, inFlight, stalled, mbps, label, state };
 }
