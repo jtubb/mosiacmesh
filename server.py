@@ -165,6 +165,19 @@ _veency_lock = asyncio.Lock()
 _PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
 _PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
 
+_PROBE_CONCURRENCY = 4          # max concurrent cache-capability SSH probes
+_PROBE_TIMEOUT_S = 20           # overall ceiling per probe
+_PROBE_CONNECT_TIMEOUT_S = 10   # ssh ConnectTimeout
+_probe_sem = None
+_probe_inflight = set()         # client_keys with a probe currently running
+
+
+def _get_probe_sem():
+    global _probe_sem
+    if _probe_sem is None:
+        _probe_sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+    return _probe_sem
+
 
 def parse_args():
     """Parse CLI args. Called only from __main__ so that importing this module
@@ -279,6 +292,53 @@ def _is_probe_eligible(client):
     dt = (getattr(client, "deviceType", "") or "").lower()
     osn = (getattr(client, "osName", "") or "").lower()
     return dt in ("tablet", "smartphone") or osn == "ios"
+
+
+async def _probe_cache_capability(client_key):
+    """SSH-probe a device for the two real push prerequisites (cache dir +
+    lighttpd serving on :8080) and flip cacheMode accordingly. Fire-and-forget;
+    never blocks the caller, never raises. Upgrade: none -> lighttpd-localhost
+    when 'MM_CACHE_OK' comes back. Downgrade handled in a later task."""
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        return
+    if client_key in _probe_inflight:
+        return                                  # no duplicate concurrent probe
+    _probe_inflight.add(client_key)
+    try:
+        remote = ("test -d /var/mobile/Media/MosaicMeshCache && "
+                  "curl -sf -m 3 http://localhost:8080/ >/dev/null && "
+                  "echo MM_CACHE_OK")
+        cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
+               + ["-T", "-o", "ConnectTimeout=%d" % _PROBE_CONNECT_TIMEOUT_S,
+                  "%s@%s" % (SSH_USER, client.ip), remote])
+        ok = False
+        async with _get_probe_sem():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE)
+                out, _err = await asyncio.wait_for(
+                    proc.communicate(), timeout=_PROBE_TIMEOUT_S)
+                ok = (proc.returncode == 0 and b"MM_CACHE_OK" in (out or b""))
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                ok = False
+            except Exception as e:            # noqa: BLE001
+                logging.warning("cache-probe %s: %s", client_key, e)
+                ok = False
+        client.cacheProbedMs = int(time.time() * 1000)
+        if ok and client.cacheMode != "lighttpd-localhost":
+            client.cacheMode = "lighttpd-localhost"
+            logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
+                         client_key)
+            saveSettings()
+        # (downgrade path added in Task 4)
+    finally:
+        _probe_inflight.discard(client_key)
 
 
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):

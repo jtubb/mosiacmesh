@@ -573,3 +573,42 @@ def test_expected_seg_keys_only_includes_segment_video_items():
     expected = server._expected_seg_keys_for_display(d)
     assert expected == {"abc_1"}, \
         f"expected only the bunny SEGMENT at index 1, got {expected}"
+
+
+class _FakeProc:
+    def __init__(self, rc, out=b"", err=b""):
+        self.returncode = rc; self._out = out; self._err = err
+    async def communicate(self):
+        return (self._out, self._err)
+    def kill(self):
+        self.returncode = -9
+
+
+def test_probe_sets_lighttpd_localhost_on_ok(monkeypatch):
+    import server
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.ip = "192.168.1.50"; c.cacheMode = "none"
+    server.settings.clients = {"ipad1": c}
+    async def fake_exec(*a, **k):
+        return _FakeProc(0, out=b"MM_CACHE_OK\n")
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
+    _run(server._probe_cache_capability("ipad1"))
+    assert c.cacheMode == "lighttpd-localhost"
+    assert c.cacheProbedMs is not None
+
+
+def test_probe_no_ip_skips(monkeypatch):
+    import server
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.ip = ""; c.cacheMode = "none"
+    server.settings.clients = {"x": c}
+    called = {"n": 0}
+    async def fake_exec(*a, **k):
+        called["n"] += 1; return _FakeProc(0, b"MM_CACHE_OK")
+    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
+    _run(server._probe_cache_capability("x"))
+    assert called["n"] == 0
+    assert c.cacheMode == "none"
