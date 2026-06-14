@@ -63,3 +63,35 @@ export function playlistReadinessForGroup(displayID, playlists, renders) {
     return { name, label: renderBadge(entry), ready: isReadyFromEntry(entry) };
   });
 }
+
+/**
+ * Per-device cache download status for the Fleet Devices card. Pure — reads the
+ * fields /api/discovery/devices already returns. Returns:
+ *   { applicable, percent, cached, expected, inFlight, stalled, mbps, label }
+ * `applicable` is false when the device isn't locally caching (cacheMode 'none')
+ * or has nothing to cache (expectedSegments 0) — the chip is hidden in those cases.
+ */
+export function deviceCacheStatus(device) {
+  const d = device || {};
+  const mode = d.cacheMode || 'none';
+  const cached = Array.isArray(d.cachedSegments) ? d.cachedSegments.length : (d.cachedSegments || 0);
+  const expected = d.expectedSegments || 0;
+  const prog = d.cachePushProgress || null;
+  if (mode === 'none') {
+    return { applicable: false, percent: 100, cached, expected, inFlight: false,
+             stalled: false, mbps: null, label: 'streams (no local cache)' };
+  }
+  if (!expected) {
+    return { applicable: false, percent: 100, cached, expected: 0, inFlight: false,
+             stalled: false, mbps: null, label: 'nothing to cache' };
+  }
+  const percent = Math.max(0, Math.min(100, Math.round((cached / expected) * 100)));
+  const stalled = !!(prog && prog.status === 'stalled');
+  const inFlight = !!(prog && prog.status === 'active');
+  const mbps = prog && typeof prog.mbps === 'number' ? prog.mbps : null;
+  let label;
+  if (stalled) label = 'stalled';
+  else if (inFlight) label = `downloading ${(Math.floor((mbps || 0) * 10) / 10).toFixed(1)} MB/s`;
+  else label = `cached ${cached}/${expected}`;
+  return { applicable: true, percent, cached, expected, inFlight, stalled, mbps, label };
+}
