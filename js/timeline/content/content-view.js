@@ -50,9 +50,17 @@ export function mmContentComponent() {
 
     playlistRenderSummary(name) {
       const pl = this.$store.mm.playlists[name];
-      const renderable = !!(pl && (pl.items || []).some(
-        (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL'));
-      return playlistGroupSummary(name, this.$store.mm.displayGroups, this.$store.mm.renders, renderable);
+      const items = (pl && pl.items) || [];
+      // FULL is renderable too (a device-encoded mirror); only SEGMENT/
+      // INDIVIDUAL need calibration, which scopes the denominator to
+      // calibrated groups (a mesh playlist can't render on an uncalibrated
+      // group). A mirror-only playlist counts every group.
+      const renderable = items.some(
+        (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL' || it.playmode === 'FULL');
+      const needsCalibration = items.some(
+        (it) => it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL');
+      return playlistGroupSummary(
+        name, this.$store.mm.displayGroups, this.$store.mm.renders, renderable, needsCalibration);
     },
     retryRender(name) {
       const summary = this.playlistRenderSummary(name);

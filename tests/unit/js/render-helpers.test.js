@@ -30,3 +30,29 @@ test('playlistGroupSummary counts states', () => {
 test('playlistGroupSummary N/A short-circuits', () => {
   assert.deepEqual(playlistGroupSummary('P', [{ displayID: 'A' }], {}, false).total, 0);
 });
+
+test('playlistGroupSummary needsCalibration scopes denominator to calibrated groups', () => {
+  const groups = [
+    { displayID: 'A', calibratedCount: 24 },  // calibrated → eligible
+    { displayID: 'B', calibratedCount: 0 },   // no calibrated screens → excluded
+    { displayID: 'C', calibratedCount: 0 },   // excluded
+  ];
+  const renders = { A: { P: { state: 'READY' } } };
+  // Mesh/per-screen playlist: only the calibrated group counts.
+  const s = playlistGroupSummary('P', groups, renders, true, true);
+  assert.equal(s.total, 1);   // not 3 — B and C can't render mesh
+  assert.equal(s.ready, 1);
+});
+
+test('playlistGroupSummary mirror (no calibration) counts every group', () => {
+  const groups = [{ displayID: 'A', calibratedCount: 0 }, { displayID: 'B', calibratedCount: 0 }];
+  const s = playlistGroupSummary('P', groups, {}, true, false);
+  assert.equal(s.total, 2);   // FULL/mirror renders anywhere
+});
+
+test('playlistGroupSummary falls back to all groups when calibratedCount absent', () => {
+  // Older /api/displays without calibratedCount → no filtering (degrade gracefully).
+  const groups = [{ displayID: 'A' }, { displayID: 'B' }];
+  const s = playlistGroupSummary('P', groups, {}, true, true);
+  assert.equal(s.total, 2);
+});

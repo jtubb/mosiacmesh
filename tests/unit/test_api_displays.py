@@ -73,6 +73,8 @@ class TestDisplaysList:
         fresh_settings.clients["c1"] = _make_client("Tablet", online=True)
         fresh_settings.clients["c2"] = _make_client("Tablet", online=False)
         fresh_settings.clients["c3"] = _make_client("Other", online=True)
+        # c1 is calibrated (has a measured perimeter), c2 is not.
+        fresh_settings.clients["c1"].measuredPerimeter = [[0, 0], [1, 0], [1, 1], [0, 1]]
         fresh_settings.schedules["s1"] = _make_schedule("s1", "Tablet")
         fresh_settings.schedules["s2"] = _make_schedule("s2", "Tablet")
         fresh_settings.schedules["s3"] = _make_schedule("s3", "Other")
@@ -81,6 +83,7 @@ class TestDisplaysList:
         tablet = next(d for d in data['displays'] if d['displayID'] == "Tablet")
         assert tablet['clientCount'] == 2
         assert tablet['onlineCount'] == 1
+        assert tablet['calibratedCount'] == 1   # only c1 has a measured perimeter
         assert tablet['scheduleCount'] == 2
         assert set(tablet['clients']) == {"c1", "c2"}
 
