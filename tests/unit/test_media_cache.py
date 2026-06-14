@@ -662,3 +662,32 @@ def test_probe_failure_leaves_none_untouched(monkeypatch):
     monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
     _run(server._probe_cache_capability("ipad1"))
     assert c.cacheMode == "none"
+
+
+def test_register_fires_probe_for_eligible(monkeypatch):
+    import server, asyncio as _a
+    from mosaicmesh.state import Client
+    fired = []
+    async def fake_probe(key):
+        fired.append(key)
+    monkeypatch.setattr(server, "_probe_cache_capability", fake_probe)
+    c = Client(); c.ip = "192.168.1.50"; c.deviceType = "tablet"
+    async def drive():
+        server._maybe_fire_cache_probe("ipad1", c)   # ensure_future inside running loop
+        await _a.sleep(0)                              # let the scheduled task run
+    _run(drive())
+    assert fired == ["ipad1"]
+
+
+def test_maybe_fire_skips_ineligible(monkeypatch):
+    import server, asyncio as _a
+    from mosaicmesh.state import Client
+    fired = []
+    async def fake_probe(key): fired.append(key)
+    monkeypatch.setattr(server, "_probe_cache_capability", fake_probe)
+    c = Client(); c.ip = ""; c.deviceType = "tablet"   # no ip -> ineligible
+    async def drive():
+        server._maybe_fire_cache_probe("x", c)
+        await _a.sleep(0)
+    _run(drive())
+    assert fired == []

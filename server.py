@@ -352,6 +352,17 @@ async def _probe_cache_capability(client_key):
         _probe_inflight.discard(client_key)
 
 
+def _maybe_fire_cache_probe(client_key, client):
+    """Fire-and-forget the cache-capability probe for an eligible device.
+    Safe to call when no event loop is running (tests) -- silently skips."""
+    if not _is_probe_eligible(client):
+        return
+    try:
+        asyncio.ensure_future(_probe_cache_capability(client_key))
+    except RuntimeError:
+        pass   # no running loop (sync test context)
+
+
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     """Scp a freshly-rendered per-iPad mp4 to the iPad's lighttpd cache
     directory. Called from the render pipeline's success path for each

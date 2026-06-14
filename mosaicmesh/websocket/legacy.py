@@ -237,6 +237,10 @@ def msg_response(msg,session):
             logging.info(f"Reclassified {msg['SRC']} as iPad (Apple+desktop UA, "
                          f"touch, {client.deviceWidth}x{client.deviceHeight})")
 
+        # Auto-onboard local cache: probe eligible (iPad/tablet) devices for
+        # lighttpd + cache dir and flip cacheMode so the post-render push engages.
+        server._maybe_fire_cache_probe(msg["SRC"], client)
+
         # Auto-configuration for new clients
         if is_new_client:
             client.discoveryTime = time.time()
