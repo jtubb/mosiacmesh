@@ -43,6 +43,7 @@ Client-side reactive timeline view for the admin console, loaded into
 - **`toolbar.js`** — view-mode toggle + date nav (UI state only — no
   server mutations).
 - **`bin/`** — left-bin sections (media library + playlist library).
+- **`content/content-items.js`** — shared content-item helpers. Exports `buildContentItems` (merges `/api/media` + `MM_ANIMATIONS` into a unified list), `contentItemToPlaylistItem` (maps a picked item to a `{file, playmode}` playlist entry — animations always get `playmode:'SCRIPT'`), `mediaItemsMissingPlayType` (returns items that are media but have no explicit `playmode` chosen), and `playTypeLabel` (human label for a `playmode` string: Mesh / Per-screen / Mirror / Script). The playlist editor uses `mediaItemsMissingPlayType` to gate Save — every media item must have an explicit Mesh / Per-screen / Mirror choice before the operator can save.
 
 ## Data flow
 

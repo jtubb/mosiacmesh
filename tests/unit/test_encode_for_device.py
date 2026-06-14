@@ -38,7 +38,7 @@ def test_build_transcode_cmd_shape():
     assert "/src/a.mp4" in cmd and "/out/full_tok_0.mp4" == cmd[-1]
     j = " ".join(cmd)
     assert "scale=1280:720:force_original_aspect_ratio=decrease" in j
-    assert "pad=1280:720" in j
+    assert "pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x000000" in j
     assert "-profile:v baseline" in j
 
 def test_build_transcode_cmd_extra_filters():

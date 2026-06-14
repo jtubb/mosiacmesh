@@ -27,7 +27,7 @@
  *   - drill-in DOUBLE-click on a .mm-drillin-item -> openPlaylistEditor(store, name, idx)
  */
 import { openModal, closeModal } from './modal-shell.js';
-import { buildContentItems, contentItemToPlaylistItem, mediaItemsMissingPlayType, playTypeLabel } from '../content/content-items.js';
+import { buildContentItems, contentItemToPlaylistItem, mediaItemsMissingPlayType } from '../content/content-items.js';
 
 function basename(p) { return String(p || '').split('/').pop() || ''; }
 function asObject(it) { return (typeof it === 'string') ? { file: it } : { ...it }; }
