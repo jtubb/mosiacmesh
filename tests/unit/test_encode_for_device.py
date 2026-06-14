@@ -108,3 +108,31 @@ def test_encode_group_full_writes_shared_asset(tmp_path, monkeypatch):
         assert captured["wh"] == (1280, 720)
     finally:
         server.settings = prev
+
+
+def test_render_assets_exist_full_checks_central_path(tmp_path, monkeypatch):
+    import os as _os
+    from mosaicmesh.state import Settings, Display, Client, Playlist, MediaElement, PlayMode
+    prev = getattr(server, 'settings', None)
+    server.settings = Settings()
+    try:
+        d = Display(); d.boundingBox = [0, 0, 10, 10]
+        server.settings.displays["G1"] = d
+        c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+        server.settings.clients["c1"] = c
+        pl = Playlist(); pl.name = "P"
+        pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "FULL"}]
+        server.settings.playlists["P"] = pl
+        # No asset on disk → not exist
+        assert R._render_assets_exist("P", "G1", "tokX") is False
+        # Create the shared central asset → exists
+        _os.makedirs(_os.path.join("media", "server", "videos"), exist_ok=True)
+        p = _os.path.join("media", "server", "videos", "full_tokX_0.mp4")
+        open(p, "wb").close()
+        try:
+            assert R._render_assets_exist("P", "G1", "tokX") is True
+        finally:
+            _os.remove(p)
+    finally:
+        server.settings = prev

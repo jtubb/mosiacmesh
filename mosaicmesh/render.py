@@ -795,6 +795,13 @@ def _render_assets_exist(playlist_name, display_id, token):
     elements = _build_media_elements(pl.items)
     clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
     for i, me in enumerate(elements):
+        if me.playmode == PlayMode.FULL:
+            ext = ".mp4" if isVideoItem(me.file) else ".png"
+            sub = "videos" if ext == ".mp4" else "images"
+            path = os.path.join("media", "server", sub, "full_" + token + "_" + str(i) + ext)
+            if not os.path.exists(path):
+                return False
+            continue
         if not _is_renderable(me):
             continue
         ext = ".mp4" if isVideoItem(me.file) else ".png"
@@ -905,6 +912,12 @@ def _delete_render_assets(playlist_name, display_id):
                         os.remove(path)
                     except OSError:
                         pass
+    for sub in ("videos", "images"):
+        for path in glob.glob(os.path.join("media", "server", sub, "full_" + token + "_*")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
 
 def cleanup_playlist_renders(playlist_name):
