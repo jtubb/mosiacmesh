@@ -117,6 +117,16 @@ server: online ⊆ readyClients → _release_group → GO(startEpoch)
 - **E2e / manual:** with the dev server, confirm a PLAY does not GO until the simulated client reports clock-ready; confirm best-effort release after the timeout. Manual fleet check: a coordinated PLAY on OEB Sign 1 starts only once screens are settled, and starts in sync.
 - **`tdbg` observability (Part 4) is the primary live-verification lever:** with `?tdbg` on, the server log shows each screen's `prec`/`accAge`/`phStd`/`phMean`/`settled`/`cready`, so you can confirm a screen only emits READY once `cready` is true, and identify a "stably wrong" screen (settled but stale/imprecise offset). This compensates for the limited node-unit-testability of the ES5 client clock code.
 
+## Manual verification
+
+Manual sync-gated-play verification (dev server + a display client at `?tdbg`):
+
+1. Load a display client with `?tdbg`; watch the server log CLIENTLOG lines.
+2. Issue PLAY for that group. Expect: recv-PREPARE, then repeated hold-READY-clock
+   with `cready:false` while `accAge`/`prec`/`phStd` settle, then send-READY with `cready:true`.
+3. Confirm playback (GO) starts only after READY; with a 2nd client, both start together.
+4. Confirm a client that can't converge is released after ~45s (PREPARE timeout log line).
+
 ## Resolved decisions (from brainstorming)
 
 1. **Need the fresh-offset dimension** on top of the existing `clockSettled()` std-dev flag — the flag proves stability, not accuracy ("stably wrong" is possible because the offset re-samples only every 15 min). Agreed.
