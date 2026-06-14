@@ -323,6 +323,25 @@
 		$('#canvas').css({ color: '' });
 	}
 
+	// Emit READY only once the clock is converged (clockReady). Re-checks on a
+	// short timer until then; the server's extended PREPARE_TIMEOUT is the
+	// bounded fallback if a client never converges. Guarded by the current
+	// prepareId so a stopped/superseded PREPARE can't later emit a stale READY.
+	function sendReadyWhenClockReady(prepareId) {
+		if (playback.readyWaitTimer) { clearTimeout(playback.readyWaitTimer); playback.readyWaitTimer = null; }
+		function attempt() {
+			if (playback.prepareId !== prepareId) { return; }   // superseded/stopped
+			if (clockReady()) {
+				dbg("send-READY");
+				sendMsg("READY", { prepareId: prepareId });
+				return;
+			}
+			dbg("hold-READY-clock");
+			playback.readyWaitTimer = setTimeout(attempt, 500);
+		}
+		attempt();
+	}
+
 	// Coordinated-start phase 1: buffer the first item and HOLD frame 0 (paused).
 	// Report READY when buffered (and armed, for gesture devices). A gesture device
 	// that is not yet armed reports NEEDS_ARM and, when the arming touch lands,
@@ -339,7 +358,7 @@
 		for (i = 0; i < playback.items.length; i++) {
 			if (isVideoItem(playback.items[i].file)) { item = playback.items[i]; break; }
 		}
-		if (!item) { sendMsg("READY", { prepareId: prepareId }); return; }  // no video -> nothing to arm
+		if (!item) { sendReadyWhenClockReady(prepareId); return; }  // no video to arm; still wait for clock
 		var v = getPersistentVideo();
 		v.style.display = 'block'; v.style.opacity = '1'; v.loop = false; v.muted = VIDEO_MUTED;
 		playback.videoSrc = item.file;
@@ -347,7 +366,7 @@
 			try { v.pause(); } catch (e) {}
 			try { v.currentTime = 0; } catch (e) {}
 		};
-		var reportReady = function () { dbg("send-READY"); sendMsg("READY", { prepareId: prepareId }); };
+		var reportReady = function () { sendReadyWhenClockReady(prepareId); };
 		var onArmed = function () {            // 'playing' fired => armed (autoplay or tap)
 			if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
 			playback.activated = true; hideTapStart();
@@ -651,6 +670,7 @@
 		if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); playback.driftTimer = null; }
 		if (playback.armTimer) { clearTimeout(playback.armTimer); playback.armTimer = null; }
+		if (playback.readyWaitTimer) { clearTimeout(playback.readyWaitTimer); playback.readyWaitTimer = null; }
 		if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
 		clearScript();
 		$('#canvas').empty();
@@ -889,6 +909,7 @@
 				// Phase 1 of coordinated start: buffer + HOLD frame 0, then report
 				// READY (or NEEDS_ARM). Do NOT start the clock — the GO (a PLAY with a
 				// future startEpoch) releases us at the shared instant.
+				if (playback.readyWaitTimer) { clearTimeout(playback.readyWaitTimer); playback.readyWaitTimer = null; }
 				blink = false;
 				exitCalibrateView();
 				hideBlackout();
@@ -896,6 +917,8 @@
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.active = false;
 				playback.paused = false;
+				playback.prepareId = data_obj.PAYLOAD.prepareId;
+				if (typeof GoTime.resync === 'function') { GoTime.resync(4, 400); }
 				dbg("recv-PREPARE");
 				prepareFirstItem(data_obj.PAYLOAD.prepareId);
 			}
