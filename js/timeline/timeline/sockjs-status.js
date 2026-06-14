@@ -120,6 +120,12 @@ export function startStatusSubscriber(store) {
       // queueDepth is NOT included in the broadcast — leave it unchanged.
       const rows = payload?.renders ?? [];
       applyMutation(() => store.setRenders(rows));
+    } else if (req === 'CACHE_PROGRESS') {
+      // payload: {clientKey, token, n, percent, mbps, status, ...} — live
+      // per-device segment-push progress (server _broadcast_cache_progress).
+      // Without this, store.displays' cache fields are frozen at hydrate()
+      // and the Fleet cache chip stays at its page-load %.
+      if (payload?.clientKey) applyMutation(() => store.setCacheProgress(payload));
     }
   }
 
