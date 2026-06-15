@@ -966,10 +966,16 @@ class TestReconcileQuad:
         assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
 
     def test_degenerate_band_ignored(self):
-        # a zero-area / collinear band must not be trusted over the fiducial
+        # a zero-area / collinear band must not be trusted: it can't validate, so
+        # the marker fiducial geometry is kept and flagged "no-band" (unusable band).
         quad, src = server.reconcile_screen_quad(self.MARKER, [[0,0],[10,0],[20,0]], 1000, 800)
-        assert src == "fiducial"
+        assert src == "no-band"
+        fid = server.reconstruct_screen_quad(self.MARKER, 1000, 800)
+        assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
 
     def test_no_border_uses_fiducial(self):
+        # no band quad at all -> fiducial geometry, flagged "no-band".
         quad, src = server.reconcile_screen_quad(self.MARKER, None, 1000, 800)
-        assert src == "fiducial"
+        assert src == "no-band"
+        fid = server.reconstruct_screen_quad(self.MARKER, 1000, 800)
+        assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
