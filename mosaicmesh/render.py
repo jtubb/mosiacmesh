@@ -926,7 +926,10 @@ def mark_group_recalibrated(display_id):
 def _delete_token_assets(token, display_id):
     """Delete on-disk seg_/ind_/full_ assets for a group at a SPECIFIC token.
     Best-effort; missing files are fine. Caller is responsible for confirming the
-    token is no longer live (see _token_is_live)."""
+    token is no longer live (see _token_is_live).
+    Per-client seg_/ind_ files are scoped to display_id's clients; full_<token>
+    assets in media/server/ are deleted globally — safe because render_token
+    hashes per-group geometry so no two groups ever share a token."""
     import glob
     if not token:
         return
@@ -988,24 +991,37 @@ def _delete_render_assets(playlist_name, display_id):
 
 
 def cleanup_playlist_renders(playlist_name):
-    """Remove a playlist's render entry + assets from every group (on delete)."""
+    """Remove a playlist's render entry + assets from every group (on delete).
+    Pops each entry BEFORE the _token_is_live check so a token still shared by
+    another entry (identical-item playlists hash to the same token) is not
+    deleted out from under it."""
     import server
     for did, display in server.settings.displays.items():
-        if playlist_name in (getattr(display, "renders", {}) or {}):
-            _delete_render_assets(playlist_name, did)
-            display.renders.pop(playlist_name, None)
+        reg = getattr(display, "renders", {}) or {}
+        if playlist_name in reg:
+            token = (reg.get(playlist_name) or {}).get("token", "")
+            reg.pop(playlist_name, None)
+            if token and not _token_is_live(token):
+                _delete_token_assets(token, did)
     _broadcast_renders_changed(force=True)
 
 
 def cleanup_group_renders(display_id):
-    """Drop a group's whole render registry + assets (on group delete)."""
+    """Drop a group's whole render registry + assets (on group delete). Clears
+    the registry BEFORE deleting so the _token_is_live guard only sees OTHER
+    referrers (a token shared with another live entry is spared). Cross-group
+    token collisions can't happen — render_token hashes per-group geometry — so
+    a deleted group's tokens become unreferenced once its own registry is cleared."""
     import server
     display = server.settings.displays.get(display_id)
     if not display:
         return
-    for name in list((getattr(display, "renders", {}) or {}).keys()):
-        _delete_render_assets(name, display_id)
+    reg = getattr(display, "renders", {}) or {}
+    tokens = {(e or {}).get("token", "") for e in reg.values()}
     display.renders = {}
+    for token in tokens:
+        if token and not _token_is_live(token):
+            _delete_token_assets(token, display_id)
     _broadcast_renders_changed(force=True)
 
 

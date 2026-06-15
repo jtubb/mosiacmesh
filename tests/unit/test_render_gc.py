@@ -200,3 +200,78 @@ def test_sweep_reexported_from_server():
     # server.py re-exports render helpers for backward-compat call sites.
     assert hasattr(server, "sweep_orphan_render_assets")
     assert server.sweep_orphan_render_assets is R.sweep_orphan_render_assets
+
+
+def test_cleanup_playlist_keeps_shared_token(fresh_settings, tmp_path, monkeypatch):
+    # Two playlists on one group with the SAME token share files on disk.
+    # Deleting one must NOT remove the shared file while the other still holds it.
+    from mosaicmesh.state import Display, Client
+    monkeypatch.chdir(tmp_path)
+    d = Display(); fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"
+    fresh_settings.clients["c1"] = c
+    tok = "cccccccccccc"
+    shared = _seed_asset(tmp_path, "c1", "videos", f"seg_{tok}_0.mp4")
+    R._set_render_state(d, "P", R.RENDER_READY, token=tok)
+    R._set_render_state(d, "Q", R.RENDER_READY, token=tok)
+
+    R.cleanup_playlist_renders("P")
+    assert shared.exists()                 # Q still references tok -> file kept
+    assert "P" not in d.renders
+
+    R.cleanup_playlist_renders("Q")
+    assert not shared.exists()             # last referrer gone -> file reclaimed
+
+
+def test_sweep_spares_queued_token(fresh_settings, tmp_path, monkeypatch):
+    # A QUEUED/RENDERING entry's token is live (in the registry) even though its
+    # files may be mid-write; the sweep must not delete them.
+    from mosaicmesh.state import Display, Client
+    monkeypatch.chdir(tmp_path)
+    d = Display(); fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"
+    fresh_settings.clients["c1"] = c
+    tok = "dddddddddddd"
+    R._set_render_state(d, "P", R.RENDER_QUEUED, token=tok)
+    f = _seed_asset(tmp_path, "c1", "videos", f"seg_{tok}_0.mp4")
+    removed = R.sweep_orphan_render_assets()
+    assert f.exists()
+    assert removed == 0
+
+
+def test_delete_token_assets_leaves_other_ind_token(fresh_settings, tmp_path, monkeypatch):
+    # ind_ (INDIVIDUAL) assets at a different token must survive a delete.
+    from mosaicmesh.state import Display, Client
+    monkeypatch.chdir(tmp_path)
+    d = Display(); fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"
+    fresh_settings.clients["c1"] = c
+    keep = _seed_asset(tmp_path, "c1", "images", "ind_eeeeeeeeeeee_0.png")
+    R._delete_token_assets("aaaaaaaaaaaa", "G1")
+    assert keep.exists()
+
+
+def test_rerender_same_token_keeps_assets(fresh_settings, tmp_path, monkeypatch):
+    # A forced re-render that produces the SAME token must NOT delete its own
+    # freshly-confirmed files (prev_token == token guard).
+    from mosaicmesh.state import Playlist, Display, Client
+    monkeypatch.chdir(tmp_path)
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients["c1"] = c
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    import asyncio
+    tok = R.render_token(R._build_media_elements(pl.items), "G1")
+    R._set_render_state(d, "P", R.RENDER_READY, token=tok)
+    f = _seed_asset(tmp_path, "c1", "videos", f"seg_{tok}_0.mp4")
+
+    async def _fake_encode(elements, did, token, progress_cb=None):
+        if progress_cb: progress_cb(1, 1)
+    monkeypatch.setattr(R, "_encode_group", _fake_encode)
+
+    asyncio.run(R.render_playlist_for_group_async("P", "G1"))
+    assert f.exists()                       # same token -> not deleted
