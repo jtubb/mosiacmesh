@@ -442,6 +442,13 @@ def is_playlist_ready(playlist_name, display_id):
             and entry.get("token") == render_token(elements, display_id))
 
 
+# Strict filename pattern for rendered-asset GC.  Only matches files written by
+# the render pipeline (seg_/ind_/full_ + 12-hex token + index + extension).
+# Uploaded source media (e.g. "myvideo.mp4") and ArUco markers ("aruco.png")
+# never match, so the sweep can never touch them.
+_RENDER_ASSET_RE = _re_seg.compile(r"^(?:seg|ind|full)_([0-9a-f]{12})_\d+\.(?:mp4|png)$")
+
+
 def _token_is_live(token):
     """True if `token` is still referenced anywhere: any group's render-registry
     entry token, or any group's live renderedToken. The single guard that makes
@@ -937,6 +944,36 @@ def _delete_token_assets(token, display_id):
                 os.remove(path)
             except OSError:
                 pass
+
+
+def sweep_orphan_render_assets():
+    """One-time boot sweep: delete rendered-asset files under media/ whose token
+    is referenced by no live render (registry entry or renderedToken). Best-effort.
+    Returns the count of files removed. Walks media/<key>/{videos,images}/ and
+    media/server/{videos,images}/; the strict _RENDER_ASSET_RE guards the blast
+    radius so uploaded source media and aruco markers are never touched."""
+    import server, glob
+    live = set()
+    for display in server.settings.displays.values():
+        for e in (getattr(display, "renders", {}) or {}).values():
+            t = e.get("token")
+            if t:
+                live.add(t)
+        rt = getattr(display, "renderedToken", "")
+        if rt:
+            live.add(rt)
+    removed = 0
+    for sub in ("videos", "images"):
+        for path in glob.glob(os.path.join("media", "*", sub, "*")):
+            fname = os.path.basename(path)
+            m = _RENDER_ASSET_RE.match(fname)
+            if m and m.group(1) not in live:
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
 
 
 def _delete_render_assets(playlist_name, display_id):

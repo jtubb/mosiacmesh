@@ -163,3 +163,34 @@ def test_failed_rerender_keeps_previous_assets(fresh_settings, tmp_path, monkeyp
     asyncio.run(R.render_playlist_for_group_async("P", "G1"))
     assert d.renders["P"]["state"] == R.RENDER_FAILED
     assert old.exists()                          # failed re-render must not delete old
+
+
+def test_sweep_removes_only_orphan_tokens(fresh_settings, tmp_path, monkeypatch):
+    from mosaicmesh.state import Display, Client
+    monkeypatch.chdir(tmp_path)
+    d = Display(); fresh_settings.displays["G1"] = d
+    c = Client(); c.displayID = "G1"
+    fresh_settings.clients["c1"] = c
+    live_tok = "fedcbafedcba"          # 12 hex chars
+    R._set_render_state(d, "P", R.RENDER_READY, token=live_tok)
+
+    live = _seed_asset(tmp_path, "c1", "videos", f"seg_{live_tok}_0.mp4")
+    orphan = _seed_asset(tmp_path, "c1", "videos", "seg_111111111111_0.mp4")
+    orphan_full = _seed_asset(tmp_path, "server", "images", "full_111111111111_2.png")
+    # Non-matching files must be untouched.
+    upload = _seed_asset(tmp_path, "server", "videos", "myvideo.mp4")
+    aruco = _seed_asset(tmp_path, "c1", "images", "aruco.png")
+
+    removed = R.sweep_orphan_render_assets()
+
+    assert live.exists()
+    assert upload.exists()
+    assert aruco.exists()
+    assert not orphan.exists()
+    assert not orphan_full.exists()
+    assert removed == 2
+
+
+def test_sweep_empty_media_is_noop(fresh_settings, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert R.sweep_orphan_render_assets() == 0
