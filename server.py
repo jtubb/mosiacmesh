@@ -71,6 +71,7 @@ from mosaicmesh.render import (
     _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL, _PUSH_CONCURRENCY,
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
     revalidate_renders_on_boot,
+    sweep_orphan_render_assets,
     mark_group_recalibrated,
     is_playlist_ready,
 )
@@ -2363,6 +2364,12 @@ if __name__ == '__main__':
                 revalidate_renders_on_boot()
             except Exception as e:
                 logging.error("render revalidation on boot failed: %s", e)
+            try:
+                _swept = sweep_orphan_render_assets()
+                if _swept:
+                    logging.info("swept %d orphaned render asset(s) at boot", _swept)
+            except Exception as e:
+                logging.error("orphan-asset sweep on boot failed: %s", e)
             # Remove any HTML-corrupted display group keys (phantom duplicates)
             sanitize_display_groups()
             # Reset stale renderStatus: a previous server run that was

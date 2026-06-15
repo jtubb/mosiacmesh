@@ -194,3 +194,9 @@ def test_sweep_removes_only_orphan_tokens(fresh_settings, tmp_path, monkeypatch)
 def test_sweep_empty_media_is_noop(fresh_settings, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert R.sweep_orphan_render_assets() == 0
+
+
+def test_sweep_reexported_from_server():
+    # server.py re-exports render helpers for backward-compat call sites.
+    assert hasattr(server, "sweep_orphan_render_assets")
+    assert server.sweep_orphan_render_assets is R.sweep_orphan_render_assets
