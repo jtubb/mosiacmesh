@@ -1265,8 +1265,17 @@ def _begin_prepare(display_id):
         logging.info("_begin_prepare %s: PREPARE sent to %d synced; %d un-synced "
                      "will be sent PREPARE when their SYN/SYNACK completes",
                      display_id, n_sent, n_skipped)
-        asyncio.ensure_future(_prepare_unsynced_clients(display_id,
-                                                         display.prepareId))
+        # Fire-and-forget the unsynced-client poll. Guarded with a running-loop
+        # check: production always calls _begin_prepare inside the aiohttp loop,
+        # but a synchronous caller (unit test) has no running loop, and Python
+        # 3.12+ no longer auto-creates one — bare ensure_future would raise
+        # RuntimeError. No loop -> the background poll is a no-op (nothing to poll).
+        try:
+            asyncio.get_running_loop()
+            asyncio.ensure_future(_prepare_unsynced_clients(display_id,
+                                                            display.prepareId))
+        except RuntimeError:
+            pass
     server._broadcast_playback_state(display_id)
 
 
