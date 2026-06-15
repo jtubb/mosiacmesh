@@ -217,7 +217,7 @@
 			}
 			if (v && !v._mmEvtHooked) {
 				v._mmEvtHooked = true;
-				var names = ['playing', 'error', 'stalled', 'waiting', 'pause', 'canplay', 'suspend', 'abort'];
+				var names = ['loadstart', 'loadedmetadata', 'loadeddata', 'playing', 'error', 'stalled', 'waiting', 'pause', 'canplay', 'suspend', 'abort'];
 				var mk = function (n) { return function () { window._mmVidEvt = n + (v.error ? ('/e' + v.error.code) : ''); dbg('vid:' + n); }; };
 				var i; for (i = 0; i < names.length; i++) { v.addEventListener(names[i], mk(names[i]), false); }
 			}
@@ -289,6 +289,7 @@
 				p['catch'](function () { v.muted = true; var q = v.play(); if (q && q['catch']) { q['catch'](function () {}); } });
 			}
 		} catch (e) {}
+		dbg('arm-play');   // tdbg: confirms the (real or synthetic) tap reached play()
 		// Do NOT optimistically set activated here: a synthetic/blocked tap (e.g. an
 		// auto-arm VNC tap on iOS 5, where play() needs a REAL gesture) would falsely
 		// mark us armed and suppress the prompt while the video stays paused. The
