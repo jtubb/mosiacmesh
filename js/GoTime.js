@@ -123,8 +123,7 @@ var GoTime = (function f() {
         _syncCount: 0,
         _offset: 0,
         _precision: 2e308,
-        _lastAcceptTime: null,   // when the offset was last (re)locked
-        _precisionDecay: 0.0005, // ms the accept-threshold grows per ms since last lock
+        _lastAcceptTime: null,   // when the offset was last locked (for ?tdbg age only)
         _history: [],
         _syncInitialTimeouts: [0, 3000, 9000, 18000, 45000],
         _syncInterval: 900000,
@@ -203,17 +202,15 @@ var GoTime = (function f() {
             Method: method,
             Time: timestamp
         });*/
-        // Accept the sample if its precision (RTT/2) beats the stored precision, which
-        // now DECAYS with time since the last accepted sample. Previously precision
-        // only ratcheted down, so the offset froze on the single best-ever RTT: it
-        // never tracked clock drift over a long wall session, and one low-RTT outlier
-        // could lock a wrong offset forever. The decayed threshold lets a fresh
-        // low-RTT sample re-lock (capped so a network blip can't lock a bad sample),
-        // so the offset follows drift while still preferring low-jitter measurements.
-        var sinceAccept = (options._lastAcceptTime == null) ? 2e308 : (timestamp - options._lastAcceptTime);
-        var grow = sinceAccept * options._precisionDecay;
-        if (grow > 50) { grow = 50; }
-        if (sample.precision <= options._precision + grow) {
+        // Monotonic precision ratchet (the original, field-proven design): hold the best
+        // low-RTT offset we've measured. Ongoing oscillator drift is corrected by
+        // ProgrammableTimer's median drift loop at the BEAT level — NOT by re-locking the
+        // offset. The decaying re-lock that briefly replaced this chased fresh samples and
+        // on PSM-jittery iPad-1 radios kept re-locking onto 90-190ms-RTT samples, moving
+        // the offset out from under a beat that was already settled. A stale-but-precise
+        // offset is fine here: the beat absorbs the drift. (_lastAcceptTime is retained
+        // only so ?tdbg can report offset age; nothing gates on it anymore.)
+        if (sample.precision <= options._precision) {
             options._offset = Math.round(sample.offset);
             options._precision = sample.precision;
             options._lastAcceptTime = timestamp;
@@ -303,6 +300,31 @@ var GoTime = (function f() {
 			sample = _calculateOffset(options._wsRequestTime, responseTime, serverTime);
 			return _reviseOffset(sample, "websocket");
 		},
+
+		// Force fresh clock samples now (used on PREPARE so the offset isn't
+		// up-to-15-min stale). Fires n _sync() calls spaced spacingMs apart.
+		resync: function(n, spacingMs) {
+			n = n || 4; spacingMs = spacingMs || 400;
+			for (var i = 0; i < n; i++) { setTimeout(_sync, i * spacingMs); }
+		},
+
+		// Age (ms) of the currently-locked offset sample; Infinity if none yet.
+		msSinceAccept: function() {
+			return (options._lastAcceptTime == null) ? Infinity : (GoTime.now() - options._lastAcceptTime);
+		},
+
+		// PURE clock-ready decision (no closure state) so it is unit-testable:
+		// offset must be fresh (accAgeMs) AND precise (precisionMs) AND the beat
+		// stable (phaseStd) AND centered (phaseMean). Thresholds overridable.
+		readyVerdict: function(precisionMs, accAgeMs, phaseStd, phaseMean, opts) {
+			opts = opts || {};
+			var maxPrec = (opts.maxPrecisionMs != null) ? opts.maxPrecisionMs : 50;
+			var maxAge  = (opts.maxAgeMs       != null) ? opts.maxAgeMs       : 30000;
+			var maxStd  = (opts.maxStdMs       != null) ? opts.maxStdMs       : 10;
+			var maxMean = (opts.maxMeanMs      != null) ? opts.maxMeanMs      : 20;
+			return (precisionMs <= maxPrec) && (accAgeMs <= maxAge) &&
+			       (phaseStd <= maxStd) && (Math.abs(phaseMean) <= maxMean);
+		}
 	}
     
 })();

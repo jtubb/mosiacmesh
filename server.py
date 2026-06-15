@@ -1,6 +1,5 @@
 import logging
 import json
-from enum import Enum
 import os
 import cv2 as cv
 import numpy as np
@@ -28,16 +27,106 @@ import hashlib
 from functools import lru_cache
 import uuid
 import datetime
-from dateutil import rrule as _rrule
+
+# Data classes live in mosaicmesh.state; re-imported here so existing code
+# (and tests that do `from server import Client`) keeps working.
+from mosaicmesh.state import (
+    Settings, Scripts, Display, PlayState, MediaElement,
+    Playlist, Schedule, PlayMode, Client,
+    migrate_client_objects,
+)
+from mosaicmesh.persistence import (
+    save_settings_incremental, saveSettings, cleanup_old_clients,
+)
+from mosaicmesh.cache import (
+    get_pooled_file_handle, close_file_pool,
+    prewarm_static_cache, get_cached_file,
+    file_cache, cache_stats,
+)
+from mosaicmesh.broadcast import (
+    _send_to_session, _deliver,
+    broadcast_to_client, broadcast_to_display_group,
+)
+from mosaicmesh.calibration import (
+    order_points, _draw_fitted_label, group_bounding_box,
+    reconstruct_screen_quad, _quad_box, _quad_aspect,
+    _aspect_in_marker_frame, reconcile_screen_quad, _render_output_dims,
+    warp_image_for_screen, _hex_to_bgr, letterbox_to_aspect,
+    assign_group_bounding_boxes, _group_clients,
+    find_squares, angle_cos,
+)
+from mosaicmesh.render import (
+    _keyframe_grid_args, _video_input_args, _video_encoder_args,
+    _get_push_sem, render_token, compute_render_token, _broadcast_render_status,
+    _is_renderable, _normalize_effect, _resolve_effect_filters,
+    _run_ffmpeg, render_group_async,
+    _per_client_items, _broadcast_per_client_play, _broadcast_per_client_preload,
+    isVideoItem, quad_to_source_points,
+    build_ffmpeg_perspective_cmd, build_ffmpeg_individual_cmd,
+    get_video_dimensions, resolve_media_path,
+    _duration_ms, _media_item_payload,
+    _resolve_media_url, _build_media_elements,
+    _apply_playlist, _start_group_playback, _stop_group_playback,
+    _group_online_keys, _begin_prepare, _prepare_unsynced_clients,
+    _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL, _PUSH_CONCURRENCY,
+    KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
+    revalidate_renders_on_boot,
+    mark_group_recalibrated,
+    is_playlist_ready,
+)
+from mosaicmesh.device_scripts import (
+    SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
+    _run_device_script, _drop_pooled_vnc,
+)
+from mosaicmesh.scheduling import (
+    _FREQ_MAP, playlist_index, _parse_date, _hhmm_to_min, schedule_active_at,
+)
+from mosaicmesh.api.discovery import (
+    auto_configure_client, get_discovered_devices,
+    _expected_seg_keys_for_display, _expected_segments_for_client,
+    _propagation_percent_for_client, sync_new_client_to_group,
+    api_discovery_devices, api_discovery_stats, api_discovery_configure,
+)
+from mosaicmesh.api.playlists import (
+    api_playlists_list, api_playlists_get,
+    api_playlists_create,
+    api_playlists_update, api_playlists_delete,
+)
+from mosaicmesh.api.schedules import (
+    api_schedules_list, api_schedules_get,
+    api_schedules_create,
+    api_schedules_update, api_schedules_delete,
+)
+from mosaicmesh.api.profiles import (
+    api_profiles_list, api_profiles_get, api_profiles_create,
+    api_profiles_update, api_profiles_delete,
+    api_clients_assign_profile,
+)
+from mosaicmesh.api.media import api_media, api_media_delete, upload_handler
+from mosaicmesh.api.displays import (
+    api_displays_list, api_displays_create, api_displays_delete,
+)
+from mosaicmesh.api.renders import api_renders_list
+from mosaicmesh.websocket.legacy import msg_response
+# Re-exported for backward-compat: tests in test_websocket_handlers.py call
+# server.handle_websocket_message(...) directly. The handler is also NOT YET
+# wired into ws_handler (dispatch.py only dispatches to msg_response); when
+# the typed protocol gets wired in, ws_handler should call it conditionally
+# and this re-export becomes optional.
+from mosaicmesh.websocket.typed import handle_websocket_message
+from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
-PREPARE_TIMEOUT_MS = 25000  # Safety-net timeout for SILENT/stuck clients only. A
-                            # client that reported NEEDS_ARM (iOS-5 awaiting a human
-                            # tap) is waited on indefinitely (_release_expired_prepares
-                            # holds the GO while any online client is arm-pending), so
-                            # the whole wall starts together once all are armed. This
-                            # timeout only releases past clients that never responded.
+PREPARE_TIMEOUT_MS = 45000  # Safety-net timeout. Lengthened (was 25000) so PSM-
+                            # jittery clocks have time to re-converge after the PREPARE
+                            # resync burst before the best-effort release (sync-gated
+                            # play). Covers SILENT/stuck clients too. A client that
+                            # reported NEEDS_ARM (iOS-5 awaiting a human tap) is waited
+                            # on indefinitely (_release_expired_prepares holds the GO
+                            # while any online client is arm-pending), so the whole wall
+                            # starts together once all are armed. This timeout only
+                            # releases past clients that never responded.
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
 # MUST match the password baked into the fleet's Veency plist by the
@@ -57,1471 +146,38 @@ VEENCY_PASSWORD = os.environ.get("MMVNCPW") or "mosaicmesh"
 _veency_pool = {}
 _veency_lock = asyncio.Lock()
 
-# --- Device lifecycle automation -----------------------------------------
-# The server runs per-device shell scripts over SSH (login/start/stop/reboot),
-# using the passphrase-less key installed by tools/onboard_devices.ps1 and the
-# same legacy-crypto flags (the iPad-1's OpenSSH only speaks SHA-1-era crypto).
-# Client.{login,start,stop,reboot}Script default to None and are backfilled with
-# DEFAULT_DEVICE_SCRIPTS (editable per device via the discovery configure API).
-SSH_KEY_PATH = os.path.expanduser(os.path.join("~", ".ssh", "mosaic_ipad"))
-SSH_USER = "root"
-SSH_LEGACY_OPTS = ["-o", "HostKeyAlgorithms=+ssh-rsa",
-                   "-o", "PubkeyAcceptedAlgorithms=+ssh-rsa",
-                   "-o", "IdentitiesOnly=yes",           # only -i key; old sshd low MaxAuthTries
-                   "-o", "StrictHostKeyChecking=accept-new",
-                   "-o", "ConnectTimeout=10",
-                   "-o", "BatchMode=yes"]                # never prompt (unattended)
-# The wall's display page each device opens. Edit for your network.
-DISPLAY_URL = "http://192.168.1.60:3000/"
-# Bundle id of the MosaicMesh home-screen webclip, used by startScript
-# to launch the display in WEBAPP MODE (chrome-less, fullscreen across
-# script + video transitions). The webclip is installed by tools/
-# onboard_devices.ps1 step 5.4g with a stable UUID across the fleet.
-# Falls back to uiopen (Safari) on iPads where the webclip isn't
-# installed yet. Hex spells "MosaicMeshKiosk1" in ASCII for grep-
-# friendliness in `activator listeners` output.
-WEBCLIP_BUNDLE_ID = "com.apple.webapp-4D6F736169634D6573684B696F736B31"
-DEFAULT_DEVICE_SCRIPTS = {
-    # Wake + unlock + keep the screen lit, via Activator. State-independent
-    # (safe to call regardless of current iPad state): lockscreen.dismiss
-    # wakes the screen if asleep AND skips slide-to-unlock if locked AND
-    # no-ops if already unlocked. The previous version also pressed the
-    # home button, which had the destructive side effect of minimizing
-    # Safari (kicking the wall display to the home screen) if the iPad
-    # was already foregrounded on MosaicMesh -- removed so login is safe
-    # to fire from any starting state. The SBSettings autolock switch off
-    # prevents re-sleeping. Verified on iPad-1 / iOS 5.1.1.
-    # Also locks rotation to PORTRAIT on every login: a wall of iPads
-    # has a fixed physical orientation, so any user-induced rotation
-    # away from portrait (accidental, or by Veency input quirks) must
-    # be reverted before the display layer renders. SBOrientationLocked*
-    # are the prefs SpringBoard reads; `defaults write` routes through
-    # cfprefsd which fires the CFPreferences-change notification that
-    # SpringBoard's observer applies without a respring. Writing as
-    # mobile via `su -c` is mandatory -- root's defaults land in
-    # /var/root/Library/Preferences (wrong place); SpringBoard reads
-    # /var/mobile/Library/Preferences/com.apple.springboard.plist.
-    # Orientation enum is UIInterfaceOrientation: 1 = portrait.
-    # The `2>/dev/null`s keep the loginScript output clean for the
-    # admin UI; the LOGIN_OK terminator is what the server matches on.
-    "loginScript":  "activator send libactivator.lockscreen.dismiss; sleep 1; "
-                    "activator send switch-off.com.a3tweaks.switch.autolock; "
-                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedActive -bool YES' 2>/dev/null; "
-                    "su mobile -c 'defaults write com.apple.springboard SBOrientationLockedOrientation -int 1' 2>/dev/null; "
-                    "echo LOGIN_OK",
-    # Open the display page in WEBAPP MODE via the home-screen webclip
-    # (sbdidlaunch on the webclip's bundle id), falling back to mobile
-    # Safari (uiopen) if the webclip isn't installed on this iPad yet.
-    # Webapp mode gives chrome-less fullscreen across script+video
-    # transitions; Safari mode keeps the URL bar visible and re-enters
-    # iOS native fullscreen per video. See docs/superpowers/specs/
-    # 2026-06-03-cache-progress-and-propagation-ui.md for context.
-    # Like the old uiopen-only form: brings the app to the foreground
-    # without forcing a reload, so a Safari/webapp instance that's
-    # already at this URL just gets refocused.
-    "startScript":  "sbdidlaunch '" + WEBCLIP_BUNDLE_ID + "' 2>/dev/null"
-                    " || uiopen '" + DISPLAY_URL + "'; echo START_OK",
-    # Open the display page with the ?tdbg query flag, which the client JS
-    # uses to (1) draw an on-screen timing HUD with current playback frame /
-    # offset / drift, and (2) stream debug state back to the server log so
-    # operators can collect group-wide diagnostics without per-device touch.
-    #
-    # KILL Safari first then uiopen: on iOS 5 `uiopen` to a URL Safari is
-    # already showing only brings Safari to the foreground -- it does NOT
-    # reload the page. Tdbg mode needs a fresh page load (new SockJS
-    # connection, fresh JS state, fresh ?tdbg flag in location.href). The
-    # killall + relaunch is the only way to guarantee that on iOS 5.
-    # testScript needs killall because it's changing the URL (regular ->
-    # ?tdbg) and iOS 5 Safari otherwise stacks the new tab on top of
-    # the old. Plain killall (SIGTERM) lets Safari clean up; -9 was
-    # too aggressive. NO autolock toggle or SuspendState rm here --
-    # those were experimental fixes that turned out to interact badly
-    # with the always-awake state.
-    "testScript":   "killall MobileSafari 2>/dev/null; sleep 1; "
-                    "uiopen '" + DISPLAY_URL +
-                    ("?tdbg" if "?" not in DISPLAY_URL else "&tdbg") +
-                    "'; echo TEST_OK",
-    # Close the display client (Web.app for the home-screen webclip
-    # since 2026-06-03; MobileSafari for the legacy Safari fallback
-    # path), re-enable auto-lock (start disabled it via the boot
-    # LaunchDaemon's autolock-off), and sleep the screen now via the
-    # sleep button. Killing Web AND MobileSafari is belt-and-suspenders:
-    # whichever was foregrounded gets terminated, and the unused one
-    # is a no-op. Symmetric with start: stop -> screen off + allowed
-    # to stay asleep.
-    "stopScript":   "killall Web 2>/dev/null; "
-                    "killall MobileSafari 2>/dev/null; "
-                    "activator send switch-on.com.a3tweaks.switch.autolock; "
-                    "activator send libactivator.system.sleepbutton; echo STOP_OK",
-    # Full device reboot.
-    "rebootScript": "echo REBOOTING; reboot",
-}
-
-def _apply_default_scripts(client):
-    """Backfill the lifecycle-script fields with fleet defaults where unset (None),
-    so a freshly-registered/older device isn't left with null scripts. Never
-    overrides a per-device script an operator has set."""
-    for field, default in DEFAULT_DEVICE_SCRIPTS.items():
-        if getattr(client, field, None) is None:
-            setattr(client, field, default)
-
-# Render encode note: segments use plain libx264 Constrained Baseline + CRF (NO VBV
-# -maxrate/-bufsize, which injects HRD into the SPS that iOS-5 / Chrome-29 UIWebView
-# reject with MEDIA_ERR_SRC_NOT_SUPPORTED), plus a REGULAR keyframe grid every
-# KEYFRAME_GRID_SEC. iOS-5 seeks keyframe-accurately (currentTime snaps to a
-# keyframe), so x264's default ragged scene-cut keyframes (1-10s apart) made
-# mid-clip drift-correction snap unpredictably far. A fixed grid lets every client
-# seek to the SAME grid keyframe (shared GoTime clock + shared grid => mutual sync).
-# All-intra (-g 1) is still avoided: it blew the bitrate past the iPad-1 decoder.
-# Denser grid => smaller snap: the iPad seek lands within +-KEYFRAME_GRID_SEC/2 of
-# the clock, so a tighter grid both reduces the residual AND its run-to-run spread.
-KEYFRAME_GRID_SEC = 0.25
-
-def _keyframe_grid_args():
-    """ffmpeg args for a regular keyframe grid: force a keyframe every
-    KEYFRAME_GRID_SEC of OUTPUT time (fps-independent). Encoder-independent;
-    the scene-cut-disable flag is encoder-specific and lives in
-    _video_encoder_args() below."""
-    return ["-force_key_frames", "expr:gte(t,n_forced*%s)" % KEYFRAME_GRID_SEC]
-
-
-# Video encoder + concurrency configuration. Render time on a 24-iPad fleet
-# was previously: 24 sequential ffmpeg invocations, each a software (libx264)
-# encode on one CPU. With a modern GPU's hardware encoder (NVENC on NVIDIA,
-# QSV on Intel iGPU, AMF on AMD) and bounded asyncio.gather concurrency,
-# the same render runs ~20-50x faster end-to-end (NVENC alone is 5-10x per
-# file; concurrency cuts the wall time by another ~4-8x on a 24-thread box).
+# Render pipeline constants + functions live in mosaicmesh.render (imported above).
+# Device lifecycle script constants + functions live in mosaicmesh.device_scripts (imported above).
+# _PUSH_STALL_WINDOW_S and _PUSH_POLL_INTERVAL_S remain here because they are only
+# used by _push_segment_to_cached_clients / _poll_push_progress which stay in server.py.
 #
-# Both knobs are env-var overridable so an operator on a CPU-only machine
-# (or one whose driver session limit differs from ours) can adjust without
-# editing source. Defaults assume a single decent NVIDIA GPU.
-#
-#   MMRENDER_ENCODER:  h264_nvenc (default) | h264_qsv | h264_amf | libx264
-#   MMRENDER_CONCURRENCY: max parallel ffmpegs (default 6; NVENC consumer
-#                        sessions are typically capped at 8, headroom keeps
-#                        other concurrent work from being starved)
-#
-# Default = libx264 (CPU). Why not h264_nvenc despite the 5-10x perf win:
-# iPad-1's H.264 baseline decoder rejects NVENC's SPS/SEI output (decoder
-# parses ~65KB of the file, sees SEI NAL types it doesn't handle, fires
-# MEDIA_ERR_SRC_NOT_SUPPORTED / vid:abort, and stops fetching). libx264's
-# baseline SPS is iPad-1-compatible. For fleets running iPad-2 or newer,
-# set MMRENDER_ENCODER=h264_nvenc to opt back in to GPU encoding.
-_VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "libx264"
-_RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
-# Default OFF after empirical regression: enabling -hwaccel cuda with 12
-# concurrent NVENC encodes ran the test fleet (24 iPads) at 397s vs 322s
-# without. The PCIe round-trip (GPU decode -> CPU filter chain (no CUDA
-# equivalent of `perspective`) -> GPU encode) + GPU memory contention at
-# high concurrency outweighed the CPU decode savings on iPad-sized
-# output. Worth re-enabling for 4K/high-bitrate sources where CPU decode
-# is the real bottleneck. Override:
-#   $env:MMRENDER_HWACCEL = "cuda"   (or "qsv", "d3d11va")
-_VIDEO_HWACCEL = os.environ.get("MMRENDER_HWACCEL") or ""
-
-# Cap on parallel cache-push scps to the iPad fleet. The cache is meant
-# to AVOID WiFi saturation at PLAY time, but if we fire 24 parallel
-# scps right after a render we saturate the same AP and every push
-# times out. With 24 contending streams the per-iPad rate dropped to
-# ~100 KB/s (~2.4 MB/s aggregate, all going to one AP). MMPUSH_
-# CONCURRENCY=2 keeps each push at ~LAN line rate and lets a fresh
-# render's 24x100MB push fan-out complete in ~5-10 min total instead
-# of all timing out.
-_PUSH_CONCURRENCY = int(os.environ.get("MMPUSH_CONCURRENCY") or 2)
-
-# Stall detection: a push is aborted only if no NEW bytes have landed
-# on the iPad's destination file within this window. The poller (see
-# _push_segment_to_cached_clients) ssh's stat -c%s every
-# _PUSH_POLL_INTERVAL_S seconds and signals the push coroutine if the
-# size hasn't increased in _PUSH_STALL_WINDOW_S. This replaces an
-# earlier static 600s per-push timeout, which proved to be the wrong
-# tool: a healthy slow transfer over contended WiFi can legitimately
-# need >10 min for one 100 MB segment; a static ceiling either kills
-# good work (set too tight) or papers over genuine stalls (set too
-# loose). Stall-based detection is strictly better.
+# Why STALL-based abort rather than a static timeout: legitimate cache pushes to
+# iPad-1 over WiFi can run for many minutes on a fresh segment; a fixed timeout
+# either over-aborts (kills slow but progressing transfers) or under-aborts (lets
+# zombie SSH sessions hang for hours). Polling the iPad's destination file size
+# every _PUSH_POLL_INTERVAL_S seconds and aborting only when no bytes flow for
+# _PUSH_STALL_WINDOW_S seconds gives us "as long as it takes, but no longer."
+# Empirically tuned: 30s stall window catches genuinely-dead transfers without
+# spurious-aborting healthy-but-slow ones; 5s poll interval is the sweet spot
+# between "responsive to stalls" and "not aggressively over-polling sshd on a
+# resource-constrained iPad-1." Override via MMPUSH_STALL_S / MMPUSH_POLL_S
+# env vars for tuning per-fleet without code changes.
 _PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
-# 2s poll was empirically too aggressive on iPad-1: every poll opens a
-# fresh ssh connection through the legacy SHA-1 handshake, which
-# competes with the scp's own connection. iPad-1 sshd seems to limit
-# concurrent connections enough that the actual scp transfer can stall
-# entirely while the poller keeps eating handshake cycles. 5s gives
-# the scp clear runway between polls; with a 30s stall window that's
-# still 5+ polls of evidence before we declare stall.
 _PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
 
-# Lazy module-level semaphore (created on first use, when an event
-# loop is guaranteed to exist; we don't want to bind it to whatever
-# loop happened to be current at import time).
-_push_sem = None
+_PROBE_CONCURRENCY = 4          # max concurrent cache-capability SSH probes
+_PROBE_TIMEOUT_S = 20           # overall ceiling per probe
+_PROBE_CONNECT_TIMEOUT_S = 10   # ssh ConnectTimeout
+_probe_sem = None
+_probe_inflight = set()         # client_keys with a probe currently running
+
+
+def _get_probe_sem():
+    global _probe_sem
+    if _probe_sem is None:
+        _probe_sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
+    return _probe_sem
 
-
-def _get_push_sem():
-    """Return the module-level push semaphore, creating it on first
-    use inside the running event loop. Safe to call from any
-    coroutine; not safe to call before any loop has started."""
-    global _push_sem
-    if _push_sem is None:
-        _push_sem = asyncio.Semaphore(_PUSH_CONCURRENCY)
-    return _push_sem
-
-
-def _video_input_args():
-    """ffmpeg input-option args (go BEFORE -i). If MMRENDER_HWACCEL is set,
-    emit `-hwaccel <value>` so the source video is decoded on the GPU.
-    Default is OFF (CPU decode) -- see _VIDEO_HWACCEL comment for the
-    empirical reasoning."""
-    if _VIDEO_HWACCEL:
-        return ["-hwaccel", _VIDEO_HWACCEL]
-    return []
-
-
-def _video_encoder_args():
-    """Return ffmpeg encoder + preset args for the configured encoder, plus
-    the encoder-appropriate "no scene-cut keyframes" flag (keyframe grid
-    spacing must be uniform for client-side seek alignment, so any extra
-    scene-detection keyframes break the grid).
-
-    All encoder configs target iPad-1 compatible H.264 baseline @ ~CRF 23
-    quality; this works for NVENC, QSV, AMF, and libx264.
-    """
-    enc = _VIDEO_ENCODER
-    if enc == "h264_nvenc":
-        # NVENC preset names: p1 (fastest) -> p7 (slowest). p4 ~= libx264
-        # 'fast'. -rc vbr + -cq 23 mimics libx264 -crf 23 (constant quality
-        # rate-control). -no-scenecut 1 disables scene-detection keyframes.
-        return ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
-                "-cq", "23", "-no-scenecut", "1"]
-    if enc == "h264_qsv":
-        # Intel Quick Sync (integrated GPU). -global_quality is the QSV
-        # equivalent of CRF. No-scenecut not exposed; QSV's keyframe
-        # behaviour respects -force_key_frames.
-        return ["-c:v", "h264_qsv", "-preset", "veryfast",
-                "-global_quality", "23"]
-    if enc == "h264_amf":
-        # AMD AMF (discrete or APU). -quality speed = fastest preset.
-        # -rc cqp + -qp_i/-qp_p = constant quality.
-        return ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp",
-                "-qp_i", "23", "-qp_p", "23"]
-    # Fallback: software libx264. -x264-params scenecut=0 is libx264-
-    # specific syntax for the same "no scene-cut keyframes" intent.
-    return ["-c:v", "libx264", "-preset", "veryfast",
-            "-x264-params", "scenecut=0"]
-
-
-# File cache with modification time tracking
-file_cache = {}
-cache_stats = {'hits': 0, 'misses': 0}
-
-# JSON response cache for common responses (will be initialized after jsonpickle import)
-json_response_cache = {}
-
-# File handle pool for range requests
-file_handle_pool = {}
-pool_max_size = 50
-
-def get_pooled_file_handle(file_path, mode='rb'):
-    """Get cached file handle from pool"""
-    key = f"{file_path}:{mode}"
-    if key not in file_handle_pool:
-        if len(file_handle_pool) >= pool_max_size:
-            # Close oldest handle
-            oldest_key = next(iter(file_handle_pool))
-            file_handle_pool[oldest_key].close()
-            del file_handle_pool[oldest_key]
-        file_handle_pool[key] = open(file_path, mode)
-    return file_handle_pool[key]
-
-def close_file_pool():
-    """Close all pooled file handles and clear the file cache"""
-    for handle in file_handle_pool.values():
-        handle.close()
-    file_handle_pool.clear()
-    file_cache.clear()
-    cache_stats['hits'] = 0
-    cache_stats['misses'] = 0
-
-def _send_to_session(session_id, encoded_message):
-    """Look up a sockjs Session by its id and call .send() directly. Returns
-    True if delivered, False if no such session.
-
-    Why we need this: the previous broadcast_to_*() helpers called
-    socketmanager.broadcast() once PER addressed client, which sent each
-    message to ALL connected sessions and relied on the iPad-side DEST
-    filter (index.html line 688: `if DEST == getUDID() || DEST == 'ALL'`).
-    For a 24-iPad group on a 24-iPad fleet (each iPad ~~ 1-2 sockjs
-    sessions due to xhr_streaming fallback), one logical PLAY/STOP/PAUSE
-    command became 24 broadcasts x ~40 sessions = ~960 serialized socket
-    writes through the event loop -- visible to operators as command lag.
-    Targeted send via socketmanager.get(session_id) skips every session
-    that isn't the intended recipient: O(N) instead of O(N*M)."""
-    if socketmanager is None or not session_id:
-        return False
-    sess = socketmanager.get(session_id, default=None)
-    if sess is None:
-        return False  # session has since disconnected/expired
-    try:
-        sess.send(encoded_message)
-        return True
-    except Exception as e:
-        logging.debug("_send_to_session(%s) failed: %s", session_id, e)
-        return False
-
-
-def _deliver(client_id, encoded_message, client):
-    """Try targeted session send; fall back to broadcast on miss.
-
-    Why the fallback: after a Safari restart (post-reboot, ?tdbg switch,
-    or crash) the iPad opens a NEW SockJS session with a fresh session.id,
-    but client.clientID still points to the OLD (dead) session until the
-    new connection's REGISTER message arrives and updates it. During that
-    gap (typically 100-500ms but can be 1-2s under load), targeted send
-    drops every message addressed to that iPad. Observed in the field:
-    19 of 22 reconnected iPads missed PREPARE because the broadcast
-    happened within the gap.
-
-    Fallback: when the targeted lookup fails, call socketmanager.broadcast
-    -- the message goes to all sessions, the iPad's new session receives
-    it, and the client-side DEST filter (matching its UDID) routes it
-    correctly. Worst case is the same N*M fanout we had before, but
-    only for the affected client, not for every group message."""
-    if _send_to_session(getattr(client, "clientID", ""), encoded_message):
-        return
-    # Targeted miss -- fall back to broadcast so the message still reaches
-    # the iPad through its new (post-reconnect) session.
-    if socketmanager is not None:
-        socketmanager.broadcast(encoded_message)
-
-
-def broadcast_to_client(client_id, response_dict):
-    """Send a message to a single client (identified by its clientKey, i.e.
-    the cookie-based UDID). Routes to the iPad's specific sockjs session
-    when possible; falls back to broadcast (filtered by client-side DEST)
-    when the session lookup misses -- typically during the reconnect gap."""
-    client = settings.clients.get(client_id)
-    if not client:
-        return
-    response_dict["DEST"] = client_id
-    _deliver(client_id, jsonpickle.encode(response_dict), client)
-
-
-def broadcast_to_display_group(display_id, response_dict):
-    """Send a per-client message to every client in a display group. Each
-    iPad gets the message addressed to its own DEST (the contract the
-    client-side filter expects). Targeted per-session in the steady state;
-    falls back to broadcast for any iPad whose session is in the reconnect
-    gap."""
-    if socketmanager is None:
-        return
-    for client_id, client in settings.clients.items():
-        if client.displayID != display_id:
-            continue
-        response_dict["DEST"] = client_id
-        _deliver(client_id, jsonpickle.encode(response_dict), client)
-
-def init_json_cache():
-    """Initialize JSON response cache after imports are available"""
-    global json_response_cache
-    json_response_cache = {
-        'success': jsonpickle.encode({"PAYLOAD": "SUCCESS"}),
-        'ack': jsonpickle.encode({"PAYLOAD": "ACK"}),
-        'synack': jsonpickle.encode({"PAYLOAD": "SYNACK"})
-    }
-
-def handle_client_disconnect(session_id):
-    """Enhanced client disconnect handling"""
-    # Find and update client last seen time
-    for client_key, client in settings.clients.items():
-        if client.clientID == session_id:
-            client.lastSeen = time.time()
-            client.isOnline = False
-            client.synced = False
-            client.ready = False
-            logging.info(f"Client {client.friendlyName or client_key} disconnected")
-            break
-
-def auto_configure_client(client_key, client):
-    """Automatically configure new clients based on device characteristics"""
-    if client.autoConfigured:
-        return
-    
-    # Auto-assign display group based on device type
-    if client.deviceType == "smartphone":
-        client.displayID = "Mobile"
-        settings.displays.setdefault("Mobile", Display())
-    elif client.deviceType == "tablet":
-        client.displayID = "Tablet"
-        settings.displays.setdefault("Tablet", Display())
-    elif client.deviceType == "desktop":
-        client.displayID = "Desktop" 
-        settings.displays.setdefault("Desktop", Display())
-    else:
-        client.displayID = "Default"
-    
-    # Generate friendly name if not set
-    if not client.friendlyName:
-        device_name = client.deviceModel or client.deviceBrand or "Unknown"
-        client.friendlyName = f"{device_name}_{client_key[:8]}"
-    
-    # Set capabilities based on device characteristics
-    client.capabilities = []
-    if client.deviceWidth >= 1920 and client.deviceHeight >= 1080:
-        client.capabilities.append("HD")
-    if client.deviceType in ["smartphone", "tablet"]:
-        client.capabilities.append("touch")
-        client.capabilities.append("mobile")
-    if client.deviceType == "desktop":
-        client.capabilities.append("keyboard")
-        client.capabilities.append("mouse")
-    
-    client.autoConfigured = True
-    client.discoverySource = "websocket"
-    
-    logging.info(f"Auto-configured client {client.friendlyName} -> {client.displayID}")
-
-def _expected_seg_keys_for_display(display):
-    """Set of seg_KEY strings (token_n) the display CURRENTLY expects
-    to be cached on any lighttpd-localhost iPad in its group. Driven
-    by the display's renderedToken (so a stale cache for a previous
-    render isn't counted as 'have'). Empty set if the display has no
-    renderedToken or no renderable SEGMENT items."""
-    if not display or not getattr(display, "renderedToken", None):
-        return set()
-    token = display.renderedToken
-    keys = set()
-    for i, me in enumerate(getattr(display, "mediaElements", []) or []):
-        if _is_renderable(me) and isVideoItem(me.file) \
-                and me.playmode == PlayMode.SEGMENT:
-            keys.add("%s_%d" % (token, i))
-    return keys
-
-
-def _expected_segments_for_client(client):
-    """Number of seg_ items this client SHOULD have cached given the
-    current rendered token of its display group. Operator-facing
-    convenience; the denominator of propagationPercent."""
-    did = getattr(client, "displayID", None)
-    if not did:
-        return 0
-    return len(_expected_seg_keys_for_display(settings.displays.get(did)))
-
-
-def _propagation_percent_for_client(client):
-    """0-100. Fraction of currently-expected segments this client has
-    in cachedSegments. Returns 100.0 for clients in displays with no
-    renderable segments (vacuously cached -- nothing to propagate).
-    Returns 100.0 for non-iPad / cacheMode=none clients too: the bar
-    is meaningful only for lighttpd-localhost iPads, but we don't want
-    a noisy 0% to drag down aggregates."""
-    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
-        return 100.0
-    did = getattr(client, "displayID", None)
-    if not did:
-        return 100.0
-    expected = _expected_seg_keys_for_display(settings.displays.get(did))
-    if not expected:
-        return 100.0
-    cached = getattr(client, "cachedSegments", set()) or set()
-    have = sum(1 for k in expected if k in cached)
-    return round(100.0 * have / len(expected), 1)
-
-
-def get_discovered_devices():
-    """Get all discovered devices with discovery metadata"""
-    discovered = []
-    current_time = time.time()
-
-    for client_key, client in settings.clients.items():
-        device_info = {
-            "clientKey": client_key,
-            "friendlyName": client.friendlyName,
-            "displayID": client.displayID,
-            "deviceType": client.deviceType,
-            "deviceBrand": client.deviceBrand,
-            "deviceModel": client.deviceModel,
-            "resolution": f"{client.deviceWidth}x{client.deviceHeight}",
-            "canvas": f"{getattr(client, 'canvasWidth', 0)}x{getattr(client, 'canvasHeight', 0)}",
-            "ip": client.ip,
-            "hostname": getattr(client, "hostname", ""),
-            "osName": client.osName,
-            "osVersion": client.osVersion,
-            "engine": getattr(client, "engine", ""),
-            "userAgent": getattr(client, "userAgent", ""),
-            "discoveryTime": client.discoveryTime,
-            "lastSeen": client.lastSeen,
-            "isOnline": client.isOnline,
-            "synced": client.synced,
-            "readyToDisplay": client.ready,
-            "timeSinceLastSeen": current_time - client.lastSeen,
-            "capabilities": client.capabilities,
-            "autoConfigured": client.autoConfigured,
-            "discoverySource": client.discoverySource,
-            "connectionCount": client.connectionCount,
-            # Media-cache state (2026-06-03). cachedSegments is a Python
-            # set in memory; serialize as a sorted list for the API so
-            # operators see a stable order. getattr guards against
-            # Clients in settings.dat that pre-dated these fields and
-            # somehow slipped through migrate_client_objects.
-            "cacheMode": getattr(client, "cacheMode", "none"),
-            "cachedSegments": sorted(list(getattr(client, "cachedSegments", set()) or set())),
-            # Progress-aware fields (2026-06-03 second iteration).
-            # cachePushProgress is None when idle, dict when active --
-            # see Client.cachePushProgress for the schema. The two
-            # derived fields below let dashboards render
-            # "cached N/M (P%)" without computing it themselves.
-            "cachePushProgress": getattr(client, "cachePushProgress", None),
-            "expectedSegments": _expected_segments_for_client(client),
-            "propagationPercent": _propagation_percent_for_client(client),
-        }
-        discovered.append(device_info)
-    
-    # Sort by most recently seen
-    discovered.sort(key=lambda x: x["lastSeen"], reverse=True)
-    return discovered
-
-# Settings save optimization
-last_settings_hash = None
-
-def save_settings_incremental():
-    """Save settings only if they have changed"""
-    global last_settings_hash
-    try:
-        current_settings = jsonpickle.encode(settings, unpicklable=True)
-        current_hash = hash(current_settings)
-        
-        if last_settings_hash != current_hash:
-            with Path("settings.dat").open("w", encoding="utf-8") as f:
-                f.write(current_settings)
-            last_settings_hash = current_hash
-            logging.debug("Settings saved (changed)")
-        else:
-            logging.debug("Settings save skipped (unchanged)")
-    except Exception as e:
-        logging.error(f"Failed to save settings: {e}")
-
-def saveSettings():
-    """Persist settings to disk (wrapper around save_settings_incremental)."""
-    save_settings_incremental()
-
-def cleanup_old_clients(max_age_seconds=24 * 3600):
-    """Remove clients that have been offline longer than max_age_seconds.
-    Persists only when something was actually removed. Returns the count."""
-    current_time = time.time()
-    stale_keys = [
-        key for key, client in settings.clients.items()
-        if not client.isOnline and (current_time - client.lastSeen) > max_age_seconds
-    ]
-    for key in stale_keys:
-        del settings.clients[key]
-        try:
-            asyncio.get_running_loop().create_task(_drop_pooled_vnc(key))
-        except RuntimeError:
-            pass  # called outside a running loop (e.g. tests); pool cleanup is best-effort
-        logging.info(f"Removed stale client {key}")
-    if stale_keys:
-        saveSettings()
-    return len(stale_keys)
-
-def playlist_index(elapsed_ms, durations, loop):
-    """Given elapsed playback time and per-item durations (ms), return the
-    current {'index', 'offsetMs'} or None when the playlist is empty/ended.
-
-    This is the synchronization core: clients call the JS mirror of this with
-    elapsed = GoTime.now() - startEpoch, so every display lands on the same
-    item at the same instant.
-    """
-    total = 0
-    for d in durations:
-        total += d
-    if total <= 0:
-        return None
-    if loop:
-        elapsed_ms = elapsed_ms % total
-    elif elapsed_ms >= total:
-        return None
-    if elapsed_ms < 0:
-        elapsed_ms = 0
-    cum = 0
-    for i in range(len(durations)):
-        if elapsed_ms < cum + durations[i]:
-            return {"index": i, "offsetMs": elapsed_ms - cum}
-        cum += durations[i]
-    return {"index": len(durations) - 1, "offsetMs": durations[-1]}
-
-def sync_new_client_to_group(client_key, client):
-    """If the client's display group is currently playing, send that one client
-    PRELOAD + PLAY so it joins the in-progress playlist in sync."""
-    display = settings.displays.get(client.displayID)
-    if not display or display.action != PlayState.PLAY or not display.mediaElements:
-        return
-    # Per-client URLs (this client's rendered segment), not the generic source —
-    # else a reconnecting renderable client gets the undecodable full source.
-    items = _per_client_items(display, client_key, client)
-    broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
-    broadcast_to_client(client_key, {
-        "REQUEST": "PLAY",
-        "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}
-    })
-
-def order_points(pts):
-    """Reduce a set of quad points (Nx1x2 or Nx2) to 4 corners [TL, TR, BR, BL]."""
-    pts = np.array(pts, dtype="float64").reshape(-1, 2)
-    s = pts.sum(axis=1)
-    d = pts[:, 0] - pts[:, 1]
-    return np.array([
-        pts[np.argmin(s)],   # TL: smallest x+y
-        pts[np.argmax(d)],   # TR: largest x-y
-        pts[np.argmax(s)],   # BR: largest x+y
-        pts[np.argmin(d)],   # BL: smallest x-y
-    ], dtype="float32")
-
-
-def _draw_fitted_label(image, text, marker_corners, color=(255, 0, 0),
-                       font=cv.FONT_HERSHEY_SIMPLEX,
-                       width_mult=1.5, gap_frac=0.15):
-    """Draw `text` aligned to the marker's TL->TR edge -- i.e. in the same
-    reading direction as the canvas's +x axis, regardless of how the iPad
-    is oriented in the photo.
-
-    Anchoring to the MARKER (not the screen quad) has two big wins:
-      1. The marker's corners are detected directly from the photo with
-         pattern-defined ordering, so they're robust even when band
-         detection is poor or the screen quad is fiducial-only.
-      2. The marker's TL->TR vector is the canvas's reading direction,
-         so labels read the right way up on rotated panels (a 90deg-
-         rotated iPad's label is rotated 90deg too -- looks correct
-         from the panel's viewpoint).
-
-    Position: just above the marker (outside the marker's top edge by
-    gap_frac of the marker's height), centered on the TL->TR midpoint.
-    Text is rotated to align with the TL->TR direction via warpAffine.
-
-    Size: text width matches width_mult * marker edge length (default
-    1.5x). Marker is rendered at 300px in canvas coords; the screen is
-    typically 3-4x that on each side, so 1.5x-marker text reads as
-    proportional without overflowing the screen edges in normal layouts.
-
-    The text is rendered onto a small transparent-style buffer and warped
-    in via cv.warpAffine. We use a single-channel mask to compose: the
-    text writes only where the buffer is non-zero, leaving the photo
-    untouched everywhere else."""
-    mc = np.array(marker_corners, dtype="float32").reshape(4, 2)
-    tl, tr = mc[0], mc[1]
-    edge = tr - tl
-    edge_len = float(np.linalg.norm(edge))
-    if edge_len < 8:
-        return
-    # Reading direction (along TL->TR) and "up" relative to the marker
-    # (out of the canvas, away from marker's center).
-    dx, dy = edge / edge_len
-    # "up" is perpendicular to edge, pointing away from the marker's
-    # centroid (so text goes ABOVE the marker, not into it).
-    centroid = mc.mean(axis=0)
-    perp_a = np.array([-dy, dx])   # rotate edge 90deg CCW
-    perp_b = np.array([dy, -dx])   # rotate edge 90deg CW
-    # Pick whichever perp points AWAY from the marker centroid.
-    tl_to_centroid = centroid - tl
-    up = perp_a if float(np.dot(perp_a, tl_to_centroid)) < 0 else perp_b
-
-    # Size the text to fit within width_mult * marker edge.
-    target_w = edge_len * width_mult
-    (tw1, th1), _ = cv.getTextSize(str(text), font, 1.0, 1)
-    if tw1 <= 0 or th1 <= 0:
-        return
-    scale = target_w / tw1
-    if scale < 0.3:
-        return
-    thickness = max(2, int(round(scale * 1.5)))
-    (tw, th), baseline = cv.getTextSize(str(text), font, scale, thickness)
-
-    # Render text into its own small buffer (BGR), then warpAffine it
-    # into the main image at the rotated, translated position.
-    pad = max(2, int(round(scale * 2)))
-    buf_w = tw + 2 * pad
-    buf_h = th + baseline + 2 * pad
-    text_buf = np.zeros((buf_h, buf_w, 3), dtype=np.uint8)
-    text_mask = np.zeros((buf_h, buf_w), dtype=np.uint8)
-    # Baseline at (pad, pad + th); thickness drawn into both buffers.
-    cv.putText(text_buf, str(text), (pad, pad + th), font, scale, color,
-               thickness, cv.LINE_AA)
-    cv.putText(text_mask, str(text), (pad, pad + th), font, scale, 255,
-               thickness, cv.LINE_AA)
-
-    # Place buffer in the image: TL of the BUFFER maps to a photo point
-    # such that the BUFFER'S BOTTOM CENTRE is at the marker's top edge
-    # midpoint, offset upward by gap_frac * edge_len. The buffer is
-    # rotated so its X axis aligns with the marker's TL->TR direction.
-    edge_mid = (tl + tr) / 2.0
-    gap = edge_len * gap_frac
-    # The text's "bottom centre" anchor in the photo (right at the gap
-    # above the marker's TL->TR edge).
-    photo_anchor = edge_mid + up * gap
-    # Buffer-local point that should land at photo_anchor: (buf_w/2, buf_h - pad).
-    # We define the affine M such that
-    #   M @ (buf_w/2, buf_h - pad, 1) = photo_anchor
-    # and M's linear part is rotation by angle theta = atan2(dy, dx).
-    cos_t, sin_t = float(dx), float(dy)
-    # Photo point of an offset (bx, by) from anchor: anchor + bx*[dx,dy] + by*(-up).
-    # We need the affine that maps buffer coords (bx_, by_) -> photo coords.
-    # bx, by relative to anchor = (bx_ - buf_w/2, by_ - (buf_h - pad)).
-    # Photo coord = anchor + (bx_ - buf_w/2)*[dx,dy] + (by_ - (buf_h - pad))*[-up_x,-up_y]
-    # In matrix form:
-    #   [photo_x]   [ dx  -up_x ] [bx_]   [ tx ]
-    #   [photo_y] = [ dy  -up_y ] [by_] + [ ty ]
-    # where (tx, ty) = anchor - (buf_w/2)*[dx,dy] - (buf_h - pad)*(-up).
-    ax, ay = float(photo_anchor[0]), float(photo_anchor[1])
-    bcx, bcy = buf_w / 2.0, buf_h - pad
-    tx_ = ax - bcx * dx - bcy * (-up[0])
-    ty_ = ay - bcx * dy - bcy * (-up[1])
-    M = np.array([[dx, -up[0], tx_],
-                  [dy, -up[1], ty_]], dtype="float32")
-    h, w = image.shape[:2]
-    warped = cv.warpAffine(text_buf, M, (w, h), flags=cv.INTER_LINEAR,
-                           borderValue=(0, 0, 0))
-    warped_mask = cv.warpAffine(text_mask, M, (w, h), flags=cv.INTER_LINEAR,
-                                borderValue=0)
-    # Composite: image[mask>0] = warped[mask>0]. Use np.where on the mask.
-    mask3 = warped_mask[:, :, None] > 0
-    np.copyto(image, warped, where=mask3)
-
-
-def group_bounding_box(quads):
-    """Tight axis-aligned [x, y, w, h] enclosing all screen quads (photo coords)."""
-    if not quads:
-        return None
-    allpts = np.concatenate([np.array(q, dtype="int32").reshape(-1, 2) for q in quads])
-    x, y, w, h = cv.boundingRect(allpts)
-    return [int(x), int(y), int(w), int(h)]
-
-
-def reconstruct_screen_quad(marker_quad, cw, ch, marker_px=300):
-    """Photo-space quad of the full screen, extrapolated from the centered,
-    fixed-size ArUco marker (marker and screen are coplanar). marker_quad is
-    [TL,TR,BR,BL] in photo px (ordered). Returns a (4,1,2) int32 array of the
-    screen corners [TL,TR,BR,BL]."""
-    cw = float(cw); ch = float(ch); h = marker_px / 2.0
-    marker_canvas = np.array([
-        [cw/2 - h, ch/2 - h], [cw/2 + h, ch/2 - h],
-        [cw/2 + h, ch/2 + h], [cw/2 - h, ch/2 + h]], dtype="float32")
-    dst = np.array(marker_quad, dtype="float32").reshape(4, 2)
-    H = cv.getPerspectiveTransform(marker_canvas, dst)
-    screen = np.array([[[0, 0]], [[cw, 0]], [[cw, ch]], [[0, ch]]], dtype="float32")
-    return cv.perspectiveTransform(screen, H).astype("int32")
-
-
-def _quad_box(contour):
-    """Clean convex 4-corner box (minAreaRect) from any contour/quad, ordered."""
-    pts = np.array(contour, dtype="float32").reshape(-1, 1, 2)
-    return order_points(cv.boxPoints(cv.minAreaRect(pts)))
-
-
-def _quad_iou(a, b):
-    """Intersection-over-union of two convex quads (each (4,2) or (4,1,2))."""
-    a = np.array(a, dtype="float32").reshape(-1, 2)
-    b = np.array(b, dtype="float32").reshape(-1, 2)
-    inter, _ = cv.intersectConvexConvex(a, b)
-    union = cv.contourArea(a) + cv.contourArea(b) - inter
-    return float(inter / union) if union > 0 else 0.0
-
-
-def _quad_aspect(quad):
-    """Width / height of a quad's axis-aligned bounding rect. Used as an
-    orientation-only signal -- aspect is invariant to translation, scale, and
-    the band's well-known ~10-15% per-side inward shrink, so it's a more
-    robust rotation detector than absolute IoU."""
-    pts = np.array(quad, dtype="float32").reshape(-1, 1, 2)
-    x, y, w, h = cv.boundingRect(pts.astype(np.int32))
-    return float(w) / max(1.0, float(h))
-
-
-def _aspect_in_marker_frame(quad, marker_corners):
-    """Aspect ratio (width/height) of `quad` measured in the marker's local
-    coordinate frame, after un-warping the marker's perspective.
-
-    Why this is better than `_quad_aspect`: that function uses the quad's
-    photo-frame AABB, which is *not* invariant to perspective tilt. A 2:1
-    rectangle tilted 45deg in photo has an AABB aspect of 1:1 -- the
-    orientation info has been erased by the bounding-rect operation.
-
-    This function computes the homography from photo coords back to the
-    marker's intrinsic 300x300 frame (centered at origin), applies it to
-    the quad's corners, then measures the quad's extent in that flat
-    rectified frame. The marker is coplanar with the screen (both are
-    rendered on the same canvas), so the rectification that flattens the
-    marker also flattens the screen -- giving the screen's true aspect
-    as if you were looking straight at it.
-
-    Use this for "does the band match the reported canvas aspect?" -- a
-    direct comparison of ratios in the marker frame, no perspective bias."""
-    mp = np.array(marker_corners, dtype="float32").reshape(4, 2)
-    # Marker's intrinsic frame: 300x300 square centered at origin.
-    h = 150.0
-    mc = np.array([[-h, -h], [h, -h], [h, h], [-h, h]], dtype="float32")
-    # Homography from photo back to marker frame.
-    H = cv.getPerspectiveTransform(mp, mc)
-    pts = np.array(quad, dtype="float32").reshape(-1, 1, 2)
-    in_marker = cv.perspectiveTransform(pts, H).reshape(-1, 2)
-    xs = in_marker[:, 0]
-    ys = in_marker[:, 1]
-    width = float(xs.max() - xs.min())
-    height = float(ys.max() - ys.min())
-    if height < 1e-6:
-        return 1.0
-    return width / height
-
-
-def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, min_iou=0.5):
-    """Choose the screen quad. The marker-derived fiducial is ALWAYS the output
-    geometry; the detected band is used purely to VALIDATE the fiducial and
-    to detect a stale mobile auto-rotation.
-
-    Why not use the band as output (a previous attempt): on iPad-1 calibrate
-    pages with an 8px CSS border and the iPad's own plastic bezel, the bright-
-    region threshold detects the white *interior* of the screen, not the
-    screen edge -- the bezel + border + JPEG edge blur shrink the detected
-    contour by ~10-15% per side from the true panel edge. The fiducial
-    extrapolates from the marker to the full canvas (which equals the html
-    element extent = the panel) and is correct by construction; substituting
-    band geometry made every screen render too small.
-
-    Rotation detection: we want to catch the case where the iPad reported its
-    canvas dims in one orientation but was photographed in the other (the
-    canvas-resize event didn't make it to the server before calibration).
-    Two independent signals decide:
-      - IoU comparison: the swapped fiducial (cw<->ch) is closer to the band.
-        High specificity but requires a usable band AND enough orientation
-        difference to push IoU above min_iou.
-      - Aspect comparison: the band's bounding-rect aspect is closer to the
-        swapped fiducial's aspect than to the native fiducial's. This is
-        invariant to the band's ~10-15% inward shrink (shrink affects width
-        and height proportionally), so it works even when band IoU is below
-        min_iou -- which is the common case for one-off rotated screens
-        whose band is partially occluded or poorly thresholded.
-
-    Returns (quad (4,1,2) int32, source) where source is one of:
-      'fiducial'    -- fiducial, band-validated (high confidence)
-      'rotated'     -- swapped-orientation fiducial (band confirmed rotation)
-      'unverified'  -- fiducial, band didn't validate either orientation
-                       (band may be noisy/degenerate; fiducial still trusted)
-      'no-band'     -- fiducial, no band quad was provided to validate against
-                       (the bright-region pipeline produced no quad for this
-                       marker -- typically dim/glare iPads)"""
-    fid = reconstruct_screen_quad(marker_quad, cw, ch, marker_px)
-    fid_sw = reconstruct_screen_quad(marker_quad, ch, cw, marker_px)
-    # Need a usable, non-degenerate band box to validate against.
-    box = None
-    if border_contour is not None and len(np.array(border_contour).reshape(-1, 2)) >= 3:
-        b = _quad_box(border_contour)
-        if cv.contourArea(b.astype("float32").reshape(-1, 1, 2)) > 0:
-            box = b
-    if box is None:
-        return fid, "no-band"
-    iou = _quad_iou(fid, box)
-    iou_sw = _quad_iou(fid_sw, box)
-    # Aspect comparison in the MARKER'S frame after perspective un-warp.
-    # Both the marker and the screen are coplanar (rendered on the same
-    # canvas) so the rectification that flattens the marker also flattens
-    # the band, giving the band's true aspect as if seen straight-on.
-    # The fiducials' aspect in marker frame IS cw/ch by construction.
-    ba = _aspect_in_marker_frame(box, marker_quad)
-    fa = float(cw) / max(1.0, float(ch))
-    fa_sw = float(ch) / max(1.0, float(cw))
-
-    # AUTO-SWAP CRITERIA: only swap when evidence is OVERWHELMING. Real
-    # fleet photos have intra-screen brightness gradients that can pull
-    # the band's measured aspect toward 1.0 (square), and a "barely
-    # closer to swap than to native" heuristic over-fires on those.
-    # Tight criteria below default to KEEP (trust the iPad's reported
-    # canvas dims) unless every signal agrees:
-    #   (a) band aspect is within 0.15 log units of the swap aspect
-    #       (i.e., band shape matches swap shape within ~15%)
-    #   (b) band aspect is at least 0.35 log units away from the native
-    #       aspect (i.e., band is decisively NOT the reported shape)
-    #   (c) IoU with the swapped fiducial corroborates: swapped IoU
-    #       beats native IoU by at least 1.5x AND is >= min_iou
-    # If any fails, keep the iPad's reported orientation; the user can
-    # manually swap via the swap_orientation admin action if needed.
-    log_ba = float(np.log(ba))
-    log_native = float(np.log(fa))
-    log_swap = float(np.log(fa_sw))
-    aspect_matches_swap = abs(log_ba - log_swap) < 0.15
-    aspect_far_from_native = abs(log_ba - log_native) > 0.35
-    iou_corroborates_swap = (iou_sw >= min_iou and
-                              iou_sw > iou * 1.5)
-    if aspect_matches_swap and aspect_far_from_native and iou_corroborates_swap:
-        return fid_sw, "rotated"
-    # Distinguish "we checked and it agreed with reported" from "we couldn't
-    # decide". Useful in the visualisation: green = checked, yellow = ambiguous.
-    if iou >= min_iou and abs(log_ba - log_native) < 0.20:
-        return fid, "fiducial"
-    return fid, "unverified"
-
-
-def _render_output_dims(client):
-    """Per-screen render output size: the canvas/viewport ASPECT (true shape and
-    orientation), scaled to FIT WITHIN the device's reported screen resolution so
-    it stays displayable AND decodable on the panel — a 1st-gen iPad's H.264
-    decoder maxes near its 768x1024 screen, and the viewport can't exceed the
-    screen anyway. Returns even (w, h) for libx264."""
-    aw = int(getattr(client, "canvasWidth", 0) or client.deviceWidth) or 1
-    ah = int(getattr(client, "canvasHeight", 0) or client.deviceHeight) or 1
-    dw = int(getattr(client, "deviceWidth", 0) or 0)
-    dh = int(getattr(client, "deviceHeight", 0) or 0)
-    if dw and dh:
-        s = min(1.0, dw / float(aw), dh / float(ah))
-        aw = int(round(aw * s)); ah = int(round(ah * s))
-    return max(2, aw - aw % 2), max(2, ah - ah % 2)
-
-
-def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):
-    """Warp the region of source_img under a screen's quad onto that screen's
-    pixel rect. bbox is the [x, y, w, h] region of the photo that the source image is stretched to fill
-    (the group bbox for SEGMENT, the screen's own quad bbox for INDIVIDUAL); the full image is
-    stretched to fill bbox, so the screen quad (photo coords) maps back into
-    media coords, then a homography fits it to out_w x out_h."""
-    h, w = source_img.shape[:2]
-    bx, by, bw, bh = bbox
-    # Use the quad in its STORED order (screen TL,TR,BR,BL from the marker), not a
-    # geometric re-sort — otherwise a non-upright panel (e.g. 180°-mounted) flips.
-    ordered = np.array(screen_quad, dtype="float32").reshape(-1, 2)
-    src = np.array([[(px - bx) / bw * w, (py - by) / bh * h] for (px, py) in ordered], dtype="float32")
-    dst = np.array([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]], dtype="float32")
-    m = cv.getPerspectiveTransform(src, dst)
-    return cv.warpPerspective(source_img, m, (out_w, out_h))
-
-
-def _hex_to_bgr(hexstr):
-    """'#rrggbb' -> OpenCV (B, G, R) tuple; falls back to black."""
-    h = (hexstr or "#000000").lstrip("#")
-    if len(h) != 6:
-        h = "000000"
-    return (int(h[4:6], 16), int(h[2:4], 16), int(h[0:2], 16))
-
-
-def letterbox_to_aspect(img, target_w, target_h, bg_bgr):
-    """Scale img to fit within target_w x target_h preserving aspect, centered
-    on a solid bg_bgr canvas of exactly that size."""
-    target_w = max(1, int(target_w)); target_h = max(1, int(target_h))
-    h, w = img.shape[:2]
-    scale = min(target_w / float(w), target_h / float(h))
-    nw = max(1, int(round(w * scale))); nh = max(1, int(round(h * scale)))
-    resized = cv.resize(img, (nw, nh))
-    canvas = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-    canvas[:] = bg_bgr
-    x = (target_w - nw) // 2; y = (target_h - nh) // 2
-    canvas[y:y + nh, x:x + nw] = resized
-    return canvas
-
-
-def assign_group_bounding_boxes():
-    """Per display group, set boundingBox/boundingBoxCenter from the ArUco
-    screens' quads (photo coords). Call after calibration."""
-    groups = {}
-    for key, client in settings.clients.items():
-        if client.measuredPerimeter is not None and client.displayID:
-            groups.setdefault(client.displayID, []).append(client.measuredPerimeter)
-    for display_id, quads in groups.items():
-        display = settings.displays.setdefault(display_id, Display())
-        bbox = group_bounding_box(quads)
-        display.boundingBox = bbox
-        if bbox:
-            display.boundingBoxCenter = [bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2]
-
-
-def _group_clients(display_id):
-    """Sorted [(clientKey, client)] for clients assigned to a display group."""
-    return sorted([(k, c) for k, c in settings.clients.items() if c.displayID == display_id])
-
-
-_FREQ_MAP = {"DAILY": _rrule.DAILY, "WEEKLY": _rrule.WEEKLY,
-             "MONTHLY": _rrule.MONTHLY, "YEARLY": _rrule.YEARLY}
-
-
-def _parse_date(s):
-    y, m, d = [int(x) for x in str(s).split("-")]
-    return datetime.datetime(y, m, d)
-
-
-def _hhmm_to_min(s):
-    hh, mm = [int(x) for x in str(s).split(":")]
-    return hh * 60 + mm
-
-
-def schedule_active_at(schedule, when):
-    """True if `schedule` is active at datetime `when` (server-local): `when`'s
-    date is an rrule occurrence (minus exdates) and the time is within the
-    [startTime, endTime] window. Pure; ignores `enabled` (caller checks that)."""
-    freq = _FREQ_MAP.get(getattr(schedule, "freq", None))
-    if freq is None:
-        return False
-    try:
-        dtstart = _parse_date(schedule.dtstart)
-    except Exception:
-        return False
-    kw = {"dtstart": dtstart, "interval": max(1, int(getattr(schedule, "interval", 1) or 1))}
-    end = getattr(schedule, "end", None) or {"type": "never"}
-    if not isinstance(end, dict):
-        end = {"type": "never"}
-    if end.get("type") == "until" and end.get("untilDate"):
-        try:
-            u = _parse_date(end["untilDate"])
-            kw["until"] = u.replace(hour=23, minute=59, second=59)
-        except Exception:
-            pass
-    elif end.get("type") == "count" and end.get("count"):
-        kw["count"] = int(end["count"])
-    if getattr(schedule, "freq", None) == "WEEKLY" and getattr(schedule, "byweekday", None):
-        kw["byweekday"] = [int(x) for x in schedule.byweekday]
-    rset = _rrule.rruleset()
-    rset.rrule(_rrule.rrule(freq, **kw))
-    for ex in (getattr(schedule, "exdates", None) or []):
-        try:
-            rset.exdate(_parse_date(ex))
-        except Exception:
-            pass
-    day_start = datetime.datetime(when.year, when.month, when.day)
-    if not rset.between(day_start, day_start, inc=True):   # occurrences sit at midnight of each day
-        return False
-    now_min = when.hour * 60 + when.minute
-    try:
-        return _hhmm_to_min(schedule.startTime) <= now_min <= _hhmm_to_min(schedule.endTime)
-    except Exception:
-        return False
-
-
-def compute_render_token(display_id):
-    """Stable hash of the inputs that affect a per-screen render (SEGMENT or INDIVIDUAL): the playlist
-    items, the group bounding box, and each client's resolution + measured quad.
-    Rendered assets are valid only while this matches Display.renderedToken."""
-    display = settings.displays.get(display_id)
-    if not display:
-        return ""
-    items = []
-    for me in display.mediaElements:
-        pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
-        items.append((me.id, me.file, me.duration, pm,
-                      getattr(me, "backgroundColor", "#000000"),
-                      getattr(me, "startEffect", None), getattr(me, "endEffect", None)))
-    clients = []
-    for key, c in _group_clients(display_id):
-        perim = None
-        if c.measuredPerimeter is not None:
-            perim = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2).tolist()
-        clients.append((key, c.deviceWidth, c.deviceHeight, perim))
-    # Bump this when the encode settings change, to invalidate stale renders.
-    # v6: encoder default reverted libx264 (NVENC SPS rejected by iPad-1).
-    encode_ver = "grid025-cbl-v6"
-    raw = repr((items, display.boundingBox, clients, encode_ver))
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
-
-
-def _broadcast_render_status(display_id, status):
-    if socketmanager is not None:
-        socketmanager.broadcast(jsonpickle.encode(
-            {"REQUEST": "RENDER_STATUS", "PAYLOAD": {"displayID": display_id, "status": status}}))
-
-
-def _is_renderable(me):
-    """SEGMENT and INDIVIDUAL items require a per-screen server render."""
-    return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL)
-
-
-def _normalize_effect(field):
-    """Tolerate an effect field as {name, params} | bare-string name | None."""
-    if not field:
-        return None
-    if isinstance(field, str):
-        return {"name": field, "params": {}}
-    if isinstance(field, dict) and field.get("name"):
-        return field
-    return None
-
-
-def _resolve_effect_filters(me, duration_ms, out_w, out_h):
-    """Collect (video_fragments, audio_fragments) for an item's start/end effects."""
-    vfs, afs = [], []
-    ctx = {"duration_ms": duration_ms, "out_w": out_w, "out_h": out_h}
-    for role, field in (("start", getattr(me, "startEffect", None)),
-                        ("end", getattr(me, "endEffect", None))):
-        spec = _normalize_effect(field)
-        if not spec:
-            continue
-        eff = effects.get_effect(spec.get("name"))
-        if eff is None:
-            continue
-        v, a = eff.video_filters(role, eff.resolve(spec.get("params")), ctx)
-        vfs += v
-        afs += a
-    return vfs, afs
-
-
-async def _run_ffmpeg(cmd, label, semaphore):
-    """Run one ffmpeg command under the concurrency semaphore. Logs and
-    raises with the last few lines of stderr on non-zero exit -- ffmpeg's
-    final lines are where the actual error message lives (everything
-    before is progress noise)."""
-    async with semaphore:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _out, _err = await proc.communicate()
-        if proc.returncode != 0:
-            tail = (_err or b"").decode("utf-8", "replace").strip().splitlines()[-3:]
-            logging.error("ffmpeg rc=%s (%s) cmd=%s\n  %s",
-                          proc.returncode, label, " ".join(cmd), "\n  ".join(tail))
-            raise RuntimeError("ffmpeg failed for " + label +
-                               " (" + str(proc.returncode) + ")")
-
-
-async def render_group_async(display_id):
-    """Async render of a group's SEGMENT items.
-
-    Strategy: build the FULL list of per-client ffmpeg commands first, then
-    asyncio.gather them under a Semaphore(_RENDER_CONCURRENCY) so multiple
-    encodes run in parallel. The previous implementation awaited each ffmpeg
-    in a for-loop -- the async syntax was misleading, the actual execution
-    was strictly sequential. On a 24-iPad fleet this is the difference
-    between ~10 minutes and ~30 seconds total render time.
-
-    Image warps still happen inline (OpenCV CPU warpPerspective). For a 24-
-    iPad fleet at typical output sizes, the whole image-render pass is
-    < 1 second; concurrency would buy ~nothing and just complicate the
-    code path."""
-    display = settings.displays.get(display_id)
-    if not display:
-        return {"status": "error"}
-    display.renderStatus = "rendering"
-    _broadcast_render_status(display_id, "rendering")
-    token = compute_render_token(display_id)
-    try:
-        seg_items = [(i, me) for i, me in enumerate(display.mediaElements)
-                     if _is_renderable(me)]
-        clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
-        # Pass 1: collect all video render commands. Pass 2: gather them.
-        # This lets us see the total job count and parallelise everything
-        # in a single batch (across items AND across clients).
-        video_jobs = []        # list of (cmd, label)
-        seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
-        for i, me in seg_items:
-            src_path = resolve_media_path(me.file)
-            if isVideoItem(me.file):
-                dims = get_video_dimensions(src_path) if src_path else None
-                if not dims:
-                    raise RuntimeError("cannot read source video: " + str(me.file))
-                sw, sh = dims
-                for key, c in clients:
-                    out_dir = os.path.join("media", key, "videos")
-                    Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    out_w, out_h = _render_output_dims(c)
-                    # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
-                    # seconds-domain duration (the param name 'duration_ms' is a
-                    # misnomer). Do NOT convert to ms here — only the client
-                    # playback payload (_media_item_payload) needs ms.
-                    evf, eaf = _resolve_effect_filters(me, me.duration,
-                                                       out_w, out_h)
-                    if me.playmode == PlayMode.INDIVIDUAL:
-                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
-                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
-                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
-                            raise RuntimeError("degenerate screen quad for client " + str(key))
-                        if sw * bh >= sh * bw:                 # source wider/equal -> pad height
-                            pad_w = sw; pad_h = int(round(sw * bh / float(bw)))
-                        else:                                  # source taller -> pad width
-                            pad_h = sh; pad_w = int(round(sh * bw / float(bh)))
-                        pad_x = (pad_w - sw) // 2; pad_y = (pad_h - sh) // 2
-                        pts = quad_to_source_points([bx, by, bw, bh], c.measuredPerimeter, pad_w, pad_h)
-                        out_path = os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".mp4")
-                        cmd = build_ffmpeg_individual_cmd(src_path, out_path, pts,
-                                                          out_w, out_h,
-                                                          pad_w, pad_h, pad_x, pad_y,
-                                                          getattr(me, "backgroundColor", "#000000"),
-                                                          extra_video_filters=evf, extra_audio_filters=eaf)
-                    else:
-                        pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
-                        out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
-                        cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                           out_w, out_h,
-                                                           extra_video_filters=evf, extra_audio_filters=eaf)
-                        seg_push_targets.append((key, i))
-                    video_jobs.append((cmd, key + "/" + str(i)))
-            else:
-                img = cv.imread(src_path) if src_path else None
-                if img is None:
-                    raise RuntimeError("cannot read source image: " + str(me.file))
-                for key, c in clients:
-                    out_dir = os.path.join("media", key, "images")
-                    Path(out_dir).mkdir(parents=True, exist_ok=True)
-                    # Output at the client's TRUE rendered viewport (canvas),
-                    # falling back to reported device dims when canvas is 0/missing.
-                    out_w, out_h = _render_output_dims(c)
-                    if me.playmode == PlayMode.INDIVIDUAL:
-                        quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)
-                        bx, by, bw, bh = [int(v) for v in cv.boundingRect(quad_pts)]
-                        if bw <= 0 or bh <= 0 or cv.contourArea(np.array(c.measuredPerimeter, dtype="int32")) <= 0:
-                            raise RuntimeError("degenerate screen quad for client " + str(key))
-                        bg = _hex_to_bgr(getattr(me, "backgroundColor", "#000000"))
-                        canvas = letterbox_to_aspect(img, bw, bh, bg)
-                        warped = warp_image_for_screen(canvas, [bx, by, bw, bh], c.measuredPerimeter,
-                                                       out_w, out_h)
-                        cv.imwrite(os.path.join(out_dir, "ind_" + token + "_" + str(i) + ".png"), warped)
-                    else:
-                        warped = warp_image_for_screen(img, display.boundingBox, c.measuredPerimeter,
-                                                       out_w, out_h)
-                        cv.imwrite(os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".png"), warped)
-        # Pass 2: fire all video ffmpeg jobs in parallel, capped at
-        # _RENDER_CONCURRENCY. Any failure raises out of asyncio.gather
-        # (return_exceptions=False default) and gets caught by the outer
-        # try-except, which sets renderStatus='error' and broadcasts.
-        if video_jobs:
-            sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
-            logging.info("render: launching %d ffmpeg jobs concurrency=%d encoder=%s",
-                         len(video_jobs), _RENDER_CONCURRENCY, _VIDEO_ENCODER)
-            t0 = time.time()
-            await asyncio.gather(*[_run_ffmpeg(cmd, lbl, sem) for cmd, lbl in video_jobs])
-            logging.info("render: %d ffmpeg jobs done in %.1fs",
-                         len(video_jobs), time.time() - t0)
-            # Cache-push: fire-and-forget scp of each seg_ file to its
-            # iPad's lighttpd cache dir. _push_segment_to_cached_clients
-            # is a no-op for clients not in lighttpd-localhost cacheMode,
-            # so it is safe to call unconditionally for every seg_ target.
-            # See docs/superpowers/specs/2026-06-03-media-cache-design.md
-            for _push_key, _push_n in seg_push_targets:
-                asyncio.ensure_future(
-                    _push_segment_to_cached_clients(_push_key, token, _push_n))
-        display.renderedToken = token
-        display.renderStatus = "ready"
-        _broadcast_render_status(display_id, "ready")
-        return {"status": "ready", "token": token}
-    except Exception as e:
-        logging.error("render failed for %s: %s", display_id, e)
-        display.renderStatus = "error"
-        _broadcast_render_status(display_id, "error")
-        return {"status": "error", "error": str(e)}
-
-
-def _per_client_items(display, key, c):
-    """Per-client playlist items: renderable items (SEGMENT/INDIVIDUAL) resolve to
-    THIS client's warped file when calibrated, else the plain source. Shared by
-    the PLAY (GO) and PREPARE paths so both hand a client the same playable URL.
-
-    Media-cache aware (2026-06-03): when this client is in
-    cacheMode='lighttpd-localhost' AND has the segment cached locally
-    (seg_<token>_<i> in client.cachedSegments), the per-iPad URL is
-    rewritten to http://127.0.0.1:8080/seg_<token>_<i>.mp4 so the
-    iPad's Safari fetches from its local lighttpd instead of competing
-    for shared WiFi bandwidth at PLAY time. INDIVIDUAL-mode items are
-    NOT cached by this design (no ind_HASH_N tracking in cachedSegments),
-    so they keep the central-server URL. See spec
-    docs/superpowers/specs/2026-06-03-media-cache-design.md."""
-    token = display.renderedToken
-    items = []
-    cache_on = (getattr(c, "cacheMode", "none") == "lighttpd-localhost")
-    cached = getattr(c, "cachedSegments", set()) if cache_on else set()
-    for i, me in enumerate(display.mediaElements):
-        if _is_renderable(me) and c.measuredPerimeter is not None:
-            prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
-            ext = ".mp4" if isVideoItem(me.file) else ".png"
-            seg_key = "%s_%d" % (token, i)
-            if (prefix == "seg_" and cache_on and seg_key in cached):
-                # Cache hit: localhost URL bypasses central server entirely.
-                f = "http://127.0.0.1:8080/seg_" + seg_key + ".mp4"
-            else:
-                f = "/media/" + key + "/" + prefix + token + "_" + str(i) + ext
-        else:
-            f = me.file  # FULL item, or uncalibrated fallback to full source
-        item = _media_item_payload(me)
-        item["file"] = f
-        items.append(item)
-    return items
-
-
-def _broadcast_per_client_play(display_id, display):
-    """Send each client its own PLAY with its per-client (warped) media URLs."""
-    for key, c in _group_clients(display_id):
-        broadcast_to_client(key, {"REQUEST": "PLAY",
-            "PAYLOAD": {"startEpoch": display.playStartEpoch,
-                        "items": _per_client_items(display, key, c), "loop": display.loop}})
-
-
-def _broadcast_per_client_preload(display_id, media_elements=None):
-    """Send each client in a display group its own PRELOAD with per-client
-    media URLs computed by _per_client_items -- the same function PLAY uses,
-    so PRELOAD and PLAY are consistent. iPad-1 devices in lighttpd-localhost
-    cacheMode + cached segment get localhost URLs; everyone else gets the
-    central-server per-client URL (matching legacy behavior). The legacy
-    `media_elements` parameter is accepted for backward compatibility but
-    ignored -- we read display.mediaElements via display_id."""
-    display = settings.displays.get(display_id)
-    if not display:
-        return
-    for key, c in _group_clients(display_id):
-        items = _per_client_items(display, key, c)
-        broadcast_to_client(key, {"REQUEST": "PRELOAD",
-                                  "PAYLOAD": {"items": items}})
-
-
-# Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded
-# to .mp4 by ffmpeg regardless of source; FULL items play directly in the
-# browser (.mp4/.webm/.m4v are broadly playable, .mov needs h264/Safari/Chrome).
-_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".ogv")
-
-
-def isVideoItem(file):
-    """True if a media file is a video, mirroring the client's isVideoItem.
-    Tolerates a trailing ?query."""
-    return str(file or "").lower().split("?")[0].endswith(_VIDEO_EXTS)
-
-
-def quad_to_source_points(bbox, screen_quad, src_w, src_h):
-    """Corners of the screen's quad expressed in source media pixel coords (the
-    source is stretched to fill the group bbox). Uses the quad in its STORED
-    order — reconstruct_screen_quad emits screen [TL,TR,BR,BL] in the panel's own
-    orientation (from the marker). Re-ordering geometrically would discard that
-    and flip a non-upright panel (e.g. a 180°-mounted screen)."""
-    bx, by, bw, bh = bbox
-    pts = np.array(screen_quad, dtype="float32").reshape(-1, 2)
-    return [[(float(px) - bx) / bw * src_w, (float(py) - by) / bh * src_h] for (px, py) in pts]
-
-
-def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
-                                 extra_video_filters=None, extra_audio_filters=None):
-    """ffmpeg arg list: perspective-warp the source quad to fill the frame, scale
-    to the screen resolution, encode iPad-compatible H.264 + AAC audio.
-    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR.
-    extra_video_filters append to -vf; extra_audio_filters add an -af when present."""
-    tl, tr, br, bl = src_points
-    def n(v):
-        return str(int(round(v)))
-    persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
-             ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
-    vf = persp + ",scale=" + str(out_w) + ":" + str(out_h)
-    for f in (extra_video_filters or []):
-        vf += "," + f
-    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
-    cmd += _video_encoder_args()
-    cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k"]
-    if extra_audio_filters:
-        cmd += ["-af", ",".join(extra_audio_filters)]
-    cmd += _keyframe_grid_args()
-    cmd += ["-movflags", "+faststart", out_path]
-    return cmd
-
-
-def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
-                                pad_w, pad_h, pad_x, pad_y, bg_hex,
-                                extra_video_filters=None, extra_audio_filters=None):
-    """ffmpeg args for INDIVIDUAL: pad the source to the screen bbox aspect with
-    backgroundColor, perspective-warp the whole padded frame to the screen quad,
-    scale to the device resolution. src_points is [TL, TR, BR, BL]."""
-    tl, tr, br, bl = src_points
-    def n(v):
-        return str(int(round(v)))
-    _h = (bg_hex or "#000000").lstrip("#")
-    if len(_h) != 6:
-        _h = "000000"
-    hexcol = "0x" + _h
-    pad = ("pad=" + str(int(pad_w)) + ":" + str(int(pad_h)) + ":" +
-           str(int(pad_x)) + ":" + str(int(pad_y)) + ":color=" + hexcol)
-    persp = ("perspective=" + n(tl[0]) + ":" + n(tl[1]) + ":" + n(tr[0]) + ":" + n(tr[1]) +
-             ":" + n(bl[0]) + ":" + n(bl[1]) + ":" + n(br[0]) + ":" + n(br[1]) + ":sense=source")
-    vf = pad + "," + persp + ",scale=" + str(out_w) + ":" + str(out_h)
-    for f in (extra_video_filters or []):
-        vf += "," + f
-    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
-    cmd += _video_encoder_args()
-    cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k"]
-    if extra_audio_filters:
-        cmd += ["-af", ",".join(extra_audio_filters)]
-    cmd += _keyframe_grid_args()
-    cmd += ["-movflags", "+faststart", out_path]
-    return cmd
-
-
-def get_video_dimensions(path):
-    """Return (width, height) of a video via OpenCV, or None if unreadable."""
-    cap = cv.VideoCapture(path)
-    try:
-        w = int(cap.get(cv.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv.CAP_PROP_FRAME_HEIGHT))
-    finally:
-        cap.release()
-    if w <= 0 or h <= 0:
-        return None
-    return (w, h)
-
-
-def resolve_media_path(file_url):
-    """Map a media URL ('/media/<client>/<name>') to its on-disk path, matching
-    media_handler's convention (images/ or videos/ by extension)."""
-    parts = file_url.strip("/").split("/")
-    if len(parts) < 3 or parts[0] != "media":
-        return None
-    client = parts[1]
-    name = parts[-1]
-    subdir = "videos" if isVideoItem(name) else "images"
-    return os.path.join("media", client, subdir, name)
-
-def prewarm_static_cache():
-    """Pre-populate file_cache with the static assets every iPad fetches
-    on page load (index.html + js/*). Avoids blocking the asyncio event
-    loop on synchronous open()/read() during a fleet-wide Start burst:
-    24 iPads loading the page simultaneously is ~24*5 = ~120 small file
-    fetches. Without pre-warming, the first fetch of each file blocks
-    the loop while disk I/O happens, serializing the entire burst.
-    After this call, get_cached_file() returns pure-dict hits at request
-    time.
-
-    Logged with hit count so a misconfigured deploy (missing files) is
-    obvious in the startup log."""
-    static_files = []
-    for name in ('index.html', 'admin.html', 'discovery.html'):
-        if os.path.isfile(name):
-            static_files.append(name)
-    if os.path.isdir('js'):
-        for f in os.listdir('js'):
-            full = os.path.join('js', f)
-            if os.path.isfile(full):
-                static_files.append(full)
-    loaded = 0
-    for f in static_files:
-        if get_cached_file(f) is not None:
-            loaded += 1
-    logging.info("prewarm_static_cache: %d files cached (%.0f KiB total)",
-                 loaded,
-                 sum(len(v.get('content', b'')) for v in file_cache.values()) / 1024)
-
-
-def get_cached_file(file_path):
-    """Get file content with caching based on modification time.
-
-    Cache entries are stored as {'content': bytes, 'mtime': float}. This
-    function is the only reader/writer of that value format.
-    """
-    if not os.path.exists(file_path):
-        return None
-    try:
-        mod_time = os.path.getmtime(file_path)
-
-        # Check if file is in cache and not modified
-        cached = file_cache.get(file_path)
-        if cached is not None and cached['mtime'] == mod_time:
-            cache_stats['hits'] += 1
-            return cached['content']
-
-        # File not cached or modified - read from disk
-        with open(file_path, 'rb') as f:
-            data = f.read()
-        cache_stats['misses'] += 1
-        file_cache[file_path] = {'content': data, 'mtime': mod_time}
-
-        # Limit cache size to prevent memory issues (simple FIFO)
-        if len(file_cache) > 100:
-            oldest_key = next(iter(file_cache))
-            del file_cache[oldest_key]
-
-        return data
-    except (OSError, IOError):
-        return None
 
 def parse_args():
     """Parse CLI args. Called only from __main__ so that importing this module
@@ -1530,423 +186,6 @@ def parse_args():
     parser.add_argument("-p", "--Port", help="Port to run server on")
     parser.add_argument("-v", "--Verbose", action='store_true', help="Verbose output")
     return parser.parse_args()
-
-class Settings():
-    def __init__(self):
-        self.displays = {}
-        self.scripts = {}
-        self.clients = {}
-        self.playlists = {}
-        self.schedules = {}
-
-class Scripts():
-    def __init__(self):
-        self.name = ''
-        self.description = ''
-        self.value = None
-        self.status = None
-
-class Display():
-    def __init__(self):
-        self.boundingBox = None
-        self.boundingBoxCenter = None
-        self.mediaElements = []
-        self.loop = False
-        self.currentFrame = 0
-        self.action = PlayState.NOACTION
-        self.playStartEpoch = 0   # server-time ms when playback last (re)started
-        self.pauseOffset = 0      # ms into the playlist when paused
-        self.renderedToken = ""   # token of the last successful SEGMENT render
-        self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
-        self.defaultPlaylistName = None   # fallback playlist when no schedule is active
-        self.scheduledEntryId = None      # transient: which schedule/"__default__" currently drives this group
-        self.scheduledPlaying = False     # transient: have we issued PLAY for the current effective target
-        self.prepareId = None
-        self.readyClients = set()
-        self.armPending = set()   # clients that sent NEEDS_ARM, awaiting a human tap
-        self.prepareDeadline = 0
-
-class PlayState(Enum):
-    NOACTION = 0
-    STOP = 1
-    PLAY = 2
-    PAUSE = 3
-    PREPARING = 4
-
-class MediaElement():
-    def __init__(self):
-        self.id = None
-        self.file = None
-        self.duration = None
-        self.playmode = PlayMode.DEFAULT
-        self.backgroundColor = "#000000"
-        self.startEffect = None
-        self.endEffect = None
-
-
-class Playlist():
-    def __init__(self):
-        self.name = ""
-        self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect
-        self.loop = False
-
-class Schedule():
-    def __init__(self):
-        self.id = ""
-        self.name = ""
-        self.playlistName = ""
-        self.displayID = ""
-        self.priority = 0
-        self.enabled = True
-        self.freq = "DAILY"          # DAILY | WEEKLY | MONTHLY | YEARLY
-        self.interval = 1
-        self.byweekday = []          # ints 0=Mon..6=Sun (WEEKLY)
-        self.dtstart = ""            # "YYYY-MM-DD"
-        self.end = {"type": "never"} # or {"type":"until","untilDate":...} / {"type":"count","count":N}
-        self.exdates = []            # ["YYYY-MM-DD", ...]
-        self.startTime = "00:00"
-        self.endTime = "23:59"
-
-class PlayMode(Enum):
-    DEFAULT = 0
-    FULL = 1
-    SEGMENT = 2
-    SCRIPT = 3
-    INDIVIDUAL = 4
-
-class Client():
-    def __init__(self):
-        self.friendlyName = None
-        self.clientID = ""
-        self.displayID = None
-        self.arucoID = None
-        self.deviceHeight = 0
-        self.deviceWidth = 0
-        self.canvasWidth = 0    # rendered viewport (innerWidth) — reflects actual
-        self.canvasHeight = 0   # orientation; device* is the raw screen resolution
-        self.measuredCenter = None
-        self.measuredPerimeter = None
-        self.userAgent = None
-        self.ip = ""
-        self.hostname = ""              # reverse-DNS (PTR) of ip, when resolvable
-        self.hostnameResolved = False   # PTR lookup attempted (don't retry per ip)
-        self.nameIsCustom = False       # user set friendlyName -> DNS won't override
-        self.touch = False              # client reported touch support at REGISTER
-        self.osName=""
-        self.osVersion=""
-        self.engine=""
-        self.deviceBrand=""
-        self.deviceModel=""
-        self.deviceType=""
-        self.loginScript = None
-        self.startScript = None
-        self.stopScript = None
-        self.rebootScript = None
-        self.testScript = None
-        self.ready = False      # ready to display: media cached & client ready
-        self.isOnline = False   # alive: connected / recent heartbeat
-        self.synced = False     # SYN/SYNACK handshake (clock/group) complete
-        # Enhanced discovery fields
-        self.discoveryTime = time.time()
-        self.lastSeen = time.time()
-        self.connectionCount = 0
-        self.capabilities = []
-        self.autoConfigured = False
-        self.discoverySource = "manual"  # manual, websocket, network
-        # Cache-state model (2026-06-03). cacheMode = "none" by default;
-        # set to "lighttpd-localhost" by onboarding when the iPad has
-        # lighttpd installed and a writable /var/mobile/Media/
-        # MosaicMeshCache/ dir. Set to "service-worker" by the client's
-        # ANNOUNCE_CACHE_MODE message when SW registration succeeds.
-        # See docs/superpowers/specs/2026-06-03-media-cache-design.md.
-        self.cacheMode = "none"
-        # Hashes of segments currently cached on this device, in the
-        # form "<encode_ver_hash>_<segment_index>" (matches the
-        # seg_<HASH>_<N>.mp4 filename convention from the render
-        # pipeline). Populated by _push_segment_to_cached_clients on
-        # successful scp; pruned by _reconcile_ipad_cache.
-        self.cachedSegments = set()
-        # In-memory only (does not persist; meaningful only during a
-        # push). Set to a dict by _push_segment_to_cached_clients when
-        # a push starts; cleared to None when the push ends (success
-        # or stall). Shape: {"token", "n", "bytesSent", "totalBytes",
-        # "startedMs", "lastChangeMs", "status", "mbps"}.
-        # See docs/superpowers/specs/2026-06-03-cache-progress-and-
-        # propagation-ui.md.
-        self.cachePushProgress = None
-
-async def ws_handler(manager, session, msg):
-    # sockjs >=0.12 handler signature: (manager, session, msg).
-    # Message types are sockjs.MsgType.* and msg carries .type / .data.
-    logging.debug("WS_HANDLER")
-    if manager is None:
-        return
-    if msg.type == sockjs.MsgType.OPEN:
-        # Enhanced discovery notification with client info
-        client_info = {
-            "sessionId": session.id,
-            "ip": _client_ip(session.request) if hasattr(session, 'request') else "unknown",
-            "userAgent": session.request.headers.get('User-Agent', '') if hasattr(session, 'request') else "",
-            "timestamp": time.time()
-        }
-        discovery_announcement = {
-            "REQUEST": "DEVICE_DISCOVERED", 
-            "PAYLOAD": client_info
-        }
-        manager.broadcast(jsonpickle.encode(discovery_announcement))
-        
-        # Also send traditional JOIN for backward compatibility
-        manager.broadcast(jsonpickle.encode({"REQUEST": "JOIN", "PAYLOAD":session.id}))
-
-        # Replay current renderStatus to the newly-connected session for any
-        # display with a non-empty status. Without this, an admin who
-        # refreshes the playlist page during an in-flight render loses the
-        # "rendering..." badge (the original broadcast happened before they
-        # reconnected). Sent only to this session via session.send() to
-        # avoid pestering already-connected clients.
-        try:
-            if settings is not None and getattr(settings, "displays", None):
-                for _did, _disp in settings.displays.items():
-                    _st = getattr(_disp, "renderStatus", "")
-                    if _st:
-                        session.send(jsonpickle.encode({
-                            "REQUEST": "RENDER_STATUS",
-                            "PAYLOAD": {"displayID": _did, "status": _st}}))
-        except Exception as _e:
-            logging.debug("ws OPEN: render-status replay failed: %s", _e)
-
-
-    elif msg.type == sockjs.MsgType.MESSAGE:
-        session.send(msg_response(jsonpickle.decode(msg.data),session))
-    elif msg.type == sockjs.MsgType.CLOSED:
-        # Enhanced disconnect notification
-        handle_client_disconnect(session.id)
-        manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
-
-def _duration_ms(me):
-    """Item duration in milliseconds. Durations are authored/stored in SECONDS
-    (the editor's 'Duration (s)' field, default 5), but the client playback
-    engine (playlistIndex vs GoTime ms, currentTime, msToNext) and the ffmpeg
-    effect filters both consume MILLISECONDS — so convert at every boundary
-    that leaves the seconds-domain."""
-    try:
-        return int(round(float(me.duration) * 1000))
-    except (TypeError, ValueError):
-        return 0
-
-
-def _media_item_payload(me):
-    """Per-item dict sent to clients in PLAY/PRELOAD. getattr guards items
-    loaded from an older settings.dat that predate the newer fields. duration
-    is emitted in MILLISECONDS (stored in seconds — see _duration_ms)."""
-    return {"id": me.id, "file": me.file, "duration": _duration_ms(me),
-            "playmode": me.playmode.name,
-            "backgroundColor": getattr(me, "backgroundColor", "#000000"),
-            "startEffect": getattr(me, "startEffect", None),
-            "endEffect": getattr(me, "endEffect", None)}
-
-
-# seg_<HASH>_<N>.mp4 filename pattern (from render-pipeline line 1097
-# / per-client URL construction at line 1159). seg_hash is hex; seg_n
-# is a decimal integer. The pattern is anchored on basename so it
-# matches whether item.file is a bare filename or a /media/<key>/...
-# path or a full http://server/media/... URL.
-import re as _re_seg
-_SEG_FILE_RE = _re_seg.compile(r"seg_([a-f0-9]+)_(\d+)\.mp4$")
-
-
-# Per-client URL routing for media-cache-aware clients. See spec
-# 2026-06-03-media-cache-design.md. For SEGMENT items on an iPad in
-# lighttpd-localhost cache mode that has the segment cached, returns
-# the localhost URL so Safari fetches from local lighttpd (zero LAN
-# bandwidth). For every other case -- non-SEGMENT items, cache miss,
-# different cache mode -- returns the central-server URL.
-#
-# Accepts both real `MediaElement` instances (whose .playmode is a
-# `PlayMode` enum) and dict-like / stub items (whose .playmode may
-# be the string "SEGMENT" -- e.g., post-`_media_item_payload` wire
-# dicts, or test stubs). Both forms work.
-def _resolve_media_url(client, item):
-    # Normalise playmode to its string name. PlayMode is an Enum on
-    # real MediaElement instances; on wire-dicts / test stubs it's
-    # already a string.
-    pm = getattr(item, "playmode", None)
-    pm_name = pm.name if hasattr(pm, "name") else (pm if isinstance(pm, str) else None)
-    # Non-SEGMENT items (SCRIPT, IMAGE, INDIVIDUAL, etc.) are either
-    # tiny or per-iPad-uncached by this design; pass through .file
-    # unchanged so existing behavior is preserved.
-    if pm_name != "SEGMENT":
-        return getattr(item, "file", "")
-    # Look for explicit seg_hash/seg_n attributes first (test stubs);
-    # otherwise parse from the file path / URL using the canonical
-    # seg_<HASH>_<N>.mp4 basename pattern set by the render pipeline.
-    seg_hash = getattr(item, "seg_hash", None)
-    seg_n = getattr(item, "seg_n", None)
-    if seg_hash is None or seg_n is None:
-        file_str = getattr(item, "file", "") or ""
-        m = _SEG_FILE_RE.search(file_str)
-        if m:
-            seg_hash = m.group(1)
-            seg_n = m.group(2)
-    if seg_hash is None or seg_n is None:
-        # Defensive: a SEGMENT item we can't extract hash+n from
-        # can't be cached. Return the original file path.
-        return getattr(item, "file", "")
-    seg_key = f"{seg_hash}_{seg_n}"
-    if (getattr(client, "cacheMode", "none") == "lighttpd-localhost"
-            and seg_key in getattr(client, "cachedSegments", set())):
-        return f"http://127.0.0.1:8080/seg_{seg_key}.mp4"
-    # Central-server URL. clientKey is set on the Client by REGISTER;
-    # tests pass it explicitly. Modern (service-worker) clients also
-    # get this central URL -- their SW intercepts transparently.
-    ckey = getattr(client, "clientKey", None) or "unknown"
-    return f"http://192.168.1.60:3000/media/{ckey}/seg_{seg_key}.mp4"
-
-
-def _build_media_elements(items):
-    """Build MediaElement objects from a list of item dicts (SETPLAYLIST /
-    ASSIGN_PLAYLIST share this). Maps the playmode string to the enum and
-    applies field defaults."""
-    elements = []
-    for item in (items or []):
-        me = MediaElement()
-        me.id = item.get("id")
-        me.file = item.get("file")
-        me.duration = item.get("duration")
-        _pm = item.get("playmode")
-        me.playmode = (PlayMode.SEGMENT if _pm == "SEGMENT"
-                       else PlayMode.SCRIPT if _pm == "SCRIPT"
-                       else PlayMode.INDIVIDUAL if _pm == "INDIVIDUAL"
-                       else PlayMode.FULL)
-        me.backgroundColor = item.get("backgroundColor", "#000000")
-        me.startEffect = item.get("startEffect")
-        me.endEffect = item.get("endEffect")
-        elements.append(me)
-    return elements
-
-
-def _apply_playlist(display_id, pl):
-    """Copy a saved Playlist onto a group (mediaElements, loop, PRELOAD).
-
-    Does NOT blank renderedToken eagerly: compute_render_token() is a stable
-    hash of items + bounding box + per-client perimeters, so re-assigning
-    the SAME playlist produces the same token and the existing render
-    output is still valid. Blanking unconditionally forced a "needs render"
-    state every time the user re-assigned a playlist they hadn't changed --
-    deeply confusing because they could see the render had just completed.
-    Let the natural token comparison decide."""
-    display = settings.displays.setdefault(display_id, Display())
-    display.mediaElements = _build_media_elements(pl.items)
-    display.loop = bool(pl.loop)
-    _broadcast_per_client_preload(display_id, display.mediaElements)
-
-
-def _start_group_playback(display_id, resume_epoch=None):
-    """Set the group playing now and broadcast PLAY (per-client for renderable items,
-    else group-wide). No render gating here — callers ensure render readiness."""
-    display = settings.displays.get(display_id)
-    if not display or not display.mediaElements:
-        return
-    now_ms = int(time.time() * 1000)
-    if resume_epoch is None:
-        resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
-    display.playStartEpoch = resume_epoch
-    display.action = PlayState.PLAY
-    if any(_is_renderable(me) for me in display.mediaElements):
-        _broadcast_per_client_play(display_id, display)
-    else:
-        items = [_media_item_payload(me) for me in display.mediaElements]
-        broadcast_to_display_group(display_id, {
-            "REQUEST": "PLAY",
-            "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
-
-
-def _stop_group_playback(display_id):
-    display = settings.displays.get(display_id)
-    if display:
-        display.action = PlayState.STOP
-        display.currentFrame = 0
-        # cancel any in-flight coordinated-start prepare (don't leave stale state)
-        display.prepareId = None
-        display.readyClients = set()
-        display.armPending = set()
-        display.prepareDeadline = 0
-    broadcast_to_display_group(display_id, {"REQUEST": "STOP", "PAYLOAD": {"displayID": display_id}})
-
-
-def _group_online_keys(display_id):
-    return {k for k, c in settings.clients.items()
-            if getattr(c, "displayID", None) == display_id and getattr(c, "isOnline", False)}
-
-
-def _begin_prepare(display_id):
-    """Phase 1: tell the group to buffer + hold frame 0 (don't start the clock).
-
-    Sends PREPARE only to clients that have completed the SYN/SYNACK
-    handshake (client.synced == True). Un-synced clients (freshly
-    reconnected, mid-handshake) are skipped here -- they'll be picked up
-    by _prepare_unsynced_clients() which polls and sends PREPARE as each
-    finishes its handshake. Without this filter PREPARE would race the
-    page-load on freshly-reconnected iPads and get silently dropped on
-    the client side (the recv-PREPARE handler bails when sock_callback
-    isn't yet wired)."""
-    display = settings.displays.get(display_id)
-    if not display or not display.mediaElements:
-        return
-    display.prepareId = uuid.uuid4().hex
-    display.readyClients = set()
-    display.armPending = set()
-    display.prepareDeadline = int(time.time() * 1000) + PREPARE_TIMEOUT_MS
-    display.action = PlayState.PREPARING
-    n_sent = n_skipped = 0
-    for key, c in _group_clients(display_id):
-        if not getattr(c, "synced", False):
-            n_skipped += 1
-            continue
-        # Per-client PREPARE: each client must buffer/arm with ITS OWN rendered
-        # segment URL, not the generic source (a renderable client handed the
-        # 1080p source can't decode it -> MEDIA_ERR_SRC_NOT_SUPPORTED). Same
-        # URLs as the GO.
-        broadcast_to_client(key, {
-            "REQUEST": "PREPARE",
-            "PAYLOAD": {"prepareId": display.prepareId,
-                        "items": _per_client_items(display, key, c), "loop": display.loop}})
-        n_sent += 1
-    if n_skipped:
-        logging.info("_begin_prepare %s: PREPARE sent to %d synced; %d un-synced "
-                     "will be sent PREPARE when their SYN/SYNACK completes",
-                     display_id, n_sent, n_skipped)
-        asyncio.ensure_future(_prepare_unsynced_clients(display_id,
-                                                         display.prepareId))
-
-
-async def _prepare_unsynced_clients(display_id, prepare_id):
-    """Poll for clients that finish their SYN/SYNACK after _begin_prepare's
-    initial broadcast, and send them PREPARE then. Bounded to the same
-    deadline as the rest of the prepare phase -- after PREPARE_TIMEOUT_MS
-    the release fires and any still-unsynced clients are released along
-    with the rest of the group (they receive the PLAY broadcast and
-    catch up from there)."""
-    sent = set()
-    while True:
-        await asyncio.sleep(0.5)
-        display = settings.displays.get(display_id)
-        if not display:
-            return
-        if display.action != PlayState.PREPARING or display.prepareId != prepare_id:
-            return  # group already released / new prepare started
-        for key, c in _group_clients(display_id):
-            if key in sent:
-                continue
-            if not getattr(c, "synced", False):
-                continue
-            broadcast_to_client(key, {
-                "REQUEST": "PREPARE",
-                "PAYLOAD": {"prepareId": prepare_id,
-                            "items": _per_client_items(display, key, c),
-                            "loop": display.loop}})
-            sent.add(key)
-            logging.info("_prepare_unsynced: late PREPARE sent to %s", key)
 
 
 def _release_group(display_id):
@@ -2043,19 +282,92 @@ async def _get_pooled_vnc(client_key, ip):
     return proxy
 
 
-async def _drop_pooled_vnc(client_key):
-    """Evict and disconnect a pooled VNC client. Safe to call when
-    the client_key isn't pooled (no-op). Called on per-tap failure
-    (so the next attempt re-handshakes) and on client offline
-    cleanup (so dead iPads don't leak file descriptors)."""
-    async with _veency_lock:
-        proxy = _veency_pool.pop(client_key, None)
-    if proxy is None:
+def _is_probe_eligible(client):
+    """True for the provisioned display devices we SSH-probe for cache
+    capability: Apple touch devices (iPad-1 reclassifies to deviceType
+    'tablet'; iOS phones report 'smartphone') that have an IP. Everything
+    else never gets cacheMode and always serves centrally."""
+    if not getattr(client, "ip", ""):
+        return False
+    dt = (getattr(client, "deviceType", "") or "").lower()
+    osn = (getattr(client, "osName", "") or "").lower()
+    return dt in ("tablet", "smartphone") or osn == "ios"
+
+
+async def _probe_cache_capability(client_key):
+    """SSH-probe a device for the two real push prerequisites (cache dir exists +
+    lighttpd alive) and flip cacheMode accordingly. Fire-and-forget; never blocks
+    the caller, never raises. Upgrade: none -> lighttpd-localhost when 'MM_CACHE_OK'
+    comes back. Downgrade: lighttpd-localhost -> none (and clear cachedSegments)
+    when the probe fails on a previously-capable device.
+
+    Liveness is checked with shell builtins only (`kill -0` on lighttpd's pid
+    file) -- the iPad-1 userland has no curl/wget/nc/ps, so an HTTP/process check
+    would always fail with 127 ('command not found') and wrongly report the
+    device not-capable even while lighttpd is serving."""
+    client = settings.clients.get(client_key)
+    if not client or not getattr(client, "ip", ""):
+        return
+    if client_key in _probe_inflight:
+        return                                  # no duplicate concurrent probe
+    _probe_inflight.add(client_key)
+    try:
+        remote = ("test -d /var/mobile/Media/MosaicMeshCache && "
+                  "kill -0 \"$(cat /var/run/lighttpd.pid 2>/dev/null)\" 2>/dev/null && "
+                  "echo MM_CACHE_OK")
+        cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
+               + ["-T", "-o", "ConnectTimeout=%d" % _PROBE_CONNECT_TIMEOUT_S,
+                  "%s@%s" % (SSH_USER, client.ip), remote])
+        ok = False
+        async with _get_probe_sem():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE)
+                out, _err = await asyncio.wait_for(
+                    proc.communicate(), timeout=_PROBE_TIMEOUT_S)
+                ok = (proc.returncode == 0 and b"MM_CACHE_OK" in (out or b""))
+                if not ok:
+                    logging.warning(
+                        "cache-probe %s not capable (rc=%s): %s",
+                        client_key, getattr(proc, "returncode", "?"),
+                        (_err or b"").decode("utf-8", "replace").strip()[-200:])
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                ok = False
+            except Exception as e:            # noqa: BLE001
+                logging.warning("cache-probe %s: %s", client_key, e)
+                ok = False
+        client.cacheProbedMs = int(time.time() * 1000)
+        if ok and client.cacheMode != "lighttpd-localhost":
+            client.cacheMode = "lighttpd-localhost"
+            logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
+                         client_key)
+            saveSettings()
+        elif not ok and client.cacheMode == "lighttpd-localhost":
+            client.cacheMode = "none"
+            client.cachedSegments = set()   # unreachable now; stop emitting dead localhost URLs
+            logging.info("cache-probe: %s no longer cache-capable -> none (cleared cache)",
+                         client_key)
+            saveSettings()
+    finally:
+        _probe_inflight.discard(client_key)
+
+
+def _maybe_fire_cache_probe(client_key, client):
+    """Fire-and-forget the cache-capability probe for an eligible device.
+    No-op for ineligible devices, and safe to call from a synchronous context
+    with no running event loop (returns without scheduling)."""
+    if not _is_probe_eligible(client):
         return
     try:
-        await asyncio.get_event_loop().run_in_executor(None, proxy.disconnect)
-    except Exception as e:
-        logging.debug("veency pool disconnect for %s: %s", client_key, e)
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return   # no running loop (sync context) -> don't construct/schedule
+    asyncio.ensure_future(_probe_cache_capability(client_key))
 
 
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
@@ -2381,54 +693,6 @@ async def _reconcile_ipad_cache(client):
                           client.clientKey, s, e)
 
 
-# Veency-side framebuffer coordinate of the MosaicMesh home-screen
-# webclip icon when the iPad is in portrait orientation and the
-# operator has dragged the icon to the LEFTMOST dock slot. The
-# framebuffer is always landscape 1024x768 regardless of iPad
-# orientation, rotated 90 CCW from the portrait user view -- so the
-# user's portrait (96, 945) lands at framebuffer (945, 671). This
-# pair was empirically verified on .50 (sign1screen1) in this
-# session. If you reposition the icon, update this constant.
-# See docs/superpowers/specs/ for the rationale: iOS 5 doesn't
-# expose a CLI launcher that includes a webclip's URL context, so
-# the only reliable "launch the webclip" path is to drive
-# SpringBoard's own tap-handler via VNC.
-WEBAPP_ICON_FBX = 945
-WEBAPP_ICON_FBY = 671
-
-
-async def _launch_webapp_via_vnc(client_key):
-    """Launch the MosaicMesh home-screen webclip by sending a VNC
-    tap at the icon's framebuffer coordinate. The iPad's SpringBoard
-    receives the tap, reads the webclip's Info.plist (including its
-    URL context), and launches Web.app with that URL -- the same
-    code path a human finger triggers. Best-effort: a missing pool
-    entry / handshake failure just logs.
-
-    Requires the operator to have dragged the MosaicMesh icon to the
-    LEFTMOST dock slot on each iPad (in portrait orientation). The
-    onboarding script's webclip install (step 5.4g) creates the icon
-    but does not pin its position; that's a one-time per-iPad
-    manual step."""
-    client = settings.clients.get(client_key)
-    if not client or not getattr(client, "ip", ""):
-        logging.warning("launch-webapp %s: no client/ip", client_key)
-        return False
-    loop = asyncio.get_event_loop()
-    try:
-        proxy = await _get_pooled_vnc(client_key, client.ip)
-        await loop.run_in_executor(None, _do_tap, proxy,
-                                   WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
-        logging.info("launch-webapp: VNC-tapped %s at fb(%d,%d)",
-                     client_key, WEBAPP_ICON_FBX, WEBAPP_ICON_FBY)
-        return True
-    except Exception as e:  # noqa: BLE001
-        await _drop_pooled_vnc(client_key)
-        logging.warning("launch-webapp tap failed for %s: %s",
-                        client_key, e)
-        return False
-
-
 async def _auto_arm_client(client_key):
     """Deliver one Veency VNC tap (screen centre) to arm an un-armed
     iOS device. Holds one persistent VNC connection per iPad in
@@ -2464,112 +728,6 @@ async def _auto_arm_client(client_key):
         # Drop the bad connection so the next attempt re-handshakes.
         await _drop_pooled_vnc(client_key)
         logging.warning("auto-arm tap failed for %s: %s", client_key, e)
-
-
-async def _run_device_script(client_key, which):
-    """Run a device's lifecycle script (which in {login,start,stop,reboot}) over
-    SSH, using the per-device field (or the fleet default). Best-effort: missing
-    key / no IP / SSH failure just logs. Returns (rc, output) for the caller/log."""
-    client = settings.clients.get(client_key)
-    if not client or not getattr(client, "ip", ""):
-        logging.warning("run-script %s %s: no client/ip", client_key, which)
-        return (None, "no-ip")
-
-    # Special-case "start": iOS 5 / iPad-1 has no CLI launcher that
-    # passes a webclip's URL context to Web.app, so neither sbdidlaunch
-    # nor `open <bundle-id>` nor `activator send` actually launch the
-    # MosaicMesh webapp foreground with content (we tried all of them
-    # in the 2026-06-03 session). The only working "launch the
-    # webclip" path is SpringBoard's own tap handler. So for "start"
-    # we (a) SSH-run the loginScript first to wake the screen +
-    # disable autolock, then (b) VNC-tap the icon's framebuffer
-    # coordinate (WEBAPP_ICON_FBX, WEBAPP_ICON_FBY) -- which requires
-    # the operator to have dragged the icon to the leftmost dock slot
-    # in portrait orientation on each iPad. Falls back to SSH-exec of
-    # startScript if the VNC tap fails (Veency unreachable, pool
-    # exhausted, etc.) so non-iPad-1 devices and emergency
-    # uiopen-to-Safari paths still work.
-    if which == "start":
-        # Wake the screen only -- send libactivator.lockscreen.dismiss
-        # (wakes if asleep, no-ops if awake). Do NOT also call the
-        # autolock switch-off here: it produces a transient "Autolock
-        # disabled" popup that intercepts the VNC tap below. Autolock
-        # is already off from the boot LaunchDaemon (5.4a) which fires
-        # the same switch-off command 30s after every boot, so the
-        # autolock state is correct system-wide regardless.
-        wake_script = "activator send libactivator.lockscreen.dismiss"
-        login_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
-                     ["%s@%s" % (SSH_USER, client.ip), wake_script])
-        try:
-            wake = await asyncio.create_subprocess_exec(
-                *login_cmd, stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL)
-            try:
-                await asyncio.wait_for(wake.wait(), timeout=10)
-            except asyncio.TimeoutError:
-                try: wake.kill(); await wake.wait()
-                except Exception: pass
-        except Exception as e:  # noqa: BLE001
-            logging.warning("run-script %s start: wake step failed: %s",
-                            client_key, e)
-        # Brief settle delay so SpringBoard has finished the wake
-        # animation before we tap -- otherwise the tap can land
-        # mid-transition and SpringBoard ignores it.
-        await asyncio.sleep(0.8)
-        ok = await _launch_webapp_via_vnc(client_key)
-        if ok:
-            return (0, "VNC_TAP_OK")
-        logging.warning("run-script %s start: VNC tap failed, "
-                        "falling back to startScript SSH exec",
-                        client_key)
-        # Fall through to the generic SSH path below.
-
-    field = which + "Script"
-    script = getattr(client, field, None) or DEFAULT_DEVICE_SCRIPTS.get(field)
-    if not script:
-        logging.warning("run-script %s %s: no script", client_key, which)
-        return (None, "no-script")
-    cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
-           ["%s@%s" % (SSH_USER, client.ip), script])
-    proc = None
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
-        try:
-            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
-        except asyncio.TimeoutError:
-            # CRITICAL: kill the subprocess on timeout. Without this the
-            # ssh.exe stays alive in the background indefinitely -- on
-            # iOS-5 fleets where SSH connects but the iPad's shell hangs
-            # mid-command (WiFi power-save mid-handshake, slow respring,
-            # etc.), every Start/Login/Test that times out for one
-            # device leaves a leaked ssh.exe on the server. Observed in
-            # production: 87 zombie ssh.exe processes accumulated over
-            # 19-22 hours, saturating the Windows network stack until
-            # iPad GET requests couldn't even reach aiohttp's listener.
-            logging.warning("run-script %s %s: timeout (30s); killing ssh.exe",
-                            client_key, which)
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-            return (None, "timeout")
-        text = (out or b"").decode("utf-8", "replace").strip()
-        logging.warning("run-script %s %s rc=%s: %s", client_key, which,
-                        proc.returncode, text.replace("\n", " ")[:300])
-        return (proc.returncode, text)
-    except Exception as e:  # noqa: BLE001
-        # Catch-all: any other error (proc creation failed, etc.) -- still
-        # try to kill if proc was created.
-        if proc is not None and proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.wait()
-            except Exception:
-                pass
-        logging.warning("run-script %s %s failed: %s", client_key, which, e)
-        return (None, str(e))
 
 
 def _client_ip(request):
@@ -2747,8 +905,7 @@ def _mdns_reverse(ip, wait=1.5):
 # client id). Live identity fields (clientID, ip, hostname, device*, online,
 # connectionCount) are NOT copied — the new record keeps those.
 _MERGE_FIELDS = ("displayID", "measuredCenter", "measuredPerimeter", "arucoID",
-                 "capabilities", "loginScript", "startScript", "stopScript",
-                 "rebootScript", "testScript")
+                 "capabilities", "profileName")
 
 
 def _merge_reconnected_client(new_key, new_client):
@@ -2857,517 +1014,6 @@ async def resolve_client_hostnames(unicast_timeout=2.0, mdns_timeout=3.0):
         saveSettings()
 
 
-def msg_response(msg,session):
-    clientid = session.id
-    logging.debug(session.request.headers['User-Agent'])
-    
-    response = {"DEST":clientid,"REQUEST": msg["REQUEST"], "PAYLOAD": {}}
-    
-    logging.debug(session.request.remote)
-    logging.debug(msg["SRC"])
-    
-    if(msg["REQUEST"] == "SERVERTIME"):
-        response["PAYLOAD"] = int(time.time()*1000)
-        
-    elif(msg["REQUEST"] == "DISPLAYS"):
-        response["PAYLOAD"] = settings.displays
-        
-    elif(msg["REQUEST"] == "IDENTIFYDISPLAY"):
-        identifyDisplays(msg["PAYLOAD"]['group'],msg["PAYLOAD"]['id'])
-        
-    elif(msg["REQUEST"] == "UPDATEDISPLAY"):
-        # Cache client reference to avoid repeated dictionary lookups
-        client_id = msg["PAYLOAD"]["clientID"]
-        client = settings.clients.get(client_id)
-        if client:
-            if('friendlyName' in msg["PAYLOAD"]):
-                client.friendlyName = msg["PAYLOAD"]["friendlyName"]
-                client.nameIsCustom = True   # user-set name: DNS won't override it
-            if('displayID' in msg["PAYLOAD"]):
-                client.displayID = msg["PAYLOAD"]["displayID"]
-    
-    elif(msg["REQUEST"] == "UPDATEDISPLAYGROUP"):
-        if(msg["PAYLOAD"]["newID"] != 'Default'):
-            if(msg["PAYLOAD"]["newID"] is not None):
-                settings.displays.setdefault(msg["PAYLOAD"]["newID"], Display())
-                if(msg["PAYLOAD"]["oldID"] in settings.displays):
-                    settings.displays[msg["PAYLOAD"]["newID"]] = settings.displays.pop(msg["PAYLOAD"]["oldID"])
-            else:
-                settings.displays.pop(msg["PAYLOAD"]["oldID"])
-                for key in settings.clients.keys():
-                    if(settings.clients[key].displayID == msg["PAYLOAD"]["oldID"]):
-                        settings.clients[key].displayID = 'Default'
-            
-    elif(msg["REQUEST"] == "CLIENTS"):
-        logging.debug(msg["PAYLOAD"])
-        if 'PAYLOAD' not in msg:
-            response["PAYLOAD"] = settings.clients[msg["PAYLOAD"]]
-        else:
-            response["PAYLOAD"] = settings.clients
-            
-    elif(msg["REQUEST"] == "SYN"):
-        client = settings.clients.get(msg["PAYLOAD"])
-        if client:
-            client.synced = False
-        response["PAYLOAD"] = "ACK"
-
-    elif(msg["REQUEST"] == "SYNACK"):
-        client = settings.clients.get(msg["PAYLOAD"])
-        if client:
-            client.synced = True
-        response["PAYLOAD"] = "SYNACK"
-
-    elif(msg["REQUEST"] == "ANNOUNCE_CACHE_MODE"):
-        # Client-announced cache capability. The client side knows whether
-        # it has a working Service Worker, lighttpd, or neither; it tells
-        # us so we can route PLAY payload URLs correctly. The whitelist
-        # below prevents a malicious or bug-induced client from setting
-        # an arbitrary string (which would break _resolve_media_url's
-        # logic in subtle ways).
-        client = settings.clients.get(msg["SRC"])
-        mode = (msg.get("PAYLOAD") or {}).get("mode")
-        if client and mode in ("none", "lighttpd-localhost", "service-worker"):
-            client.cacheMode = mode
-        response["PAYLOAD"] = {"cacheMode": getattr(client, "cacheMode", "none")}
-
-    elif(msg["REQUEST"] == "REMOVE_CLIENT"):
-        # Admin-initiated removal of a single device. The device re-registers
-        # (as new) if it ever reconnects — this only clears the stale record.
-        payload = msg.get("PAYLOAD") or {}
-        target = payload.get("clientID") if isinstance(payload, dict) else payload
-        removed = settings.clients.pop(target, None)
-        response["PAYLOAD"] = {"removed": target if removed is not None else None}
-        if removed is not None:
-            saveSettings()
-            logging.info(f"Removed client {target} (admin request)")
-            socketmanager.broadcast(jsonpickle.encode(
-                {"REQUEST": "DEVICE_REMOVED", "PAYLOAD": {"clientKey": target}}))
-
-    elif(msg["REQUEST"] == "CLEAR_OFFLINE_CLIENTS"):
-        # Bulk-purge every currently-offline device (max_age 0 = any age).
-        count = cleanup_old_clients(max_age_seconds=0)
-        response["PAYLOAD"] = {"removed": count}
-        if count:
-            socketmanager.broadcast(jsonpickle.encode(
-                {"REQUEST": "DEVICE_REMOVED", "PAYLOAD": {"cleared": count}}))
-
-    elif(msg["REQUEST"] == "REGISTER"):
-        is_new_client = msg["SRC"] not in settings.clients
-        settings.clients.setdefault(msg["SRC"], Client())
-        # Cache client reference to avoid repeated dictionary lookups
-        client = settings.clients[msg["SRC"]]
-        
-        # Enhanced registration with discovery tracking
-        client.clientID = clientid
-        client.userAgent = session.request.headers['User-Agent']
-        client.deviceWidth = msg["PAYLOAD"]["width"]
-        client.deviceHeight = msg["PAYLOAD"]["height"]
-        # Rendered viewport (older clients omit it -> fall back to device res)
-        client.canvasWidth = msg["PAYLOAD"].get("canvasWidth") or client.deviceWidth
-        client.canvasHeight = msg["PAYLOAD"].get("canvasHeight") or client.deviceHeight
-        _new_ip = _client_ip(session.request)
-        if _new_ip != getattr(client, 'ip', ''):
-            client.hostnameResolved = False   # new IP -> re-resolve its hostname
-        client.ip = _new_ip
-        client.lastSeen = time.time()
-        client.isOnline = True
-        # NB: do NOT set client.synced=True here -- synced means "clock-
-        # sync handshake stable" (GoTime first WhenSynced callback fired),
-        # not "page registered". REGISTER is much earlier than clock
-        # stability. The client emits TIME_SYNCED separately when its
-        # clock is stable; the TIME_SYNCED handler is the one that sets
-        # client.synced=True.
-        #
-        # DO reset synced=False on REGISTER, though: a fresh REGISTER means
-        # a fresh page load, so GoTime is starting its sync probes over,
-        # and any prior synced flag is stale. Symmetric with SYN (which
-        # also flips synced=False as the JS announces its new sync round).
-        # Without this reset, the test harness's wait-for-fresh-sync gate
-        # can't observe the kill+reload cycle because the synced flag
-        # never flips false (handle_client_disconnect runs ~14s late on
-        # the OLD session_id while REGISTER already overwrote clientID
-        # to the NEW one -- the lookup fails, the flag stays True).
-        client.synced = False
-        client.connectionCount += 1
-        
-        # Device detection and fingerprinting
-        device = DeviceDetector(session.request.headers['User-Agent']).parse()
-        client.osName = device.os_name()
-        client.osVersion = device.os_version()
-        client.engine = _engine_str(device.engine())
-        client.deviceBrand = device.device_brand()
-        client.deviceModel = device.device_model()
-        client.deviceType = _device_type_str(device.device_type())
-
-        # Recover legacy iPads that present a Mac user-agent (e.g. Safari
-        # "Request Desktop Website"). The iPad identity is absent from such a
-        # UA, so we reclassify from client-reported touch + screen-size signals
-        # BEFORE auto_configure_client runs (it groups by deviceType).
-        client.touch = bool(msg["PAYLOAD"].get("touch", False))
-        if _is_legacy_ipad_signal(client.deviceBrand, client.deviceType,
-                                  client.deviceWidth, client.deviceHeight, client.touch):
-            client.deviceType = "tablet"
-            if not client.deviceModel:
-                client.deviceModel = "iPad"
-            logging.info(f"Reclassified {msg['SRC']} as iPad (Apple+desktop UA, "
-                         f"touch, {client.deviceWidth}x{client.deviceHeight})")
-
-        # Auto-configuration for new clients
-        if is_new_client:
-            client.discoveryTime = time.time()
-            auto_configure_client(msg["SRC"], client)
-            _apply_default_scripts(client)   # backfill login/start/stop/reboot defaults
-
-            # Notify admin interface of new device
-            new_device_notification = {
-                "REQUEST": "NEW_DEVICE_CONFIGURED",
-                "PAYLOAD": {
-                    "clientKey": msg["SRC"],
-                    "friendlyName": client.friendlyName,
-                    "deviceType": client.deviceType,
-                    "displayID": client.displayID,
-                    "autoConfigured": True
-                }
-            }
-            socketmanager.broadcast(jsonpickle.encode(new_device_notification))
-
-        # Sync EVERY (re)connecting client to its group, not just first-timers: a
-        # reload/reconnect mid-playback must resume (re-send PRELOAD + PLAY with the
-        # in-progress epoch). Idempotent — no-op unless the group is currently PLAY.
-        sync_new_client_to_group(msg["SRC"], client)
-
-        # Enhanced success response with configuration info
-        response["PAYLOAD"] = {
-            "status": "SUCCESS",
-            "displayID": client.displayID,
-            "friendlyName": client.friendlyName,
-            "autoConfigured": client.autoConfigured,
-            "capabilities": client.capabilities
-        }
-        
-    elif(msg["REQUEST"] == "UPDATECLIENT"):
-        # Cache client reference to avoid repeated dictionary lookups
-        client = settings.clients.get(msg["SRC"])
-        if client:
-            for settingKey in msg["PAYLOAD"]:
-                setattr(client, settingKey, msg["PAYLOAD"][settingKey])
-            client.clientID = clientid
-            response["PAYLOAD"] = client
-        
-    elif(msg["REQUEST"] == "GENERATEARUCO"):
-        generateAruco(msg["PAYLOAD"]["id"])
-        
-    elif(msg["REQUEST"] == "READY"):
-        # Client signals its media is cached and it is ready to display
-        client = settings.clients.get(msg["SRC"])
-        if client:
-            client.ready = True
-        did = getattr(client, "displayID", None) if client else None
-        display = settings.displays.get(did)
-        if display and display.action == PlayState.PREPARING \
-                and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
-            display.readyClients.add(msg["SRC"])
-            display.armPending.discard(msg["SRC"])   # armed now (was awaiting a tap)
-            _maybe_release(did)
-        response["PAYLOAD"]="SUCCESS"
-
-    elif(msg["REQUEST"] == "NEEDS_ARM"):
-        client = settings.clients.get(msg["SRC"])
-        display = settings.displays.get(getattr(client, "displayID", None)) if client else None
-        if display and display.action == PlayState.PREPARING \
-                and (msg.get("PAYLOAD") or {}).get("prepareId") == display.prepareId:
-            # Mark this client as awaiting a HUMAN arming tap so the GO timeout won't
-            # release the wall without it (see _release_expired_prepares).
-            display.armPending.add(msg["SRC"])
-            asyncio.ensure_future(_auto_arm_client(msg["SRC"]))
-
-    elif(msg["REQUEST"] == "CLIENTLOG"):
-        # Client-side debug stream (opt-in via ?tdbg). Surfaced in the server log
-        # so device state (video error/readyState/events) is visible without the
-        # operator relaying an on-screen HUD. No state change.
-        logging.warning("CLIENTLOG %s %s", msg.get("SRC"), msg.get("PAYLOAD"))
-
-    elif(msg["REQUEST"] == "DISCOVERY_STATUS"):
-        # Return discovery information for all clients
-        response["PAYLOAD"] = get_discovered_devices()
-        
-    elif(msg["REQUEST"] == "RECONFIGURE_CLIENT"):
-        # Force reconfiguration of a client
-        client = settings.clients.get(msg["PAYLOAD"]["clientKey"])
-        if client:
-            client.autoConfigured = False
-            auto_configure_client(msg["PAYLOAD"]["clientKey"], client)
-            response["PAYLOAD"] = {"status": "SUCCESS", "reconfigured": True}
-        else:
-            response["PAYLOAD"] = {"status": "ERROR", "message": "Client not found"}
-    
-    elif(msg["REQUEST"] == "BULK_CONFIGURE"):
-        # Configure multiple clients at once
-        configured_count = 0
-        for client_key in msg["PAYLOAD"]["clientKeys"]:
-            client = settings.clients.get(client_key)
-            if client:
-                client.autoConfigured = False
-                auto_configure_client(client_key, client)
-                configured_count += 1
-        response["PAYLOAD"] = {"status": "SUCCESS", "configured": configured_count}
-        
-    elif(msg["REQUEST"] == "REPORT_CANVAS"):
-        # Client re-reporting its viewport size (e.g. after going full screen for
-        # calibration). Keep canvasWidth/Height fresh so calibrate() reconstructs
-        # the screen quad from the marker using the dims actually photographed.
-        client = settings.clients.get(msg["SRC"])
-        if client is not None:
-            payload = msg.get("PAYLOAD") or {}
-            cw = payload.get("canvasWidth")
-            ch = payload.get("canvasHeight")
-            if cw and ch:
-                client.canvasWidth = int(cw)
-                client.canvasHeight = int(ch)
-                save_settings_incremental()
-
-    elif(msg["REQUEST"] == "SETPLAYLIST"):
-        payload = msg["PAYLOAD"]
-        display_id = payload["displayID"]
-        display = settings.displays.setdefault(display_id, Display())
-        display.mediaElements = _build_media_elements(payload.get("items", []))
-        display.loop = bool(payload.get("loop", False))
-        display.renderedToken = ""  # playlist changed -> needs (re)render
-        _broadcast_per_client_preload(display_id, display.mediaElements)
-        response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "PLAY"):
-        display_id = msg["PAYLOAD"]["displayID"]
-        display = settings.displays.get(display_id)
-        if not display or not display.mediaElements:
-            response["PAYLOAD"] = "SUCCESS"
-        else:
-            now_ms = int(time.time() * 1000)
-            resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
-            has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and display.renderStatus == "rendering":
-                response["PAYLOAD"] = {"status": "RENDER_IN_PROGRESS", "displayID": display_id}
-            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
-                response["PAYLOAD"] = {"status": "RENDER_REQUIRED", "displayID": display_id}
-            else:
-                if display.action == PlayState.PAUSE:
-                    _start_group_playback(display_id, resume_epoch)   # resume: direct, today's path
-                else:
-                    _begin_prepare(display_id)                        # fresh start: coordinated
-                response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "STOP"):
-        display_id = msg["PAYLOAD"]["displayID"]
-        _stop_group_playback(display_id)
-        response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "PAUSE"):
-        display_id = msg["PAYLOAD"]["displayID"]
-        display = settings.displays.get(display_id)
-        if display and display.action == PlayState.PLAY:
-            display.pauseOffset = int(time.time() * 1000) - display.playStartEpoch
-            display.action = PlayState.PAUSE
-        broadcast_to_display_group(display_id, {
-            "REQUEST": "PAUSE", "PAYLOAD": {"displayID": display_id}
-        })
-        response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "RELOAD"):
-        # Admin command: tell display clients to hard-reload so they pick up new
-        # client JS/HTML. Three scopes:
-        #   PAYLOAD.clientKey -> only that one iPad (single-device probe)
-        #   PAYLOAD.displayID -> only that group's members
-        #   otherwise        -> every connected client via DEST="ALL"
-        # The client reloads only on a RELOAD addressed to its own UDID or to
-        # "ALL", so the control console isn't reloaded by a group reload.
-        payload = msg.get("PAYLOAD")
-        client_key = payload.get("clientKey") if isinstance(payload, dict) else None
-        display_id = payload.get("displayID") if isinstance(payload, dict) else None
-        if client_key:
-            broadcast_to_client(client_key, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
-        elif display_id:
-            broadcast_to_display_group(display_id, {"REQUEST": "RELOAD", "PAYLOAD": "NONE"})
-        else:
-            socketmanager.broadcast(jsonpickle.encode(
-                {"DEST": "ALL", "REQUEST": "RELOAD", "PAYLOAD": "NONE"}))
-        response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "RUN_SCRIPT"):
-        # Admin command: run a device lifecycle script over SSH. PAYLOAD =
-        # {script: "login"|"start"|"stop"|"reboot"} plus a target: {clientKey} for
-        # one device, {displayID} for a whole group, or {all:true} for the fleet.
-        payload = msg.get("PAYLOAD") or {}
-        which = payload.get("script")
-        if which not in ("login", "start", "stop", "reboot", "test"):
-            response["PAYLOAD"] = {"status": "BAD_REQUEST"}
-        else:
-            ck = payload.get("clientKey")
-            did = payload.get("displayID")
-            if ck:
-                keys = [ck] if ck in settings.clients else []
-            elif did:
-                keys = [k for k, c in settings.clients.items()
-                        if getattr(c, "displayID", None) == did]
-            elif payload.get("all"):
-                keys = list(settings.clients.keys())
-            else:
-                keys = []
-            for k in keys:
-                asyncio.ensure_future(_run_device_script(k, which))
-            logging.warning("RUN_SCRIPT %s -> %d device(s)", which, len(keys))
-            response["PAYLOAD"] = {"status": "SUCCESS", "script": which, "count": len(keys)}
-
-    elif(msg["REQUEST"] == "RENDER"):
-        display_id = msg["PAYLOAD"]["displayID"]
-        display = settings.displays.get(display_id)
-        if not display or not display.mediaElements:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no playlist"}
-        elif not display.boundingBox:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibration"}
-        elif not any(_is_renderable(me) for me in display.mediaElements):
-            response["PAYLOAD"] = {"status": "ERROR",
-                                   "error": "nothing to render — Mirror/Animation play directly, just press Play"}
-        elif not [c for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]:
-            response["PAYLOAD"] = {"status": "ERROR", "error": "no calibrated screens"}
-        elif display.renderStatus == "rendering":
-            response["PAYLOAD"] = {"status": "rendering"}
-        else:
-            asyncio.ensure_future(render_group_async(display_id))
-            response["PAYLOAD"] = {"status": "rendering"}
-
-    elif(msg["REQUEST"] == "LIST_PLAYLISTS"):
-        rows = []
-        for name, pl in settings.playlists.items():
-            items = pl.items or []
-            has_segment = any(it.get("playmode") in ("SEGMENT", "INDIVIDUAL") for it in items)
-            rows.append({"name": name, "itemCount": len(items),
-                         "hasSegment": has_segment})
-        response["PAYLOAD"] = rows
-
-    elif(msg["REQUEST"] == "GET_PLAYLIST"):
-        pl = settings.playlists.get(msg["PAYLOAD"].get("name"))
-        if pl is None:
-            response["PAYLOAD"] = {"error": "not found"}
-        else:
-            response["PAYLOAD"] = {"name": pl.name, "items": pl.items, "loop": pl.loop}
-
-    elif(msg["REQUEST"] == "SAVE_PLAYLIST"):
-        payload = msg["PAYLOAD"]
-        name = (payload.get("name") or "").strip()
-        if not name:
-            response["PAYLOAD"] = {"error": "name required"}
-        else:
-            pl = settings.playlists.setdefault(name, Playlist())
-            pl.name = name
-            pl.items = payload.get("items", [])
-            pl.loop = bool(payload.get("loop", False))
-            response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "DELETE_PLAYLIST"):
-        settings.playlists.pop(msg["PAYLOAD"].get("name"), None)
-        response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "ASSIGN_PLAYLIST"):
-        payload = msg["PAYLOAD"]
-        display_id = payload.get("displayID")
-        pl = settings.playlists.get(payload.get("name"))
-        if pl is None or display_id is None:
-            response["PAYLOAD"] = {"status": "error", "displayID": display_id}
-        else:
-            _apply_playlist(display_id, pl)
-            display = settings.displays.get(display_id)
-            has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and not display.boundingBox:
-                status = "NOT_CALIBRATED"
-            elif has_renderable and compute_render_token(display_id) != display.renderedToken:
-                status = "RENDER_REQUIRED"
-            else:
-                status = "ok"
-            response["PAYLOAD"] = {"status": status, "displayID": display_id}
-
-    elif(msg["REQUEST"] == "LIST_SCHEDULES"):
-        now = datetime.datetime.now()
-        rows = []
-        for sid, s in settings.schedules.items():
-            rows.append({"id": s.id, "name": s.name, "playlistName": s.playlistName,
-                         "displayID": s.displayID, "priority": s.priority, "enabled": s.enabled,
-                         "activeNow": bool(getattr(s, "enabled", True)) and schedule_active_at(s, now)})
-        response["PAYLOAD"] = rows
-
-    elif(msg["REQUEST"] == "GET_SCHEDULE"):
-        s = settings.schedules.get(msg["PAYLOAD"].get("id"))
-        if s is None:
-            response["PAYLOAD"] = {"error": "not found"}
-        else:
-            response["PAYLOAD"] = {"id": s.id, "name": s.name, "playlistName": s.playlistName,
-                                   "displayID": s.displayID, "priority": s.priority, "enabled": s.enabled,
-                                   "freq": s.freq, "interval": s.interval, "byweekday": s.byweekday,
-                                   "dtstart": s.dtstart, "end": s.end, "exdates": s.exdates,
-                                   "startTime": s.startTime, "endTime": s.endTime}
-
-    elif(msg["REQUEST"] == "SAVE_SCHEDULE"):
-        p = msg["PAYLOAD"]
-        ok = True; err = None
-        try:
-            if _hhmm_to_min(p.get("startTime", "00:00")) >= _hhmm_to_min(p.get("endTime", "23:59")):
-                ok = False; err = "endTime must be after startTime"
-        except Exception:
-            ok = False; err = "bad time"
-        if ok and p.get("freq") not in _FREQ_MAP:
-            ok = False; err = "bad frequency"
-        if ok and p.get("freq") == "WEEKLY" and not p.get("byweekday"):
-            ok = False; err = "weekly schedule needs at least one weekday"
-        if ok:
-            try:
-                _parse_date(p.get("dtstart"))
-            except Exception:
-                ok = False; err = "bad start date"
-        if ok:
-            probe = Schedule()
-            for k in ("freq", "interval", "byweekday", "dtstart", "end"):
-                setattr(probe, k, p.get(k, getattr(probe, k)))
-            probe.startTime = p.get("startTime", "00:00"); probe.endTime = p.get("endTime", "23:59")
-            try:
-                schedule_active_at(probe, datetime.datetime.now())  # compiles the rrule
-            except Exception as e:
-                ok = False; err = "bad recurrence: " + str(e)
-        if not ok:
-            response["PAYLOAD"] = {"error": err}
-        else:
-            sid = p.get("id") or ("sch_" + uuid.uuid4().hex[:10])
-            s = settings.schedules.setdefault(sid, Schedule())
-            s.id = sid
-            for k in ("name", "playlistName", "displayID", "priority", "enabled",
-                      "freq", "interval", "byweekday", "dtstart", "end", "exdates",
-                      "startTime", "endTime"):
-                if k in p:
-                    setattr(s, k, p[k])
-            try:
-                s.priority = int(s.priority)
-            except (TypeError, ValueError):
-                s.priority = 0
-            response["PAYLOAD"] = {"id": sid}
-
-    elif(msg["REQUEST"] == "DELETE_SCHEDULE"):
-        settings.schedules.pop(msg["PAYLOAD"].get("id"), None)
-        response["PAYLOAD"] = "SUCCESS"
-
-    elif(msg["REQUEST"] == "GET_GROUP_DEFAULTS"):
-        response["PAYLOAD"] = [{"displayID": did, "defaultPlaylistName": getattr(d, "defaultPlaylistName", None)}
-                               for did, d in settings.displays.items()]
-
-    elif(msg["REQUEST"] == "SET_GROUP_DEFAULT"):
-        p = msg["PAYLOAD"]
-        display = settings.displays.get(p.get("displayID"))
-        if display is not None:
-            display.defaultPlaylistName = (p.get("playlistName") or "").strip() or None
-        response["PAYLOAD"] = "SUCCESS"
-
-    else:
-        response["PAYLOAD"] = msg["PAYLOAD"]    #echo anything that isn't a registered command
-
-    return jsonpickle.encode(response)
-
 # --- Structured async message protocol (intended replacement for msg_response) ---
 # Existing JS clients still speak the REQUEST-based protocol above; this handler
 # is additive for the newer 'type'-based clients until they fully migrate.
@@ -3390,90 +1036,38 @@ def _device_field(value):
     resolved = value() if callable(value) else value
     return resolved if isinstance(resolved, str) else None
 
-async def handle_websocket_message(session, message_data):
-    """Dispatch a structured ('type'-based) WebSocket message.
-
-    Per-client delivery still flows through the central socketmanager + DEST
-    routing used elsewhere; direct replies use session.send.
-    """
-    if not isinstance(message_data, dict):
-        return  # ignore malformed frames without raising
-
-    msg_type = message_data.get('type')
-
-    if msg_type == 'clientInfo':
-        client = settings.clients.setdefault(session.id, Client())
-        client.clientID = session.id
-        client.friendlyName = message_data.get('friendlyName', client.friendlyName)
-        client.deviceWidth = message_data.get('deviceWidth', client.deviceWidth)
-        client.deviceHeight = message_data.get('deviceHeight', client.deviceHeight)
-        client.deviceType = message_data.get('deviceType', client.deviceType)
-        client.userAgent = message_data.get('userAgent', client.userAgent)
-        if getattr(session, 'request', None) is not None:
-            client.ip = _client_ip(session.request)
-        client.lastSeen = time.time()
-        client.isOnline = True
-        # synced stays False until the client emits TIME_SYNCED (see the
-        # REGISTER handler comment) -- REGISTER is page-bootstrap, not
-        # clock-sync.
-        client.connectionCount += 1
-        # Best-effort fingerprinting (fields may be methods or plain values)
-        try:
-            device = device_detector.parse(client.userAgent)
-            client.osName = _device_field(device.os_name) or client.osName
-            client.osVersion = _device_field(device.os_version) or client.osVersion
-            client.deviceBrand = _device_field(device.device_brand) or client.deviceBrand
-            client.deviceModel = _device_field(device.device_model) or client.deviceModel
-            detected_type = _device_type_str(_device_field(device.device_type))
-            if detected_type and not message_data.get('deviceType'):
-                client.deviceType = detected_type
-        except Exception as e:
-            logging.debug(f"Device detection skipped: {e}")
-        auto_configure_client(session.id, client)
-
-    elif msg_type == 'ready':
-        client = settings.clients.get(session.id)
-        if client:
-            client.ready = message_data.get('ready', True)
-            client.lastSeen = time.time()
-
-    elif msg_type == 'heartbeat':
-        client = settings.clients.get(session.id)
-        if client:
-            client.lastSeen = time.time()
-            client.isOnline = True
-        await session.send(jsonpickle.encode({"REQUEST": "HEARTBEAT", "PAYLOAD": "ACK"}))
-
-    elif msg_type == 'displayData':
-        # Relay to peers in the same display group via the central manager
-        display_id = message_data.get('displayID')
-        if socketmanager is not None and display_id is not None:
-            broadcast_to_display_group(display_id, {
-                "REQUEST": "displayData",
-                "PAYLOAD": message_data.get('data')
-            })
-        await session.send(jsonpickle.encode({"REQUEST": "displayData", "PAYLOAD": "ACK"}))
-
-    else:
-        logging.debug(f"Unknown websocket message type: {msg_type}")
-
 async def index_handler(request):
     logging.debug("INDEX_HANDLER")
     fileName = request.match_info.get('page', "index.html")
-    
+
     data = '404 Not Found'
-    
+
     if(fileName == "time"):
         return web.Response(body=str(int(time.time()*1000)), content_type='text/html')
-    
+
     root, ext = os.path.splitext(fileName)
     if not ext:
         fileName = fileName+'.html'
 
     logging.debug(fileName)
 
+    # Path traversal + extension containment. The route regex blocks `/`
+    # so multi-segment paths can't reach here, but a single-segment hit
+    # like /server.py used to serve the Python source file straight from
+    # CWD. Restrict to a small whitelist of extensions that admins
+    # legitimately load top-level (HTML pages + their inline assets) and
+    # require the resolved path to stay inside the repo root.
+    ALLOWED_EXT = ('.html', '.js', '.css', '.ico')
+    if not fileName.endswith(ALLOWED_EXT):
+        return web.Response(status=404, reason='NOT FOUND')
+    repo_root = os.path.realpath('.')
+    target = os.path.realpath(fileName)
+    if not (target == repo_root or target.startswith(repo_root + os.sep)):
+        return web.Response(status=404, reason='NOT FOUND')
+    fileName = target
+
     ct = 'application/octet-stream'
-    
+
     if( os.path.isfile(fileName)):
         cached_data = get_cached_file(fileName)
         if cached_data is not None:
@@ -3621,9 +1215,18 @@ async def javascript_handler(request):
     logging.debug("JAVASCRIPT_HANDLER")
     fileName = request.match_info.get('src')
     logging.debug(fileName)
-    file_path = 'js/' + fileName
-    
-    if( os.path.isfile(file_path)):
+    # Path traversal containment: realpath both the base and the joined
+    # target, then assert target is still under base. PR-4a widened the
+    # route from /js/{src} (single-segment) to /js/{src:.+} so subdirs
+    # like /js/timeline/index.js resolve — that widening also lets
+    # `../server.py` slip through the route matcher, so the handler
+    # MUST do its own containment check.
+    base = os.path.realpath('js')
+    target = os.path.realpath(os.path.join('js', fileName or ''))
+    if not (target == base or target.startswith(base + os.sep)):
+        return web.Response(status=404, reason='NOT FOUND')
+    file_path = target
+    if os.path.isfile(file_path):
         data = get_cached_file(file_path)
         if data is not None:
             # See index_handler comment: iPad-1 needs explicit no-cache
@@ -3692,39 +1295,6 @@ def runScript(scriptID):
 def deleteScript(scriptID):
     del settings.scripts[scriptID]
 
-async def upload_handler(request):
-    logging.debug("UPLOAD_HANDLER")
-    uploadDest = request.match_info.get('dest')
-    logging.debug(uploadDest)
-    reader = await request.multipart()
-    # reader.next() will `yield` the fields of your form
-    field = await reader.next()
-    logging.debug(field.name)
-    filename = field.filename
-    # You cannot rely on Content-Length if transfer is chunked.
-    size = 0
-    path = os.path.join('cache')
-    if not os.path.exists(path):
-        os.mkdir(path)
-    with open(os.path.join(path,filename), 'wb') as f:
-        while True:
-            chunk = await field.read_chunk()  # 8192 bytes by default.
-            if not chunk:
-                break
-            size += len(chunk)
-            f.write(chunk)
-    
-    response = "none"
-    ct = 'application/octet-stream'
-    
-    if(uploadDest == "calibrate"):
-        response, ct = calibrate(os.path.join(path,filename))
-    elif(uploadDest == "image"):
-        response, ct = processImage(path,filename)
-    elif(uploadDest == "video"):
-        response, ct = processVideo(path, filename)
-    return web.Response(body=response, content_type=ct)
-
 def processImage(path,filename):
     logging.debug("processImage")
     imgDir = "media/server/images"
@@ -3738,10 +1308,6 @@ def processVideo(path, filename):
     Path(vidDir).mkdir(parents=True, exist_ok=True)
     Path(os.path.join(path, filename)).rename(os.path.join(vidDir, filename))
     return "success", "text/html"
-
-def angle_cos(p0, p1, p2):
-    d1, d2 = (p0-p1).astype('float'), (p2-p1).astype('float')
-    return abs( np.dot(d1, d2) / np.sqrt( np.dot(d1, d1)*np.dot(d2, d2) ) )
 
 # ---------------------------------------------------------------------------
 # Screen-quad detection: a four-stage pipeline that survives the cluttered,
@@ -3884,7 +1450,17 @@ def _quad_contains_point(quad, point):
 def _quad_iou(q1, q2):
     """Intersection-over-union of two convex quads. Uses the axis-aligned
     bounding-box approximation -- fast and good enough for the "did these
-    two quads accidentally trace the same compound region?" decision."""
+    two quads accidentally trace the same compound region?" decision.
+
+    NOTE: mosaicmesh.calibration ALSO defines _quad_iou, but with the
+    PRECISE convex intersection (cv.intersectConvexConvex) for the
+    marker/border reconciliation pipeline. The two are intentionally
+    different algorithms for different call sites; do not merge them.
+    This AABB version is local to server.py because it's only used by
+    the _drop_overlapping helper in the screen-quad detection pipeline.
+    server.py does NOT re-export _quad_iou from mosaicmesh.calibration
+    (the calibration version stays internal to that module).
+    """
     x1, y1, w1, h1 = cv.boundingRect(q1)
     x2, y2, w2, h2 = cv.boundingRect(q2)
     ix = max(0, min(x1 + w1, x2 + w2) - max(x1, x2))
@@ -4230,36 +1806,6 @@ def _drop_overlapping(marker_to_quad, iou_threshold=0.3):
     return keep
 
 
-def find_squares(img):
-    # Optimize: Convert to grayscale once instead of processing all channels
-    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY) if len(img.shape) == 3 else img
-    gray = cv.GaussianBlur(gray, (5, 5), 0)
-    squares = []
-    
-    # Optimize: Reduce threshold iterations and use more efficient range
-    for thrs in range(0, 255, 52):  # Reduced iterations from 10 to 5
-        if thrs == 0:
-            bin = cv.Canny(gray, 0, 50, apertureSize=5)
-            bin = cv.dilate(bin, None)
-        else:
-            _retval, bin = cv.threshold(gray, thrs, 255, cv.THRESH_BINARY)
-        
-        contours, _hierarchy = cv.findContours(bin, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            # Early area check to avoid expensive operations on small contours
-            area = cv.contourArea(cnt)
-            if area < 1000:
-                continue
-                
-            cnt_len = cv.arcLength(cnt, True)
-            cnt = cv.approxPolyDP(cnt, 0.02*cnt_len, True)
-            if len(cnt) == 4 and cv.isContourConvex(cnt):
-                cnt = cnt.reshape(-1, 2)
-                max_cos = np.max([angle_cos( cnt[i], cnt[(i+1) % 4], cnt[(i+2) % 4] ) for i in range(4)])
-                if max_cos < 0.1:
-                    squares.append(cnt)
-    return squares
-        
 def setup_aruco_detector():
     """Return (dictionary, parameters) for 6x6 ArUco marker detection.
 
@@ -4350,6 +1896,20 @@ def calibrate(filename):
                      n_floodfill, n_threshold, n_fallback)
 
     relevantContours = []
+    # PR-28: count markers mapped to a known client so the upload handler
+    # can return a meaningful "detected N markers" number to the calibration
+    # modal. `detected_count` is the raw ArUco detection count (may include
+    # stale markers from a previous fleet or unrelated devices); `mapped`
+    # is the operationally-useful figure — markers whose arucoID we
+    # recognise + persisted measuredCenter/measuredPerimeter for.
+    #
+    # Capture detected_count NOW, before the per-marker loop below
+    # reassigns `corners` to a single marker's (4, 2) reshape on every
+    # iteration (a pre-existing shadow that didn't matter until PR-28
+    # tried to read len(corners) AFTER the loop — the post-loop read
+    # was always seeing 4, the corner-count of the last processed marker).
+    detected_count = int(len(corners)) if hasattr(corners, '__len__') else 0
+    mapped_count = 0
 
     if len(corners) > 0:
         # flatten the ArUco IDs list
@@ -4384,6 +1944,7 @@ def calibrate(filename):
                                  if getattr(c, "arucoID", None) == markerID), None)
                 if clientID is None:
                     continue  # marker for a client we no longer have
+                mapped_count += 1
                 clientLabel = settings.clients[clientID].friendlyName or clientID
                 # Label is drawn AFTER quad reconciliation below (we need the
                 # screen bbox to size the font correctly). See _draw_fitted_label.
@@ -4474,11 +2035,35 @@ def calibrate(filename):
     del image, candidate_quads, marker_to_quad
 
     assign_group_bounding_boxes()
-    # Return the *URL* (not the disk path): media_handler serves
-    # /media/<client>/<file> by inserting the images/ subdir, so the file
-    # written to media/displays/images/calibration.png is fetched as
-    # /media/displays/calibration.png.
-    return "media/displays/calibration.png","text/html"
+    # Enqueue a re-render of every renderable playlist for each affected
+    # group (first calibration OR recalibrate). "Affected" = any group that
+    # now has ≥1 client with a measuredPerimeter (i.e. was just calibrated).
+    # This runs AFTER assign_group_bounding_boxes so _group_is_calibrated
+    # sees the boundingBox. The returned list of playlist names is surfaced
+    # in the JSON response so the calibration modal can warn the operator.
+    affected = {c.displayID for c in settings.clients.values()
+                if getattr(c, "measuredPerimeter", None) is not None
+                and getattr(c, "displayID", None)}
+    will_render = []
+    for _gid in affected:
+        for _n in mark_group_recalibrated(_gid):
+            if _n not in will_render:
+                will_render.append(_n)
+    # PR-28: return JSON so the calibration modal can render
+    # "Detected N markers." `imageUrl` is the *URL* (not the disk path):
+    # media_handler serves /media/<client>/<file> by inserting the images/
+    # subdir, so the file written to media/displays/images/calibration.png
+    # is fetched as /media/displays/calibration.png. `detected` and
+    # `mapped` were captured above (detected BEFORE the per-marker loop
+    # shadowed `corners`).
+    body = json.dumps({
+        "success": True,
+        "detected": detected_count,
+        "mapped": mapped_count,
+        "imageUrl": "media/displays/calibration.png",
+        "willRender": will_render,
+    })
+    return body, "application/json"
 
 async def cache_stats_handler(request):
     """Debug endpoint to view cache performance"""
@@ -4523,269 +2108,57 @@ async def get_video_duration(path):
     return dur
 
 
-async def api_media(request):
-    """List the shared media library under media/server/{images,videos}, plus
-    per-video durations (seconds) so the playlist editor can offer 'full length'."""
-    def _list(sub):
-        d = os.path.join("media", "server", sub)
-        if not os.path.isdir(d):
-            return []
-        return ["/media/server/" + sub + "/" + f
-                for f in sorted(os.listdir(d))
-                if os.path.isfile(os.path.join(d, f))]
-    videos = _list("videos")
-    durations = {}
-    for url in videos:
-        disk = os.path.join("media", "server", "videos", os.path.basename(url))
-        d = await get_video_duration(disk)
-        if d is not None:
-            durations[url] = round(d, 1)
-    body = json.dumps({"images": _list("images"), "videos": videos,
-                       "videoDurations": durations})
-    return web.Response(text=body, content_type="application/json")
+def _playback_state(display):
+    """Map a Display's playback fields to a coarse state string for the admin
+    Now landing. PLAY/PREPARING -> playing, PAUSE -> paused, STOP/NOACTION ->
+    'stopped' if a playlist is applied else 'idle'."""
+    action = getattr(display, "action", None)
+    if action in (PlayState.PLAY, PlayState.PREPARING):
+        return "playing"
+    if action == PlayState.PAUSE:
+        return "paused"
+    has_playlist = bool(getattr(display, "currentPlaylistName", None)) and bool(getattr(display, "mediaElements", None))
+    return "stopped" if has_playlist else "idle"
+
+
+def _playback_row(display_id, display):
+    """The per-group row exposed by /api/playback and the PLAYBACK_CHANGED broadcast."""
+    return {
+        "displayID": display_id,
+        "state": _playback_state(display),
+        "currentPlaylist": getattr(display, "currentPlaylistName", None),
+        "startedEpoch": getattr(display, "playStartEpoch", 0),
+        "renderStatus": getattr(display, "renderStatus", ""),
+    }
+
+
+def _broadcast_playback_state(display_id):
+    """Broadcast one group's playback row to all admins. Best-effort: a broadcast
+    failure must never break playback (matches the PR-27 CLIENTS_CAME_ONLINE pattern)."""
+    try:
+        display = settings.displays.get(display_id)
+        if display is None:
+            return
+        socketmanager.broadcast(jsonpickle.encode({
+            "REQUEST": "PLAYBACK_CHANGED",
+            "PAYLOAD": {"groups": [_playback_row(display_id, display)]},
+        }))
+    except Exception:
+        pass
+
+
+async def api_playback(request):
+    """Read-only per-group playback snapshot for the admin Now landing."""
+    rows = [_playback_row(did, d) for did, d in settings.displays.items()]
+    return web.json_response({"success": True, "groups": rows})
+
 
 async def api_effects(request):
     """List the registered transition effects and their parameter schemas."""
     return web.Response(text=json.dumps({"effects": effects.effect_catalog()}),
                         content_type="application/json")
 
-async def api_discovery_devices(request):
-    """REST: list all discovered devices."""
-    devices = get_discovered_devices()
-    return web.json_response({
-        "success": True,
-        "devices": devices,
-        "total": len(devices),
-        "online": len([d for d in devices if d["isOnline"]]),
-    })
 
-async def api_discovery_stats(request):
-    """REST: aggregate discovery + cache statistics."""
-    devices = get_discovered_devices()
-    display_groups = {}
-    for d in devices:
-        gid = d["displayID"] or "default"
-        display_groups[gid] = display_groups.get(gid, 0) + 1
-    total = cache_stats['hits'] + cache_stats['misses']
-
-    # Per-display-group cache propagation: counts each lighttpd-
-    # localhost iPad in the group as one of {fullyCached, pushing,
-    # stalled, idle}. Empty for groups without a renderedToken or
-    # without renderable SEGMENT items -- the bar is meaningless
-    # there and the admin UI uses absence to hide the widget.
-    group_prop = {}
-    for did, display in settings.displays.items():
-        expected_keys = _expected_seg_keys_for_display(display)
-        if not expected_keys:
-            continue
-        total_g = 0
-        full = pushing = stalled = idle = 0
-        for k, c in settings.clients.items():
-            if getattr(c, "displayID", None) != did:
-                continue
-            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
-                continue
-            total_g += 1
-            cached = getattr(c, "cachedSegments", set()) or set()
-            if expected_keys.issubset(cached):
-                full += 1
-            elif getattr(c, "cachePushProgress", None):
-                if c.cachePushProgress.get("status") == "stalled":
-                    stalled += 1
-                else:
-                    pushing += 1
-            else:
-                idle += 1
-        if total_g > 0:
-            group_prop[did] = {
-                "total": total_g, "fullyCached": full,
-                "pushing": pushing, "stalled": stalled, "idle": idle,
-                "percent": round(100.0 * full / total_g, 1),
-            }
-
-    return web.json_response({
-        "success": True,
-        "totalDevices": len(devices),
-        "onlineDevices": len([d for d in devices if d["isOnline"]]),
-        "autoConfiguredDevices": len([d for d in devices if d["autoConfigured"]]),
-        "displayGroups": display_groups,
-        "displayGroupPropagation": group_prop,
-        "cacheStats": {
-            "hits": cache_stats['hits'],
-            "misses": cache_stats['misses'],
-            "cachedFiles": len(file_cache),
-            "hitRatio": (cache_stats['hits'] / total) if total else 0,
-        },
-    })
-
-async def api_discovery_configure(request):
-    """REST: configure client(s). Supports five payload styles:
-
-      - {"clientKey", "displayID"?, "friendlyName"?}      -> update fields
-      - {"action": "reconfigure", "clientKey"}            -> re-run auto-config
-      - {"action": "bulk_reconfigure", "clientKeys": [...]}-> re-run for many
-      - {"action": "swap_orientation", "clientKey"}        -> swap canvas dims +
-        clear measuredPerimeter (force a re-calibrate at the new orientation)
-      - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
-        "none", "lighttpd-localhost", or "service-worker"
-      - {"action": "force_push", "displayID"} -> re-trigger cache-push
-        scps for the named display's CURRENT renderedToken to every
-        lighttpd-localhost iPad in that group, without re-running
-        ffmpeg. Recovery path for when an earlier render's push fan-out
-        failed (e.g. WiFi saturated, network blip, server crashed
-        mid-push). Pushes are still throttled via _PUSH_CONCURRENCY,
-        so this is safe to call without re-saturating the AP.
-
-    (The action-based forms preserve the contract that discovery.html uses.)
-    """
-    try:
-        data = await request.json()
-    except Exception:
-        return web.json_response({"success": False, "error": "Invalid JSON"}, status=400)
-
-    action = data.get("action")
-
-    if action == "bulk_reconfigure":
-        configured = 0
-        for key in data.get("clientKeys", []):
-            client = settings.clients.get(key)
-            if client:
-                client.autoConfigured = False
-                auto_configure_client(key, client)
-                configured += 1
-        saveSettings()
-        return web.json_response({"success": True, "configured": configured})
-
-    if action == "clear_cache":
-        # Operator/test helper: drop a client's server-side
-        # cachedSegments record so the next force_push (or
-        # subsequent render) re-pushes the segments. Doesn't touch
-        # the actual files on the iPad (lighttpd will keep serving
-        # stale-but-byte-identical content until the push lands a
-        # newer copy). With no clientKey, clears all
-        # lighttpd-localhost clients (handy for re-running an
-        # acceptance test from scratch).
-        ck = data.get("clientKey")
-        cleared = 0
-        if ck:
-            c = settings.clients.get(ck)
-            if not c:
-                return web.json_response(
-                    {"success": False, "error": "Client not found"}, status=404)
-            c.cachedSegments = set()
-            cleared = 1
-        else:
-            for c in settings.clients.values():
-                if getattr(c, "cacheMode", "none") == "lighttpd-localhost":
-                    c.cachedSegments = set()
-                    cleared += 1
-        saveSettings()
-        logging.info("clear_cache: cleared cachedSegments on %d client(s)", cleared)
-        return web.json_response({"success": True, "cleared": cleared})
-
-    if action == "force_push":
-        # Recovery path: replay the post-render push hook for an
-        # already-rendered display, without paying the ffmpeg cost
-        # again. Walks the current display's mediaElements, finds
-        # SEGMENT items, and queues _push_segment_to_cached_clients
-        # for each (lighttpd-localhost iPad, segment_index) pair that
-        # ISN'T already in client.cachedSegments. Returns the count of
-        # pushes queued; actual completion is logged via the existing
-        # cache-push: INFO lines.
-        display_id = data.get("displayID")
-        if not display_id:
-            return web.json_response(
-                {"success": False, "error": "displayID required"}, status=400)
-        display = settings.displays.get(display_id)
-        if not display:
-            return web.json_response(
-                {"success": False, "error": "display not found"}, status=404)
-        token = getattr(display, "renderedToken", "") or ""
-        if not token:
-            return web.json_response(
-                {"success": False,
-                 "error": "no renderedToken yet -- run RENDER first"},
-                status=409)
-        # Identify segment items by enumerated position (matches what
-        # render_group_async + _per_client_items use as the index).
-        seg_indices = [i for i, me in enumerate(display.mediaElements)
-                       if _is_renderable(me) and isVideoItem(me.file)
-                       and me.playmode == PlayMode.SEGMENT]
-        queued = 0
-        skipped_cached = 0
-        skipped_no_perim = 0
-        for key, c in _group_clients(display_id):
-            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
-                continue
-            if c.measuredPerimeter is None:
-                skipped_no_perim += 1
-                continue
-            cached = getattr(c, "cachedSegments", set()) or set()
-            for n in seg_indices:
-                seg_key = "%s_%d" % (token, n)
-                if seg_key in cached:
-                    skipped_cached += 1
-                    continue
-                asyncio.ensure_future(
-                    _push_segment_to_cached_clients(key, token, n))
-                queued += 1
-        logging.info("force_push: display=%r token=%s queued=%d "
-                     "skipped_cached=%d skipped_no_perim=%d",
-                     display_id, token, queued, skipped_cached,
-                     skipped_no_perim)
-        return web.json_response({"success": True, "queued": queued,
-                                  "skipped_cached": skipped_cached,
-                                  "skipped_no_perim": skipped_no_perim,
-                                  "token": token})
-
-    client_key = data.get("clientKey")
-    if not client_key:
-        return web.json_response({"success": False, "error": "clientKey required"}, status=400)
-    client = settings.clients.get(client_key)
-    if not client:
-        return web.json_response({"success": False, "error": "Client not found"}, status=404)
-
-    if action == "reconfigure":
-        client.autoConfigured = False
-        auto_configure_client(client_key, client)
-    elif action == "swap_orientation":
-        # Manual override for cases where calibrate's auto-rotation detection
-        # got it wrong (e.g. an iPad whose band quad wasn't detected so neither
-        # the IoU nor aspect signal had a chance to fire, or borderline cases
-        # where both signals were noisy). Swaps reported canvas dims AND
-        # clears measuredPerimeter so the next calibration photo re-projects
-        # the screen with the corrected orientation. The user is expected to
-        # re-upload a calibration image after calling this.
-        cw = int(getattr(client, "canvasWidth", 0) or 0)
-        ch = int(getattr(client, "canvasHeight", 0) or 0)
-        client.canvasWidth, client.canvasHeight = ch, cw
-        client.measuredPerimeter = None
-        logging.info("swap_orientation: %s canvas %sx%s -> %sx%s",
-                     client_key, cw, ch, ch, cw)
-    elif action == "set_cache_mode":
-        mode = data.get("mode")
-        if mode not in ("none", "lighttpd-localhost", "service-worker"):
-            return web.json_response({"success": False,
-                                      "error": f"invalid mode {mode!r}"},
-                                     status=400)
-        client.cacheMode = mode
-        logging.info("set_cache_mode: %s -> %s", client_key, mode)
-    else:
-        if "displayID" in data:
-            client.displayID = data["displayID"]
-        if "friendlyName" in data:
-            client.friendlyName = data["friendlyName"]
-            client.nameIsCustom = True   # user-set name: DNS won't override it
-        # Per-device lifecycle scripts (login/start/stop/reboot/test). ""
-        # clears back to the fleet default on next backfill; a non-empty
-        # string overrides it.
-        for sf in ("loginScript", "startScript", "stopScript", "rebootScript",
-                   "testScript"):
-            if sf in data:
-                setattr(client, sf, data[sf] if data[sf] else None)
-
-    saveSettings()
-    return web.json_response({"success": True})
 
 def sanitize_display_groups():
     """Self-heal display-group keys that captured HTML markup.
@@ -4812,74 +2185,6 @@ def sanitize_display_groups():
         logging.info(f"Sanitized {fixed} display group key(s) containing HTML")
     return fixed
 
-
-def migrate_client_objects():
-    """Migrate old client objects to include new discovery fields"""
-    if not hasattr(settings, 'playlists'):
-        settings.playlists = {}
-    if not hasattr(settings, 'schedules'):
-        settings.schedules = {}
-    for _disp in settings.displays.values():
-        if not hasattr(_disp, 'defaultPlaylistName'):
-            _disp.defaultPlaylistName = None
-        _disp.scheduledEntryId = None      # transient — reset on startup
-        _disp.scheduledPlaying = False
-        # coordinated-start fields: backfill onto older Displays AND reset the
-        # transient prepare state (a restart cancels any in-flight prepare).
-        _disp.prepareId = None
-        _disp.readyClients = set()
-        _disp.armPending = set()
-        _disp.prepareDeadline = 0
-    current_time = time.time()
-    for client_key, client in settings.clients.items():
-        if not hasattr(client, 'discoveryTime'):
-            client.discoveryTime = current_time
-        if not hasattr(client, 'lastSeen'):
-            client.lastSeen = current_time
-        if not hasattr(client, 'connectionCount'):
-            client.connectionCount = 1
-        if not hasattr(client, 'capabilities'):
-            client.capabilities = []
-        if not hasattr(client, 'autoConfigured'):
-            client.autoConfigured = False
-        if not hasattr(client, 'discoverySource'):
-            client.discoverySource = "existing"
-        if not hasattr(client, 'isOnline'):
-            client.isOnline = False
-        if not hasattr(client, 'synced'):
-            client.synced = False
-        if not hasattr(client, 'hostname'):
-            client.hostname = ""
-        if not hasattr(client, 'hostnameResolved'):
-            client.hostnameResolved = False
-        if not hasattr(client, 'touch'):
-            client.touch = False
-        if not hasattr(client, 'canvasWidth'):
-            client.canvasWidth = getattr(client, 'deviceWidth', 0)
-        if not hasattr(client, 'canvasHeight'):
-            client.canvasHeight = getattr(client, 'deviceHeight', 0)
-        if not hasattr(client, 'nameIsCustom'):
-            # Protect pre-existing custom names: a name that is NOT the
-            # auto-generated '<device>_<key[:8]>' form is treated as user-set,
-            # so reverse-DNS won't clobber it.
-            fn = client.friendlyName or ""
-            client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
-        if not hasattr(client, 'cacheMode'):
-            client.cacheMode = "none"
-        if not hasattr(client, 'cachedSegments'):
-            client.cachedSegments = set()
-        # cachePushProgress is transient (a push is meaningful only
-        # while the process is live), so unconditionally reset on
-        # startup -- any state in settings.dat is stale.
-        client.cachePushProgress = None
-        # Backfill lifecycle-script defaults onto devices registered before the
-        # automation existed (their fields are absent/None -> show as null).
-        _apply_default_scripts(client)
-        # Re-attempt resolution for clients that never got a hostname (e.g.
-        # resolved blank before DNS was fixed / before the mDNS fallback). The
-        # 60s retry throttle keeps perpetually-nameless devices from churning.
-        if not getattr(client, 'hostname', ''):
-            client.hostnameResolved = False
 
 def evaluate_schedules(now=None):
     """Per group with a schedule or a default playlist: pick the effective target
@@ -4930,10 +2235,15 @@ def evaluate_schedules(now=None):
                 display.scheduledEntryId = key
                 display.scheduledPlaying = False
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and compute_render_token(display_id) != display.renderedToken:
-                if display.renderStatus != "rendering":
-                    asyncio.ensure_future(render_group_async(display_id))
-                    display.scheduledPlaying = False
+            if has_renderable and not is_playlist_ready(playlist_name, display_id):
+                # Not ready: enqueue (idempotent) and HOLD — don't play stale/un-rendered.
+                from mosaicmesh import render_queue, render as _render
+                elements = _render._build_media_elements(
+                    settings.playlists[playlist_name].items)
+                _render._set_render_state(display, playlist_name, _render.RENDER_QUEUED,
+                                          token=_render.render_token(elements, display_id))
+                render_queue.enqueue(playlist_name, display_id)
+                display.scheduledPlaying = False
             elif not getattr(display, "scheduledPlaying", False):
                 _start_group_playback(display_id)
                 display.scheduledPlaying = True
@@ -4968,15 +2278,19 @@ async def process():
             client.isOnline = False
             stale_clients.append({
                 "clientKey": client_key,
+                "displayID": client.displayID,
                 "friendlyName": client.friendlyName,
-                "lastSeen": client.lastSeen
+                "isOnline": False,
+                "lastSeen": client.lastSeen,
             })
-    
-    # Notify about stale clients
+
+    # Notify about stale clients. PR-27 (2026-06-09): wrap the list in
+    # a `devices` field so the payload shape matches CLIENTS_CAME_ONLINE
+    # — sockjs-status.js reads payload.devices for both events.
     if stale_clients:
         stale_notification = {
             "REQUEST": "CLIENTS_WENT_OFFLINE",
-            "PAYLOAD": stale_clients
+            "PAYLOAD": {"devices": stale_clients},
         }
         socketmanager.broadcast(jsonpickle.encode(stale_notification))
         logging.info(f"{len(stale_clients)} clients went offline")
@@ -5021,6 +2335,17 @@ async def process():
 socketmanager = None
 
 if __name__ == '__main__':
+    # When this file is executed directly, Python registers it in sys.modules
+    # under '__main__'. Any sub-module that does `import server` (a pattern we
+    # use throughout mosaicmesh/) would otherwise create a SECOND copy of this
+    # file under 'server' — one where the __main__ block never runs, so
+    # `settings` and other __main__-block bindings are missing. Aliasing
+    # __main__ under 'server' makes the lazy imports resolve to the running
+    # namespace and keeps the singleton (settings, runner, socketmanager) in
+    # one place.
+    import sys
+    sys.modules.setdefault('server', sys.modules[__name__])
+
     args = parse_args()
     settings = Settings()
     runner = None
@@ -5034,6 +2359,10 @@ if __name__ == '__main__':
             settings = jsonpickle.decode(data)
             # Migrate old client objects to include new discovery fields
             migrate_client_objects()
+            try:
+                revalidate_renders_on_boot()
+            except Exception as e:
+                logging.error("render revalidation on boot failed: %s", e)
             # Remove any HTML-corrupted display group keys (phantom duplicates)
             sanitize_display_groups()
             # Reset stale renderStatus: a previous server run that was
@@ -5090,9 +2419,7 @@ if __name__ == '__main__':
                 
                 # Set up socket manager
                 socketmanager = sockjs.get_manager(app=app,name='mosiacmesh')
-                
-                # Initialize JSON response cache now that jsonpickle is available
-                init_json_cache()
+
                 # Pre-warm the static-file cache so a fleet-wide Start burst
                 # doesn't block the event loop on cold disk reads.
                 prewarm_static_cache()
@@ -5127,7 +2454,7 @@ if __name__ == '__main__':
         app = web.Application()
         app.router.add_route('GET', '/', index_handler)
         app.router.add_route('GET', '/{page:[^{}/]+}', index_handler) #[^sockjs/]+
-        app.router.add_route('GET', '/js/{src}', javascript_handler)
+        app.router.add_route('GET', '/js/{src:.+}', javascript_handler)
         app.router.add_route('GET', '/images/{src}', image_handler)
         app.router.add_route('GET', '/media/{file}', media_handler),
         app.router.add_route('GET', '/media/{client}/{file}', media_handler),
@@ -5136,10 +2463,32 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
         # Discovery API endpoints (granular handlers)
         app.router.add_route('GET', '/api/media', api_media)
+        app.router.add_route('DELETE', '/api/media', api_media_delete)
         app.router.add_route('GET', '/api/effects', api_effects)
         app.router.add_route('GET', '/api/discovery/devices', api_discovery_devices)
         app.router.add_route('GET', '/api/discovery/stats', api_discovery_stats)
         app.router.add_route('POST', '/api/discovery/configure', api_discovery_configure)
+        app.router.add_get('/api/playlists', api_playlists_list)
+        app.router.add_get('/api/playlists/{name}', api_playlists_get)
+        app.router.add_post('/api/playlists', api_playlists_create)
+        app.router.add_put('/api/playlists/{name}', api_playlists_update)
+        app.router.add_delete('/api/playlists/{name}', api_playlists_delete)
+        app.router.add_get('/api/schedules', api_schedules_list)
+        app.router.add_get('/api/schedules/{id}', api_schedules_get)
+        app.router.add_post('/api/schedules', api_schedules_create)
+        app.router.add_put('/api/schedules/{id}', api_schedules_update)
+        app.router.add_delete('/api/schedules/{id}', api_schedules_delete)
+        app.router.add_get('/api/profiles', api_profiles_list)
+        app.router.add_get('/api/profiles/{name}', api_profiles_get)
+        app.router.add_post('/api/profiles', api_profiles_create)
+        app.router.add_put('/api/profiles/{name}', api_profiles_update)
+        app.router.add_delete('/api/profiles/{name}', api_profiles_delete)
+        app.router.add_post('/api/clients/{clientKey}/profile', api_clients_assign_profile)
+        app.router.add_get('/api/displays', api_displays_list)
+        app.router.add_post('/api/displays', api_displays_create)
+        app.router.add_delete('/api/displays/{displayID}', api_displays_delete)
+        app.router.add_get('/api/renders', api_renders_list)
+        app.router.add_get('/api/playback', api_playback)
         sockjs.add_endpoint(app, ws_handler, name='mosiacmesh', prefix='/sockjs/')
         
         asyncio.run(run_server())

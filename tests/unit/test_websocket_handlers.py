@@ -164,8 +164,12 @@ class TestWebSocketBroadcasting:
     """Test WebSocket broadcasting functionality"""
     
     def test_broadcast_to_display_group(self, mock_settings):
-        """Broadcasting to a display group fans out via the central
-        socketmanager + DEST routing (one broadcast per client in the group)."""
+        """Fallback path: clients with no session id (empty clientID) route
+        through socketmanager.broadcast(DEST=...). One broadcast call per
+        in-group client, none for clients outside the group. The steady-
+        state targeted path (session id present, _send_to_session calls
+        sess.send() directly) is covered by test_send_to_session_targeted
+        in test_module_layout.py."""
         if not hasattr(server, 'broadcast_to_display_group'):
             pytest.skip("broadcast_to_display_group not implemented")
 

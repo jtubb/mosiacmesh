@@ -9,839 +9,71 @@
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script> 
   <script src="/js/mosiacmesh.js"></script>
+  <script src="/js/animations.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jstree/3.3.16/jstree.min.js"></script>
+  <script>
+    // Defer Alpine's auto-start so the ES module below can register the
+    // store + components BEFORE Alpine evaluates the existing x-data
+    // attributes on the page. Module scripts are deferred and run AFTER
+    // classic defer scripts, so without this hook Alpine would already
+    // have processed the DOM and missed every Alpine.data/store call.
+    // The module retrieves window.__deferredAlpineStart and invokes it
+    // once registration is complete.
+    // PR-19 (2026-06-09): the original deferLoadingAlpine hook stopped
+    // working in Alpine 3.13.10 — Alpine auto-starts on script load
+    // without invoking deferLoadingAlpine. We rely instead on the
+    // alpine:init event pattern (registered by js/timeline/index.js)
+    // AND on script ORDER below: index.js must load + evaluate BEFORE
+    // Alpine so its alpine:init listener is registered in time. The
+    // deferLoadingAlpine hook is kept as a no-op safety net in case a
+    // future Alpine version re-enables it.
+    window.deferLoadingAlpine = function (start) { window.__deferredAlpineStart = start; };
+  </script>
+  <!-- IMPORTANT: index.js MUST come BEFORE the Alpine CDN script. Both are
+       deferred; deferred scripts execute in source order, so this puts
+       index.js's alpine:init listener in place before Alpine fires the
+       event. Reversing the order regresses the bug fixed in PR-19. -->
+  <script type="module" src="/js/timeline/index.js"></script>
+  <script defer
+          src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.10/dist/cdn.min.js"
+          integrity="sha384-XBJ5+bq4ga1+0s+J4sl6njqQ9C/YIfKeQw18HypSuGEaPm1g/VWaNdsQ5d3sE1qi"
+          crossorigin="anonymous"></script>
   <script>
     // This is the control console, not a display. Opt out of RELOAD broadcasts so
     // reloading a display group (or "all") never reloads the operator's console.
     window._mmNoReload = true;
-    function tickcallback(currentTime,currentTarget,drift_correction)
-    {
-        if(sock == null)
-        {
-            mosiacMeshConnect();
+
+    // Task 14 (Section 1 overhaul): the dead legacy jQuery was removed here.
+    // Deleted: tickcallback + ProgrammableTimer.setup (the admin console does
+    // not tick), the raw-SockJS Console <form> submit handler (the Console
+    // section markup was removed in Task 12), and the legacy jQuery toast()
+    // helper + the bulk of mosiacMeshCallback (the jQuery UIs it drove are
+    // gone; the live message path is js/timeline/timeline/sockjs-status.js,
+    // which wraps window.sock.onmessage and feeds Alpine.store('mm')).
+    //
+    // KEPT: the SockJS connection itself. mosiacMeshConnect() (in
+    // js/mosiacmesh.js) creates window.sock + wires window.generateMessage,
+    // which the timeline modals (play-now / fleet-confirm / calibration /
+    // track-header-context-menu) and sockjs-status.js all depend on. The
+    // only surviving callback behavior is the operator-facing device
+    // join/remove toast, now routed through the Alpine store toast (the
+    // legacy jQuery toast() is gone).
+    function mosiacMeshCallback(data_obj) {
+        var store = (window.Alpine && typeof window.Alpine.store === 'function')
+            ? window.Alpine.store('mm') : null;
+        if (!store || typeof store.toast !== 'function') { return; }
+        if (data_obj.REQUEST == "NEW_DEVICE_CONFIGURED") {
+            var nd = data_obj.PAYLOAD || {};
+            store.toast('Device joined: ' + (nd.friendlyName || nd.clientKey || 'unknown'), 'info');
+        } else if (data_obj.REQUEST == "DEVICE_REMOVED") {
+            var rp = data_obj.PAYLOAD || {};
+            store.toast(rp.cleared != null ? ('Cleared ' + rp.cleared + ' offline device(s)') : 'Device removed', 'info');
         }
     }
-	
-	$('form').submit(function() {
-		var text = generateMessage("SRV",$('#text').val(),"");
-        log('Sending: ' + text);
-        sock.send(text);
-        $('#text').val('').focus();
-        return false;
-    });
-	
-	function mosiacMeshCallback(data_obj)
-	{
-		$('#connDot').addClass('on');
-		$('#connText').text('connected');
 
-		if(data_obj.REQUEST == "REGISTER" && data_obj.PAYLOAD == "SUCCESS")
-		{
-			refreshClients();
-		}
-		else if(data_obj.REQUEST == "DISPLAYS")
-		{
-			console.log(data_obj.PAYLOAD);
-			displays = [{
-					'id' : 'displays',
-					'text' : 'Displays',
-					'state' : { 'opened' : true, 'selected' : false },
-					'children' : [],
-					'icon': 'images/favicon.ico',
-					'li_attr' : { 'class' : 'tree_root' },
-					'draggable' : false
-				}];
-				
-			window._lastDisplays = data_obj.PAYLOAD;
-			window._nodeBadges = {};   // rebuilt each tree refresh
-			for(var key in data_obj.PAYLOAD)
-			{
-				var d = data_obj.PAYLOAD[key] || {};
-				window._nodeBadges[key] = groupBadgeHtml(d) + groupCountBadge(0);
-				displays[0].children.push({
-					'id' : key,
-					'text' : key,
-					'state' : { 'opened' : true, 'selected' : false },
-					'children' : [],
-					'icon' : 'images/display.ico',
-					'li_attr' : { 'class' : 'display_group' },
-					'draggable' : false
-				});
-			}
-			$('#displays').jstree(true).settings.core.data = displays;
-			$('#displays').jstree(true).refresh();
-			adminRenderOverview(data_obj.PAYLOAD);
-			if (typeof plRefreshGroups === 'function') { plRefreshGroups(); }
-		}
-		else if(data_obj.REQUEST == "CLIENTS")
-		{
-			displayKeys = {'deviceHeight': 'Height',
-						   'deviceWidth': 'Width',
-						   'measuredCenter': 'Center',
-						   'userAgent': 'User Agent',
-						   'ip': 'IP Address',
-						   'osName': 'OS',
-						   'osVersion': 'Version',
-						   'engine': 'Browser Engine',
-						   'deviceBrand': 'Device Brand',
-						   'deviceModel': 'Device Model',
-						   'deviceType': 'Device Type',
-						   'width': 'Width',
-						   'height': 'Height',
-						   'loginScript': 'Login Script',
-						   'startScript': 'Start Script',
-						   'stopScript': 'Stop Script',
-						   'rebootScript': 'Reboot Script',
-						   };
-						   
-			console.log(data_obj.PAYLOAD);
-			for(var key in data_obj.PAYLOAD)
-			{
-				for(var dispKey in $('#displays').jstree(true).settings.core.data[0].children)
-				{
-					if(data_obj.PAYLOAD[key].displayID == $('#displays').jstree(true).settings.core.data[0].children[dispKey].id)
-					{
-						children = [];
-						
-						var icon = "images/client.ico"
-						
-						for(var dataKey in data_obj.PAYLOAD[key])
-						{
-							if(dataKey in displayKeys)
-							{
-								value = data_obj.PAYLOAD[key][dataKey];
-								if(dataKey == 'deviceType' && value != 'desktop')
-								{
-									icon = "images/mobileclient.ico"
-								}
-								children.push({
-									// Namespace the detail-node id by client key. A bare
-									// field name (e.g. 'deviceWidth') collides across
-									// clients — jsTree requires globally-unique ids, so
-									// duplicates merge and every device shows one device's
-									// details. Prefixing with the client key keeps them distinct.
-									'id' : key + '::' + dataKey,
-									'text' : displayKeys[dataKey] + ": "+ value,
-									'state' : { 'opened' : false, 'selected' : false },
-									'children' : false,
-									'icon' : "images/info.ico",
-									'li_attr' : { 'class' : 'display_attr' },
-									'draggable' : false
-								});
-							}
-						}
-		
-						var clientObj = data_obj.PAYLOAD[key];
-						var clientBadge;
-						if (clientObj.ready) {
-							clientBadge = ' <span class="badge ready">ready</span>';
-						} else if (clientObj.synced) {
-							clientBadge = ' <span class="badge syncing">synced</span>';
-						} else if (clientObj.isOnline) {
-							clientBadge = ' <span class="badge online">online</span>';
-						} else {
-							clientBadge = ' <span class="badge offline">offline</span>';
-						}
-						window._nodeBadges[key] = clientBadge;
-						$('#displays').jstree(true).settings.core.data[0].children[dispKey].children.push({
-							'id' : key,
-							'text' : stripHtml(clientObj['friendlyName'] || key),
-							'state' : { 'opened' : false, 'selected' : false },
-							'children' : children,
-							'icon' : icon,
-							'li_attr' : { 'class' : 'display' }
-						});
-					}
-				}
-			}
-			// update each group's screen-count badge now that children are nested
-			var _groups = $('#displays').jstree(true).settings.core.data[0].children;
-			for(var gi in _groups)
-			{
-				var g = _groups[gi];
-				window._nodeBadges[g.id] = groupBadgeHtml((window._lastDisplays || {})[g.id])
-					+ groupCountBadge((g.children || []).length);
-			}
-			$('#displays').jstree(true).refresh();
-		}
-		else if(data_obj.REQUEST == "LIST_PLAYLISTS")
-		{
-			var $sel = $('#plSelect').empty();
-			$('<option>').val("").text("-- select --").appendTo($sel);
-			$.each(data_obj.PAYLOAD, function(_, row){
-				$('<option>').val(row.name)
-					.text(row.name + " (" + row.itemCount + ")").appendTo($sel);
-			});
-			if (plEditor.name) { $sel.val(plEditor.name); }
-			window._schPlaylists = $.map(data_obj.PAYLOAD, function(r){ return r.name; });
-			window._plCount = (data_obj.PAYLOAD || []).length;
-			if (typeof adminRenderSummary === 'function') adminRenderSummary();
-		}
-		else if(data_obj.REQUEST == "GET_PLAYLIST")
-		{
-			if (data_obj.PAYLOAD && !data_obj.PAYLOAD.error) {
-				plEditor = { name: data_obj.PAYLOAD.name,
-					items: data_obj.PAYLOAD.items || [],
-					loop: !!data_obj.PAYLOAD.loop, selected: -1 };
-				$('#plLoop').prop('checked', plEditor.loop);
-				$('#plName').text(plEditor.name);
-				plRenderItems(); plRenderInspector();
-			}
-		}
-		else if(data_obj.REQUEST == "ASSIGN_PLAYLIST")
-		{
-			var s = data_obj.PAYLOAD.status;
-			if (s === "NOT_CALIBRATED") {
-				plSetBadge("⚠ not calibrated");
-				plSetTransportState({render: false, play: false});
-				toast("Not calibrated", 'warn');
-			} else if (s === "RENDER_REQUIRED") {
-				plSetBadge("⚠ needs render");
-				plSetTransportState({render: true, play: false});
-				toast("Needs render", 'warn');
-			} else if (s === "error") {
-				plSetBadge("⚠ assign failed");
-				plSetTransportState({render: false, play: false});
-				toast("Assign failed", 'danger');
-			} else {
-				plSetBadge("✓ assigned");
-				plSetTransportState({render: true, play: true});
-				toast("Assigned", 'ok');
-			}
-		}
-		else if(data_obj.REQUEST == "RENDER")
-		{
-			if (data_obj.PAYLOAD && data_obj.PAYLOAD.status === "ERROR") {
-				plSetBadge("⚠ " + (data_obj.PAYLOAD.error || "render error"));
-			} else if (data_obj.PAYLOAD && data_obj.PAYLOAD.status === "rendering") {
-				plSetBadge("⏳ rendering…");
-			}
-		}
-		else if(data_obj.REQUEST == "RENDER_STATUS")
-		{
-			// Only update the badge if THIS status is for the group the
-			// playlist editor is currently bound to. Without this filter,
-			// a render finishing on display A would clobber the badge
-			// while the user is reviewing display B's playlist (the
-			// server broadcasts RENDER_STATUS to all sessions).
-			var statusDid = data_obj.PAYLOAD && data_obj.PAYLOAD.displayID;
-			if (!(statusDid && plAssignedGroup() && statusDid !== plAssignedGroup())) {
-				var st = data_obj.PAYLOAD.renderStatus || data_obj.PAYLOAD.status;
-				plSetBadge(st === "rendering" ? "⏳ rendering…"
-					: st === "ready" ? "✓ render ready"
-					: st === "error" ? "⚠ render error" : st || "");
-				if (st === "ready") { plSetTransportState({render: true, play: true}); }
-				else if (st === "rendering") { plSetTransportState({render: false, play: false}); }
-			}
-		}
-		else if(data_obj.REQUEST == "PLAY")
-		{
-			var ps = data_obj.PAYLOAD && data_obj.PAYLOAD.status;
-			if (ps === "RENDER_IN_PROGRESS") { plSetBadge("⏳ rendering…"); plSetTransportState({render: false, play: false}); }
-			else if (ps === "RENDER_REQUIRED") { plSetBadge("⚠ needs render"); plSetTransportState({render: true, play: false}); }
-		}
-		else if(data_obj.REQUEST == "LIST_SCHEDULES")
-		{
-			var $s = $('#schSelect').empty();
-			$('<option>').val("").text("-- select --").appendTo($s);
-			$.each(data_obj.PAYLOAD, function(_, r){
-				$('<option>').val(r.id).text((r.activeNow?"● ":"") + r.name + " ["+r.displayID+"]").appendTo($s); });
-			if (schEditor && schEditor.id) { $s.val(schEditor.id); }
-			window._schCount = (data_obj.PAYLOAD || []).length;
-			if (typeof adminRenderSummary === 'function') adminRenderSummary();
-		}
-		else if(data_obj.REQUEST == "GET_SCHEDULE")
-		{
-			if (data_obj.PAYLOAD && !data_obj.PAYLOAD.error) { schEditor = data_obj.PAYLOAD; $('#schStatus').text(schEditor.name); schRenderForm(); }
-		}
-		else if(data_obj.REQUEST == "SAVE_SCHEDULE")
-		{
-			if (data_obj.PAYLOAD && data_obj.PAYLOAD.id && schEditor) { schEditor.id = data_obj.PAYLOAD.id; $('#schStatus').text("saved"); toast('Schedule saved', 'ok'); }
-			else if (data_obj.PAYLOAD && data_obj.PAYLOAD.error) { $('#schStatus').text("⚠ " + data_obj.PAYLOAD.error); toast(data_obj.PAYLOAD.error, 'danger'); }
-		}
-		else if(data_obj.REQUEST == "GET_GROUP_DEFAULTS")
-		{
-			schRenderDefaults(data_obj.PAYLOAD);
-		}
-		else if(data_obj.REQUEST == "DISCOVERY_HEARTBEAT")
-		{
-			var p = data_obj.PAYLOAD || {};
-			$('#connText').text('connected' + (p.onlineClients != null ? ' · ' + p.onlineClients + ' online' : ''));
-			adminScheduleRefresh();   // periodic fallback (~30s) for unsignaled changes
-		}
-		else if(data_obj.REQUEST == "NEW_DEVICE_CONFIGURED")
-		{
-			var nd = data_obj.PAYLOAD || {};
-			if (typeof toast === 'function') toast('Device joined: ' + (nd.friendlyName || nd.clientKey || 'unknown'), 'ok');
-			adminScheduleRefresh();
-		}
-		else if(data_obj.REQUEST == "CLIENTS_WENT_OFFLINE")
-		{
-			adminScheduleRefresh();
-		}
-		else if(data_obj.REQUEST == "DEVICE_REMOVED")
-		{
-			var rp = data_obj.PAYLOAD || {};
-			if (typeof toast === 'function') {
-				toast(rp.cleared != null ? ('Cleared ' + rp.cleared + ' offline device(s)') : 'Device removed', 'ok');
-			}
-			adminScheduleRefresh();
-		}
-		else if(data_obj.REQUEST == "CACHE_PROGRESS")
-		{
-			// Per-iPad cache-push progress tick from the server's
-			// _poll_push_progress coroutine. Updates the per-display-
-			// group propagation bar incrementally. iPad clients
-			// receive these too (DEST=ALL); they have no handler so
-			// the message is silently dropped there.
-			onCacheProgress(data_obj.PAYLOAD || {});
-		}
-	}
-
-	// Status badges are rendered as a DOM decoration AFTER each node draws (see
-	// adminDecorateTree), NOT baked into the node's `text` — otherwise jsTree's
-	// inline rename editor would expose the badge HTML and round-trip it into the
-	// saved name. window._nodeBadges maps node id -> badge HTML.
-	function groupBadgeHtml(d) {
-		d = d || {};
-		return d.boundingBox ? ' <span class="badge ok">calibrated</span>'
-		                     : ' <span class="badge warn">not calibrated</span>';
-	}
-	function groupCountBadge(count) {
-		return ' <span class="badge">' + count + (count === 1 ? ' screen' : ' screens') + '</span>';
-	}
-	function stripHtml(s) { return String(s == null ? '' : s).replace(/<[^>]*>/g, '').trim(); }
-
-	// Append each node's badge(s) into its anchor after the tree (re)draws. Idempotent:
-	// clears any prior decoration first so repeated redraws don't stack badges.
-	function adminDecorateTree() {
-		var map = window._nodeBadges || {};
-		$('#displays a.jstree-anchor').each(function(){
-			var $a = $(this);
-			$a.find('.deco-badge').remove();
-			var id = this.id.replace(/_anchor$/, '');
-			if (map[id]) { $a.append('<span class="deco-badge">' + map[id] + '</span>'); }
-		});
-	}
-	$(function(){ $('#displays').on('refresh.jstree redraw.jstree after_open.jstree', adminDecorateTree); });
-
-	function adminRenderOverview(displays) {
-		var $o = $('#overviewCards').empty(); var playing = [];
-		$.each(displays || {}, function(id, d){
-			if (!d) return;
-			var act = d.action && (d.action.name || d.action);     // enum-object {name} or raw value
-			var isPlaying = (act === 'PLAY' || act === 2);
-			var n = (d.mediaElements || []).length;
-			if (isPlaying) playing.push(id);
-			var calib = d.boundingBox ? '<span class="badge ok">calibrated</span>' : '<span class="badge warn">not calibrated</span>';
-			var $card = $('<div class="card">').html('<b>'+id+'</b> '+calib+'<br><span class="size" style="color:var(--text-muted)">'
-				+ n + ' item' + (n===1?'':'s') + ' · ' + (isPlaying ? '<span class="badge playing">▶ playing</span>' : 'idle') + '</span>');
-			// Cache propagation bar (hidden until /api/discovery/stats
-			// reports a non-empty entry for this group). data-display-id
-			// is the addressing key both initPropagationBars and
-			// onCacheProgress use to find the right element.
-			$card.append(
-				'<div class="cache-propagation" data-display-id="' + id + '" style="display:none">' +
-				'  <div class="cache-propagation-label">' +
-				'    <span><strong>Cache</strong> <span class="cache-propagation-counts">—</span></span>' +
-				'    <span class="cache-propagation-percent">0%</span>' +
-				'  </div>' +
-				'  <div class="cache-propagation-bar">' +
-				'    <div class="cache-propagation-fill cache-propagation-fill-inflight" style="width:0%"></div>' +
-				'    <div class="cache-propagation-fill" style="width:0%"></div>' +
-				'  </div>' +
-				'</div>'
-			);
-			$('<button class="btn btn-ghost" type="button" style="margin-top:var(--s2)">⟳ Reload</button>')
-				.attr('title', 'Reload displays in "'+id+'"')
-				.on('click', function(){ adminReloadGroup(id); })
-				.appendTo($card);
-			$card.appendTo($o);
-		});
-		if (!Object.keys(displays || {}).length) $o.html('<div class="empty">No display groups yet.</div>');
-		$('#nowPlaying').text(playing.length ? ('▶ ' + playing.join(', ')) : '');
-		window._groupCount = Object.keys(displays || {}).length;
-		adminRenderSummary();
-		// Re-hydrate propagation state from /api/discovery/stats now
-		// that the overview cards (the elements the bar binds to) have
-		// been rebuilt. Without this, a DISPLAYS refresh would wipe
-		// the bar DOM and we'd be stuck at zero until the next push.
-		initPropagationBars();
-	}
-
-	// Per-display-group cache propagation tracking.
-	// Spec: docs/superpowers/specs/2026-06-03-cache-progress-and-
-	// propagation-ui.md. State map is keyed by displayID; each entry
-	// holds the counters we display + a map of in-flight pushes
-	// (clientKey -> percent) so we can sum the in-flight contribution
-	// to the bar's lighter overlay band. Server pushes CACHE_PROGRESS
-	// over SockJS at each poller tick (~2s) plus on push start/end.
-	window._propagationState = window._propagationState || {};
-
-	function renderPropagationBar(displayID) {
-		var $el = $('.cache-propagation[data-display-id="' + displayID + '"]');
-		if (!$el.length) return;
-		var s = window._propagationState[displayID];
-		if (!s) { $el.hide(); return; }
-		var cachedPct = s.total ? (100 * s.fullyCached / s.total) : 0;
-		// In-flight contribution: each iPad currently pushing adds its
-		// own progress percent / total iPads. So a 50%-done push on 1
-		// of 24 iPads adds (50/24)% ≈ 2.1% to the bar's lighter band.
-		var inflightContrib = 0;
-		if (s.total && s.pushing) {
-			var pushVals = Object.keys(s.pushing).map(function(k){ return s.pushing[k] || 0; });
-			inflightContrib = pushVals.reduce(function(a,b){ return a+b; }, 0) / s.total;
-		}
-		$el.find('.cache-propagation-fill').not('.cache-propagation-fill-inflight')
-			.css('width', cachedPct + '%');
-		$el.find('.cache-propagation-fill-inflight')
-			.css('width', Math.min(100, cachedPct + inflightContrib) + '%');
-		var pushingN = s.pushing ? Object.keys(s.pushing).length : 0;
-		var stalledNote = s.stalled > 0 ? (' · <span style="color:#d32f2f">' + s.stalled + ' stalled</span>') : '';
-		$el.find('.cache-propagation-counts').html(
-			s.fullyCached + '/' + s.total + ' cached · ' + pushingN + ' pushing' + stalledNote
-		);
-		$el.find('.cache-propagation-percent').text(Math.round(cachedPct) + '%');
-		$el.toggleClass('stalled', s.stalled > 0);
-		$el.show();
-	}
-
-	function initPropagationBars() {
-		$.ajax({
-			url: '/api/discovery/stats',
-			cache: false,
-			dataType: 'json',
-			success: function(data) {
-				var groups = (data && data.displayGroupPropagation) || {};
-				// Preserve any in-flight push state we've accumulated
-				// from CACHE_PROGRESS broadcasts (the stats endpoint
-				// only knows about server-side counters; live push %
-				// lives client-side in s.pushing).
-				$.each(groups, function(displayID, agg) {
-					var prev = window._propagationState[displayID];
-					window._propagationState[displayID] = {
-						total: agg.total,
-						fullyCached: agg.fullyCached,
-						stalled: agg.stalled || 0,
-						idle: agg.idle || 0,
-						pushing: (prev && prev.pushing) || {}
-					};
-					renderPropagationBar(displayID);
-				});
-			},
-			error: function() {
-				// Stats endpoint unreachable -- bars stay hidden.
-				// Not noisy because this is best-effort UX, not
-				// a critical control path.
-			}
-		});
-	}
-
-	function onCacheProgress(payload) {
-		if (!payload || !payload.displayID) return;
-		var displayID = payload.displayID;
-		var s = window._propagationState[displayID];
-		if (!s) {
-			// Group not yet known on the client -- fetch full stats.
-			initPropagationBars();
-			return;
-		}
-		s.pushing = s.pushing || {};
-		if (payload.status === 'cached') {
-			delete s.pushing[payload.clientKey];
-			// fullyCached is authoritatively recomputed by the next
-			// /api/discovery/stats poll; for instant feedback we
-			// increment here, capped at total.
-			s.fullyCached = Math.min(s.total, (s.fullyCached || 0) + 1);
-		} else if (payload.status === 'stalled') {
-			delete s.pushing[payload.clientKey];
-			s.stalled = (s.stalled || 0) + 1;
-		} else {  // 'pushing' or any unknown active status
-			s.pushing[payload.clientKey] = payload.percent || 0;
-		}
-		renderPropagationBar(displayID);
-	}
-
-	// Aggregate count cards (media / playlists / schedules / groups), from the
-	// existing /api/media + LIST_PLAYLISTS + LIST_SCHEDULES responses.
-	function adminRenderSummary() {
-		var cards = [
-			['Display groups', window._groupCount, 'displays'],
-			['Media files', window._mediaCount, 'media'],
-			['Playlists', window._plCount, 'playlists'],
-			['Schedules', window._schCount, 'schedules']
-		];
-		var $s = $('#overviewSummary').empty();
-		$.each(cards, function(_, c){
-			var val = (c[1] == null) ? '–' : c[1];
-			$('<div class="card" style="cursor:pointer">')
-				.html('<div class="size" style="color:var(--text-muted)">'+c[0]+'</div>'
-					+ '<div style="font-size:22px;font-weight:600">'+val+'</div>')
-				.on('click', function(){ location.hash = c[2]; })
-				.appendTo($s);
-		});
-	}
-
-	function imageChanged() {
-		var file = event.target.files[0];
-
-		if (file.size > 5*1024*1024) {
-			toast('Max upload size is 5M', 'warn');
-		}
-
-		// Also see .name, .type
-
-		var image = new Image();
-		image.src = URL.createObjectURL(file);
-		$('#canvas').empty();
-		$('#canvas').prepend(image);
-	};
-	
-	function refreshClients() {
-		sock.send(generateMessage('SRV','DISPLAYS','null'));
-	    sock.send(generateMessage('SRV','CLIENTS','null'));
-	}
-
-	// Tell display clients to hard-reload (pick up new client JS/HTML). Per-group
-	// targets only that group's members; "all" hits every connected display. The
-	// console opts out via _mmNoReload, so neither reloads this page.
-	function adminReloadGroup(id) {
-		try { sock.send(generateMessage('SRV','RELOAD',{displayID:id})); toast('Reloading "'+id+'"…','ok'); }
-		catch(e){ toast('Not connected','warn'); }
-	}
-	function adminReloadAll() {
-		if (!confirm('Reload every connected display? (This console is not affected.)')) return;
-		try { sock.send(generateMessage('SRV','RELOAD','')); toast('Reloading all displays…','ok'); }
-		catch(e){ toast('Not connected','warn'); }
-	}
-
-	// Run a device lifecycle script (login/start/stop/reboot) over SSH. `node` is a
-	// jsTree node: a device (class 'display' -> clientKey) or a group ('display_group'
-	// -> displayID, fans out to the group). Reboot confirms (it takes the device down).
-	function runScript(node, which) {
-		var isGroup = node.li_attr && node.li_attr.class == 'display_group';
-		var label = stripHtml(node.text || node.id);
-		if (which == 'reboot' &&
-		    !confirm('Reboot ' + (isGroup ? 'EVERY device in "' + label + '"' : '"' + label + '"') + '?')) return;
-		var payload = isGroup ? { displayID: node.id, script: which } : { clientKey: node.id, script: which };
-		try {
-			sock.send(generateMessage('SRV', 'RUN_SCRIPT', payload));
-			toast(which.charAt(0).toUpperCase() + which.slice(1) + ' → ' + label, 'ok');
-		} catch (e) { toast('Not connected', 'warn'); }
-	}
-	// Fleet-wide lifecycle (every device). Reboot/Stop confirm.
-	function runScriptAll(which) {
-		if ((which == 'reboot' || which == 'stop') &&
-		    !confirm(which.charAt(0).toUpperCase() + which.slice(1) + ' EVERY device in the fleet?')) return;
-		try {
-			sock.send(generateMessage('SRV', 'RUN_SCRIPT', { all: true, script: which }));
-			toast(which.charAt(0).toUpperCase() + which.slice(1) + ' → all devices', 'ok');
-		} catch (e) { toast('Not connected', 'warn'); }
-	}
-
-	$(document).ready(function () {
-		$("#calImageForm").submit(function (event) {
-
-			//disable the default form submission
-			event.preventDefault();
-			//grab all form data  
-			var formData = new FormData($('#calImageForm')[0]);
-
-			$.ajax({
-				url: 'upload/calibrate',
-				type: 'POST',
-				data: formData,
-				cache: false,
-                enctype: 'multipart/form-data',
-				contentType: false,
-				processData: false,
-				success: function (data) {
-					image = new Image();
-					$('#canvas').hide()
-					image.src = data+"?"+GoTime.now();
-					$('#canvas').empty();
-					$('#canvas').prepend(image);
-					image.addEventListener('load', function() {$('#canvas').show();});
-					if (typeof toast === 'function') toast('Calibration image processed', 'ok');
-				},
-				error: function(xhr){
-					console.log("Error in ajax form submission", xhr && xhr.status);
-					if (typeof toast === 'function')
-						toast('Calibration upload failed (' + ((xhr && xhr.status) || 'error') + ')', 'warn');
-				}
-			});
-
-			return false;
-		});
-		
-		$("#mediaContentForm").submit(function (event) {
-
-			//disable the default form submission
-			event.preventDefault();
-			//grab all form data
-			var formData = new FormData($('#mediaContentForm')[0]);
-
-			$.ajax({
-				url: 'upload/image',
-				type: 'POST',
-				data: formData,
-				cache: false,
-                enctype: 'multipart/form-data',
-				contentType: false,
-				processData: false,
-				success: function (data) {
-					console.log(data);
-					adminLoadMediaGrid();
-				},
-				error: function(){
-					console.log("Error in ajax form submission");
-				}
-			});
-
-			return false;
-		});
-		
-		$('#displays').jstree({
-		  "core" : {
-			"multiple" : false,
-			"animation" : 0,
-			"html_titles" : true,
-			"themes" : { "stripes" : true },
-			"check_callback" :  function (operation, node, node_parent, node_position, more) {
-				if (operation === 'move_node'){
-					if (Object.hasOwn(node_parent, 'li_attr') && node.li_attr.class == 'display' && node_parent.li_attr.class == 'display_group') {
-						return true;
-					}
-					else{
-						return false;
-					}
-				}
-				return true;
-			}
-		  },
-		  "plugins" : [ "contextmenu", "dnd", "search", "state", "unique", "changed" ],
-		  'contextmenu' : {
-			'items' : customMenu
-		  }
-		});
-		
-		function customMenu(node) {
-			// The default set of all items
-			var items = {
-				refreshItem: { // The "refresh" menu item
-					label: "Refresh",
-					action: function (obj) {
-						refreshClients();
-					}
-				},
-				calibrateItem: { // The "calibrate" menu item
-					label: "Calibrate Display",
-					action: function (obj) {
-						sock.send(generateMessage('SRV','GENERATEARUCO',{'id': node.id}));
-					}
-				},
-				identifyItem: { // The "identify" menu item
-					label: "Identify Display",
-					action: function (obj) {
-						sock.send(generateMessage('SRV','IDENTIFYDISPLAY',{'group': node.li_attr.class=='display_group', 'id': node.id}));
-					}
-				},
-			    newItem: { // The "create" menu item
-					label: "New Display Group",
-					action: function (obj) {
-						node = $('#displays').jstree(true).create_node(node);
-						$('#displays').jstree(true).edit(node);
-					}
-				},
-				renameItem: { // The "rename" menu item
-					label: "Rename",
-					action: function (obj) {
-						$('#displays').jstree(true).edit(node);
-					}
-				},
-				deleteItem: { // The "delete" menu item
-					label: "Delete",
-					action: function (obj) {
-						$('#displays').jstree(true).delete_node(node);
-					}
-				},
-				removeItem: { // Remove a single device (client) from the server
-					label: "Remove Device",
-					action: function (obj) {
-						if (confirm('Remove "' + (node.text || node.id) + '" from the server? It will re-register if it reconnects.')) {
-							sock.send(generateMessage('SRV','REMOVE_CLIENT',{'clientID': node.id}));
-							adminScheduleRefresh();
-						}
-					}
-				},
-				// Lifecycle scripts over SSH. On a device node these target that
-				// device (clientKey); on a group node they fan out to the group
-				// (displayID). The server runs login/start/stop/reboot per device.
-				loginItem:  { label: "Login (wake + unlock)", action: function () { runScript(node, 'login'); } },
-				startItem:  { label: "Start (open display)",  action: function () { runScript(node, 'start'); } },
-				stopItem:   { label: "Stop (close display)",  action: function () { runScript(node, 'stop'); } },
-				rebootItem: { label: "Reboot device",         action: function () { runScript(node, 'reboot'); } },
-				testItem:   { label: "Start Testing (🐞 diagnostics)", action: function () { runScript(node, 'test'); } }
-			};
-			
-			// Only allow creation of Display groups
-			if(node.li_attr.class != 'tree_root') {
-				//items.newItem._disabled = true;
-				delete items.refreshItem;
-				delete items.newItem;
-			}
-			
-			// Only allow identification of displays and display groups
-			if(!(node.li_attr.class == 'display' || node.li_attr.class == 'display_group')){
-				delete items.identifyItem;
-			}
-			
-			// Only allow rename of devices and device groups except for the default display group
-			if(!(node.li_attr.class == 'display' || node.li_attr.class == 'display_group') || node.id == 'Default') {
-				//items.renameItem._disabled = true;
-				delete items.renameItem;
-			}
-			// Only show calibrate for display groups
-			if (node.li_attr.class != 'display_group'){
-				delete items.calibrateItem;
-				// Only show the delete item for non default display groups
-				delete items.deleteItem;
-			}
-			else if (node.id == 'Default') {
-
-				delete items.deleteItem;
-			}
-
-			// "Remove Device" only applies to device (client) nodes
-			if (node.li_attr.class != 'display') {
-				delete items.removeItem;
-			}
-
-			// Lifecycle scripts apply to a device (-> its clientKey) or a display
-			// group (-> fan out to the group). Not the tree root.
-			if (!(node.li_attr.class == 'display' || node.li_attr.class == 'display_group')) {
-				delete items.loginItem; delete items.startItem;
-				delete items.stopItem;  delete items.rebootItem;
-			}
-
-			return items;
-		}
-		
-		/*$('#displays').on("changed.jstree", function (e, data) {
-		    console.log('Changed');
-			if(data.selected.length) {
-				console.log(data);
-				console.log('The selected node is: ' + data.selected[0] + " with a value of: " + data.instance.get_node(data.selected[0]).text);
-			}
-		})*/
-		
-		$('#displays').on('create_node.jstree',function (e, data) {
-		  console.log("create_node");
-		  // only allow display groups to be created
-		  data.node.icon = 'images/display.ico';
-		  data.node.li_attr  = { 'class' : 'display_group' };
-		});
-		
-		$('#displays').on('delete_node.jstree',function (e, data) {
-		  console.log("delete_node");
-		  sock.send(generateMessage('SRV','UPDATEDISPLAYGROUP',{'oldID':data.node.id, 'newID':null}));
-		});
-
-		$('#displays').on('rename_node.jstree',function (e, data) {
-		  console.log("rename_node");
-		  if(data.node.li_attr.class == 'display_group') {
-			  $('#displays').jstree(true).set_id(data.node,data.node.text);
-			  sock.send(generateMessage('SRV','UPDATEDISPLAYGROUP',{'oldID':data.old || data.node.id, 'newID':data.text}));
-		  }
-		  else
-		  {
-			  sock.send(generateMessage('SRV','UPDATEDISPLAY',{'clientID':data.node.id, 'friendlyName':data.text}));
-		  }
-		});
-
-		$('#displays').on('move_node.jstree',function (e, data) {
-		  console.log("move_node");
-		  /* only allow moving device nodes between displays
-		  tree_root
-		  display_group
-		  display
-		  display_attr*/
-		  if(data.node.li_attr.class == 'display' && $('#'+data.old_parent).first().hasClass('display_group')) {
-			sock.send(generateMessage('SRV','UPDATEDISPLAY',{'clientID':data.node.id, 'displayID':data.parent}));
-		  }
-		})
-		
-		var to = false;
-		$('#displays_q').keyup(function () {
-			if(to) { clearTimeout(to); }
-			to = setTimeout(function () {
-				var v = $('#displays_q').val();
-				$('#displays').jstree(true).search(v);
-			}, 250);
-		});
-	});
-	
-	function toast(msg, kind) {
-	  var $t = $('<div class="toast">').addClass(kind || '').text(msg).appendTo('#toasts');
-	  setTimeout(function(){ $t.fadeOut(250, function(){ $(this).remove(); }); }, 3000);
-	}
-
-	function adminLoadMediaGrid() {
-	  $.getJSON('/api/media', function(d){
-	    var $g = $('#mediaGrid').empty(); var all = (d.images||[]).concat(d.videos||[]);
-	    window._mediaCount = all.length; if (typeof adminRenderSummary === 'function') adminRenderSummary();
-	    if (!all.length) { $g.html('<div class="empty">No media yet — drop files below to upload.</div>'); return; }
-	    $.each(d.images||[], function(_,u){ $('<div class="thumb">').html('<img src="'+u+'"><div class="cap">'+u.split('/').pop()+'</div>').appendTo($g); });
-	    $.each(d.videos||[], function(_,u){ $('<div class="thumb">').html('<video src="'+u+'" muted></video><div class="cap">'+u.split('/').pop()+'</div>').appendTo($g); });
-	  });
-	}
-	$(function(){ setTimeout(adminLoadMediaGrid, 1000); });
-
-    ProgrammableTimer.setup(1000,tickcallback);
-	mosiacMeshConnect(mosiacMeshCallback);
-
-	var _adminRefreshTimer = null;
-	function adminRefreshStatus() {
-		// Don't rebuild the tree while the user is renaming a node — defer until the
-		// inline edit input is gone (jsTree's rename field has class jstree-rename-input).
-		if ($('#displays .jstree-rename-input').length) {
-			clearTimeout(_adminRefreshTimer);
-			_adminRefreshTimer = setTimeout(adminRefreshStatus, 1500);
-			return;
-		}
-		// Refresh BOTH displays and clients: the DISPLAYS handler rebuilds the tree
-		// with empty groups, so CLIENTS must follow to re-nest the screens.
-		if (typeof sock !== 'undefined' && sock) {
-			try { sock.send(generateMessage('SRV','DISPLAYS','null'));
-			      sock.send(generateMessage('SRV','CLIENTS','null')); } catch(e){}
-		}
-	}
-	// Event-driven: push signals (device joined / went offline / heartbeat) call this,
-	// debounced. No blind interval — the 30s heartbeat is the only periodic fallback.
-	function adminScheduleRefresh() {
-		clearTimeout(_adminRefreshTimer);
-		_adminRefreshTimer = setTimeout(adminRefreshStatus, 400);
-	}
-	$(function(){ setTimeout(adminRefreshStatus, 1200); });  // initial load only — no polling interval
-
-	$(function(){
-	  $('#clearOffline').on('click', function(){
-	    if (confirm('Remove all offline devices from the server?')) {
-	      sock.send(generateMessage('SRV','CLEAR_OFFLINE_CLIENTS',''));
-	      adminScheduleRefresh();
-	    }
-	  });
-	});
-
-	$(function(){
-	  $('#calGenerate').on('click', function(){
-	    var sel = [];
-	    try { sel = $('#displays').jstree('get_selected'); } catch(e){}
-	    if (!sel || !sel.length) { toast('Select a group first', 'warn'); return; }
-	    sock.send(generateMessage('SRV','GENERATEARUCO',{'id': sel[0]}));
-	  });
-	});
-
+    // Open the SockJS connection so window.sock exists for sockjs-status.js
+    // to hook and for the timeline modals to send through.
+    mosiacMeshConnect(mosiacMeshCallback);
   </script>
   <style>
 	img{
@@ -909,26 +141,87 @@
 		font-size:12px;
 	}
 
-/* ===== MosaicMesh admin design system ===== */
+/* ===== MosaicMesh admin design system — design tokens =====
+   All CSS custom properties are defined here in one place.
+   Theme overrides (light) follow immediately.
+   Rules elsewhere in this file reference these tokens; they are
+   never redefined outside this block.
+   ============================================================ */
+
+/* --- Universal tokens (theme-independent) --- */
 :root {
+  /* colors — semantic status */
+  --ok:#27ae60; --warn:#e6a23c; --danger:#e25555;
+  --err:#e25555;         /* alias for danger, used in mm-* components */
+  --playing:#4a90d9;
+
+  /* colors — interactive / accent */
   --accent:#4a90d9; --accent-hover:#3a78ba;
-  --ok:#27ae60; --warn:#e6a23c; --danger:#e25555; --playing:#4a90d9;
+
+  /* spacing scale */
   --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:24px;
-  --radius:6px; --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+
+  /* radius + shadow */
+  --radius:6px;
   --shadow:0 1px 3px rgba(0,0,0,.25);
+
+  /* font */
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
 }
+
+/* --- Dark theme (default) --- */
 :root, [data-theme="dark"] {
-  --bg:#13171d; --surface:#1a1f27; --surface-2:#222831; --border:#2b313c;
+  /* surfaces */
+  --bg:#13171d; --surface:#1a1f27; --surface-2:#222831;
+  --bg-elev:#2a2a2a;     /* elevated surface for modals, popovers, context menus */
+  --border:#2b313c;
+
+  /* text */
   --text:#e6eaf0; --text-muted:#8b94a2;
+
+  /* PR-23 vertical alignment bars on the day grid — dark theme tones. */
+  --grid-hour:rgba(255,255,255,0.22);
+  --grid-quarter:rgba(255,255,255,0.07);
 }
+
+/* --- Light theme overrides --- */
 [data-theme="light"] {
-  --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5; --border:#d7dde5;
-  --text:#1c2330; --text-muted:#5a6473; --shadow:0 1px 3px rgba(0,0,0,.10);
+  /* surfaces */
+  --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5;
+  --bg-elev:#ffffff;     /* elevated surface brightens on light bg */
+  --border:#d7dde5;
+
+  /* text */
+  --text:#1c2330; --text-muted:#5a6473;
+
+  /* shadow lightens proportionally */
+  --shadow:0 1px 3px rgba(0,0,0,.10);
+
+  /* PR-23 alignment bars need to be DARKER strokes on the light bg
+     (the dark-theme white-with-low-alpha values disappear against
+     a near-white background). Slightly higher alpha on the hour
+     tick keeps the visual hierarchy comparable to dark mode. */
+  --grid-hour:rgba(28,35,48,0.28);
+  --grid-quarter:rgba(28,35,48,0.10);
 }
+
+/* --- System light-mode fallback (no explicit data-theme set) --- */
 @media (prefers-color-scheme: light) {
   :root:not([data-theme]) {
-    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5; --border:#d7dde5;
+    /* surfaces */
+    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f5;
+    --bg-elev:#ffffff;
+    --border:#d7dde5;
+
+    /* text */
     --text:#1c2330; --text-muted:#5a6473;
+
+    /* shadow */
+    --shadow:0 1px 3px rgba(0,0,0,.10);
+
+    /* grid lines */
+    --grid-hour:rgba(28,35,48,0.28);
+    --grid-quarter:rgba(28,35,48,0.10);
   }
 }
 * { box-sizing:border-box; }
@@ -942,10 +235,15 @@ body { background:var(--bg); color:var(--text); font:14px/1.4 var(--font); }
 .sidebar { flex:0 0 168px; background:var(--surface); border-right:1px solid var(--border); padding:var(--s2) 0; overflow:auto; }
 .navitem { display:block; width:100%; text-align:left; background:none; border:0; color:var(--text-muted); padding:var(--s2) var(--s4); font:inherit; cursor:pointer; border-left:3px solid transparent; }
 .navitem:hover { color:var(--text); }
-.navitem.active { color:var(--text); background:var(--surface-2); border-left-color:var(--accent); }
+/* .navitem.active removed — nav uses .navitem.on (Task 12). */
 .main { flex:1; overflow:auto; padding:var(--s4); min-width:0; }
-.section { display:none; }
-.section.active { display:block; }
+/* Task 12: x-show on each .section now owns visibility (it sets inline
+   display:none when its activeTab test is false, and clears the inline
+   style when true). The old `.section{display:none}` + `.section.active`
+   pair fought x-show: a truthy x-show clears the inline style, which then
+   fell back to the stylesheet's display:none and the section stayed
+   hidden. Dropping the base rules lets a shown <section> render at its
+   natural block display. */
 .section h2 { margin:0 0 var(--s4); font-size:18px; }
 .panel { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); padding:var(--s3); box-shadow:var(--shadow); }
 .panel-title { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--text-muted); margin:0 0 var(--s2); }
@@ -992,30 +290,18 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .jstree-anchor .badge { vertical-align:middle; line-height:1; padding:1px 6px; margin-left:4px; }
 /* the jsTree open/close arrow sprite is dark — invert it so it shows on the dark surface */
 [data-theme="dark"] .jstree-default .jstree-ocl { filter: invert(1) brightness(1.6); }
-@media (max-width:760px) {
-  .shell { flex-direction:column; }
-  .sidebar { flex:none; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--border); }
-  .navitem { border-left:0; border-bottom:3px solid transparent; white-space:nowrap; }
-  .navitem.active { border-left:0; border-bottom-color:var(--accent); }
-}
+/* Task 12: the mobile sidebar layout (bottom nav bar) now lives in the
+   four-destination shell block near the end of this stylesheet. The old
+   top-horizontal-scroll rules here were removed so they don't fight the
+   new bottom bar (they set border-bottom / overflow-x / .navitem.active
+   that the new .on-based block doesn't reset). */
 /* ===== Mobile-friendly overrides ===== */
 @media (max-width: 768px) {
   .main { padding: var(--s2); }
   .statusbar { padding: var(--s1) var(--s2); gap: var(--s2); flex-wrap: wrap; }
   .section h2 { font-size: 16px; margin-bottom: var(--s2); }
-  /* Stack the playlist editor 3-column layout vertically */
-  #playlistEditor, #scheduleEditor { width: auto !important; max-width: 100%; }
-  #playlistEditor > div[style*="display:flex"],
-  #playlistEditor > div[style*="display: flex"] { flex-direction: column; }
-  #playlistEditor .panel { flex: 1 1 auto !important; min-width: 0 !important; }
   /* Fixed em-widths -> fluid on mobile */
-  #canvas { width: 100% !important; max-width: 100%; height: auto !important; min-height: 18em; }
   #log { width: auto !important; max-width: 100%; height: 50vh !important; }
-  #Media { max-width: 100%; }
-  /* Displays + Calibration section: stack the two panels */
-  section[data-route="displays"] > div[style*="display:flex"],
-  section[data-route="displays"] > div[style*="display: flex"] { flex-direction: column; }
-  section[data-route="displays"] .panel { flex: 1 1 auto !important; min-width: 0 !important; width: 100%; }
   /* Toolbars: full-width select/input, wrap long button labels */
   .toolbar { gap: var(--s1); }
   .toolbar select, .toolbar input[type="text"], .toolbar input[type="search"] { flex: 1 1 12em; min-width: 8em; }
@@ -1057,602 +343,852 @@ input:focus,select:focus,textarea:focus,.btn:focus,.navitem:focus { outline:2px 
 .cache-propagation-fill-inflight { background: #81c784; opacity: 0.55; }
 .cache-propagation.stalled .cache-propagation-counts { color: #d32f2f;
     font-weight: 600; }
+/* ===== Timeline Day-view grid ===== */
+.mm-day-grid, .mm-week-grid { position: relative; }
+.mm-now-line {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--err, red); pointer-events: none;
+  left: 0; z-index: 5;
+}
+/* PR-25: snapped-start indicator during a drag. Pinned to the
+   target track row by clip-move.js / playlist-to-track.js on
+   dragover; hidden on dragend / drop. Position fixed (viewport-
+   relative) so the drag handlers can place it directly from
+   ev.clientX without worrying about scroll offsets. */
+.mm-drag-start-marker {
+  position: fixed;
+  pointer-events: none;
+  z-index: 1500;
+  width: 2px;
+  background: var(--warn, #fc6);
+  box-shadow: 0 0 4px rgba(252, 198, 102, 0.6);
+}
+.mm-drag-start-marker-label {
+  position: absolute;
+  top: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--warn, #fc6);
+  color: #000;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+/* PR-23 (2026-06-09): vertical alignment bars across the day grid.
+   Bold solid line on the hour (every 1/24 of the usable area, starting
+   110px in past the track-label column), fainter solid line on every
+   15-minute mark. The hour gradient is listed first so it composites
+   ON TOP of the quarter-hour layer at shared positions (every 24th of
+   the 96 lines), keeping the hour mark visually dominant.
+   "Dashed" was the original ask; CSS-only dashed vertical lines need
+   either an SVG background-image or 72 individual elements — the
+   color-weighted solids give the same visual hierarchy at a fraction
+   of the complexity. If real dashed is desired, swap the second
+   gradient for a data-URI SVG with stroke-dasharray. */
+.mm-day-grid {
+  font-size: 12px;
+  background-image:
+    repeating-linear-gradient(to right,
+      var(--grid-hour) 0,
+      var(--grid-hour) 1px,
+      transparent 1px,
+      transparent calc((100% - 110px) / 24)
+    ),
+    repeating-linear-gradient(to right,
+      var(--grid-quarter) 0,
+      var(--grid-quarter) 1px,
+      transparent 1px,
+      transparent calc((100% - 110px) / 96)
+    );
+  background-position: 110px 0;
+  background-size: calc(100% - 110px) 100%, calc(100% - 110px) 100%;
+  background-repeat: no-repeat, no-repeat;
+}
+.mm-week-grid { font-size: 12px; }
+.mm-week-cell { background: rgba(255,255,255,0.02); min-height: 18px; }
+.mm-month-grid { font-size: 12px; }
+.mm-month-cell { background: rgba(255,255,255,0.02); min-height: 60px; padding: 4px; position: relative; }
+.mm-month-cell-blank { background: transparent; }
+.mm-month-num { font-weight: 600; }
+.mm-month-dots { margin-top: 4px; }
+.mm-month-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:3px; }
+.mm-axis-cell { color: var(--text-muted); padding: 2px 4px; }
+.mm-track-row .mm-track-header { padding: 4px; }
+.mm-track-name { font-weight: 600; }
+.mm-track-status { color: var(--text-muted); font-size: 11px; }
+.mm-status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; vertical-align:middle; margin-right:4px; }
+.mm-render-badge { font-size: 0.8em; padding: 0 .4em; border-radius: 3px; margin-left: .4em; color: var(--warn); }
+.mm-render-badge.is-ready { color: var(--ok); }
+.mm-render-badge.is-pending { color: var(--warn); }
+.mm-playlist-render { font-size: 0.8em; color: var(--text-muted); margin-left: .5em; }
+.mm-playlist-retry { font-size: 0.8em; margin-left: .4em; }
+/* PR-4b: drop target overlay for drag-playlist→create-schedule. Sits in
+   the same grid cell as any clips on that track row; clips are emitted
+   AFTER the droparea so they paint on top. During an in-flight playlist
+   drag, body.mm-dragging-playlist disables pointer-events on clips so the
+   dragover/drop targets the droparea, not the clip on top of it. */
+.mm-track-droparea { background: rgba(255,255,255,0.02); border-radius: 4px; min-height: 28px; }
+.mm-track-droparea.mm-drag-target { background: rgba(80,160,255,0.18); outline: 2px dashed rgba(80,160,255,0.6); outline-offset: -2px; }
+/* PR-4b: while any of our drag handlers is mid-drag, clips become
+   transparent to pointer events so the .mm-track-droparea underneath
+   receives dragover/drop. The dragging element is still grabbed by the
+   browser (its own pointer-events state doesn't matter once drag began),
+   so this only affects OTHER clips that the cursor crosses. */
+/* PR-21 (2026-06-09): the `pointer-events: none` rule we used to put on
+   clips during drag silently cancelled Chromium's OS-level drag when
+   applied to the source element (no dragover, no drop, drag dies in
+   <5px). The reason we had it — letting dragover pass through clips to
+   reach the underlying .mm-track-droparea — is now handled in JS via
+   `document.elementsFromPoint` in clip-move.js and playlist-to-track.js
+   (see findDroparea). Just the opacity ghost is kept for visual feedback. */
+body.mm-dragging .mm-clip { opacity: 0.85; }
+.mm-clip[draggable="true"] { cursor: grab; }
+.mm-clip[draggable="true"]:active { cursor: grabbing; }
+.mm-bin-item[draggable="true"] { cursor: grab; }
+.mm-bin-item[draggable="true"]:active { cursor: grabbing; }
+.mm-clip { background: var(--accent, #345); color: white; border-radius: 4px; padding: 4px 6px; position: relative; overflow: hidden; user-select: none; outline: 1px solid transparent; transition: outline 60ms; }
+.mm-clip-selected { outline: 2px solid var(--warn, #fc6); outline-offset: 1px; }
+/* PR-4b: 6px invisible edge handles for pointer-event resize. Hover
+   shows a subtle highlight; cursor: ew-resize. draggable=false on the
+   element keeps an edge-grab from kicking off the clip-move handler. */
+/* PR-11: handle widened 6 → 10px. 6px was too narrow on narrow clips
+   (the default 1-hour drop is ~50px wide at 1200px viewport) and users
+   routinely missed it, kicking off a clip-move drag instead of a
+   resize. The matching EDGE_HIT_PX guard in drag/clip-move.js catches
+   any near-edge dragstart that still slips past. */
+.mm-clip-resize-handle { position: absolute; top: 0; bottom: 0; width: 10px; cursor: ew-resize; background: transparent; z-index: 2; }
+.mm-clip-resize-handle[data-edge="left"]  { left: 0; }
+.mm-clip-resize-handle[data-edge="right"] { right: 0; }
+.mm-clip-resize-handle:hover { background: rgba(255,255,255,0.15); }
+/* PR-4b: drill-in sub-row. Sits below the main day grid, spans the
+   full width, hosts a left-to-right ribbon of playlist items. Each
+   item is absolute-positioned with left+width % so dragging media in
+   (PR4b T11) lands on the row regardless of which item is under the
+   cursor. */
+.mm-drillin-row { background: rgba(120, 170, 240, 0.08); border-left: 3px solid var(--accent, #6ad); border-radius: 4px; padding: 6px 8px; margin-top: 4px; }
+.mm-drillin-header { display: flex; align-items: baseline; gap: 8px; font-size: 11px; margin-bottom: 4px; }
+.mm-drillin-label { font-weight: 600; }
+.mm-drillin-hint { color: var(--text-muted, #888); font-size: 10px; }
+.mm-drillin-items { position: relative; height: 28px; background: rgba(0,0,0,0.18); border-radius: 3px; }
+.mm-drillin-item { position: absolute; top: 2px; bottom: 2px; background: var(--bg-elev, #333); border-radius: 3px; padding: 0 6px; font-size: 11px; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; border: 1px solid rgba(255,255,255,0.08); cursor: pointer; transition: outline 60ms; }
+/* PR-4c gap-fix (spec §358): selected sub-item highlight. Del removes it. */
+.mm-drillin-item.mm-drillin-item-selected { outline: 2px solid var(--warn, #fc6); outline-offset: 1px; background: rgba(255, 204, 102, 0.18); }
+/* PR-8: drop-target highlight during sub-item drag-to-reorder. */
+.mm-drillin-item.mm-drillin-drop-target { outline: 2px dashed var(--accent, #6ad); outline-offset: 1px; background: rgba(120, 170, 240, 0.22); }
+.mm-drillin-row.mm-drag-target { background: rgba(120, 170, 240, 0.2); outline: 2px dashed rgba(120, 170, 240, 0.6); outline-offset: -2px; }
+.mm-drillin-empty { color: var(--text-muted, #888); font-size: 11px; padding: 4px 6px; }
+.mm-clip-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mm-clip-time { font-size: 10px; opacity: 0.8; }
+.mm-clip-stripe {
+  position: absolute; top:0; bottom:0;
+  background: repeating-linear-gradient(45deg, rgba(255,0,0,0.2) 0 6px, transparent 6px 12px);
+  pointer-events: none;
+}
+/* PR-4c gap-fix (spec §367): Week-view variant — vertical orientation
+   so the stripe extends along the clip's height rather than its width.
+   Overrides top/bottom (default fills vertically) with top/height %
+   set by the renderer; left:0 right:0 makes it span the clip's width. */
+.mm-clip-stripe-vertical { top: auto; bottom: auto; left: 0; right: 0; }
+.mm-toolbar { display: flex; align-items: center; gap: 6px; padding: 8px 0; flex-wrap: wrap; }
+.mm-toolbar-date { font-weight: 600; min-width: 220px; text-align: center; }
+.btn-active { background: var(--accent, #345); color: white; }
+.mm-toast-stack { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 6px; z-index: 1000; max-width: 360px; }
+/* PR-4b T13: recurrence popover. Floats anchored under a clip; click
+   outside dismisses (handler in recurrence-popover.js). */
+.mm-popover { position: fixed; z-index: 1100; background: var(--bg-elev, #2a2a2a); padding: 12px; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,0.6); min-width: 320px; color: var(--text, #eee); }
+.mm-popover-row { display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; }
+.mm-popover-row label { font-size:12px; display:flex; align-items:center; gap:4px; }
+.mm-toast { padding: 8px 12px; border-radius: 6px; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); cursor: pointer; box-shadow: 0 2px 12px rgba(0,0,0,0.5); font-size: 12px; }
+.mm-toast-error { background: var(--err, #c33); }
+.mm-toast-info  { background: var(--accent, #345); }
+/* PR-4c: modal scaffold (modal-shell.js) */
+.mm-modal-overlay { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; }
+.mm-modal { background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.7); min-width: 360px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; }
+.mm-modal-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.08); }
+.mm-modal-header h2 { font-size: 14px; margin: 0; }
+.mm-modal-body { padding: 12px; overflow: auto; }
+.mm-modal-close { padding: 2px 8px; min-width: auto; }
+/* Task-11: modal → bottom sheet on mobile */
+@media (max-width: 760px) {
+  .mm-modal-overlay { align-items: flex-end; }      /* dock to bottom */
+  .mm-modal {
+    width: 100%;
+    max-width: 100%;
+    max-height: 92vh;
+    border-radius: 14px 14px 0 0;                    /* sheet: rounded top only */
+    animation: mm-sheet-up 180ms ease-out;
+  }
+  .mm-modal-body { overflow-y: auto; }
+}
+@keyframes mm-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+/* PR-4c T-A4: recurrence editor form + preview */
+.mm-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; margin-bottom: 12px; }
+.mm-form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.mm-form-grid label input, .mm-form-grid label select { font-size: 12px; padding: 4px; box-sizing: border-box; width: 100%; }
+/* Radios + checkboxes shouldn't stretch — the width:100% rule above is
+   for text/number/date inputs. Without this override the radios in
+   .mm-form-row (e.g. "Never / Until / After N times") render enormous
+   because they're inside .mm-form-grid labels. */
+.mm-form-grid input[type="radio"],
+.mm-form-grid input[type="checkbox"] { width: auto; }
+.mm-form-row { grid-column: 1 / -1; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+.mm-form-row label { flex-direction: row; gap: 4px; }
+.mm-form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-bottom: 12px; }
+.mm-btn-danger { background: var(--err); color: #fff; border-color: var(--err); }
+.mm-btn-danger:hover { filter: brightness(1.08); }
+/* Vertical-list playlist editor (.mm-ple*). Replaces the PR-17 ribbon.
+   Items render top-to-bottom; click a row to edit it in the settings
+   box; "+ Add content" opens an inline picker (media + animations). */
+.mm-ple-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+.mm-ple-list { list-style:none; padding:0; margin:0 0 12px; max-height:40vh; overflow-y:auto; }
+.mm-ple-row { display:flex; align-items:center; gap:8px; padding:8px; background:var(--surface-2); border:1px solid var(--border); border-radius:6px; margin-bottom:6px; cursor:pointer; }
+.mm-ple-row.sel { border-color:var(--accent); }
+.mm-ple-grip { cursor:grab; color:var(--text-muted); }
+.mm-ple-ic { width:18px; text-align:center; }
+.mm-ple-nm { flex:1; font-size:13px; }
+.mm-ple-dur { font-size:11px; color:var(--text-muted); }
+.mm-ple-del { border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:15px; }
+.mm-ple-settings { display:flex; gap:12px; flex-wrap:wrap; padding:10px; background:var(--surface); border:1px solid var(--border); border-radius:6px; margin-bottom:10px; }
+.mm-ple-settings label { font-size:12px; display:flex; flex-direction:column; gap:3px; }
+.mm-ple-hint { font-size: 10px; color: var(--text-muted); }
+.mm-ple-add { width:100%; border:1px dashed var(--accent); color:var(--accent); background:none; border-radius:6px; padding:9px; }
+.mm-ple-picker { border:1px solid var(--border); border-radius:6px; padding:10px; margin-top:8px; }
+.mm-ple-picker-filters { display:flex; gap:6px; margin-bottom:8px; flex-wrap:wrap; }
+.mm-ple-picker-filters button { font-size:11px; padding:2px 9px; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; }
+.mm-ple-picker-filters button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.mm-ple-picker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(90px,1fr)); gap:8px; max-height:240px; overflow-y:auto; }
+.mm-ple-picktile { display:flex; flex-direction:column; gap:4px; align-items:center; font-size:10px; padding:8px 4px; border:1px solid var(--border); border-radius:6px; background:var(--surface-2); color:var(--text); cursor:pointer; }
+.mm-ple-picktile.kind-animation { border-color:#9a7bff; }
+.mm-ple-picktile span:first-child { font-size:18px; }
+.mm-recurrence-preview { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; font-size: 11px; }
+.mm-recurrence-preview ol { margin: 6px 0 0 18px; padding: 0; }
+.mm-recurrence-preview li { padding: 2px 0; }
+.mm-recurrence-empty { color: var(--text-muted, #888); list-style: none; margin-left: -18px; }
+/* PR-4c T-D1: calibration modal */
+.mm-calibration .steps { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.mm-calibration .steps li { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+.mm-calibration .steps .num { width: 22px; height: 22px; border-radius: 50%; background: var(--accent, #345); display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 11px; flex-shrink: 0; }
+.mm-calibration-status, .mm-calibration-result { font-size: 11px; color: var(--text-muted, #888); }
+.mm-calibration-result { margin: 10px 0; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 4px; }
+.mm-context-menu { position: fixed; z-index: 1600; background: var(--bg-elev, #2a2a2a); color: var(--text, #eee); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px 0; min-width: 160px; box-shadow: 0 4px 20px rgba(0,0,0,0.5); list-style: none; margin: 0; }
+.mm-context-menu li { padding: 6px 12px; cursor: pointer; font-size: 12px; }
+.mm-context-menu li:hover { background: rgba(255,255,255,0.08); }
+.mm-context-menu li.mm-context-divider { padding: 0; border-top: 1px solid rgba(255,255,255,0.08); margin: 2px 0; pointer-events: none; }
+.mm-context-menu li.mm-context-danger { color: var(--err, #f88); }
+.mm-track-header { cursor: pointer; }
+.mm-timeline-layout { display: flex; gap: 12px; }
+.mm-bin { width: 200px; flex: 0 0 200px; }
+.mm-bin-section { margin-bottom: 16px; }
+.mm-bin-title { font-weight: 600; margin-bottom: 6px; }
+.mm-bin-list { list-style: none; padding: 0; margin: 0; max-height: 240px; overflow-y: auto; }
+.mm-bin-item { padding: 4px 6px; cursor: default; }
+.mm-bin-item:hover { background: rgba(255,255,255,0.05); }
+/* PR-16: media bin gains a delete × button on hover. Visible-on-hover keeps the row uncluttered. */
+.mm-bin-item-deletable { display: flex; align-items: center; gap: 6px; }
+.mm-bin-delete { opacity: 0; background: transparent; border: 0; color: var(--text-muted, #888); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer; }
+.mm-bin-item-deletable:hover .mm-bin-delete { opacity: 1; }
+.mm-bin-delete:hover { color: var(--err, #f88); }
+.mm-timeline-main { flex: 1 1 auto; min-width: 0; }
+/* PR-4c T-C3: profile-editor 3-pane shell */
+.mm-profile-editor { display: grid; grid-template-columns: 200px 1fr 280px; gap: 10px; min-width: 900px; max-width: 1100px; min-height: 480px; }
+.mm-pe-list { border-right: 1px solid rgba(255,255,255,0.08); padding-right: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mm-pe-list-actions { display: flex; gap: 4px; }
+.mm-pe-profiles { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; font-size: 12px; }
+.mm-pe-profiles li { padding: 6px 8px; cursor: pointer; border-radius: 3px; }
+.mm-pe-profiles li:hover { background: rgba(255,255,255,0.06); }
+.mm-pe-profiles li.selected { background: rgba(120,170,240,0.18); }
+.mm-pe-form { overflow-y: auto; padding-right: 8px; min-width: 0; }
+.mm-pe-empty { color: var(--text-muted, #888); padding: 12px; font-size: 12px; }
+.mm-pe-preview { border-left: 1px solid rgba(255,255,255,0.08); padding-left: 8px; display: flex; flex-direction: column; gap: 6px; }
+.mm-pe-preview-header { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+.mm-pe-preview-body { flex: 1; background: rgba(0,0,0,0.3); padding: 8px; font-size: 11px; white-space: pre-wrap; word-break: break-all; overflow-y: auto; min-height: 200px; }
+.mm-pe-danger { color: var(--err, #f88); }
+.mm-pe-unresolved { color: var(--err, #f88); font-weight: bold; }
+/* PR-4c gap-fix (spec §363): fleet-action confirm modal body */
+.mm-fleet-confirm { min-width: 320px; max-width: 460px; }
+.mm-fleet-confirm-desc { color: var(--text-muted, #888); font-size: 12px; margin: 0 0 10px; }
+.mm-fleet-confirm-summary { font-size: 13px; margin: 0 0 14px; }
+.mm-fleet-confirm-summary strong { color: var(--warn, #fc6); }
+.mm-fleet-confirm-danger { background: var(--err, #c33) !important; }
+/* PR-29: ad-hoc Play-Now picker modal */
+.mm-play-now { min-width: 280px; max-width: 380px; }
+.mm-play-now-note { color: var(--text-muted, #888); font-size: 12px; margin: 0 0 12px; }
+.mm-play-now-empty { color: var(--text-muted, #888); font-size: 12px; margin: 0 0 14px; font-style: italic; }
+.mm-play-now-list { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.mm-play-now-list li { margin: 0; }
+.mm-play-now-pick { width: 100%; text-align: left; }
+/* PR-4c T-C4: profile-editor form pane */
+.mm-pe-script-row { display: grid; grid-template-columns: 50px 1fr; gap: 6px; align-items: center; margin-bottom: 4px; font-size: 11px; }
+.mm-pe-script-row textarea { font-family: monospace; font-size: 11px; padding: 4px; box-sizing: border-box; width: 100%; }
+.mm-profile-editor details { margin-bottom: 8px; }
+.mm-profile-editor summary { cursor: pointer; font-size: 12px; font-weight: 600; padding: 4px 0; }
+.mm-form-row-wide { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; }
+/* ===== Task 12: four-destination shell + Now landing ===== */
+.navitem .ni-ic { font-size: 16px; margin-right: 8px; }
+.navitem.on { color: var(--text); background: var(--surface-2); border-left: 2px solid var(--accent); }
+.now-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.now-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; padding: 12px; }
+.now-card.playing { border-color: var(--accent); }
+.nc-head { display: flex; justify-content: space-between; align-items: center; }
+.nc-name { font-weight: 600; }
+.nc-pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--surface); color: var(--text-muted); }
+.nc-pill.playing { background: rgba(74,144,217,.18); color: var(--accent); }
+.nc-meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+.now-glance { font-size: 13px; color: var(--text-muted); margin-bottom: 12px; }
+.now-empty { color: var(--text-muted); padding: 24px; text-align: center; }
+.placeholder-tab { color: var(--text-muted); padding: 40px; text-align: center; }
+
+@media (max-width: 760px) {
+  .shell { display: block; }
+  .sidebar {
+    position: fixed; left: 0; right: 0; bottom: 0; top: auto;
+    display: flex; flex-direction: row; border-top: 1px solid var(--border);
+    background: var(--surface); z-index: 1200;
+  }
+  .sidebar .navitem { display: flex; align-items: center; justify-content: center; flex: 1; flex-direction: column; gap: 2px; font-size: 10px; text-align: center; border-left: none; }
+  .sidebar .navitem.on { border-left: none; border-top: 2px solid var(--accent); background: transparent; }
+  .navitem .ni-ic { margin-right: 0; display: block; font-size: 18px; }
+  .main { padding-bottom: 64px; }
+}
+
+.mm-content-subtabs { display:flex; gap:4px; border-bottom:1px solid var(--border); margin-bottom:12px; }
+.mm-content-subtabs button { background:none; border:none; color:var(--text-muted); padding:8px 14px; border-bottom:2px solid transparent; cursor:pointer; }
+.mm-content-subtabs button.on { color:var(--text); font-weight:600; border-bottom-color:var(--accent); }
+.mm-content-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap; }
+.mm-content-filters { display:flex; gap:6px; flex-wrap:wrap; }
+.mm-content-filters button { font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--border); background:none; color:var(--text-muted); cursor:pointer; }
+.mm-content-filters button.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+.mm-content-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; }
+.mm-content-tile { position:relative; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px 8px; text-align:center; }
+.mm-content-tile.kind-animation { border-color:#9a7bff; }
+.mm-tile-ic { display:block; font-size:22px; margin-bottom:6px; }
+.mm-tile-name { font-size:11px; word-break:break-all; }
+.mm-tile-del { position:absolute; top:4px; right:4px; border:none; background:rgba(0,0,0,.4); color:#fff; border-radius:50%; width:18px; height:18px; line-height:16px; cursor:pointer; opacity:0; }
+.mm-content-tile:hover .mm-tile-del { opacity:1; }
+.mm-content-empty { color:var(--text-muted); padding:24px; text-align:center; }
+.mm-playlist-list { list-style:none; padding:0; margin:0; }
+.mm-playlist-row { display:flex; align-items:center; gap:10px; padding:8px; border:1px solid var(--border); border-radius:6px; margin-bottom:6px; }
+.mm-playlist-name { flex:1; text-align:left; background:none; border:none; color:var(--text); font-size:14px; cursor:pointer; }
+.mm-playlist-meta { font-size:11px; color:var(--text-muted); }
+.mm-playlist-del { border:none; background:none; color:var(--text-muted); cursor:pointer; font-size:16px; }
+
+/* ---- Section 3: mobile Schedule stack ---- */
+.mm-schedule-mobile { padding-bottom:88px; }
+.mm-sched-mobile-toolbar { display:flex; align-items:center; gap:6px; padding:8px 0; flex-wrap:wrap; }
+.mm-density-toggle { display:inline-flex; gap:2px; }
+.mm-sched-group { max-width:46vw; }
+.mm-sched-mobile-datenav { display:flex; align-items:center; gap:8px; padding:4px 0 10px; }
+.mm-sched-mobile-datenav .mm-toolbar-date { flex:1; text-align:center; font-weight:600; }
+.mm-sched-fab { position:fixed; right:16px; bottom:76px; z-index:50; border-radius:22px; padding:10px 18px; box-shadow:0 3px 10px rgba(0,0,0,.35); font-weight:600; }
+
+/* Agenda (Day + day-sectioned Week) */
+.mm-agenda { display:flex; flex-direction:column; gap:14px; }
+.mm-agenda-group { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); overflow:hidden; }
+.mm-agenda-group-title { margin:0; padding:8px 12px; font-size:12px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; color:var(--text-muted); background:rgba(127,127,127,.08); border-bottom:1px solid var(--border); }
+.mm-agenda-day-header { margin:16px 0 6px; padding:6px 4px; font-size:13px; font-weight:700; color:var(--text); border-bottom:2px solid var(--accent); position:sticky; top:0; background:var(--bg); z-index:1; }
+.mm-agenda-empty { padding:10px 12px; color:var(--text-muted); font-size:12px; font-style:italic; }
+.mm-agenda-row { padding:9px 12px; border-bottom:1px solid var(--border); cursor:pointer; }
+.mm-agenda-group .mm-agenda-row:last-child { border-bottom:none; }
+.mm-agenda-row:active { background:rgba(127,127,127,.10); }
+.mm-agenda-row.mm-agenda-now { background:color-mix(in srgb, var(--warn) 14%, transparent); }
+.mm-agenda-main { display:flex; align-items:center; gap:7px; flex-wrap:wrap; font-size:14px; }
+.mm-agenda-ic { opacity:.8; }
+.mm-agenda-time { font-variant-numeric:tabular-nums; color:var(--text-muted); font-size:13px; }
+.mm-agenda-name { font-weight:600; }
+.mm-agenda-live { font-size:10px; font-weight:700; color:#fff; background:var(--warn); border-radius:8px; padding:1px 6px; }
+.mm-agenda-conflict { font-size:10px; font-weight:700; color:#fff; background:var(--err); border-radius:8px; padding:1px 6px; }
+.mm-agenda-recur { font-size:11px; color:var(--text-muted); }
+.mm-agenda-spark { display:flex; gap:1px; height:5px; margin-top:6px; border-radius:3px; overflow:hidden; }
+.mm-agenda-seg { display:block; height:100%; }
+
+/* Vertical day timeline */
+.mm-vt { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); margin-top:4px; }
+.mm-vt-hour { border-top:1px solid var(--border); box-sizing:border-box; left:0; right:0; }
+.mm-vt-hour:first-child { border-top:none; }
+.mm-vt-label { position:absolute; left:4px; top:1px; font-size:10px; color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.mm-vt-block { background:var(--accent); color:#fff; border-radius:5px; padding:3px 6px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.3); cursor:pointer; box-sizing:border-box; }
+.mm-vt-block-now { outline:2px solid var(--warn); }
+.mm-vt-block-name { display:block; font-size:12px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mm-vt-block-time { display:block; font-size:10px; opacity:.85; }
+.mm-vt-nowline { height:2px; background:var(--err); z-index:3; }
+
+/* ---- Section 4: Fleet ---- */
+.mm-fleet { display:flex; gap:14px; align-items:flex-start; }
+.mm-fleet-list { flex:0 0 38%; max-width:380px; }
+.mm-fleet-list-head { display:flex; align-items:center; gap:6px; padding:4px 0 8px; }
+.mm-fleet-list-title { font-weight:700; }
+.mm-fleet-groups { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.mm-fleet-group { display:flex; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); cursor:pointer; }
+.mm-fleet-group.sel { outline:2px solid var(--accent); }
+.mm-fleet-group-name { flex:1; font-weight:600; }
+.mm-fleet-group-badges { display:flex; align-items:center; gap:6px; font-size:12px; }
+.mm-fleet-online { color:var(--text-muted); font-variant-numeric:tabular-nums; }
+.mm-fleet-badge.playing { color:var(--ok); }
+.mm-fleet-badge.calibrated { color:var(--ok); }
+.mm-fleet-empty { color:var(--text-muted); font-style:italic; padding:10px; }
+.mm-fleet-detail { flex:1; min-width:0; }
+.mm-fleet-detail-head { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.mm-fleet-detail-name { margin:0; font-size:18px; }
+.mm-fleet-statusline { color:var(--text-muted); font-size:13px; margin-bottom:12px; }
+.mm-fleet-cards { display:flex; flex-direction:column; gap:12px; }
+.mm-fleet-card { border:1px solid var(--border); border-radius:8px; background:var(--bg-elev); padding:10px 12px; }
+.mm-fleet-card-title { margin:0 0 8px; font-size:13px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--text-muted); }
+.mm-fleet-card-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.mm-fleet-calib { color:var(--text-muted); font-size:13px; }
+.mm-fleet-card-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.mm-fleet-card-head .mm-fleet-card-title { margin:0; }
+.mm-fleet-selbtn { font-size:12px; padding:3px 10px; }
+.mm-fleet-selall { display:inline-flex; align-items:center; gap:6px; font-size:13px; margin-bottom:8px; }
+.mm-fleet-devices { list-style:none; margin:0; padding:0; }
+.mm-fleet-device { border-bottom:1px solid var(--border); }
+.mm-fleet-device:last-child { border-bottom:none; }
+.mm-fleet-dev-row { display:flex; align-items:center; gap:9px; padding:10px 4px; font-size:14px; cursor:pointer; }
+.mm-fleet-dev-row:active { background:rgba(127,127,127,.08); }
+.mm-fleet-dev-dot { width:9px; height:9px; border-radius:50%; background:#888; flex:0 0 auto; }
+.mm-fleet-dev-dot.online { background:var(--ok); }
+.mm-fleet-dev-name { flex:1; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mm-fleet-dev-type { color:var(--text-muted); font-size:12px; flex:0 0 auto; }
+.mm-fleet-dev-chev { color:var(--text-muted); font-size:12px; flex:0 0 auto; width:14px; text-align:center; }
+.mm-dev-cache { display:inline-flex; align-items:center; gap:4px; font-size:11px; color:var(--text-muted); margin-left:auto; }
+.mm-dev-cache-bar { position:relative; width:46px; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
+.mm-dev-cache-fill { position:absolute; top:0; bottom:0; left:0; height:100%; background:#2e7d32; transition:width 250ms ease-out; }
+.mm-dev-cache.inflight .mm-dev-cache-fill { background:#81c784; }
+.mm-dev-cache.stalled .mm-dev-cache-fill { background:#d32f2f; }
+.mm-dev-cache.stalled .mm-dev-cache-pct { color:#d32f2f; font-weight:600; }
+.mm-dev-cache-detail { display:flex; justify-content:space-between; }
+.mm-fleet-dev-panel { display:flex; flex-direction:column; gap:8px; padding:4px 4px 12px 22px; }
+.mm-fleet-dev-field { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
+.mm-fleet-dev-field select { flex:1; min-width:0; }
+.mm-fleet-selbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:12px; flex-wrap:wrap; padding:8px 10px; margin-bottom:8px; background:var(--bg-elev); border:1px solid var(--accent); border-radius:8px; box-shadow:0 2px 6px rgba(0,0,0,.18); }
+.mm-fleet-selcount { font-weight:700; font-size:13px; }
+.mm-fleet-selact { display:inline-flex; align-items:center; gap:5px; }
+.mm-fleet-selact select { font-size:13px; max-width:42vw; }
+/* Mobile: list is full-width; detail becomes a full-screen sheet. */
+@media (max-width:759px){
+  .mm-fleet { flex-direction:column; }
+  .mm-fleet-list { flex:1 1 auto; max-width:none; }
+  /* padding-bottom clears the fixed bottom nav bar (.sidebar, z-index 1200,
+     ~64px) which sits ABOVE this sheet (z-index 60) — without it the last
+     device row hides behind the bar and can't be scrolled into view. */
+  .mm-fleet-detail.mm-fleet-sheet { position:fixed; inset:0; z-index:60; background:var(--bg); overflow:auto; padding:14px 14px 76px; }
+}
+
+/* ---- Global Render Status panel (Task 20) ---- */
+.mm-render-status { position: relative; }
+.mm-render-status-toggle { font:inherit; border:1px solid var(--border); background:var(--surface-2); color:var(--text); border-radius:var(--radius); padding:4px 10px; cursor:pointer; font-size:12px; }
+.mm-render-status-toggle:hover { border-color:var(--accent); }
+.mm-render-status-drawer { position: absolute; right: 0; top: calc(100% + 4px); background: var(--bg-elev); border: 1px solid var(--border); padding: .5em .75em; min-width: 280px; max-height: 50vh; overflow: auto; z-index: 120; box-shadow: var(--shadow); border-radius: var(--radius); }
+.mm-render-status-drawer h4 { margin: 0 0 .4em; font-size: 12px; color: var(--text-muted); }
+.mm-render-status-drawer ul { list-style: none; margin: 0; padding: 0; }
+.mm-render-status-drawer li { padding: .25em 0; border-bottom: 1px solid var(--border); font-size: .85em; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mm-render-status-drawer li:last-child { border-bottom: none; }
+.mm-render-status-drawer p { margin: 0; font-size: .85em; color: var(--text-muted); }
   </style>
 </head>
 <body>
-<div class="app">
+<!-- Task 12: Alpine 3 only walks elements inside an x-data root. The
+     statusbar (connection indicator) and sidebar (nav) live outside the
+     per-section x-data scopes, so the whole shell is wrapped in a single
+     empty x-data root here. $store.mm is global and resolves from any
+     nested scope; the per-section x-data="{}" roots still work as nested
+     scopes. Without this, the nav :class/@click and the connText x-text
+     never evaluate. -->
+<div class="app" x-data="{}">
   <div class="statusbar">
     <span class="brand">● MosaicMesh</span>
-    <span class="dot" id="connDot"></span>
-    <span id="connText" class="size">connecting…</span>
-    <span id="nowPlaying" class="size"></span>
+    <span class="dot" id="connDot" :class="{ on: $store.mm.connection.connected }"></span>
+    <span id="connText" class="size" x-text="$store.mm.connection.connected ? ('connected · ' + $store.mm.connection.onlineClients + ' online') : 'connecting…'"></span>
     <span class="spacer"></span>
+    <!-- Task 20: Global Render Status panel — visible across all tabs whenever
+         renders are active or queued. Binds to $store.mm which is global. -->
+    <div class="mm-render-status" x-data x-show="$store.mm.rendersList.length || $store.mm.renderQueueDepth" @click.outside="$store.mm.renderPanelOpen = false">
+      <button class="mm-render-status-toggle" @click="$store.mm.renderPanelOpen = !$store.mm.renderPanelOpen"
+              x-text="'▣ ' + ($store.mm.rendersList.length + $store.mm.renderQueueDepth) + ' rendering…'"></button>
+      <div class="mm-render-status-drawer" x-show="$store.mm.renderPanelOpen">
+        <h4>Render status</h4>
+        <template x-if="!$store.mm.rendersList.length"><p>All renders up to date.</p></template>
+        <ul>
+          <template x-for="r in $store.mm.rendersList" :key="r.displayID + ':' + r.playlist">
+            <li>
+              <span x-text="r.playlist"></span>
+              <span style="color:var(--text-muted)">·</span>
+              <span x-text="r.displayID" style="color:var(--text-muted)"></span>
+              <progress x-show="r.state==='RENDERING'" :value="r.percent || 0" max="100" style="width:60px"></progress>
+              <span x-text="r.state + (r.percent!=null ? ' '+r.percent+'%' : '') + (r.eta!=null ? ' · ~'+r.eta+'s' : '')" style="color:var(--text-muted);font-size:0.8em"></span>
+              <button class="btn" style="font-size:0.8em;padding:2px 7px" x-show="r.state==='FAILED'" @click="$store.mm.retryRenderGroup(r.playlist, r.displayID)">Retry</button>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
     <button class="btn btn-ghost" id="themeToggle" type="button">🌙 Theme</button>
   </div>
   <div class="shell">
-    <nav class="sidebar" id="sidebar">
-      <button class="navitem" data-nav="overview">Overview</button>
-      <button class="navitem" data-nav="displays">Displays</button>
-      <button class="navitem" data-nav="media">Media</button>
-      <button class="navitem" data-nav="playlists">Playlists</button>
-      <button class="navitem" data-nav="schedules">Schedules</button>
-      <button class="navitem" data-nav="console">Console</button>
+    <nav class="sidebar" id="sidebar" role="navigation" aria-label="Sections">
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='now' }"
+              :aria-current="$store.mm.activeTab==='now' ? 'page' : false"
+              @click="$store.mm.goTo('now')"><span class="ni-ic">⚡</span><span class="ni-lbl">Now</span></button>
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='content' }"
+              :aria-current="$store.mm.activeTab==='content' ? 'page' : false"
+              @click="$store.mm.goTo('content')"><span class="ni-ic">▦</span><span class="ni-lbl">Content</span></button>
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='schedule' }"
+              :aria-current="$store.mm.activeTab==='schedule' ? 'page' : false"
+              @click="$store.mm.goTo('schedule')"><span class="ni-ic">📅</span><span class="ni-lbl">Schedule</span></button>
+      <button class="navitem" :class="{ on: $store.mm.activeTab==='fleet' }"
+              :aria-current="$store.mm.activeTab==='fleet' ? 'page' : false"
+              @click="$store.mm.goTo('fleet')"><span class="ni-ic">📡</span><span class="ni-lbl">Fleet</span></button>
     </nav>
     <main class="main">
-      <section class="section" data-route="overview"><h2>Overview</h2>
-        <div id="overviewSummary" class="grid" style="margin-bottom:var(--s4)"></div>
-        <div class="panel-title" style="display:flex;align-items:center;gap:var(--s2)">
-          <span>Display groups</span>
-          <button class="btn btn-ghost" type="button" onclick="adminReloadAll()"
-                  title="Reload every connected display (not this console)">⟳ Reload all</button>
-          <span style="flex:1"></span>
-          <span class="size" style="color:var(--text-muted)">Fleet:</span>
-          <button class="btn btn-ghost" type="button" onclick="runScriptAll('login')"  title="Wake + unlock every device (SSH)">🔓 Login all</button>
-          <button class="btn btn-ghost" type="button" onclick="runScriptAll('start')"  title="Open the display page on every device (SSH)">▶ Start all</button>
-          <button class="btn btn-ghost" type="button" onclick="runScriptAll('stop')"   title="Close the display on every device (SSH)">⏹ Stop all</button>
-          <button class="btn btn-ghost" type="button" onclick="runScriptAll('reboot')" title="Reboot every device (SSH)">⟲ Reboot all</button>
-          <button class="btn btn-ghost" type="button" onclick="runScriptAll('test')" title="Open the display in diagnostics mode (?tdbg)">🐞 Start Testing all</button>
-        </div>
-        <div id="overviewCards" class="grid"></div>
-      </section>
-
-      <section class="section" data-route="displays"><h2>Displays &amp; Calibration</h2>
-        <div style="display:flex; gap:16px; flex-wrap:wrap;">
-          <div class="panel" style="flex:0 0 30em;">
-            <div class="panel-title">Groups &amp; screens</div>
-            <input type="text" id="displays_q" value="" class="input" placeholder="Search…" style="display:block; box-sizing:border-box; width:100%; margin:0 0 0.5em 0; padding:4px;">
-            <button class="btn" id="clearOffline" type="button" style="display:block; width:100%; box-sizing:border-box; margin:0 0 1em 0;">Clear offline devices</button>
-            <div id="displays" style="width:100%; box-sizing:border-box; height:25em; overflow-y:auto; overflow-x:hidden; border:1px solid var(--border)"></div>
-          </div>
-          <div class="panel" style="flex:1; min-width:24em;">
-            <div class="panel-title">Calibration</div>
-            <ol class="steps">
-              <li><span class="num">1</span> <button class="btn" id="calGenerate" type="button">Generate &amp; show ArUco on selected group</button></li>
-              <li><span class="num">2</span> Photograph the wall</li>
-              <li><span class="num">3</span> Upload the photo (below)</li>
-            </ol>
-            <div id="canvas" style="width: 48em; height: 27em; overflow:auto; border: 1px solid var(--border)"></div>
-	<form id="calImageForm" action="javascript:;" method="post">
-		<label for="calImage">Upload Calibration Image</label>
-		<input id="calImage" name="calImage" type="file" value="" onchange='imageChanged(this);'/>
-
-		<input type="submit" value="Upload"/>
-	</form>
-          </div>
+      <section class="section" data-route="now" x-data="{}" x-show="$store.mm.activeTab==='now'">
+        <div class="now-glance" x-text="`${$store.mm.connection.onlineClients} online · ${$store.mm.nowCards.filter(c=>c.state==='playing').length} playing`"></div>
+        <div class="now-cards">
+          <template x-for="card in $store.mm.nowCards" :key="card.displayID">
+            <div class="now-card" :class="{ playing: card.state==='playing' }">
+              <div class="nc-head">
+                <span class="nc-name" x-text="card.displayID"></span>
+                <span class="nc-pill" :class="card.state" x-text="card.state==='playing' ? '▶ playing' : card.state"></span>
+              </div>
+              <div class="nc-meta">
+                <span x-text="card.currentPlaylist || 'Idle'"></span>
+                <span x-text="`${card.onlineCount}/${card.screenCount} online`"></span>
+                <span class="nc-render" x-show="card.renderStatus==='rendering'">· rendering…</span>
+              </div>
+            </div>
+          </template>
+          <p class="now-empty" x-show="$store.mm.nowCards.length===0">No display groups yet.</p>
         </div>
       </section>
+      <section class="section" data-route="content" x-show="$store.mm.activeTab==='content'" x-data="mmContent">
+        <div class="mm-content-subtabs">
+          <button :class="{on: subview==='library'}" @click="subview='library'">Library</button>
+          <button :class="{on: subview==='playlists'}" @click="subview='playlists'">Playlists</button>
+        </div>
 
-      <section class="section" data-route="media"><h2>Media library</h2>
-	<div id="mediaGrid" class="thumbs" style="margin-bottom:12px;"></div>
-	<div id="Media" style="width:100%; max-width:62em; overflow:visible; border:0;">
-	    <input type="file" name="file" id="file" multiple>
+        <!-- Library -->
+        <div x-show="subview==='library'">
+          <div class="mm-content-toolbar">
+            <div class="mm-content-filters">
+              <button :class="{on: filter==='all'}" @click="filter='all'">All</button>
+              <button :class="{on: filter==='image'}" @click="filter='image'">Images</button>
+              <button :class="{on: filter==='video'}" @click="filter='video'">Videos</button>
+              <button :class="{on: filter==='animation'}" @click="filter='animation'">Animations</button>
+            </div>
+            <label class="btn btn-primary mm-upload-label">+ Upload
+              <input type="file" accept="image/*,video/*" multiple style="display:none" @change="uploadFiles($event)">
+            </label>
+          </div>
+          <div class="mm-content-grid">
+            <template x-for="it in items" :key="it.kind + ':' + it.ref">
+              <div class="mm-content-tile" :class="'kind-' + it.kind">
+                <span class="mm-tile-ic" x-text="iconFor(it.kind)"></span>
+                <span class="mm-tile-name" x-text="it.name"></span>
+                <button class="mm-tile-del" x-show="it.kind!=='animation'" @click="removeItem(it)" title="Delete">×</button>
+              </div>
+            </template>
+            <p class="mm-content-empty" x-show="items.length===0">Nothing here yet.</p>
+          </div>
+        </div>
 
-		<!-- Drag and Drop container-->
-		<div class="upload-area"  id="uploadfile">
-			<h1>Drag &amp; drop files here<br/>or click to select</h1>
-		</div>
-	</div>
+        <!-- Playlists -->
+        <div x-show="subview==='playlists'">
+          <div class="mm-content-toolbar">
+            <button class="btn btn-primary" @click="newPlaylist()">+ New playlist</button>
+          </div>
+          <ul class="mm-playlist-list">
+            <template x-for="p in playlists" :key="p.name">
+              <li class="mm-playlist-row">
+                <button class="mm-playlist-name" @click="edit(p.name)" x-text="p.name"></button>
+                <span class="mm-playlist-meta" x-text="(p.items?.length || 0) + ' items'"></span>
+                <span class="mm-playlist-render" x-show="playlistRenderSummary(p.name).total"
+                      x-text="'rendered ' + playlistRenderSummary(p.name).ready + '/' + playlistRenderSummary(p.name).total"></span>
+                <button class="mm-playlist-retry" x-show="playlistRenderSummary(p.name).failed.length"
+                        @click="retryRender(p.name)" title="Retry failed renders">Retry ⚠</button>
+                <button class="mm-playlist-del" @click="deletePlaylist(p.name)" title="Delete">×</button>
+              </li>
+            </template>
+            <p class="mm-content-empty" x-show="playlists.length===0">No playlists yet.</p>
+          </ul>
+        </div>
       </section>
+      <section class="section" data-route="schedule" x-data="{}" x-show="$store.mm.activeTab==='schedule'">
+        <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
+        <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
 
-      <section class="section" data-route="playlists"><h2>Playlists</h2>
-<div id="playlistEditor" style="border:1px solid var(--border); padding:8px; width:62em; margin-bottom:1em;">
-  <div class="toolbar" style="margin-bottom:6px;">
-    <b>Playlists:</b>
-    <select id="plSelect"></select>
-    <button id="plNew" class="btn" type="button">+ New</button>
-    <button id="plSave" class="btn btn-primary" type="button">Save</button>
-    <button id="plDelete" class="btn btn-danger" type="button">Delete</button>
-    <label style="margin-left:8px;"><input type="checkbox" id="plLoop"> Loop</label>
-    <span id="plName" style="margin-left:8px; color:var(--text-muted);"></span>
-  </div>
-  <div style="display:flex; gap:10px;">
-    <div class="panel" style="flex:0 0 12em;">
-      <div class="size"><b>Media Library</b></div>
-      <div id="plLibrary" style="height:14em; overflow:auto; border:1px solid #ccc;"></div>
-      <input id="plUpload" type="file" style="margin-top:4px;">
-    </div>
-    <div class="panel" style="flex:1;">
-      <div class="size"><b>Playlist</b> (drag to reorder)</div>
-      <ul id="plItems" style="list-style:none; padding:0; margin:0; height:14em; overflow:auto; border:1px solid #ccc;"></ul>
-    </div>
-    <div id="plInspectorHost" class="panel" style="flex:0 0 15em;">
-    </div>
-  </div>
-  <div id="plTransport" style="margin-top:6px;">
-  </div>
-</div>
+        <div x-show="$store.mm.hydrated && !$store.mm.isMobile" class="mm-timeline-layout">
+          <aside class="mm-bin">
+            <div x-data="mmPlaylistBin" class="mm-bin-section">
+              <div class="mm-bin-title">Playlists</div>
+              <ul class="mm-bin-list">
+                <template x-for="p in list" :key="p.name">
+                  <li class="mm-bin-item"
+                      draggable="true"
+                      @dragstart="dragStart(p.name, $event)"
+                      @dragend="dragEnd()"
+                      x-text="p.name"></li>
+                </template>
+              </ul>
+            </div>
+          </aside>
+          <div class="mm-timeline-main">
+            <div x-data="mmToolbar" class="mm-toolbar">
+              <button class="btn" :class="{'btn-active': $store.mm.viewMode==='day'}"   @click="setMode('day')">Day</button>
+              <button class="btn" :class="{'btn-active': $store.mm.viewMode==='week'}"  @click="setMode('week')">Week</button>
+              <button class="btn" :class="{'btn-active': $store.mm.viewMode==='month'}" @click="setMode('month')">Month</button>
+              <button class="btn btn-ghost" @click="step(-1)">◀</button>
+              <span class="mm-toolbar-date" x-text="formatDate()"></span>
+              <button class="btn btn-ghost" @click="step(1)">▶</button>
+              <button class="btn btn-ghost" @click="today()">Today</button>
+              <button class="btn btn-primary" @click="openCreateSchedule()" title="Schedule a playlist on a group">+ Schedule</button>
+
+              <template x-if="$store.mm.viewMode !== 'day'">
+                <select class="input" :value="$store.mm.selectedDisplay"
+                        @change="setSelectedDisplay($event.target.value)">
+                  <template x-for="id in availableDisplayIds" :key="id">
+                    <option :value="id" x-text="id"></option>
+                  </template>
+                </select>
+              </template>
+
+            </div>
+            <div x-data="mmTimeline" x-html="render()"></div>
+          </div>
+        </div>
+
+        <!-- Mobile: agenda / vertical / week / month stack (Section 3) -->
+        <div x-show="$store.mm.hydrated && $store.mm.isMobile" x-data="mmScheduleMobile" class="mm-schedule-mobile">
+          <div class="mm-sched-mobile-toolbar">
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='day'}"   @click="$store.mm.setViewMode('day')">Day</button>
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='week'}"  @click="$store.mm.setViewMode('week')">Week</button>
+            <button class="btn" :class="{'btn-active': $store.mm.viewMode==='month'}" @click="$store.mm.setViewMode('month')">Month</button>
+            <span style="flex:1"></span>
+            <template x-if="$store.mm.viewMode==='day'">
+              <span class="mm-density-toggle">
+                <button class="btn btn-ghost" :class="{'btn-active': density==='agenda'}"   @click="setDensity('agenda')" title="Agenda list">☰</button>
+                <button class="btn btn-ghost" :class="{'btn-active': density==='vertical'}" @click="setDensity('vertical')" title="Day timeline">▤</button>
+              </span>
+            </template>
+            <template x-if="$store.mm.viewMode==='month' || ($store.mm.viewMode==='day' && density==='vertical')">
+              <select class="input mm-sched-group" @change="setSelGroup($event.target.value)" title="Display group">
+                <template x-for="id in tracks" :key="id"><option :value="id" :selected="id === selGroupResolved" x-text="id"></option></template>
+              </select>
+            </template>
+          </div>
+          <div class="mm-sched-mobile-datenav" x-data="mmToolbar">
+            <button class="btn btn-ghost" @click="step(-1)">◀</button>
+            <span class="mm-toolbar-date" x-text="formatDate()"></span>
+            <button class="btn btn-ghost" @click="step(1)">▶</button>
+            <button class="btn btn-ghost" @click="today()">Today</button>
+          </div>
+          <div x-html="render()"></div>
+          <button class="btn btn-primary mm-sched-fab" @click="openCreate()" title="Schedule a playlist">+ Schedule</button>
+        </div>
+
       </section>
+      <!-- PR-6: legacy sections (overview / displays / media / playlists /
+           schedules) deleted. Their functionality lives in the (now
+           Schedule-tab) timeline section + its modals + the toolbar
+           buttons. Task 12 (Section 1 overhaul): the old raw-SockJS
+           Console section was removed and the shell became the four
+           destinations Now / Content / Schedule / Fleet. The timeline
+           markup was relocated under data-route="schedule" (above) so
+           mmTimeline/mmToolbar/mmPlaylistBin still mount. -->
 
-      <section class="section" data-route="schedules"><h2>Schedules</h2>
-<div id="scheduleEditor" class="panel" style="padding:8px; width:62em; margin-bottom:1em;">
-  <div class="toolbar" style="margin-bottom:6px;">
-    <b>Schedules:</b>
-    <select id="schSelect"></select>
-    <button id="schNew" class="btn" type="button">+ New</button>
-    <button id="schSave" class="btn btn-primary" type="button">Save</button>
-    <button id="schDelete" class="btn btn-danger" type="button">Delete</button>
-    <span id="schStatus" style="margin-left:8px; color:var(--text-muted);"></span>
-  </div>
-  <div id="schForm" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
-  <div style="margin-top:8px; border-top:1px solid #ccc; padding-top:6px;">
-    <b>Default playlist (when idle)</b>
-    <div id="schDefaults"></div>
-  </div>
-</div>
-      </section>
-
-      <section class="section" data-route="console"><h2>Console</h2>
-<div id="log" class="panel mono" style="width: 50em; height: 20em; overflow:auto;">
-</div>
-<form id="chatform" class="toolbar">
-  <input id="text" type="text" />
-  <input id="calibrate" class="btn" type="button" value="Submit Query" onclick="sock.send(generateMessage('SRV',$('#text').val(),'null'));"/>
-</form>
+      <section class="section" data-route="fleet" x-show="$store.mm.activeTab==='fleet'" x-data="mmFleet">
+        <div x-show="!$store.mm.hydrated && !$store.mm.hydrateError" style="color:var(--text-muted)">Loading…</div>
+        <div x-show="$store.mm.hydrateError" style="color:var(--err)" x-text="'Failed to load: ' + $store.mm.hydrateError"></div>
+        <div x-show="$store.mm.hydrated" class="mm-fleet">
+          <aside class="mm-fleet-list" x-show="!$store.mm.isMobile || selectedGroupId===null">
+            <div class="mm-fleet-list-head">
+              <span class="mm-fleet-list-title">Groups</span>
+              <span style="flex:1"></span>
+              <button class="btn btn-ghost" @click="openProfiles()" title="Edit device profiles">⚙ Profiles</button>
+              <button class="btn btn-primary" @click="newGroup()">+ New group</button>
+            </div>
+            <ul class="mm-fleet-groups">
+              <template x-for="g in groups" :key="g.displayID">
+                <li class="mm-fleet-group" :class="{'sel': g.displayID===selectedGroupId}" @click="selectGroup(g.displayID)">
+                  <span class="mm-fleet-group-name" x-text="g.displayID"></span>
+                  <span class="mm-fleet-group-badges">
+                    <span class="mm-fleet-online" x-text="statusFor(g).online + '/' + statusFor(g).total"></span>
+                    <template x-if="statusFor(g).playing"><span class="mm-fleet-badge playing" title="Playing">▶</span></template>
+                    <template x-if="statusFor(g).rendering"><span class="mm-fleet-badge rendering" title="Rendering">⟳</span></template>
+                    <template x-if="calibrationFor(g).total>0 && calibrationFor(g).calibratedCount===calibrationFor(g).total"><span class="mm-fleet-badge calibrated" title="Calibrated">✓</span></template>
+                  </span>
+                </li>
+              </template>
+              <template x-if="groups.length===0">
+                <li class="mm-fleet-empty">No display groups yet. Create one with "+ New group".</li>
+              </template>
+            </ul>
+          </aside>
+          <section class="mm-fleet-detail" x-show="selectedGroup" :class="{'mm-fleet-sheet': $store.mm.isMobile}">
+            <template x-if="selectedGroup">
+              <div>
+                <div class="mm-fleet-detail-head">
+                  <button class="btn btn-ghost mm-fleet-back" x-show="$store.mm.isMobile" @click="backToList()">‹ Fleet</button>
+                  <h2 class="mm-fleet-detail-name" x-text="selectedGroup.displayID"></h2>
+                  <span style="flex:1"></span>
+                  <button class="btn mm-btn-danger" @click="deleteGroup()">Delete group</button>
+                </div>
+                <div class="mm-fleet-statusline">
+                  <span x-text="statusFor(selectedGroup).online + '/' + statusFor(selectedGroup).total + ' online'"></span>
+                  <template x-if="statusFor(selectedGroup).playing"><span> · ▶ <span x-text="statusFor(selectedGroup).playlistName || 'playing'"></span></span></template>
+                  <template x-if="!statusFor(selectedGroup).playing"><span> · idle</span></template>
+                </div>
+                <div class="mm-fleet-cards">
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Playback</h3>
+                    <div class="mm-fleet-card-actions">
+                      <button class="btn btn-primary" @click="playNow()">▶ Play now</button>
+                      <button class="btn" @click="stopNow()">⏹ Stop</button>
+                      <button class="btn" @click="reloadGroup()" title="Reload the display page on every device in this group">↻ Reload</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card mm-fleet-render-readiness" x-show="selectedGroupId">
+                    <h3 class="mm-fleet-card-title">Rendered content</h3>
+                    <ul style="list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px;">
+                      <template x-for="r in playlistReadiness" :key="r.name">
+                        <li style="display:flex;align-items:center;gap:8px;font-size:13px;">
+                          <span x-text="r.name"></span>
+                          <span class="mm-render-badge" :class="r.ready ? 'is-ready' : 'is-pending'" x-text="r.label"></span>
+                        </li>
+                      </template>
+                      <template x-if="playlistReadiness.length===0">
+                        <li style="color:var(--text-muted);font-style:italic;">No playlists defined.</li>
+                      </template>
+                    </ul>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Calibration</h3>
+                    <div class="mm-fleet-card-actions">
+                      <span class="mm-fleet-calib" x-text="calibrationFor(selectedGroup).calibratedCount + '/' + calibrationFor(selectedGroup).total + ' calibrated'"></span>
+                      <button class="btn" @click="calibrate()">🎯 Calibrate…</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <h3 class="mm-fleet-card-title">Device scripts</h3>
+                    <div class="mm-fleet-card-actions">
+                      <button class="btn" @click="runScript('login')">Login</button>
+                      <button class="btn" @click="runScript('start')">Start</button>
+                      <button class="btn" @click="runScript('stop')">Stop</button>
+                      <button class="btn" @click="runScript('reboot')">Reboot</button>
+                      <button class="btn" @click="runScript('test')">Test</button>
+                    </div>
+                  </div>
+                  <div class="mm-fleet-card">
+                    <div class="mm-fleet-card-head">
+                      <h3 class="mm-fleet-card-title">Devices (<span x-text="devices.length"></span>)</h3>
+                      <button class="btn btn-ghost mm-fleet-selbtn" x-show="devices.length>0" @click="toggleSelectMode()" x-text="selectMode ? 'Done' : 'Select'"></button>
+                    </div>
+                    <label class="mm-fleet-selall" x-show="selectMode && devices.length>0"><input type="checkbox" :checked="allSelected" @change="toggleBulkAll()"> Select all</label>
+                    <!-- Pinned selection toolbar: appears at the top of the list the moment a
+                         selection exists, so the actions are never stranded below a long list. -->
+                    <div class="mm-fleet-selbar" x-show="selectMode && bulkSelection.size>0">
+                      <span class="mm-fleet-selcount" x-text="bulkSelection.size + ' selected'"></span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkTarget" aria-label="Move selected to group">
+                          <option value="">Move to…</option>
+                          <template x-for="g in groups" :key="g.displayID">
+                            <template x-if="g.displayID!==selectedGroupId"><option :value="g.displayID" x-text="g.displayID"></option></template>
+                          </template>
+                        </select>
+                        <button class="btn" :disabled="!bulkTarget" @click="bulkMove(bulkTarget)">Move</button>
+                      </span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkProfile" aria-label="Set profile on selected">
+                          <option value="">Profile…</option>
+                          <option value="__auto">Auto-match</option>
+                          <template x-for="p in profileNames" :key="p"><option :value="p" x-text="p"></option></template>
+                        </select>
+                        <button class="btn" :disabled="!bulkProfile" @click="bulkSetProfile()">Set</button>
+                      </span>
+                      <span class="mm-fleet-selact">
+                        <select x-model="bulkScript" aria-label="Run script on selected">
+                          <option value="">Run…</option>
+                          <option value="login">Login</option>
+                          <option value="start">Start</option>
+                          <option value="stop">Stop</option>
+                          <option value="reboot">Reboot</option>
+                          <option value="test">Test</option>
+                        </select>
+                        <button class="btn" :disabled="!bulkScript" @click="bulkRunScript()">Run</button>
+                      </span>
+                    </div>
+                    <ul class="mm-fleet-devices">
+                      <template x-for="d in devices" :key="d.clientKey">
+                        <li class="mm-fleet-device" :class="{expanded: expandedDevice===d.clientKey}">
+                          <div class="mm-fleet-dev-row" @click="!selectMode && toggleExpand(d.clientKey)">
+                            <input type="checkbox" x-show="selectMode" :checked="bulkSelection.has(d.clientKey)" @change="toggleBulk(d.clientKey)">
+                            <span class="mm-fleet-dev-dot" :class="{online: d.isOnline}" :title="d.isOnline ? 'online' : 'offline'"></span>
+                            <span class="mm-fleet-dev-name" x-text="d.friendlyName || d.clientKey"></span>
+                            <span class="mm-fleet-dev-type" x-text="d.deviceType || ''"></span>
+                            <span class="mm-dev-cache" x-show="cacheStatus(d).applicable || cacheStatus(d).stalled"
+                                  :class="{ stalled: cacheStatus(d).stalled, inflight: cacheStatus(d).inFlight }"
+                                  :title="cacheStatus(d).label">
+                              <span class="mm-dev-cache-bar"><span class="mm-dev-cache-fill" :style="'width:' + cacheStatus(d).percent + '%'"></span></span>
+                              <span class="mm-dev-cache-pct" x-text="cacheStatus(d).percent + '%'"></span>
+                            </span>
+                            <span class="mm-fleet-dev-chev" x-show="!selectMode" x-text="expandedDevice===d.clientKey ? '▾' : '▸'"></span>
+                          </div>
+                          <template x-if="!selectMode && expandedDevice===d.clientKey">
+                            <div class="mm-fleet-dev-panel">
+                              <label class="mm-fleet-dev-field">Profile
+                                <select @change="setDeviceProfile(d.clientKey, $event.target.value)">
+                                  <option value="" :selected="!d.profileName">Auto-match</option>
+                                  <template x-for="p in profileNames" :key="p"><option :value="p" :selected="d.profileName===p" x-text="p"></option></template>
+                                </select>
+                              </label>
+                              <label class="mm-fleet-dev-field">Move to
+                                <select @change="moveDevice(d.clientKey, $event.target.value)">
+                                  <template x-for="g in groups" :key="g.displayID"><option :value="g.displayID" :selected="g.displayID===selectedGroupId" x-text="g.displayID"></option></template>
+                                </select>
+                              </label>
+                              <div class="mm-fleet-dev-field mm-dev-cache-detail">
+                                <span>Cache</span>
+                                <span x-text="cacheStatus(d).label"></span>
+                              </div>
+                            </div>
+                          </template>
+                        </li>
+                      </template>
+                      <template x-if="devices.length===0">
+                        <li class="mm-fleet-empty">No devices in this group.</li>
+                      </template>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </section>
+        </div>
       </section>
     </main>
+  </div>
+  <!-- Global overlay layer: lives at the .app top level, NOT inside a route
+       <section> (whose x-show toggles display:none — which hid any modal
+       mounted into #mmModalHost when its section wasn't the active tab).
+       modal-shell.js / context-menu.js + the drag marker append/position
+       into these. -->
+  <div x-data="mmToast" class="mm-toast-stack" x-show="items.length > 0">
+    <template x-for="t in items" :key="t.id">
+      <div class="mm-toast" :class="'mm-toast-' + t.kind" @click="dismiss(t.id)" x-text="t.msg"></div>
+    </template>
+  </div>
+  <div id="mmModalHost"></div>
+  <ul id="mmContextMenu" class="mm-context-menu" style="display:none"></ul>
+  <div id="mmDragStartMarker" class="mm-drag-start-marker" style="display:none">
+    <div class="mm-drag-start-marker-label">00:00</div>
   </div>
 </div>
 <div class="toasts" id="toasts"></div>
 <script>
-var SCRIPT_ANIMATIONS = ["bouncingBalls"];
-var plEditor = { name: "", items: [], loop: false, selected: -1 };
-var plEffectCatalog = [];   // [{name,label,params:[{key,type,default,choices?}]}]
-
-function plLoadEffects() {
-  $.getJSON('/api/effects', function(data){ plEffectCatalog = (data && data.effects) || []; });
-}
-
-function plEffectByName(name) {
-  for (var i = 0; i < plEffectCatalog.length; i++) {
-    if (plEffectCatalog[i].name === name) { return plEffectCatalog[i]; }
-  }
-  return null;
-}
-
-// Build one labeled effect dropdown + its parameter inputs.
-// getFn() returns the item's current field ({name,params}|null); setFn(v) writes it.
-function plRenderEffectField($host, label, getFn, setFn) {
-  $('<div class="size">' + label + '</div>').appendTo($host);
-  var $sel = $('<select>').appendTo($host);
-  $('<option>').val("").text("None").appendTo($sel);
-  $.each(plEffectCatalog, function(_, e){ $('<option>').val(e.name).text(e.label).appendTo($sel); });
-  var cur = getFn();
-  $sel.val((cur && cur.name) || "");
-  var $params = $('<div>').appendTo($host);
-
-  function renderParams(name) {
-    $params.empty();
-    var e = plEffectByName(name);
-    if (!e) { return; }
-    $.each(e.params, function(_, p){
-      var field = getFn() || { name: name, params: {} };
-      var val = (field.params && field.params[p.key] != null) ? field.params[p.key] : p.default;
-      $('<span class="size" style="margin-right:4px;">' + p.key + '</span>').appendTo($params);
-      var $inp;
-      if (p.type === "choice") {
-        $inp = $('<select>');
-        $.each(p.choices, function(_, c){ $('<option>').val(c).text(c).appendTo($inp); });
-        $inp.val(val);
-      } else {
-        $inp = $('<input>').attr('type', 'number').css('width', '5em').val(val);
-      }
-      $inp.on('change', function(){
-        var f = getFn() || { name: name, params: {} };
-        f.name = name; f.params = f.params || {};
-        f.params[p.key] = (p.type === "choice") ? this.value : (parseFloat(this.value) || 0);
-        setFn(f);
-      });
-      $params.append($inp).append('<br>');
-    });
-  }
-
-  $sel.on('change', function(){
-    var name = this.value;
-    if (!name) { setFn(null); $params.empty(); return; }
-    var e = plEffectByName(name);
-    var params = {};
-    if (e) { $.each(e.params, function(_, p){ params[p.key] = p.default; }); }
-    setFn({ name: name, params: params });
-    renderParams(name);
-  });
-
-  renderParams((cur && cur.name) || "");
-}
-
-function plDefaultItem(file, isScript) {
-  // Videos default to Full length (their whole clip); images/scripts to 5s.
-  var vdur = (window._videoDurations || {})[file];   // seconds, videos only
-  return { id: "i" + Date.now() + Math.floor(Math.random()*1000),
-           file: file,
-           duration: vdur ? Math.ceil(vdur) : 5,
-           fullLength: vdur ? true : false,
-           playmode: isScript ? "SCRIPT" : "FULL",
-           backgroundColor: "#000000", startEffect: null, endEffect: null };
-}
-
-function plRenderLibrary(images, videos) {
-  var $lib = $('#plLibrary').empty();
-  function row(label, file, isScript) {
-    $('<div>').text(label).css({padding:'3px', cursor:'pointer'})
-      .on('click', function(){ plAddItem(file, isScript); }).appendTo($lib);
-  }
-  $.each(images, function(_, f){ row("🖼 " + f.split('/').pop(), f, false); });
-  $.each(videos, function(_, f){ row("🎞 " + f.split('/').pop(), f, false); });
-  $.each(SCRIPT_ANIMATIONS, function(_, n){ row("⚡ " + n, n, true); });
-}
-
-function plLoadLibrary() {
-  $.getJSON('/api/media', function(data){
-    window._videoDurations = data.videoDurations || {};   // url -> seconds
-    plRenderLibrary(data.images || [], data.videos || []);
-  });
-}
-
-function plAddItem(file, isScript) {
-  plEditor.items.push(plDefaultItem(file, isScript));
-  plRenderItems();
-}
-
-// Short friendly names for the layout mode, shown in the item list rows.
-var LAYOUT_SHORT = { FULL: "mirror", SEGMENT: "video wall",
-                     INDIVIDUAL: "per-screen", SCRIPT: "animation" };
-
-function plRenderItems() {
-  var $list = $('#plItems').empty();
-  if (plEditor.items.length === 0) {
-    $('<li class="empty">').text('No items — click media in the library to add.').appendTo($list);
-    return;
-  }
-  $.each(plEditor.items, function(i, it){
-    var $li = $('<li>').attr('draggable', true)
-      .css({padding:'5px', border:'1px solid var(--border)', margin:'2px', cursor:'pointer',
-            borderRadius:'var(--radius)', color:'var(--text)',
-            background: i === plEditor.selected ? 'var(--surface-2)' : 'transparent',
-            outline: i === plEditor.selected ? '2px solid var(--accent)' : 'none'})
-      .text("⡀ " + (i+1) + "  " + it.file.split('/').pop() + " · " +
-            (it.fullLength ? "full" : it.duration + "s") + " · " +
-            (LAYOUT_SHORT[it.playmode] || it.playmode));
-    $('<span>').text(" ✕").css({float:'right', color:'var(--danger)'})
-      .on('click', function(e){ e.stopPropagation(); plEditor.items.splice(i,1);
-            if (plEditor.selected >= plEditor.items.length) plEditor.selected = -1;
-            plRenderItems(); plRenderInspector(); }).appendTo($li);
-    $li.on('click', function(){ plEditor.selected = i; plRenderItems(); plRenderInspector(); });
-    $li.on('dragstart', function(e){ e.originalEvent.dataTransfer.setData('text/plain', i); });
-    $li.on('dragover', function(e){ e.preventDefault(); });
-    $li.on('drop', function(e){
-      e.preventDefault();
-      var from = parseInt(e.originalEvent.dataTransfer.getData('text/plain'), 10);
-      var moved = plEditor.items.splice(from, 1)[0];
-      plEditor.items.splice(i, 0, moved);
-      plEditor.selected = i; plRenderItems(); plRenderInspector();
-    });
-    $list.append($li);
-  });
-  plUpdateRenderButton();   // reflect layout changes (e.g. Mirror -> Video wall)
-}
-
-function plRenderInspector() {
-  var $host = $('#plInspectorHost').empty();
-  var it = plEditor.items[plEditor.selected];
-  if (!it) { $host.html('<div class="size" style="color:var(--text-muted);">Select an item</div>'); return; }
-  $('<div class="size"><b>Inspector — item ' + (plEditor.selected+1) + '</b></div>').appendTo($host);
-
-  // Duration. Videos get a Full-length / Custom-seconds toggle (a video has a
-  // natural length); images/scripts get a plain seconds field. Full length
-  // rounds UP (ceil) so a fractional clip is never clipped at the end.
-  $('<div class="size">Duration</div>').appendTo($host);
-  var vdur = (window._videoDurations || {})[it.file];   // seconds, videos only
-  if (vdur) {
-    var full = Math.ceil(vdur);
-    if (it.fullLength) { it.duration = full; }          // re-sync if the clip changed
-    var grp = 'dur' + plEditor.selected;
-
-    var $num = $('<input>').attr({type:'number', step:'0.1', min:'0'}).css('width','5em')
-                 .val(it.fullLength ? '' : it.duration).prop('disabled', !!it.fullLength);
-
-    var $full = $('<input type="radio">').attr('name', grp).prop('checked', !!it.fullLength)
-      .on('change', function(){ if (this.checked) { it.fullLength = true; it.duration = full;
-            $num.prop('disabled', true).val(''); plRenderItems(); } });
-    $('<label>').css({display:'block', cursor:'pointer'}).append($full)
-      .append(document.createTextNode(' Full length (' + full + 's)')).appendTo($host);
-
-    var $cust = $('<input type="radio">').attr('name', grp).prop('checked', !it.fullLength)
-      .on('change', function(){ if (this.checked) { it.fullLength = false;
-            $num.prop('disabled', false).val(it.duration).focus(); plRenderItems(); } });
-    $num.on('change', function(){ it.fullLength = false; $cust.prop('checked', true);
-            it.duration = parseFloat(this.value) || 0; plRenderItems(); });
-    $('<label>').css({display:'block', cursor:'pointer'}).append($cust)
-      .append(document.createTextNode(' Custom: ')).append($num)
-      .append(document.createTextNode(' s')).appendTo($host);
-  } else {
-    $('<input>').attr({type:'number', step:'0.1', min:'0'}).css('width','5em').val(it.duration)
-      .on('change', function(){ it.duration = parseFloat(this.value) || 0; plRenderItems(); })
-      .appendTo($host);
-    $('<span> s</span>').appendTo($host);
-  }
-
-  // Screen layout: how the media maps onto the physical screens. Wire values
-  // (FULL/SEGMENT/INDIVIDUAL/SCRIPT) are unchanged — these are display labels.
-  // The two calibration-dependent modes say so in-line (the editor can't grey
-  // them out because a playlist isn't bound to a group until it's assigned).
-  $('<div class="size">Screen layout</div>').appendTo($host);
-  var $pm = $('<select>').appendTo($host);
-  $.each([["FULL","Mirror — same on every screen"],
-          ["SEGMENT","Video wall — one image across all screens (needs calibration)"],
-          ["INDIVIDUAL","Per-screen — full image, angle-corrected (needs calibration)"],
-          ["SCRIPT","Animation — synced effect"]], function(_, o){
-    $pm.append($('<option>').val(o[0]).text(o[1]));
-  });
-  $pm.val(it.playmode).on('change', function(){ it.playmode = this.value; plRenderItems(); });
-
-  $('<div class="size">Background color</div>').appendTo($host);
-  $('<input>').attr('type','color').val(it.backgroundColor || '#000000')
-    .on('change', function(){ it.backgroundColor = this.value; }).appendTo($host);
-
-  plRenderEffectField($host, "Start effect",
-    function(){ return it.startEffect; }, function(v){ it.startEffect = v; });
-  plRenderEffectField($host, "End effect",
-    function(){ return it.endEffect; }, function(v){ it.endEffect = v; });
-}
-
-function plGroupOptions() {
-  // Union of the server's display groups (authoritative) and any group nodes
-  // currently in the jstree (covers a group just created locally before the
-  // next DISPLAYS refresh). De-duplicated, order-preserving.
-  var ids = [], seen = {};
-  function add(id){ if (id && !seen[id]) { seen[id] = 1; ids.push(id); } }
-  $.each(Object.keys(window._lastDisplays || {}), function(_, id){ add(id); });
-  try {
-    var data = $('#displays').jstree(true).settings.core.data[0].children;
-    $.each(data, function(_, g){ add(g.id); });
-  } catch (e) {}
-  if (!ids.length) ids = ["Default", "Mobile", "Tablet", "Desktop"];
-  return ids;
-}
-
-// Repopulate the assign-to-group dropdown from the current group list,
-// preserving the current selection. Safe to call before the dropdown exists.
-function plRefreshGroups() {
-  var $g = $('#plGroup');
-  if (!$g.length) return;
-  var cur = $g.val();
-  $g.empty();
-  $.each(plGroupOptions(), function(_, id){ $('<option>').val(id).text(id).appendTo($g); });
-  if (cur) { $g.val(cur); }
-}
-
-function plBuildTransport() {
-  var $t = $('#plTransport').empty();
-  $('<span>Assign → </span>').appendTo($t);
-  var $g = $('<select id="plGroup">').appendTo($t);
-  $.each(plGroupOptions(), function(_, id){ $('<option>').val(id).text(id).appendTo($g); });
-  $('<button class="btn" type="button">Assign</button>').on('click', plAssign).appendTo($t);
-  $('<button class="btn" type="button" id="plRenderBtn">⚙ Render</button>').on('click', plRender).appendTo($t);
-  $('<span id="plRenderBadge" style="margin:0 8px; color:var(--warn);"></span>').appendTo($t);
-  $('<button class="btn btn-primary" type="button" id="plPlayBtn">▶ Play</button>').on('click', function(){ plTransport('PLAY'); }).appendTo($t);
-  $('<button class="btn" type="button">⏸ Pause</button>').on('click', function(){ plTransport('PAUSE'); }).appendTo($t);
-  $('<button class="btn" type="button">⏹ Stop</button>').on('click', function(){ plTransport('STOP'); }).appendTo($t);
-}
-
-function plAssignedGroup() { return $('#plGroup').val(); }
-
-function plAssign() {
-  if (!plEditor.name) { toast("Save the playlist first", 'warn'); return; }
-  sock.send(generateMessage('SRV', 'ASSIGN_PLAYLIST',
-    { name: plEditor.name, displayID: plAssignedGroup() }));
-}
-function plRender() {
-  if (!plEditor.name) { toast("Save and assign the playlist first", 'warn'); return; }
-  sock.send(generateMessage('SRV', 'RENDER', { displayID: plAssignedGroup() }));
-}
-function plTransport(req) {
-  sock.send(generateMessage('SRV', req, { displayID: plAssignedGroup() }));
-}
-function plSetBadge(text) { $('#plRenderBadge').text(text); }
-
-// Render only applies to per-screen layouts (Video wall / Per-screen). A
-// Mirror/Animation-only playlist has nothing to render.
-function plHasRenderable() {
-  return (plEditor.items || []).some(function(it){
-    return it.playmode === 'SEGMENT' || it.playmode === 'INDIVIDUAL';
-  });
-}
-
-// Keep the Render button honest regardless of server status: if no item uses a
-// per-screen layout, disable it with a tooltip that points at Play instead.
-function plUpdateRenderButton() {
-  var $b = $('#plRenderBtn');
-  if (!$b.length) return;
-  if (!plHasRenderable()) {
-    $b.prop('disabled', true).attr('title',
-      'Only “Video wall” / “Per-screen” layouts need rendering. Mirror & Animation play directly — just press Play.');
-  } else {
-    $b.attr('title', '');
-  }
-}
-
-function plSetTransportState(opts) {
-  // opts: {render: bool, play: bool} — true = enabled
-  $('#plRenderBtn').prop('disabled', !opts.render);
-  $('#plPlayBtn').prop('disabled', !opts.play);
-  plUpdateRenderButton();   // override: never enable Render with nothing to render
-}
-
-function plRefreshList() { sock.send(generateMessage('SRV', 'LIST_PLAYLISTS', {})); }
-
-function plLoad(name) {
-  if (!name) return;
-  sock.send(generateMessage('SRV', 'GET_PLAYLIST', { name: name }));
-}
-
-function plNew() {
-  plEditor = { name: "", items: [], loop: false, selected: -1 };
-  $('#plLoop').prop('checked', false);
-  $('#plName').text("(new, unsaved)");
-  plRenderItems(); plRenderInspector();
-}
-
-function plSave() {
-  var name = (plEditor.name || prompt("Playlist name:") || "").trim();
-  if (!name) { toast("Name required", 'warn'); return; }
-  plEditor.name = name;
-  plEditor.loop = $('#plLoop').is(':checked');
-  sock.send(generateMessage('SRV', 'SAVE_PLAYLIST',
-    { name: name, items: plEditor.items, loop: plEditor.loop }));
-  $('#plName').text(name);
-  setTimeout(plRefreshList, 100);
-}
-
-function plDelete() {
-  if (!confirm('Delete this playlist?')) return;
-  if (!plEditor.name) return;
-  sock.send(generateMessage('SRV', 'DELETE_PLAYLIST', { name: plEditor.name }));
-  plNew(); setTimeout(plRefreshList, 100);
-}
-
-function plUploadFile(file) {
-  var fd = new FormData(); fd.append('file', file);
-  var dest = /\.(mp4|mov|webm)$/i.test(file.name) ? 'video' : 'image';
-  $.ajax({ url: '/upload/' + dest, type: 'POST', data: fd,
-           processData: false, contentType: false,
-           success: function(){ plLoadLibrary(); } });
-}
-
-// Media-library uploads (the #uploadfile dropzone + #file picker). Uploads each
-// file by extension, then refreshes the media grid and the playlist library.
-function uploadMediaFiles(files) {
-  if (!files || !files.length) return;
-  var total = files.length, done = 0;
-  $.each(files, function(_, f){
-    var fd = new FormData(); fd.append('file', f);
-    var dest = /\.(mp4|mov|webm)$/i.test(f.name) ? 'video' : 'image';
-    $.ajax({ url: '/upload/' + dest, type: 'POST', data: fd, processData: false, contentType: false,
-      success: function(){ done++;
-        if (typeof toast === 'function') toast('Uploaded ' + f.name, 'ok');
-        if (done === total) {
-          if (typeof adminLoadMediaGrid === 'function') adminLoadMediaGrid();
-          if (typeof plLoadLibrary === 'function') plLoadLibrary();
-        }
-      },
-      error: function(){ if (typeof toast === 'function') toast('Upload failed: ' + f.name, 'danger'); } });
-  });
-}
-
-$(function(){
-  $('#plNew').on('click', plNew);
-  $('#plSave').on('click', plSave);
-  $('#plDelete').on('click', plDelete);
-  $('#plSelect').on('change', function(){ plLoad($(this).val()); });
-  $('#plUpload').on('change', function(){ if (this.files[0]) plUploadFile(this.files[0]); });
-  // media dropzone wiring
-  $('#uploadfile').on('click', function(){ $('#file').click(); });
-  $('#file').on('change', function(){ uploadMediaFiles(this.files); this.value = ''; });
-  $('#uploadfile').on('dragover', function(e){ e.preventDefault(); $(this).addClass('dragover'); });
-  $('#uploadfile').on('dragleave', function(){ $(this).removeClass('dragover'); });
-  $('#uploadfile').on('drop', function(e){ e.preventDefault(); $(this).removeClass('dragover');
-    uploadMediaFiles(e.originalEvent.dataTransfer.files); });
-  plLoadEffects();
-  plLoadLibrary();
-  setTimeout(plRefreshList, 500);  // after sock connects
-  setTimeout(plBuildTransport, 600);
-});
-</script>
-<script>
-var schEditor = null;
-var WEEKDAYS = [["0","Mon"],["1","Tue"],["2","Wed"],["3","Thu"],["4","Fri"],["5","Sat"],["6","Sun"]];
-
-function schGroups() { return (typeof plGroupOptions === 'function') ? plGroupOptions() : ["Default"]; }
-
-function schToday() {
-  var d = new Date();
-  var m = ('0' + (d.getMonth() + 1)).slice(-2), day = ('0' + d.getDate()).slice(-2);
-  return d.getFullYear() + '-' + m + '-' + day;
-}
-
-function schBlank() {
-  return { id:"", name:"", playlistName:"", displayID:(schGroups()[0]||"Default"), priority:0,
-           enabled:true, freq:"WEEKLY", interval:1, byweekday:[], dtstart:schToday(),
-           end:{type:"never"}, exdates:[], startTime:"09:00", endTime:"17:00" };
-}
-
-function schRenderForm() {
-  var e = schEditor, $f = $('#schForm').empty();
-  if (!e) { $f.html('<span class="size" style="color:var(--text-muted);">+ New to create a schedule</span>'); return; }
-  function row(label, $inp) { $('<div>').append('<div class="size">'+label+'</div>').append($inp).appendTo($f); }
-  row("Name", $('<input>').val(e.name).on('change', function(){ e.name=this.value; }));
-  var $grp = $('<select>'); $.each(schGroups(), function(_,g){ $('<option>').val(g).text(g).appendTo($grp); });
-  $grp.val(e.displayID).on('change', function(){ e.displayID=this.value; }); row("Group", $grp);
-  var $pl = $('<select>'); $('<option>').val("").text("-- playlist --").appendTo($pl);
-  $.each((window._schPlaylists||[]), function(_,n){ $('<option>').val(n).text(n).appendTo($pl); });
-  $pl.val(e.playlistName).on('change', function(){ e.playlistName=this.value; }); row("Playlist", $pl);
-  var $freq = $('<select>'); $.each(["DAILY","WEEKLY","MONTHLY","YEARLY"], function(_,f){ $('<option>').val(f).text(f).appendTo($freq); });
-  $freq.val(e.freq).on('change', function(){ e.freq=this.value; schRenderForm(); }); row("Frequency", $freq);
-  row("Every N", $('<input type="number">').val(e.interval).css('width','4em').on('change', function(){ e.interval=parseInt(this.value,10)||1; }));
-  if (e.freq === "WEEKLY") {
-    var $days = $('<div>');
-    $.each(WEEKDAYS, function(_,d){
-      var on = e.byweekday.indexOf(parseInt(d[0],10))>=0 || e.byweekday.indexOf(d[0])>=0;
-      var $cb = $('<input type="checkbox">').prop('checked', on)
-        .on('change', function(){ var v=parseInt(d[0],10); e.byweekday = e.byweekday.filter(function(x){return parseInt(x,10)!==v;});
-          if (this.checked) e.byweekday.push(v); });
-      $days.append($cb).append('<span class="size" style="margin-right:6px;">'+d[1]+'</span>');
-    });
-    row("Weekdays", $days);
-  }
-  row("Start date", $('<input type="date">').val(e.dtstart).on('change', function(){ e.dtstart=this.value; }));
-  var $end = $('<select>'); $.each([["never","Never"],["until","Until date"],["count","After N"]], function(_,o){ $('<option>').val(o[0]).text(o[1]).appendTo($end); });
-  $end.val(e.end.type).on('change', function(){ e.end = {type:this.value}; schRenderForm(); }); row("End", $end);
-  if (e.end.type === "until") row("Until", $('<input type="date">').val(e.end.untilDate||"").on('change', function(){ e.end.untilDate=this.value; }));
-  if (e.end.type === "count") row("Count", $('<input type="number">').val(e.end.count||1).css('width','4em').on('change', function(){ e.end.count=parseInt(this.value,10)||1; }));
-  row("Start time", $('<input type="time">').val(e.startTime).on('change', function(){ e.startTime=this.value; }));
-  row("End time", $('<input type="time">').val(e.endTime).on('change', function(){ e.endTime=this.value; }));
-  row("Priority", $('<input type="number">').val(e.priority).css('width','4em').on('change', function(){ e.priority=parseInt(this.value,10)||0; }));
-  row("Enabled", $('<input type="checkbox">').prop('checked', e.enabled!==false).on('change', function(){ e.enabled=this.checked; }));
-  var $ex = $('<div>');
-  $.each(e.exdates, function(i,d){ $('<span class="size" style="margin-right:4px;">'+d+' </span>')
-    .append($('<a href="#">✕</a>').on('click', function(ev){ ev.preventDefault(); e.exdates.splice(i,1); schRenderForm(); })).appendTo($ex); });
-  var $exAdd = $('<input type="date">');
-  $ex.append($exAdd).append($('<button type="button">+ skip</button>').on('click', function(){ if ($exAdd.val()){ e.exdates.push($exAdd.val()); schRenderForm(); } }));
-  row("Exceptions", $ex);
-}
-
-function schRefreshList() { sock.send(generateMessage('SRV','LIST_SCHEDULES',{})); sock.send(generateMessage('SRV','LIST_PLAYLISTS',{})); }
-function schLoad(id) { if (id) sock.send(generateMessage('SRV','GET_SCHEDULE',{id:id})); }
-function schNew() { schEditor = schBlank(); $('#schStatus').text("(new)"); schRenderForm(); }
-function schSave() { if (!schEditor) return; sock.send(generateMessage('SRV','SAVE_SCHEDULE', schEditor)); setTimeout(schRefreshList, 150); }
-function schDelete() { if (!confirm('Delete this schedule?')) return; if (schEditor && schEditor.id) { sock.send(generateMessage('SRV','DELETE_SCHEDULE',{id:schEditor.id})); } schNew(); setTimeout(schRefreshList, 150); }
-function schRenderDefaults(rows) {
-  var $d = $('#schDefaults').empty();
-  $.each(schGroups(), function(_, g){
-    var cur = ""; $.each(rows||[], function(_, r){ if (r.displayID===g) cur = r.defaultPlaylistName||""; });
-    var $sel = $('<select>'); $('<option>').val("").text("None").appendTo($sel);
-    $.each((window._schPlaylists||[]), function(_,n){ $('<option>').val(n).text(n).appendTo($sel); });
-    $sel.val(cur).on('change', function(){ sock.send(generateMessage('SRV','SET_GROUP_DEFAULT',{displayID:g, playlistName:this.value})); });
-    $('<div>').append('<span class="size" style="margin-right:6px;">'+g+'</span>').append($sel).appendTo($d);
-  });
-}
-
-$(function(){
-  $('#schNew').on('click', schNew);
-  $('#schSave').on('click', schSave);
-  $('#schDelete').on('click', schDelete);
-  $('#schSelect').on('change', function(){ schLoad($(this).val()); });
-  setTimeout(function(){ schRefreshList(); sock.send(generateMessage('SRV','GET_GROUP_DEFAULTS',{})); }, 700);
-});
-</script>
-<script>
-function adminRoute() {
-  var r = (location.hash || "#overview").slice(1);
-  var found = false;
-  $('.section').each(function(){ var on = $(this).data('route') === r; $(this).toggleClass('active', on); if(on) found=true; });
-  if (!found) { $('.section[data-route=overview]').addClass('active'); r = "overview"; }
-  $('.navitem').each(function(){ $(this).toggleClass('active', $(this).data('nav') === r); });
-}
-$(function(){
-  $('.navitem').on('click', function(){ location.hash = $(this).data('nav'); });
-  $(window).on('hashchange', adminRoute);
-  adminRoute();
-});
+// Task 12 (Section 1 overhaul): the old jQuery adminRoute() + .navitem click
+// handlers + hashchange listener were removed. Section visibility is now
+// driven by Alpine x-show on each .section, reflecting $store.mm.activeTab,
+// which js/timeline/shell/router.js keeps in sync with location.hash.
 function adminApplyTheme(t) {
   document.documentElement.setAttribute('data-theme', t);
   $('#themeToggle').text(t === 'light' ? '☀ Light' : '🌙 Dark');

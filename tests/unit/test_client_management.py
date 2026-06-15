@@ -201,6 +201,11 @@ class TestDiscoveryData:
         assert device["isOnline"] is True
         assert device["autoConfigured"] is True
         assert device["capabilities"] == ["HD", "keyboard", "mouse"]
+        # Derived calibration flag (Fleet UI reads this, not the raw perimeter).
+        assert device["calibrated"] is False   # default client has no measuredPerimeter
+        mock_client.measuredPerimeter = [[0, 0], [1, 0], [1, 1], [0, 1]]
+        device2 = server.get_discovered_devices()[0]
+        assert device2["calibrated"] is True
     
     def test_get_discovered_devices_sorted_by_last_seen(self, mock_settings):
         """Test devices are sorted by lastSeen timestamp"""

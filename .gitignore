@@ -15,6 +15,10 @@ htmlcov/
 # playwright MCP artifacts
 .playwright-mcp/
 
+# Node deps for tests/e2e/ playwright harness (large chromium binary)
+node_modules/
+package-lock.json
+
 # Runtime artifacts
 # per-client media + generated ArUco markers (created at runtime)
 media/
@@ -46,3 +50,4 @@ tools/bench_variations.py
 
 # test fixture image used ad-hoc by calibrate scripts; large + binary
 tests/calibrationimage.jpg
+graphify-out/

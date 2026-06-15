@@ -1,5 +1,7 @@
 # Per-Device Media Cache — Design
 
+> **Follow-up (2026-06-14):** `cacheMode` is now auto-onboarded via a server-side SSH probe on REGISTER — see `docs/superpowers/specs/2026-06-14-auto-onboard-cache-mode-design.md`.
+
 ## Goal
 
 Eliminate the LAN-bandwidth bottleneck when a display group plays SEGMENT video items. Today, every iPad in the group fetches its 100 MB+ per-iPad rendered MP4 from the central server in parallel at PLAY time; measured peak throughput hit 5.3 Gbps for ~90 seconds during a 24-iPad cycle. The shared 802.11 WiFi medium can deliver only ~10 MB/s per iPad under contention, so AppleCoreMedia stalls within a few frames, video doesn't actually play, and drift measurement (the original motivating use case) is impossible at scale.

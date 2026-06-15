@@ -95,33 +95,202 @@ class TestDiscoveryAPI:
         assert 'displayGroups' in data
         assert 'cacheStats' in data
     
-    @pytest.mark.asyncio 
+    @pytest.mark.asyncio
     async def test_api_discovery_configure_post(self, mock_settings, mock_client):
-        """Test device configuration endpoint"""
+        """Test device configuration endpoint moves a client to an
+        existing display group (PR-14: target must exist in
+        settings.displays — Mobile is in the mock fixture)."""
         mock_settings.clients["test123"] = mock_client
         server.settings = mock_settings
-        
+
         config_data = {
             'clientKey': 'test123',
-            'displayID': 'NewDisplay',
+            'displayID': 'Mobile',
             'friendlyName': 'Updated Client'
         }
-        
+
         request = make_mocked_request('POST', '/api/discovery/configure')
         request.json = AsyncMock(return_value=config_data)
 
-        with patch('server.saveSettings') as mock_save:
+        with patch('mosaicmesh.api.discovery.saveSettings') as mock_save:
             response = await server.api_discovery_configure(request)
-        
+
         assert response.status == 200
         data = json.loads(response.text)
         assert data['success'] is True
-        
+
         # Check client was updated
         updated_client = mock_settings.clients["test123"]
-        assert updated_client.displayID == 'NewDisplay'
+        assert updated_client.displayID == 'Mobile'
         assert updated_client.friendlyName == 'Updated Client'
         mock_save.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_api_discovery_configure_rejects_unknown_displayID(self, mock_settings, mock_client):
+        """PR-14: assigning a displayID that doesn't exist in
+        settings.displays returns 404. Without this guard, a typo
+        ('Tablt') silently sets client.displayID to a string no group
+        has — the client vanishes from the timeline."""
+        mock_settings.clients["test123"] = mock_client
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'clientKey': 'test123',
+            'displayID': 'NonExistent',
+        })
+
+        response = await server.api_discovery_configure(request)
+        assert response.status == 404
+        data = json.loads(response.text)
+        assert data['success'] is False
+        assert "NonExistent" in data['error']
+        assert "create it first" in data['error']
+        # Client untouched
+        assert mock_settings.clients["test123"].displayID == 'Desktop'
+
+    @pytest.mark.asyncio
+    async def test_api_discovery_configure_rejects_empty_displayID(self, mock_settings, mock_client):
+        """PR-14: empty/whitespace displayID rejected with 400."""
+        mock_settings.clients["test123"] = mock_client
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'clientKey': 'test123',
+            'displayID': '   ',
+        })
+        response = await server.api_discovery_configure(request)
+        assert response.status == 400
+        assert mock_settings.clients["test123"].displayID == 'Desktop'
+
+    @pytest.mark.asyncio
+    async def test_api_discovery_configure_rejects_non_string_displayID(self, mock_settings, mock_client):
+        """PR-14: non-string displayID rejected with 400."""
+        mock_settings.clients["test123"] = mock_client
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'clientKey': 'test123',
+            'displayID': 42,
+        })
+        response = await server.api_discovery_configure(request)
+        assert response.status == 400
+        assert mock_settings.clients["test123"].displayID == 'Desktop'
+
+
+class TestBulkAssign:
+    """PR-15: POST /api/discovery/configure {action:'bulk_assign', clientKeys, displayID}."""
+
+    def _make_clients(self, mock_settings, count, displayID='Desktop'):
+        from unittest.mock import MagicMock
+        for i in range(count):
+            c = server.Client()
+            c.friendlyName = f"Client{i}"
+            c.displayID = displayID
+            c.deviceType = "tablet"
+            c.autoConfigured = True
+            mock_settings.clients[f"k{i}"] = c
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_happy(self, mock_settings):
+        self._make_clients(mock_settings, 3, displayID='Desktop')
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0', 'k1', 'k2'],
+            'displayID': 'Mobile',
+        })
+
+        with patch('mosaicmesh.api.discovery.saveSettings'):
+            resp = await server.api_discovery_configure(request)
+        assert resp.status == 200
+        data = json.loads(resp.text)
+        assert data['success'] is True
+        assert data['movedCount'] == 3
+        assert set(data['moved']) == {'k0', 'k1', 'k2'}
+        assert data['missing'] == []
+        assert all(mock_settings.clients[k].displayID == 'Mobile' for k in ['k0', 'k1', 'k2'])
+        # PR-15: explicit move clears autoConfigured so the next REGISTER
+        # doesn't undo the operator's choice via auto_configure_client.
+        assert all(mock_settings.clients[k].autoConfigured is False for k in ['k0', 'k1', 'k2'])
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_partial_with_missing(self, mock_settings):
+        self._make_clients(mock_settings, 2)
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0', 'ghost', 'k1'],
+            'displayID': 'Mobile',
+        })
+        with patch('mosaicmesh.api.discovery.saveSettings'):
+            resp = await server.api_discovery_configure(request)
+        assert resp.status == 200
+        data = json.loads(resp.text)
+        assert data['movedCount'] == 2
+        assert set(data['moved']) == {'k0', 'k1'}
+        assert data['missing'] == ['ghost']
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_unknown_target_404(self, mock_settings):
+        self._make_clients(mock_settings, 2)
+        server.settings = mock_settings
+
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0', 'k1'],
+            'displayID': 'NonExistent',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 404
+        data = json.loads(resp.text)
+        assert 'NonExistent' in data['error']
+        assert 'create it first' in data['error']
+        # Atomic guard: clients are NOT moved when target validation fails.
+        assert all(mock_settings.clients[k].displayID == 'Desktop' for k in ['k0', 'k1'])
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_empty_keys_400(self, mock_settings):
+        server.settings = mock_settings
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': [],
+            'displayID': 'Mobile',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_missing_keys_field_400(self, mock_settings):
+        server.settings = mock_settings
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'displayID': 'Mobile',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 400
+
+    @pytest.mark.asyncio
+    async def test_bulk_assign_empty_target_400(self, mock_settings):
+        self._make_clients(mock_settings, 1)
+        server.settings = mock_settings
+        request = make_mocked_request('POST', '/api/discovery/configure')
+        request.json = AsyncMock(return_value={
+            'action': 'bulk_assign',
+            'clientKeys': ['k0'],
+            'displayID': '  ',
+        })
+        resp = await server.api_discovery_configure(request)
+        assert resp.status == 400
     
     @pytest.mark.asyncio
     async def test_api_discovery_configure_invalid_client(self, mock_settings):
@@ -414,21 +583,56 @@ class TestClientMerge:
 
 
 class TestCalibrate:
-    """Calibration upload must not 500 when an image has no ArUco markers."""
+    """Calibration upload must not 500 when an image has no ArUco markers,
+    and must report the true detection count when markers are present."""
 
     def test_calibrate_no_markers_returns_url_without_crashing(self, tmp_path):
-        import numpy as np, cv2
+        import numpy as np, cv2, json
         # A blank image -> zero markers -> relevantContours stays empty
         img = np.full((120, 160, 3), 240, np.uint8)
         p = tmp_path / "blank.png"
         cv2.imwrite(str(p), img)
 
         server.settings = server.Settings()
-        result = server.calibrate(str(p))
+        body_str, content_type = server.calibrate(str(p))
 
-        # Returns the 2-segment media URL (media_handler inserts images/),
-        # not the 3-segment disk path, and does not raise.
-        assert result == ("media/displays/calibration.png", "text/html")
+        # PR-28: calibrate() now returns JSON so the calibration modal can
+        # surface detected/mapped counts. Image URL is the 2-segment media
+        # URL (media_handler inserts images/), not the 3-segment disk path.
+        assert content_type == "application/json"
+        body = json.loads(body_str)
+        assert body["success"] is True
+        assert body["detected"] == 0
+        assert body["mapped"] == 0
+        assert body["imageUrl"] == "media/displays/calibration.png"
+
+    def test_calibrate_reports_actual_marker_count(self, tmp_path):
+        """Regression: PR-28 first cut read `len(corners)` AFTER the per-marker
+        loop, but the loop body reassigns `corners` to a single marker's
+        (4, 2) reshape — so detected always reported 4 regardless of the true
+        count. Synthesize a photo with 6 markers and assert detected == 6."""
+        import numpy as np, cv2, json
+        # Build a 600x400 image with 6 DICT_6X6_50 markers laid out in a grid.
+        # generateMarker (cv2 >= 4.7) replaces drawMarker (< 4.7); accept both.
+        d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_6X6_50)
+        gen = getattr(cv2.aruco, "generateImageMarker", None) or cv2.aruco.drawMarker
+        img = np.full((400, 600, 3), 255, np.uint8)
+        marker_px = 80
+        positions = [(20, 20), (260, 20), (500, 20),
+                     (20, 300), (260, 300), (500, 300)]
+        for i, (x, y) in enumerate(positions):
+            m = gen(d, i, marker_px)
+            img[y:y+marker_px, x:x+marker_px] = cv2.cvtColor(m, cv2.COLOR_GRAY2BGR)
+        p = tmp_path / "six.png"
+        cv2.imwrite(str(p), img)
+
+        server.settings = server.Settings()
+        body_str, _ = server.calibrate(str(p))
+        body = json.loads(body_str)
+        # detect_aruco_markers must see all 6; mapped is 0 because no client
+        # in Settings owns these arucoIDs.
+        assert body["detected"] == 6
+        assert body["mapped"] == 0
 
 
 class TestMediaRange:

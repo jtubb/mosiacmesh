@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 import numpy as np
 import cv2 as cv
+import pytest
 from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -218,10 +219,11 @@ class TestRender:
         assert server._render_output_dims(c2) == (1278, 1260)
 
     async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (1920, 1080))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (1920, 1080))
 
         calls = []
         class _Proc:
@@ -242,10 +244,11 @@ class TestRender:
         assert server.socketmanager.broadcast.call_count >= 2
 
     async def test_render_video_ffmpeg_failure_sets_error(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (1920, 1080))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (1920, 1080))
         class _Proc:
             returncode = 1
             async def communicate(self): return (b"", b"boom")
@@ -324,19 +327,44 @@ class TestSegmentPlay:
         assert decoded["PAYLOAD"]["status"] == "RENDER_REQUIRED"
         assert server.socketmanager.broadcast.call_count == 0
 
-    def test_play_full_only_uses_group_path(self, mock_settings):
+    def test_play_full_uses_shared_central_asset(self, mock_settings):
+        # PT-T5: FULL is now renderable + render-gated. Once a READY registry entry
+        # exists, PLAY routes through per-client broadcast (_broadcast_per_client_play)
+        # and each client receives the shared central full_<token>_<i> URL — never
+        # the raw source file, never a per-client seg_ URL.
+        # Using PAUSE resume path (bypasses coordinated _begin_prepare) so the PLAY
+        # broadcast fires synchronously and we can inspect the payload.
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
         me.duration = 1000; me.playmode = server.PlayMode.FULL
-        disp.mediaElements = [me]; disp.loop = True; disp.action = server.PlayState.STOP
+        disp.mediaElements = [me]; disp.loop = True
+        disp.action = server.PlayState.PAUSE  # resume path: direct per-client PLAY
         c1 = server.Client(); c1.displayID = "Default"
         mock_settings.clients = {"c1": c1}
+        # Save the playlist so is_playlist_ready can resolve it.
+        pl = server.Playlist(); pl.name = "Full"
+        pl.items = [{"id": "a", "file": "/media/server/x.jpg", "playmode": "FULL",
+                     "duration": 1000, "backgroundColor": "#000000",
+                     "startEffect": None, "endEffect": None}]
+        mock_settings.playlists["Full"] = pl
+        # Seed a READY registry entry so the render gate passes.
+        elements = R._build_media_elements(pl.items)
+        tok = R.render_token(elements, "Default")
+        R._set_render_state(disp, "Full", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "Full"
+        disp.renderedToken = tok  # sync so _per_client_items resolves correctly
         msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
-        ret = server.msg_response(msg, self._sess())
-        assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"
-        assert server.socketmanager.broadcast.call_count == 1  # group broadcast, one client
+        server.msg_response(msg, self._sess())
+        # Per-client broadcast: one PLAY per client (c1) + one PLAYBACK_CHANGED state broadcast
+        assert server.socketmanager.broadcast.call_count == 2
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
+        f = sent["PAYLOAD"]["items"][0]["file"]
+        assert "/full_" in f                             # shared central asset
+        assert f.endswith(".png")                        # image → .png
+        assert f != me.file                              # never raw source
 
 
 class TestReloadCommand:
@@ -459,11 +487,16 @@ class TestVideoSegmentPlay:
         return s
 
     def test_play_while_rendering_emits_in_progress(self, mock_settings):
+        # Updated for registry-based gating (Task 13): old renderStatus field replaced
+        # by Display.renders[name]["state"] == RENDER_RENDERING.
         import jsonpickle
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
-        disp.renderStatus = "rendering"
+        # Set up a playlist name and registry entry in RENDERING state.
+        disp.currentPlaylistName = "Vid"
+        R._set_render_state(disp, "Vid", R.RENDER_RENDERING, token="tok")
         ret = server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
                                    "PAYLOAD": {"displayID": "Default"}}, self._sess())
         assert jsonpickle.decode(ret)["PAYLOAD"]["status"] == "RENDER_IN_PROGRESS"
@@ -520,36 +553,41 @@ class TestFfmpegIntegration:
 
 class TestIsRenderable:
     def test_predicate(self):
+        # FULL is now renderable: device encode/downscale required (PT-T3).
         for pm, exp in [(server.PlayMode.SEGMENT, True), (server.PlayMode.INDIVIDUAL, True),
-                        (server.PlayMode.FULL, False), (server.PlayMode.SCRIPT, False),
+                        (server.PlayMode.FULL, True), (server.PlayMode.SCRIPT, False),
                         (server.PlayMode.DEFAULT, False)]:
             me = server.MediaElement(); me.playmode = pm
             assert server._is_renderable(me) is exp
 
-    async def test_render_accepts_individual_only_playlist(self, monkeypatch):
-        # RENDER must not reject an INDIVIDUAL-only playlist with "no renderable items".
-        # async test (running loop) + stub ensure_future so we don't actually render.
-        scheduled = []
-        def _capture(coro):
-            scheduled.append(coro); coro.close(); return None   # close() avoids un-awaited warning
-        monkeypatch.setattr(server.asyncio, "ensure_future", _capture)
+    def test_render_handler_enqueues_failed_individual_playlist(self, monkeypatch):
+        # RENDER with {displayID, name} enqueues a FAILED render — new contract.
+        # INDIVIDUAL-only playlists are accepted (no "nothing to render" guard).
+        import mosaicmesh.render as _R
+        enq = []
+        monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                            lambda name, did: enq.append((name, did)) or True)
         ms = server.Settings()
         ms.displays = {"Default": server.Display()}
         server.settings = ms
         server.socketmanager = MagicMock()
         disp = ms.displays["Default"]
-        me = server.MediaElement(); me.file = "/media/server/x.jpg"; me.duration = 1000
-        me.playmode = server.PlayMode.INDIVIDUAL
-        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        disp.boundingBox = [0, 0, 100, 100]
+        pl = server.Playlist(); pl.name = "Ind"
+        pl.items = [{"id": 0, "file": "/media/server/x.jpg", "playmode": "INDIVIDUAL",
+                     "duration": 1000}]
+        ms.playlists["Ind"] = pl
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         ms.clients = {"c1": c}
+        _R._set_render_state(disp, "Ind", _R.RENDER_FAILED, token="old", error="boom")
         sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
         sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
         ret = jsonpickle.decode(server.msg_response(
-            {"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER", "PAYLOAD": {"displayID": "Default"}}, sess))
-        assert ret["PAYLOAD"]["status"] == "rendering"   # accepted, not ERROR
-        assert len(scheduled) == 1
+            {"SRC": "a", "DEST": "SRV", "REQUEST": "RENDER",
+             "PAYLOAD": {"displayID": "Default", "name": "Ind"}}, sess))
+        assert ret["PAYLOAD"]["status"] == "QUEUED"   # accepted, not ERROR
+        assert ("Ind", "Default") in enq
 
     def test_play_individual_stale_requires_render(self):
         ms = server.Settings(); ms.displays = {"Default": server.Display()}
@@ -569,7 +607,10 @@ class TestIsRenderable:
         assert ret["PAYLOAD"]["status"] == "RENDER_REQUIRED"
 
     def test_per_client_play_routes_individual_to_ind_file(self):
-        # Resume-from-pause path: direct per-client PLAY with individual-crop URLs
+        # Resume-from-pause path: direct per-client PLAY with individual-crop URLs.
+        # Updated for registry-based gating (Task 13): must set currentPlaylistName
+        # + a READY registry entry (replaces old direct renderedToken assignment).
+        from mosaicmesh import render as R
         ms = server.Settings(); ms.displays = {"Default": server.Display()}
         server.settings = ms; server.socketmanager = MagicMock()
         disp = ms.displays["Default"]
@@ -580,7 +621,15 @@ class TestIsRenderable:
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         ms.clients = {"c1": c}
-        disp.renderedToken = server.compute_render_token("Default")   # mark rendered
+        # Registry-based readiness: add playlist, set READY entry, sync renderedToken.
+        pl = server.Playlist(); pl.name = "Ind"
+        pl.items = [{"id": "a", "file": "/media/server/x.jpg", "playmode": "INDIVIDUAL",
+                     "duration": 1000}]
+        ms.playlists["Ind"] = pl
+        tok = server.compute_render_token("Default")
+        R._set_render_state(disp, "Ind", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "Ind"
+        disp.renderedToken = tok   # sync so _per_client_items uses the right token
         sess = MagicMock(); sess.id = "s"; sess.request = MagicMock()
         sess.request.remote = "127.0.0.1"; sess.request.headers = {"User-Agent": "T"}
         server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
@@ -670,6 +719,7 @@ class TestIndividualFfmpeg:
         assert "color=0x000000" in vf   # malformed 3-digit hex falls back to black
 
     async def test_individual_video_invokes_ffmpeg_with_pad(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings; server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
@@ -678,7 +728,7 @@ class TestIndividualFfmpeg:
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
         c.measuredPerimeter = np.array([[[0, 0]], [[100, 0]], [[100, 100]], [[0, 100]]])
         mock_settings.clients = {"c1": c}
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (200, 100))
         calls = []
         class _Proc:
             returncode = 0
@@ -697,6 +747,7 @@ class TestIndividualFfmpeg:
 
 class TestIndividualDegenerateQuad:
     async def test_zero_area_quad_raises_clear_error(self, mock_settings, monkeypatch):
+        import mosaicmesh.render as _render
         server.settings = mock_settings; server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
@@ -706,7 +757,7 @@ class TestIndividualDegenerateQuad:
         # all four corners identical -> zero-area quad
         c.measuredPerimeter = np.array([[[10, 10]], [[10, 10]], [[10, 10]], [[10, 10]]])
         mock_settings.clients = {"c1": c}
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (200, 100))
         result = await server.render_group_async("Default")
         assert result["status"] == "error"
         assert "degenerate" in result.get("error", "").lower()
@@ -781,6 +832,7 @@ class TestEffectRenderHook:
         return disp
 
     async def _run_capture(self, monkeypatch):
+        import mosaicmesh.render as _render
         calls = []
         class _Proc:
             returncode = 0
@@ -788,7 +840,7 @@ class TestEffectRenderHook:
         async def _fake_exec(*args, **kwargs):
             calls.append(list(args)); return _Proc()
         monkeypatch.setattr(server.asyncio, "create_subprocess_exec", _fake_exec)
-        monkeypatch.setattr(server, "get_video_dimensions", lambda p: (200, 100))
+        monkeypatch.setattr(_render, "get_video_dimensions", lambda p: (200, 100))
         await server.render_group_async("Default")
         return calls
 

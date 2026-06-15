@@ -119,7 +119,8 @@ class TestPlayStop:
 
         assert disp.action == server.PlayState.STOP
         assert disp.currentFrame == 0
-        assert server.socketmanager.broadcast.call_count == 1
+        # STOP broadcast to the group + the PLAYBACK_CHANGED admin broadcast (Task 5)
+        assert server.socketmanager.broadcast.call_count == 2
 
 
 class TestMidJoinSync:
@@ -174,7 +175,8 @@ class TestPause:
             server.msg_response(msg, _make_session())
         assert disp.action == server.PlayState.PAUSE
         assert disp.pauseOffset == 2500  # 1002500 - 1000000
-        assert server.socketmanager.broadcast.call_count == 1
+        # PAUSE broadcast to the group + the PLAYBACK_CHANGED admin broadcast (Task 5)
+        assert server.socketmanager.broadcast.call_count == 2
 
 
 class TestResume:
