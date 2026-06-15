@@ -442,6 +442,23 @@ def is_playlist_ready(playlist_name, display_id):
             and entry.get("token") == render_token(elements, display_id))
 
 
+def _token_is_live(token):
+    """True if `token` is still referenced anywhere: any group's render-registry
+    entry token, or any group's live renderedToken. The single guard that makes
+    asset deletion safe against the shared-token case (identical-item playlists
+    on one group hash to the same token and share files)."""
+    import server
+    if not token:
+        return False
+    for display in server.settings.displays.values():
+        for e in (getattr(display, "renders", {}) or {}).values():
+            if e.get("token") == token:
+                return True
+        if getattr(display, "renderedToken", "") == token:
+            return True
+    return False
+
+
 def _normalize_effect(field):
     """Tolerate an effect field as {name, params} | bare-string name | None."""
     if not field:
