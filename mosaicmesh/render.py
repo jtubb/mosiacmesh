@@ -911,14 +911,11 @@ def mark_group_recalibrated(display_id):
     return will
 
 
-def _delete_render_assets(playlist_name, display_id):
-    """Delete on-disk seg_/ind_ assets for a (playlist, group) for its current
-    token. Best-effort; missing files are fine."""
+def _delete_token_assets(token, display_id):
+    """Delete on-disk seg_/ind_/full_ assets for a group at a SPECIFIC token.
+    Best-effort; missing files are fine. Caller is responsible for confirming the
+    token is no longer live (see _token_is_live)."""
     import server, glob
-    display = server.settings.displays.get(display_id)
-    if not display:
-        return
-    token = (display.renders.get(playlist_name) or {}).get("token", "")
     if not token:
         return
     for key, _c in _group_clients(display_id):
@@ -935,6 +932,17 @@ def _delete_render_assets(playlist_name, display_id):
                 os.remove(path)
             except OSError:
                 pass
+
+
+def _delete_render_assets(playlist_name, display_id):
+    """Delete the assets for a (playlist, group) at its CURRENT registry token.
+    Thin wrapper over _delete_token_assets — used by playlist/group delete."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return
+    token = (display.renders.get(playlist_name) or {}).get("token", "")
+    _delete_token_assets(token, display_id)
 
 
 def cleanup_playlist_renders(playlist_name):
