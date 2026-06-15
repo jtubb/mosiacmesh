@@ -755,6 +755,7 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         display.renders.pop(playlist_name, None)   # became N/A
         _broadcast_renders_changed(force=True)
         return
+    prev_token = (display.renders.get(playlist_name) or {}).get("token")
     token = render_token(elements, display_id)
     _set_render_state(display, playlist_name, RENDER_RENDERING, token=token,
                       percent=0, started=time.time())
@@ -778,6 +779,10 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         # so the per-client PLAY URLs resolve the freshly-rendered assets.
         if getattr(display, "currentPlaylistName", None) == playlist_name:
             display.renderedToken = token
+        # Reclaim the superseded token's assets — but only if nothing else
+        # references it (shared-token safety).
+        if prev_token and prev_token != token and not _token_is_live(prev_token):
+            _delete_token_assets(prev_token, display_id)
     except Exception as e:
         logging.error("render_playlist_for_group %s/%s failed: %s", playlist_name, display_id, e)
         entry = _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))

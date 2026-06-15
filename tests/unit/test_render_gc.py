@@ -85,3 +85,81 @@ def test_delete_token_assets_leaves_other_token(fresh_settings, tmp_path, monkey
     keep = _seed_asset(tmp_path, "c1", "videos", "seg_bbbbbbbbbbbb_0.mp4")
     R._delete_token_assets("aaaaaaaaaaaa", "G1")
     assert keep.exists()
+
+
+import asyncio
+
+
+def _calibrated_group(fresh_settings, did, ckey):
+    from mosaicmesh.state import Display, Client
+    d = Display(); d.boundingBox = [0, 0, 10, 10]
+    fresh_settings.displays[did] = d
+    c = Client(); c.displayID = did; c.deviceWidth = 100; c.deviceHeight = 100
+    c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]
+    fresh_settings.clients[ckey] = c
+    return d
+
+
+def test_rerender_deletes_previous_token_assets(fresh_settings, tmp_path, monkeypatch):
+    from mosaicmesh.state import Playlist
+    monkeypatch.chdir(tmp_path)
+    d = _calibrated_group(fresh_settings, "G1", "c1")
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    # Pretend a previous render produced files under an OLD token (12 hex chars).
+    old_tok = "0123456789ab"
+    old = _seed_asset(tmp_path, "c1", "videos", f"seg_{old_tok}_0.mp4")
+    R._set_render_state(d, "P", R.RENDER_READY, token=old_tok)
+
+    async def _fake_encode(elements, did, token, progress_cb=None):
+        if progress_cb: progress_cb(1, 1)
+    monkeypatch.setattr(R, "_encode_group", _fake_encode)
+
+    asyncio.run(R.render_playlist_for_group_async("P", "G1"))
+    new_tok = R.render_token(R._build_media_elements(pl.items), "G1")
+    assert d.renders["P"]["state"] == R.RENDER_READY
+    assert d.renders["P"]["token"] == new_tok
+    assert new_tok != old_tok
+    assert not old.exists()                     # previous token's files reclaimed
+
+
+def test_rerender_keeps_shared_old_token(fresh_settings, tmp_path, monkeypatch):
+    from mosaicmesh.state import Playlist
+    monkeypatch.chdir(tmp_path)
+    d = _calibrated_group(fresh_settings, "G1", "c1")
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    old_tok = "abcdefabcdef"
+    old = _seed_asset(tmp_path, "c1", "videos", f"seg_{old_tok}_0.mp4")
+    R._set_render_state(d, "P", R.RENDER_READY, token=old_tok)
+    # A SECOND playlist entry on the same group still references the old token.
+    R._set_render_state(d, "Q", R.RENDER_READY, token=old_tok)
+
+    async def _fake_encode(elements, did, token, progress_cb=None):
+        if progress_cb: progress_cb(1, 1)
+    monkeypatch.setattr(R, "_encode_group", _fake_encode)
+
+    asyncio.run(R.render_playlist_for_group_async("P", "G1"))
+    assert old.exists()                          # shared token still live -> NOT deleted
+
+
+def test_failed_rerender_keeps_previous_assets(fresh_settings, tmp_path, monkeypatch):
+    from mosaicmesh.state import Playlist
+    monkeypatch.chdir(tmp_path)
+    d = _calibrated_group(fresh_settings, "G1", "c1")
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+    old_tok = "0123456789ab"
+    old = _seed_asset(tmp_path, "c1", "videos", f"seg_{old_tok}_0.mp4")
+    R._set_render_state(d, "P", R.RENDER_READY, token=old_tok)
+
+    async def _boom(elements, did, token, progress_cb=None):
+        raise RuntimeError("ffmpeg exploded")
+    monkeypatch.setattr(R, "_encode_group", _boom)
+
+    asyncio.run(R.render_playlist_for_group_async("P", "G1"))
+    assert d.renders["P"]["state"] == R.RENDER_FAILED
+    assert old.exists()                          # failed re-render must not delete old
