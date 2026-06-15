@@ -915,7 +915,7 @@ def _delete_token_assets(token, display_id):
     """Delete on-disk seg_/ind_/full_ assets for a group at a SPECIFIC token.
     Best-effort; missing files are fine. Caller is responsible for confirming the
     token is no longer live (see _token_is_live)."""
-    import server, glob
+    import glob
     if not token:
         return
     for key, _c in _group_clients(display_id):
