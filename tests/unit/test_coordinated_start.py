@@ -34,7 +34,9 @@ def _display_with_items(server, display_id="g1", n=2):
 def test_begin_prepare_sends_per_client_prepare_and_sets_state():
     disp = _display_with_items(server)
     _online_client(server, "a", "g1")
-    with patch.object(server, "broadcast_to_client") as bc:
+    # _begin_prepare lives in mosaicmesh.render and calls its own imported
+    # broadcast_to_client — patch that module's reference, not server's copy.
+    with patch("mosaicmesh.render.broadcast_to_client") as bc:
         server._begin_prepare("g1")
     assert disp.action == server.PlayState.PREPARING
     assert disp.prepareId
@@ -53,6 +55,7 @@ def _online_client(server, key, display_id):
     c = server.Client()
     c.displayID = display_id
     c.isOnline = True
+    c.synced = True  # synced so _begin_prepare sends PREPARE to this client
     server.settings.clients[key] = c
     return c
 

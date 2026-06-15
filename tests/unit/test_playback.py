@@ -224,6 +224,7 @@ class TestScriptPlayback:
         me.duration = 10000; me.playmode = server.PlayMode.SCRIPT
         disp.mediaElements = [me]; disp.loop = True; disp.action = server.PlayState.STOP
         client = server.Client(); client.displayID = "Default"
+        client.synced = True  # synced so _begin_prepare sends PREPARE to this client
         mock_settings.clients["c1"] = client
         return disp
 
@@ -244,7 +245,8 @@ class TestScriptPlayback:
         ret = server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
                                    "PAYLOAD": {"displayID": "Default"}}, _make_session())
         assert jsonpickle.decode(ret)["PAYLOAD"] == "SUCCESS"        # not RENDER_REQUIRED
-        assert server.socketmanager.broadcast.call_count == 1        # group path, one client
+        # 2 broadcasts: PREPARE (per-client) + PLAYBACK_CHANGED (state update)
+        assert server.socketmanager.broadcast.call_count == 2
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         assert sent["PAYLOAD"]["items"][0]["playmode"] == "SCRIPT"
         assert sent["PAYLOAD"]["items"][0]["file"] == "bouncingBalls"
