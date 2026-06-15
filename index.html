@@ -156,7 +156,16 @@
 	// jitter doesn't trigger needless re-seeks once converged (each seek stalls the
 	// iPad), low enough to re-align on real drift. iOS-5 IGNORES playbackRate (verified:
 	// set 1.15 but currentTime advances 1.0x), so a seek is the only lever there.
-	var DRIFT_SEEK_MS = 100;
+	var DRIFT_SEEK_MS = 30;   // 2026-06-15: lowered from 100. iOS-5 ignores playbackRate, so the
+	                          // in-band rate-nudge is a no-op; a seek-landing residual below the
+	                          // threshold was trapped (the lead-tuner only runs on a seek). 30 lets
+	                          // sub-100ms residuals re-seek -> the lead converges -> seeks land near
+	                          // 0. Fleet-validated: drift median 37->11ms, max 100->25ms, modest
+	                          // extra seeks (cheap now that segments are cached on-device). NOTE: a
+	                          // capability-aware two-strategy variant (direct exact seek for modern)
+	                          // was tried + reverted -- direct seeks fail on iOS-5 (keyframe-snap +
+	                          // uncompensated seek latency), and the boundary-aligned keyframe seek
+	                          // below works on iOS-5 AND modern, so one path is correct for both.
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
 	                             // time to settle + establish playback before another,
 	                             // else a slow/stalled element gets re-seeked every tick

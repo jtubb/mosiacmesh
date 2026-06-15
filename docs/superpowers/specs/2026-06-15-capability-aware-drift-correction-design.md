@@ -1,7 +1,21 @@
 # Capability-aware drift correction — Design
 
 **Date:** 2026-06-15
-**Status:** Approved (design dialogue) → ready for implementation plan
+**Status:** ❌ REJECTED after fleet validation — superseded by the flat `DRIFT_SEEK_MS=30`
+(single boundary-aligned-keyframe-seek path for all devices), shipped in `index.html`.
+
+> **Why rejected (fleet finding):** Strategy A's *direct exact seek* for large drift
+> fails on iOS-5 — `currentTime=target` keyframe-snaps AND has no seek-latency
+> compensation (lead stuck at default), landing ~200ms+ behind every time. Worse,
+> the capability probe only runs in the rate-nudge band (≤100ms), so iOS-5 devices
+> with large drift never enter the probe → never flip to Strategy B → trapped in A,
+> stuck ~340ms (≈10 frames) out of sync. The boundary-aligned keyframe seek +
+> lead-tuner (which the design bypassed for "modern") is exactly what compensates
+> iOS-5's keyframe + latency, and it works on modern devices too — so ONE path is
+> correct for both, and the validated flat `DRIFT_SEEK_MS=30` is that path. The
+> capability split's only gain (rate-nudge smoothness for modern mid-range drift)
+> is marginal: modern devices have accurate clocks and rarely drift past 30ms.
+> Kept for the record of why direct-seek-per-capability doesn't work here.
 
 ## Problem
 
