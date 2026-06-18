@@ -143,6 +143,29 @@
           ctx.fillRect(x - 1, y - 1, 2, 2);
         }
       }
+    },
+    {
+      key: 'plasma',
+      label: 'Plasma',
+      description: 'Classic demoscene plasma — smoothly shifting color clouds.',
+      draw: function (ctx, tMs, w, h) {
+        var GW = 40, GH = 30, gx, gy;
+        var k1 = 8, k2 = 12, k3 = 10, k4 = 14;
+        var T1 = 2500, T2 = 3300, T3 = 4100, T4 = 1900;
+        var cw = w / GW, ch = h / GH;
+        for (gy = 0; gy < GH; gy++) {
+          for (gx = 0; gx < GW; gx++) {
+            var u = gx / GW, v = gy / GH;
+            var du = u - 0.5, dv = v - 0.5;
+            var c = Math.sin(u * k1 + tMs / T1)
+                  + Math.sin(v * k2 + tMs / T2)
+                  + Math.sin((u + v) * k3 + tMs / T3)
+                  + Math.sin(Math.sqrt(du * du + dv * dv) * k4 + tMs / T4);
+            ctx.fillStyle = 'hsl(' + (((c + 4) / 8) * 360) + ', 100%, 50%)';
+            ctx.fillRect(gx * cw, gy * ch, cw + 1, ch + 1);
+          }
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
