@@ -122,6 +122,27 @@
         }
         ctx.globalAlpha = 1;
       }
+    },
+    {
+      key: 'particleGalaxy',
+      label: 'Particle galaxy',
+      description: 'A slow galactic swirl of particles on Keplerian orbits.',
+      draw: function (ctx, tMs, w, h) {
+        var N = 400, i;
+        var cx = w / 2, cy = h / 2;
+        var mn = Math.min(w, h);
+        var RMIN = mn * 0.08, RMAX = mn * 0.45, W0 = 0.0008;
+        var GOLD = 137.5 * Math.PI / 180;
+        for (i = 0; i < N; i++) {
+          var r = RMIN + (RMAX - RMIN) * ((i * 0.6180339887) % 1);
+          var omega = W0 * Math.sqrt(RMIN / r);
+          var phi = i * GOLD;
+          var x = cx + r * Math.cos(omega * tMs + phi);
+          var y = cy + r * Math.sin(omega * tMs + phi);
+          ctx.fillStyle = 'hsl(' + (((tMs / 80) + i * 2) % 360) + ', 80%, 60%)';
+          ctx.fillRect(x - 1, y - 1, 2, 2);
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
