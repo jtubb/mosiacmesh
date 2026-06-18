@@ -442,6 +442,30 @@ def is_playlist_ready(playlist_name, display_id):
             and entry.get("token") == render_token(elements, display_id))
 
 
+# Strict filename pattern for rendered-asset GC.  Only matches files written by
+# the render pipeline (seg_/ind_/full_ + 12-hex token + index + extension).
+# Uploaded source media (e.g. "myvideo.mp4") and ArUco markers ("aruco.png")
+# never match, so the sweep can never touch them.
+_RENDER_ASSET_RE = _re_seg.compile(r"^(?:seg|ind|full)_([0-9a-f]{12})_\d+\.(?:mp4|png)$")
+
+
+def _token_is_live(token):
+    """True if `token` is still referenced anywhere: any group's render-registry
+    entry token, or any group's live renderedToken. The single guard that makes
+    asset deletion safe against the shared-token case (identical-item playlists
+    on one group hash to the same token and share files)."""
+    import server
+    if not token:
+        return False
+    for display in server.settings.displays.values():
+        for e in (getattr(display, "renders", {}) or {}).values():
+            if e.get("token") == token:
+                return True
+        if getattr(display, "renderedToken", "") == token:
+            return True
+    return False
+
+
 def _normalize_effect(field):
     """Tolerate an effect field as {name, params} | bare-string name | None."""
     if not field:
@@ -738,6 +762,7 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         display.renders.pop(playlist_name, None)   # became N/A
         _broadcast_renders_changed(force=True)
         return
+    prev_token = (display.renders.get(playlist_name) or {}).get("token")
     token = render_token(elements, display_id)
     _set_render_state(display, playlist_name, RENDER_RENDERING, token=token,
                       percent=0, started=time.time())
@@ -761,6 +786,10 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         # so the per-client PLAY URLs resolve the freshly-rendered assets.
         if getattr(display, "currentPlaylistName", None) == playlist_name:
             display.renderedToken = token
+        # Reclaim the superseded token's assets — but only if nothing else
+        # references it (shared-token safety).
+        if prev_token and prev_token != token and not _token_is_live(prev_token):
+            _delete_token_assets(prev_token, display_id)
     except Exception as e:
         logging.error("render_playlist_for_group %s/%s failed: %s", playlist_name, display_id, e)
         entry = _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))
@@ -894,14 +923,14 @@ def mark_group_recalibrated(display_id):
     return will
 
 
-def _delete_render_assets(playlist_name, display_id):
-    """Delete on-disk seg_/ind_ assets for a (playlist, group) for its current
-    token. Best-effort; missing files are fine."""
-    import server, glob
-    display = server.settings.displays.get(display_id)
-    if not display:
-        return
-    token = (display.renders.get(playlist_name) or {}).get("token", "")
+def _delete_token_assets(token, display_id):
+    """Delete on-disk seg_/ind_/full_ assets for a group at a SPECIFIC token.
+    Best-effort; missing files are fine. Caller is responsible for confirming the
+    token is no longer live (see _token_is_live).
+    Per-client seg_/ind_ files are scoped to display_id's clients; full_<token>
+    assets in media/server/ are deleted globally — safe because render_token
+    hashes per-group geometry so no two groups ever share a token."""
+    import glob
     if not token:
         return
     for key, _c in _group_clients(display_id):
@@ -920,25 +949,79 @@ def _delete_render_assets(playlist_name, display_id):
                 pass
 
 
-def cleanup_playlist_renders(playlist_name):
-    """Remove a playlist's render entry + assets from every group (on delete)."""
-    import server
-    for did, display in server.settings.displays.items():
-        if playlist_name in (getattr(display, "renders", {}) or {}):
-            _delete_render_assets(playlist_name, did)
-            display.renders.pop(playlist_name, None)
-    _broadcast_renders_changed(force=True)
+def sweep_orphan_render_assets():
+    """One-time boot sweep: delete rendered-asset files under media/ whose token
+    is referenced by no live render (registry entry or renderedToken). Best-effort.
+    Returns the count of files removed. Walks media/<key>/{videos,images}/ and
+    media/server/{videos,images}/; the strict _RENDER_ASSET_RE guards the blast
+    radius so uploaded source media and aruco markers are never touched."""
+    import server, glob
+    live = set()
+    for display in server.settings.displays.values():
+        for e in (getattr(display, "renders", {}) or {}).values():
+            t = e.get("token")
+            if t:
+                live.add(t)
+        rt = getattr(display, "renderedToken", "")
+        if rt:
+            live.add(rt)
+    removed = 0
+    for sub in ("videos", "images"):
+        for path in glob.glob(os.path.join("media", "*", sub, "*")):
+            fname = os.path.basename(path)
+            m = _RENDER_ASSET_RE.match(fname)
+            if m and m.group(1) not in live:
+                try:
+                    os.remove(path)
+                    removed += 1
+                except OSError:
+                    pass
+    return removed
 
 
-def cleanup_group_renders(display_id):
-    """Drop a group's whole render registry + assets (on group delete)."""
+def _delete_render_assets(playlist_name, display_id):
+    """Delete the assets for a (playlist, group) at its CURRENT registry token.
+    Thin wrapper over _delete_token_assets — used by playlist/group delete."""
     import server
     display = server.settings.displays.get(display_id)
     if not display:
         return
-    for name in list((getattr(display, "renders", {}) or {}).keys()):
-        _delete_render_assets(name, display_id)
+    token = (display.renders.get(playlist_name) or {}).get("token", "")
+    _delete_token_assets(token, display_id)
+
+
+def cleanup_playlist_renders(playlist_name):
+    """Remove a playlist's render entry + assets from every group (on delete).
+    Pops each entry BEFORE the _token_is_live check so a token still shared by
+    another entry (identical-item playlists hash to the same token) is not
+    deleted out from under it."""
+    import server
+    for did, display in server.settings.displays.items():
+        reg = getattr(display, "renders", {}) or {}
+        if playlist_name in reg:
+            token = (reg.get(playlist_name) or {}).get("token", "")
+            reg.pop(playlist_name, None)
+            if token and not _token_is_live(token):
+                _delete_token_assets(token, did)
+    _broadcast_renders_changed(force=True)
+
+
+def cleanup_group_renders(display_id):
+    """Drop a group's whole render registry + assets (on group delete). Clears
+    the registry BEFORE deleting so the _token_is_live guard only sees OTHER
+    referrers (a token shared with another live entry is spared). Cross-group
+    token collisions can't happen — render_token hashes per-group geometry — so
+    a deleted group's tokens become unreferenced once its own registry is cleared."""
+    import server
+    display = server.settings.displays.get(display_id)
+    if not display:
+        return
+    reg = getattr(display, "renders", {}) or {}
+    tokens = {(e or {}).get("token", "") for e in reg.values()}
     display.renders = {}
+    for token in tokens:
+        if token and not _token_is_live(token):
+            _delete_token_assets(token, display_id)
     _broadcast_renders_changed(force=True)
 
 
