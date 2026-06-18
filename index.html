@@ -483,7 +483,7 @@
 			if (pos === null) { stopPlayback(); return; }
 			if (pos.index !== playback.scriptIndex) { return; } // transition; renderPlayback handles it
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
-			if (animations[name]) { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height); }
+			if (animations[name]) { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now()); }
 			playback.scriptRaf = _raf(frame);
 		}
 		playback.scriptRaf = _raf(frame);

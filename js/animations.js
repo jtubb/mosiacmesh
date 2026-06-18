@@ -1,8 +1,10 @@
 /* js/animations.js — ES5, NO module syntax (so this same file is a valid
  * classic <script> for the iPad-1 display client AND a side-effect ESM import
  * for the admin + Node tests). Single source of truth for SCRIPT animations.
- * Each entry is self-describing; draw(ctx, tMs, w, h) is a PURE function of
- * elapsed time + canvas size, so every display draws the same frame. */
+ * Each entry is self-describing; draw(ctx, tMs, w, h, nowMs) is a PURE function
+ * of elapsed time (tMs), canvas size, and — for wall-clock animations only —
+ * the shared GoTime.now() value (nowMs), so every display draws the same frame.
+ * Animations that don't need wall-clock time ignore the 5th argument. */
 (function (root) {
   var animations = [
     {
