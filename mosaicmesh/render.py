@@ -120,7 +120,7 @@ _push_sem = None
 # Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded
 # to .mp4 by ffmpeg regardless of source; FULL items play directly in the
 # browser (.mp4/.webm/.m4v are broadly playable, .mov needs h264/Safari/Chrome).
-_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".ogv")
+_VIDEO_EXTS = (".mp4", ".mov", ".m4v", ".webm", ".ogv", ".mkv")
 
 # seg_<HASH>_<N>.mp4 filename pattern. seg_hash is hex; seg_n is a decimal
 # integer. The pattern is anchored on basename so it matches whether item.file
@@ -1044,7 +1044,7 @@ def _probed_video_seconds(file):
             return None
         if not file.startswith("/media/server/videos/"):
             return None
-        if not file.lower().endswith((".mp4", ".mov", ".m4v", ".webm", ".ogv", ".ogg")):
+        if not file.lower().endswith((".mp4", ".mov", ".m4v", ".webm", ".ogv", ".ogg", ".mkv")):
             return None
         import server
         disk = os.path.join("media", "server", "videos", os.path.basename(file))

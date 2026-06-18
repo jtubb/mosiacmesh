@@ -468,6 +468,11 @@ class TestFfmpegHelpers:
         assert server.isVideoItem("/media/server/clip.MOV") is True
         assert server.isVideoItem("/media/server/clip.webm") is True
         assert server.isVideoItem("/media/server/clip.m4v") is True
+        # .mkv (matroska) is a common upload container; ffmpeg transcodes it to
+        # an iPad-compatible .mp4 like any other source, so it must classify as
+        # video (a real "Video Test" render failed cv.imread-ing a .mkv).
+        assert server.isVideoItem("/media/server/videos/movie.mkv") is True
+        assert server.isVideoItem("/media/server/clip.MKV") is True
         assert server.isVideoItem("/media/server/clip.avi") is False  # not browser/listed
 
     def test_get_video_dimensions(self, monkeypatch):
