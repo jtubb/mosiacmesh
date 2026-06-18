@@ -215,6 +215,46 @@
         ctx.textBaseline = 'top';
         ctx.fillText('MOSAICMESH', x, y);
       }
+    },
+    {
+      key: 'analogClock',
+      label: 'Analog clock',
+      description: 'A synchronized analog clock face (hours, minutes, seconds).',
+      draw: function (ctx, tMs, w, h, nowMs) {
+        var cx = w / 2, cy = h / 2;
+        var R = Math.min(w, h) * 0.45;
+        var d = new Date(nowMs || 0);
+        var H12 = d.getHours() % 12, M = d.getMinutes(), S = d.getSeconds();
+        var k;
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.stroke();
+        for (k = 0; k < 12; k++) {
+          var a = k * Math.PI / 6 - Math.PI / 2;
+          var inner = (k % 3 === 0) ? 0.86 : 0.92;
+          ctx.lineWidth = (k % 3 === 0) ? 4 : 2;
+          ctx.beginPath();
+          ctx.moveTo(cx + Math.cos(a) * R * inner, cy + Math.sin(a) * R * inner);
+          ctx.lineTo(cx + Math.cos(a) * R, cy + Math.sin(a) * R);
+          ctx.stroke();
+        }
+        var ah = (H12 + M / 60) * Math.PI / 6 - Math.PI / 2;
+        var am = (M + S / 60) * Math.PI / 30 - Math.PI / 2;
+        var as = S * Math.PI / 30 - Math.PI / 2;
+        ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(ah) * R * 0.5, cy + Math.sin(ah) * R * 0.5); ctx.stroke();
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(am) * R * 0.7, cy + Math.sin(am) * R * 0.7); ctx.stroke();
+        ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(as) * R * 0.75, cy + Math.sin(as) * R * 0.75); ctx.stroke();
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
