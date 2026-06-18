@@ -324,6 +324,50 @@
           }
         }
       }
+    },
+    {
+      key: 'sunMoonTransit',
+      label: 'Sun / moon transit',
+      description: 'A sun (day) or moon (night) arcing across the sky by the wall clock.',
+      draw: function (ctx, tMs, w, h, nowMs) {
+        var d = new Date(nowMs || 0);
+        var hh = d.getHours() + d.getMinutes() / 60;
+        var isDay = (hh >= 6 && hh < 18);
+        var t;
+        if (isDay) { t = (hh - 6) / 12; }
+        else { t = (hh < 6) ? (hh + 6) / 12 : (hh - 18) / 12; }
+        if (t < 0) { t = 0; }
+        if (t > 1) { t = 1; }
+        var grad = ctx.createLinearGradient(0, 0, 0, h);
+        if (isDay) {
+          grad.addColorStop(0, '#4a90d9');
+          grad.addColorStop(1, '#bfe3ff');
+          ctx.fillStyle = '#4a90d9';
+        } else {
+          grad.addColorStop(0, '#06070f');
+          grad.addColorStop(1, '#10233f');
+          ctx.fillStyle = '#06070f';
+        }
+        ctx.fillRect(0, 0, w, h);
+        if (!isDay) {
+          var s = 12345, i;
+          for (i = 0; i < 30; i++) {
+            s = (s * 1103515245 + 12345) & 0x7fffffff;
+            var sx = (s % 1000) / 1000 * w;
+            s = (s * 1103515245 + 12345) & 0x7fffffff;
+            var sy = (s % 1000) / 1000 * h * 0.6;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(sx, sy, 2, 2);
+          }
+        }
+        var cx = w * t;
+        var cy = h * 0.4 - h * 0.3 * Math.sin(Math.PI * t);
+        var rad = Math.min(w, h) * 0.05;
+        ctx.fillStyle = isDay ? '#ffec70' : '#e8eef7';
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
