@@ -303,7 +303,7 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
     aspect_matches_swap = abs(log_ba - log_swap) < 0.15
     aspect_far_from_native = abs(log_ba - log_native) > 0.35
     iou_corroborates_swap = (iou_sw >= min_iou and
-                              iou_sw > iou * 1.5)
+                              iou_sw >= iou * 1.5)   # "at least 1.5x" per the criteria above
     if aspect_matches_swap and aspect_far_from_native and iou_corroborates_swap:
         return fid_sw, "rotated"
     # Distinguish "we checked and it agreed with reported" from "we couldn't

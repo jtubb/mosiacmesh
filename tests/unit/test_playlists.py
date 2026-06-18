@@ -90,6 +90,7 @@ class TestSetPlaylistFields:
         assert mock_settings.displays["Default"].mediaElements[0].playmode is server.PlayMode.INDIVIDUAL
 
     def test_play_payload_carries_new_fields(self, mock_settings):
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
@@ -98,11 +99,25 @@ class TestSetPlaylistFields:
         me.playmode = server.PlayMode.FULL; me.backgroundColor = "#123456"
         disp.mediaElements = [me]
         client = server.Client(); client.displayID = "Default"
+        client.synced = True  # synced so _begin_prepare sends PREPARE to this client
         mock_settings.clients["c1"] = client
+        # Satisfy the render gate: register a READY entry for a named playlist
+        # whose items match the mediaElement, so is_playlist_ready returns True.
+        pl = server.Playlist(); pl.name = "P"
+        pl.items = [{"id": "a", "file": "/media/server/images/x.jpg", "playmode": "FULL",
+                     "duration": 1000, "backgroundColor": "#123456",
+                     "startEffect": None, "endEffect": None}]
+        mock_settings.playlists["P"] = pl
+        elements = R._build_media_elements(pl.items)
+        tok = R.render_token(elements, "Default")
+        R._set_render_state(disp, "P", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "P"
         with patch("time.time", return_value=1000.0):
             server.msg_response({"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY",
                                  "PAYLOAD": {"displayID": "Default"}}, _make_session())
-        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args[0][0])
+        # First broadcast is the per-client PREPARE; last is PLAYBACK_CHANGED.
+        # Read the PREPARE broadcast (call_args_list[0]) to check item fields.
+        sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         item = sent["PAYLOAD"]["items"][0]
         assert item["backgroundColor"] == "#123456"
         assert item["startEffect"] is None and item["endEffect"] is None

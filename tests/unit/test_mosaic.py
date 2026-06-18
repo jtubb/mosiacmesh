@@ -305,15 +305,26 @@ class TestSegmentPlay:
 
     def test_play_rendered_sends_per_client_warped(self, mock_settings):
         # Resume-from-pause path: direct per-client PLAY with warped segment URLs
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._rendered_group(mock_settings)
         disp.renderedToken = server.compute_render_token("Default")  # mark rendered
         disp.action = server.PlayState.PAUSE  # resume path bypasses coordinated prepare
+        # Satisfy the render gate: register a named playlist + READY entry so
+        # is_playlist_ready returns True and the PLAY handler proceeds.
+        pl = server.Playlist(); pl.name = "P"
+        pl.items = [{"id": "a", "file": "/media/server/x.jpg", "playmode": "SEGMENT",
+                     "duration": 1000, "backgroundColor": "#000000",
+                     "startEffect": None, "endEffect": None}]
+        mock_settings.playlists["P"] = pl
+        tok = server.compute_render_token("Default")
+        R._set_render_state(disp, "P", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "P"
         msg = {"SRC": "admin", "DEST": "SRV", "REQUEST": "PLAY", "PAYLOAD": {"displayID": "Default"}}
         server.msg_response(msg, self._sess())
-        # one PLAY per client (broadcast_to_client), not the group broadcast
-        assert server.socketmanager.broadcast.call_count == 2
+        # one PLAY per client (broadcast_to_client) + one PLAYBACK_CHANGED state update
+        assert server.socketmanager.broadcast.call_count == 3
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         assert "/seg_" in sent["PAYLOAD"]["items"][0]["file"]
 
@@ -505,15 +516,27 @@ class TestVideoSegmentPlay:
     def test_play_rendered_video_sends_mp4_urls(self, mock_settings):
         # Resume-from-pause path: direct per-client PLAY with segmented mp4 URLs
         import jsonpickle
+        from mosaicmesh import render as R
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = self._video_group(mock_settings)
         disp.renderStatus = "ready"
         disp.renderedToken = server.compute_render_token("Default")
         disp.action = server.PlayState.PAUSE  # resume path bypasses coordinated prepare
+        # Satisfy the render gate: register a named playlist + READY entry so
+        # is_playlist_ready returns True and the PLAY handler proceeds.
+        pl = server.Playlist(); pl.name = "P"
+        pl.items = [{"id": "v", "file": "/media/server/clip.mp4", "playmode": "SEGMENT",
+                     "duration": 5000, "backgroundColor": "#000000",
+                     "startEffect": None, "endEffect": None}]
+        mock_settings.playlists["P"] = pl
+        tok = server.compute_render_token("Default")
+        R._set_render_state(disp, "P", R.RENDER_READY, token=tok)
+        disp.currentPlaylistName = "P"
         server.msg_response({"SRC": "a", "DEST": "SRV", "REQUEST": "PLAY",
                              "PAYLOAD": {"displayID": "Default"}}, self._sess())
-        assert server.socketmanager.broadcast.call_count == 1
+        # one per-client PLAY broadcast + one PLAYBACK_CHANGED state update
+        assert server.socketmanager.broadcast.call_count == 2
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         assert sent["PAYLOAD"]["items"][0]["file"].endswith(".mp4")
         assert "/seg_" in sent["PAYLOAD"]["items"][0]["file"]
@@ -966,10 +989,16 @@ class TestReconcileQuad:
         assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
 
     def test_degenerate_band_ignored(self):
-        # a zero-area / collinear band must not be trusted over the fiducial
+        # a zero-area / collinear band must not be trusted: it can't validate, so
+        # the marker fiducial geometry is kept and flagged "no-band" (unusable band).
         quad, src = server.reconcile_screen_quad(self.MARKER, [[0,0],[10,0],[20,0]], 1000, 800)
-        assert src == "fiducial"
+        assert src == "no-band"
+        fid = server.reconstruct_screen_quad(self.MARKER, 1000, 800)
+        assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
 
     def test_no_border_uses_fiducial(self):
+        # no band quad at all -> fiducial geometry, flagged "no-band".
         quad, src = server.reconcile_screen_quad(self.MARKER, None, 1000, 800)
-        assert src == "fiducial"
+        assert src == "no-band"
+        fid = server.reconstruct_screen_quad(self.MARKER, 1000, 800)
+        assert quad.reshape(4,2).tolist() == fid.reshape(4,2).tolist()
