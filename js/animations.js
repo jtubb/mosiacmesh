@@ -100,6 +100,28 @@
         }
         ctx.stroke();
       }
+    },
+    {
+      key: 'radialPulse',
+      label: 'Radial pulse',
+      description: 'Concentric color rings expanding from the center and fading out.',
+      draw: function (ctx, tMs, w, h) {
+        var K = 5, PERIOD = 4000, k;
+        var cx = w / 2, cy = h / 2;
+        var maxR = Math.sqrt(w * w + h * h) / 2;
+        ctx.lineWidth = Math.max(0.1, 4 + 6 * Math.sin(tMs / 1000));
+        for (k = 0; k < K; k++) {
+          var frac = ((tMs / PERIOD) + (k / K)) % 1;
+          var R = frac * maxR;
+          var alpha = 1 - (R / maxR);
+          ctx.globalAlpha = alpha < 0 ? 0 : (alpha > 1 ? 1 : alpha);
+          ctx.strokeStyle = 'hsl(' + (((tMs / 40) + k * 30) % 360) + ', 80%, 60%)';
+          ctx.beginPath();
+          ctx.arc(cx, cy, R > 0.1 ? R : 0.1, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
