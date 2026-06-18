@@ -342,12 +342,11 @@
         if (isDay) {
           grad.addColorStop(0, '#4a90d9');
           grad.addColorStop(1, '#bfe3ff');
-          ctx.fillStyle = '#4a90d9';
         } else {
           grad.addColorStop(0, '#06070f');
           grad.addColorStop(1, '#10233f');
-          ctx.fillStyle = '#06070f';
         }
+        ctx.fillStyle = grad;
         ctx.fillRect(0, 0, w, h);
         if (!isDay) {
           var s = 12345, i;

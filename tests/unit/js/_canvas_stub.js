@@ -8,9 +8,19 @@
  * deep-equal logs iff the animation is deterministic — which is the
  * cross-screen synchronization guarantee in testable form.
  *
- * `create{Linear,Radial}Gradient` return a tiny recording gradient
- * (later batches use it); their addColorStop calls are logged too.
+ * `create{Linear,Radial}Gradient` return a tiny gradient whose color stops
+ * are recorded as plain data on the gradient object (`__stops`), with a
+ * MODULE-SHARED `addColorStop` reference. This matters for determinism: when
+ * an animation assigns the gradient to `ctx.fillStyle`, the gradient object is
+ * recorded in `__ops`. A per-gradient closure would differ by reference
+ * between two runs and break `deepStrictEqual`; a shared function ref + data
+ * stops makes two equal gradients compare equal. So an animation can use a
+ * real gradient fill (not a flat-color workaround) and still be sync-tested.
  */
+function gradientAddColorStop(offset, color) {
+  this.__stops.push([offset, color]);
+}
+
 export function makeRecordingCtx() {
   const ops = [];
   const target = { __ops: ops };
@@ -26,11 +36,7 @@ export function makeRecordingCtx() {
       return function (...args) {
         ops.push({ op: String(prop), args });
         if (prop === 'createLinearGradient' || prop === 'createRadialGradient') {
-          return {
-            addColorStop(offset, color) {
-              ops.push({ op: 'addColorStop', args: [offset, color] });
-            },
-          };
+          return { __gradient: true, __stops: [], addColorStop: gradientAddColorStop };
         }
         return undefined;
       };
