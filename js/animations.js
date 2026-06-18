@@ -255,6 +255,75 @@
         ctx.beginPath(); ctx.moveTo(cx, cy);
         ctx.lineTo(cx + Math.cos(as) * R * 0.75, cy + Math.sin(as) * R * 0.75); ctx.stroke();
       }
+    },
+    {
+      key: 'wordClock',
+      label: 'Word clock',
+      description: 'A letter grid that lights up to spell the current time in words.',
+      draw: function (ctx, tMs, w, h, nowMs) {
+        var ROWS = [
+          'ITLISHKMFIVEX',
+          'TWENTYQUARTER',
+          'HALFBTENPASTO',
+          'ONETWOTHREEXX',
+          'FOURFIVESIXXX',
+          'SEVENEIGHTXXX',
+          'NINETENELEVEN',
+          'TWELVEOCLOCKX'
+        ];
+        var COLS = 13, NROW = 8;
+        var P = {
+          IT: [0, 0, 2], IS: [0, 3, 2], M_FIVE: [0, 8, 4],
+          M_TWENTY: [1, 0, 6], M_QUARTER: [1, 6, 7],
+          M_HALF: [2, 0, 4], M_TEN: [2, 5, 3], PAST: [2, 8, 4], TO: [2, 11, 2],
+          H1: [3, 0, 3], H2: [3, 3, 3], H3: [3, 6, 5],
+          H4: [4, 0, 4], H5: [4, 4, 4], H6: [4, 8, 3],
+          H7: [5, 0, 5], H8: [5, 5, 5],
+          H9: [6, 0, 4], H10: [6, 4, 3], H11: [6, 7, 6],
+          H12: [7, 0, 6], OCLOCK: [7, 6, 6]
+        };
+        var HOURWORD = [null, 'H1', 'H2', 'H3', 'H4', 'H5', 'H6',
+                        'H7', 'H8', 'H9', 'H10', 'H11', 'H12'];
+        var d = new Date(nowMs || 0);
+        var hr = d.getHours(), mn = d.getMinutes();
+        var slot = Math.floor(mn / 5);
+        var lit = ['IT', 'IS'], dispHour = hr % 12;
+        if (slot === 0) { /* o'clock */ }
+        else if (slot === 1) { lit.push('M_FIVE', 'PAST'); }
+        else if (slot === 2) { lit.push('M_TEN', 'PAST'); }
+        else if (slot === 3) { lit.push('M_QUARTER', 'PAST'); }
+        else if (slot === 4) { lit.push('M_TWENTY', 'PAST'); }
+        else if (slot === 5) { lit.push('M_TWENTY', 'M_FIVE', 'PAST'); }
+        else if (slot === 6) { lit.push('M_HALF', 'PAST'); }
+        else if (slot === 7) { lit.push('M_TWENTY', 'M_FIVE', 'TO'); }
+        else if (slot === 8) { lit.push('M_TWENTY', 'TO'); }
+        else if (slot === 9) { lit.push('M_QUARTER', 'TO'); }
+        else if (slot === 10) { lit.push('M_TEN', 'TO'); }
+        else { lit.push('M_FIVE', 'TO'); }
+        if (slot >= 7) { dispHour = (hr + 1) % 12; }
+        var hourIdx = (dispHour === 0) ? 12 : dispHour;
+        lit.push(HOURWORD[hourIdx]);
+        if (slot === 0) { lit.push('OCLOCK'); }
+        var on = {}, i, j;
+        for (i = 0; i < lit.length; i++) {
+          var p = P[lit[i]];
+          for (j = 0; j < p[2]; j++) { on[p[0] * COLS + (p[1] + j)] = true; }
+        }
+        var cell = Math.min(w / COLS, h / NROW);
+        var fs = Math.floor(cell * 0.7);
+        var ox = (w - cell * COLS) / 2, oy = (h - cell * NROW) / 2;
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, w, h);
+        ctx.font = fs + 'px monospace';
+        ctx.textBaseline = 'top';
+        var r, c2;
+        for (r = 0; r < NROW; r++) {
+          for (c2 = 0; c2 < COLS; c2++) {
+            ctx.fillStyle = on[r * COLS + c2] ? '#ffffff' : '#333333';
+            ctx.fillText(ROWS[r].charAt(c2), ox + c2 * cell, oy + r * cell);
+          }
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
