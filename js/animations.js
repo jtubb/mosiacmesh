@@ -193,6 +193,28 @@
           ctx.fill();
         }
       }
+    },
+    {
+      key: 'dvdLogo',
+      label: 'Bouncing logo',
+      description: 'A MOSAICMESH logo bouncing off the edges, recoloring on each hit.',
+      draw: function (ctx, tMs, w, h) {
+        var lw = w * 0.18, lh = h * 0.06;
+        var vx = 80, vy = 50;
+        var rangeX = w - lw, rangeY = h - lh;
+        var xRaw = vx * tMs / 1000, yRaw = vy * tMs / 1000;
+        var periodX = 2 * rangeX, periodY = 2 * rangeY;
+        var x = Math.abs((xRaw % periodX) - rangeX);
+        var y = Math.abs((yRaw % periodY) - rangeY);
+        var bounces = Math.floor(xRaw / rangeX) + Math.floor(yRaw / rangeY);
+        var palette = ['#e74c3c', '#e67e22', '#f1c40f', '#2ecc71', '#1abc9c',
+                       '#3498db', '#9b59b6', '#e84393', '#fd79a8', '#00cec9',
+                       '#6c5ce7', '#fab1a0', '#55efc4', '#ffeaa7', '#74b9ff'];
+        ctx.fillStyle = palette[((bounces % palette.length) + palette.length) % palette.length];
+        ctx.font = 'bold ' + Math.round(lh * 0.9) + 'px sans-serif';
+        ctx.textBaseline = 'top';
+        ctx.fillText('MOSAICMESH', x, y);
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
