@@ -10,7 +10,9 @@ test('importing js/animations.js populates MM_ANIMATIONS with well-formed entrie
   const list = globalThis.MM_ANIMATIONS;
   assert.ok(Array.isArray(list), 'MM_ANIMATIONS should be an array');
   const keys = list.map((a) => a.key);
-  for (const k of ['bouncingBalls', 'lissajous', 'phyllotaxis', 'wireframeCube']) {
+  for (const k of ['bouncingBalls', 'lissajous', 'phyllotaxis', 'wireframeCube',
+                   'radialPulse', 'particleGalaxy', 'plasma', 'pendulumWave',
+                   'dvdLogo', 'analogClock', 'wordClock', 'sunMoonTransit']) {
     assert.ok(keys.includes(k), `missing animation "${k}"`);
   }
   for (const a of list) {

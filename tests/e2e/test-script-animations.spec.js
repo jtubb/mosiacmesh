@@ -143,6 +143,37 @@ export default async function () {
 
     await stop(page);
 
+    // --- analogClock: a WALL-CLOCK animation. Beyond drawing, this is the
+    // end-to-end check that index.html's runScriptLoop passes GoTime.now() as
+    // the 5th arg (nowMs) — a clock with no nowMs would throw or draw 12:00. ---
+    const hadCanvas4 = await renderAndProbe(page, 'analogClock');
+    assert.ok(hadCanvas4, 'expected a <canvas> under #canvas after PLAY(analogClock)');
+    await page.waitForFunction(() => {
+      var c = document.querySelector('#canvas canvas');
+      if (!c) return false;
+      var d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      for (var i = 3; i < d.length; i += 4 * 40) { if (d[i] > 0) return true; }
+      return false;
+    }, null, { timeout: 5_000 }).catch(() => {});
+    const probe4 = await probePixels(page);
+    assert.ok(probe4.ok, `analogClock drew no pixels: ${JSON.stringify(probe4)}`);
+    await stop(page);
+
+    // --- plasma: a pure full-canvas fillRect-grid animation (batch 2). Fills
+    // every cell, so the pixel probe is robust. ---
+    const hadCanvas5 = await renderAndProbe(page, 'plasma');
+    assert.ok(hadCanvas5, 'expected a <canvas> under #canvas after PLAY(plasma)');
+    await page.waitForFunction(() => {
+      var c = document.querySelector('#canvas canvas');
+      if (!c) return false;
+      var d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+      for (var i = 3; i < d.length; i += 4 * 40) { if (d[i] > 0) return true; }
+      return false;
+    }, null, { timeout: 5_000 }).catch(() => {});
+    const probe5 = await probePixels(page);
+    assert.ok(probe5.ok, `plasma drew no pixels: ${JSON.stringify(probe5)}`);
+    await stop(page);
+
     return 'pass';
   } finally {
     await browser.close();
