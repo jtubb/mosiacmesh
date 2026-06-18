@@ -166,6 +166,33 @@
           }
         }
       }
+    },
+    {
+      key: 'pendulumWave',
+      label: 'Pendulum wave',
+      description: 'Sixteen pendulums with staggered periods scrambling and re-syncing.',
+      draw: function (ctx, tMs, w, h) {
+        var N = 16, i;
+        var TB = 4000, TS = 80, AMAX = Math.PI / 6;
+        var L = h * 0.7, y0 = h * 0.15;
+        for (i = 0; i < N; i++) {
+          var xi = (i + 0.5) * w / N;
+          var Ti = TB - i * TS;
+          var theta = AMAX * Math.sin(2 * Math.PI * tMs / Ti);
+          var bx = xi + L * Math.sin(theta);
+          var by = y0 + L * Math.cos(theta);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(xi, y0);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+          ctx.fillStyle = 'hsl(' + ((i / N) * 360) + ', 80%, 60%)';
+          ctx.beginPath();
+          ctx.arc(bx, by, 8, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
