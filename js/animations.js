@@ -330,6 +330,8 @@
       label: 'Sun / moon transit',
       description: 'A sun (day) or moon (night) arcing across the sky by the wall clock.',
       draw: function (ctx, tMs, w, h, nowMs) {
+        // Wall-clock animation: position + palette derive from nowMs only;
+        // tMs is intentionally unused (the sky tracks the time of day).
         var d = new Date(nowMs || 0);
         var hh = d.getHours() + d.getMinutes() / 60;
         var isDay = (hh >= 6 && hh < 18);
