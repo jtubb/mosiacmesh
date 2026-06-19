@@ -16,6 +16,7 @@ import re as _re_seg
 import asyncio
 import logging
 import hashlib
+import random
 import time
 import uuid
 from pathlib import Path
@@ -341,6 +342,12 @@ def resolve_media_path(file_url):
 # ---------------------------------------------------------------------------
 # Render orchestration helpers (access server.settings / effects)
 # ---------------------------------------------------------------------------
+
+def _mint_play_seed():
+    """A fresh 32-bit run seed for coordinated animation randomness. Wrapped so
+    tests can monkeypatch it. Avoids 0 so MM_RNG never hits its default branch."""
+    return random.getrandbits(32) or 0x1
+
 
 def render_token(media_elements, display_id):
     """Stable hash of the inputs that affect a per-screen render (SEGMENT or
@@ -1208,7 +1215,8 @@ def _broadcast_per_client_play(display_id, display):
     for key, c in _group_clients(display_id):
         broadcast_to_client(key, {"REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch,
-                        "items": _per_client_items(display, key, c), "loop": display.loop}})
+                        "items": _per_client_items(display, key, c), "loop": display.loop,
+                        "seed": getattr(display, "playSeed", 0)}})
 
 
 def _broadcast_per_client_preload(display_id, media_elements=None):
@@ -1269,9 +1277,10 @@ def _start_group_playback(display_id, resume_epoch=None):
         _broadcast_per_client_play(display_id, display)
     else:
         items = [_media_item_payload(me) for me in display.mediaElements]
-        broadcast_to_display_group(display_id, {
+        server.broadcast_to_display_group(display_id, {
             "REQUEST": "PLAY",
-            "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}})
+            "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop,
+                        "seed": getattr(display, "playSeed", 0)}})
     server._broadcast_playback_state(display_id)
 
 
@@ -1326,6 +1335,7 @@ def _begin_prepare(display_id):
     if not display or not display.mediaElements:
         return
     display.prepareId = uuid.uuid4().hex
+    display.playSeed = _mint_play_seed()
     display.readyClients = set()
     display.armPending = set()
     display.prepareDeadline = int(time.time() * 1000) + server.PREPARE_TIMEOUT_MS
@@ -1339,10 +1349,11 @@ def _begin_prepare(display_id):
         # segment URL, not the generic source (a renderable client handed the
         # 1080p source can't decode it -> MEDIA_ERR_SRC_NOT_SUPPORTED). Same
         # URLs as the GO.
-        broadcast_to_client(key, {
+        server.broadcast_to_client(key, {
             "REQUEST": "PREPARE",
             "PAYLOAD": {"prepareId": display.prepareId,
-                        "items": _per_client_items(display, key, c), "loop": display.loop}})
+                        "items": _per_client_items(display, key, c), "loop": display.loop,
+                        "seed": getattr(display, "playSeed", 0)}})
         n_sent += 1
     if n_skipped:
         logging.info("_begin_prepare %s: PREPARE sent to %d synced; %d un-synced "
@@ -1387,6 +1398,7 @@ async def _prepare_unsynced_clients(display_id, prepare_id):
                 "REQUEST": "PREPARE",
                 "PAYLOAD": {"prepareId": prepare_id,
                             "items": _per_client_items(display, key, c),
-                            "loop": display.loop}})
+                            "loop": display.loop,
+                            "seed": getattr(display, "playSeed", 0)}})
             sent.add(key)
             logging.info("_prepare_unsynced: late PREPARE sent to %s", key)
