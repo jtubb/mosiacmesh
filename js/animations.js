@@ -433,6 +433,43 @@
           ctx.stroke();
         }
       }
+    },
+    {
+      key: 'fireworks',
+      label: 'Fireworks',
+      description: 'Rockets rise and burst — a continuous, never-repeating show.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var SLOT_MS = 800, RISE_MS = 450, LIFE_MS = 1400, G = 0.0009;
+        var S = Math.floor(tMs / SLOT_MS), n, j;
+        for (n = S - 2; n <= S; n++) {
+          if (n < 0) { continue; }
+          var dt = tMs - n * SLOT_MS;
+          if (dt < 0 || dt >= LIFE_MS) { continue; }
+          var brng = MM_RNG(mmDeriveSeed(seed, n));
+          var lx = brng() * w;
+          var py = h * (0.15 + brng() * 0.35);
+          var hue = brng() * 360;
+          var M = 30 + Math.floor(brng() * 20);
+          var v = 0.12 + brng() * 0.08;
+          if (dt < RISE_MS) {
+            var rp = dt / RISE_MS;
+            var ry = h - (h - py) * rp;
+            ctx.fillStyle = 'hsl(' + hue + ', 90%, 70%)';
+            ctx.fillRect(lx - 1, ry - 1, 3, 3);
+          } else {
+            var et = dt - RISE_MS;
+            var alpha = 1 - et / (LIFE_MS - RISE_MS);
+            if (alpha < 0) { alpha = 0; }
+            ctx.fillStyle = 'hsla(' + hue + ', 90%, 60%, ' + alpha.toFixed(3) + ')';
+            for (j = 0; j < M; j++) {
+              var a = (j / M) * Math.PI * 2;
+              var dx = Math.cos(a) * v * et;
+              var dy = Math.sin(a) * v * et + 0.5 * G * et * et;
+              ctx.fillRect(lx + dx - 1, py + dy - 1, 2, 2);
+            }
+          }
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
