@@ -48,13 +48,34 @@ test('gameOfLife — far-ahead gen on a fresh seed renders seeded noise', () => 
   assert.ok(rects > 0 && rects <= GW * GH, `unexpected noise cell count ${rects}`);
 });
 
-test('gameOfLife — noise differs from the live board for the same seed', () => {
-  // Fresh seed: tMs=0 renders the green board; a far-ahead gen renders dim noise.
+test('gameOfLife — board evolves across generations (gen 0 vs gen 5)', () => {
+  // The first call seeds gen 0 and evolves STEP_PER_FRAME(=12) gens (computed=13).
+  // A second call on the SAME warm cache (seed 808, no reset) at gen 5 renders an
+  // evolved board — proving the incremental mmLifeStep writes actually propagate
+  // (guards against a silent no-op evolve loop rendering a frozen board).
+  const g0 = makeRecordingCtx(), g5 = makeRecordingCtx();
+  byKey.gameOfLife(g0, 0, W, H, 0, 808);
+  byKey.gameOfLife(g5, 500, W, H, 0, 808);
+  assert.notDeepStrictEqual(g0.__ops, g5.__ops);
+});
+
+test('gameOfLife — same seed: early gen renders board, far-ahead renders noise', () => {
+  // Warm the cache with seed 707 at gen 0 (board branch). A far-ahead gen on the
+  // SAME warm cache is still past `computed`, so it falls to the dim noise tint.
   const board = makeRecordingCtx(), noise = makeRecordingCtx();
-  byKey.gameOfLife(board, 0, W, H, 0, 505);
-  byKey.gameOfLife(noise, 250 * 100, W, H, 0, 606);
+  byKey.gameOfLife(board, 0, W, H, 0, 707);
+  byKey.gameOfLife(noise, 250 * 100, W, H, 0, 707);
   const boardFills = board.__ops.filter((o) => o.set === 'fillStyle').map((o) => o.value);
   const noiseFills = noise.__ops.filter((o) => o.set === 'fillStyle').map((o) => o.value);
   assert.ok(boardFills.includes('#7CFC00'), 'gen 0 should use the live-cell green');
   assert.ok(noiseFills.includes('#3a5a3a'), 'far-ahead gen should use the noise tint');
+});
+
+test('gameOfLife — gen wraps at G*100ms back to gen 0', () => {
+  // G=300, 100ms/gen -> tMs=30000 maps to gen 0 again. Same fresh seed, so the
+  // warm cache renders the identical gen-0 board at both tMs.
+  const a = makeRecordingCtx(), b = makeRecordingCtx();
+  byKey.gameOfLife(a, 0, W, H, 0, 909);
+  byKey.gameOfLife(b, 300 * 100, W, H, 0, 909);
+  assert.deepStrictEqual(a.__ops, b.__ops);
 });

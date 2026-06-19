@@ -66,7 +66,6 @@
     return next;
   }
 
-
   var animations = [
     {
       key: 'bouncingBalls',
