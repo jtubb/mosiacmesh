@@ -470,6 +470,35 @@
           }
         }
       }
+    },
+    {
+      key: 'truchet',
+      label: 'Truchet tiles',
+      description: 'A generative maze of flowing arcs with a traveling color wave.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var cell = Math.min(w, h) / 8;
+        var GW = Math.round(w / cell), GH = Math.round(h / cell);
+        var gx, gy;
+        ctx.lineWidth = Math.max(2, cell * 0.12);
+        for (gy = 0; gy < GH; gy++) {
+          for (gx = 0; gx < GW; gx++) {
+            var o = rng() < 0.5 ? 0 : 1;
+            var x = gx * cell, y = gy * cell;
+            var hue = (((gx + gy) * 8) + tMs / 40) % 360;
+            var wave = (((gx + gy) - (tMs / 500)) % 8 + 8) % 8;
+            var light = (wave < 1) ? 80 : 50;
+            ctx.strokeStyle = 'hsl(' + hue + ', 70%, ' + light + '%)';
+            if (o === 0) {
+              ctx.beginPath(); ctx.arc(x, y, cell / 2, 0, Math.PI / 2); ctx.stroke();
+              ctx.beginPath(); ctx.arc(x + cell, y + cell, cell / 2, Math.PI, Math.PI * 1.5); ctx.stroke();
+            } else {
+              ctx.beginPath(); ctx.arc(x + cell, y, cell / 2, Math.PI / 2, Math.PI); ctx.stroke();
+              ctx.beginPath(); ctx.arc(x, y + cell, cell / 2, Math.PI * 1.5, Math.PI * 2); ctx.stroke();
+            }
+          }
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
