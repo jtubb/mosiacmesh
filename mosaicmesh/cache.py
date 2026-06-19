@@ -29,6 +29,27 @@ def get_pooled_file_handle(file_path, mode='rb'):
     return file_handle_pool[key]
 
 
+def release_file(file_path):
+    """Close any pooled handle for file_path and drop its cached content, so the
+    file can be deleted/replaced. Windows refuses to unlink a file that still has
+    an open handle (WinError 32), so a caller about to os.remove a served media
+    file MUST release it first. Matches by NORMALIZED path: the serving handler
+    pools under a forward-slash relative path ('media/server/videos/x.mp4'),
+    while a deleter may pass an os.path.join backslash path on Windows. The pool
+    key is '<path>:<mode>' — split the mode off before comparing. Best-effort."""
+    target = os.path.normcase(os.path.normpath(file_path))
+    for key in list(file_handle_pool.keys()):
+        if os.path.normcase(os.path.normpath(key.rsplit(':', 1)[0])) == target:
+            try:
+                file_handle_pool[key].close()
+            except OSError:
+                pass
+            del file_handle_pool[key]
+    for ckey in list(file_cache.keys()):
+        if os.path.normcase(os.path.normpath(ckey)) == target:
+            del file_cache[ckey]
+
+
 def close_file_pool():
     """Close all pooled file handles and clear the file cache"""
     for handle in file_handle_pool.values():

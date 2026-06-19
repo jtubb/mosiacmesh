@@ -128,6 +128,11 @@ async def api_media_delete(request):
             "error": f"media is in use by {len(refs)} playlist(s)",
             "refs": refs,
         }, status=409)
+    # Release any pooled file handle (range-request streaming holds the video
+    # open) before deleting — Windows refuses to unlink a file with an open
+    # handle (WinError 32). POSIX tolerates it, but this is correct on both.
+    from mosaicmesh import cache
+    cache.release_file(disk)
     try:
         os.remove(disk)
     except OSError as e:
