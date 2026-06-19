@@ -401,6 +401,38 @@
         ctx.arc(cx, cy, rad, 0, Math.PI * 2);
         ctx.fill();
       }
+    },
+    {
+      key: 'starfield',
+      label: 'Starfield',
+      description: 'Warp-speed stars streaking outward — a different field every run.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var N = 200, i;
+        var cx = w / 2, cy = h / 2;
+        var SPEED = 3000, SPREAD = Math.min(w, h) * 0.04;
+        var maxR = Math.sqrt(w * w + h * h);
+        for (i = 0; i < N; i++) {
+          var ang = rng() * Math.PI * 2;
+          var phase = rng();
+          var b = 0.4 + rng() * 0.6;
+          var f = ((tMs / SPEED + phase) % 1 + 1) % 1;
+          var z = 1 - f;
+          if (z < 0.001) { continue; }
+          var r = (1 / z - 1) * SPREAD;
+          if (r > maxR) { continue; }
+          var zPrev = z + 0.04; if (zPrev > 1) { zPrev = 1; }
+          var rPrev = (1 / zPrev - 1) * SPREAD;
+          var ca = Math.cos(ang), sa = Math.sin(ang);
+          var g = Math.round(b * 255);
+          ctx.strokeStyle = 'rgb(' + g + ',' + g + ',' + g + ')';
+          ctx.lineWidth = 1 + (1 - z) * 2;
+          ctx.beginPath();
+          ctx.moveTo(cx + ca * rPrev, cy + sa * rPrev);
+          ctx.lineTo(cx + ca * r, cy + sa * r);
+          ctx.stroke();
+        }
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
