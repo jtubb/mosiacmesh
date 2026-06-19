@@ -499,6 +499,39 @@
           }
         }
       }
+    },
+    {
+      key: 'spirograph',
+      label: 'Spirograph',
+      description: 'A hypotrochoid curve traced over time — a new figure every run.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var R = 0.4 + rng() * 0.1;
+        var r = 0.05 + rng() * 0.25;
+        var d = 0.3 + rng() * 0.6;
+        var N = 500, i;
+        var scale = Math.min(w, h) * 0.45;
+        var cx = w / 2, cy = h / 2;
+        var rot = tMs / 9000;
+        var ratio = (R - r) / r;
+        var thetaMax = Math.PI * 2 * 8;
+        var grow = (tMs / 6000) % 1;
+        var tmax = thetaMax * (0.2 + 0.8 * grow);
+        var cr = Math.cos(rot), sr = Math.sin(rot);
+        ctx.strokeStyle = 'hsl(' + ((tMs / 40) % 360) + ', 70%, 60%)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (i = 0; i <= N; i++) {
+          var th = (i / N) * tmax;
+          var bx = (R - r) * Math.cos(th) + d * r * Math.cos(ratio * th);
+          var by = (R - r) * Math.sin(th) - d * r * Math.sin(ratio * th);
+          var rx = bx * cr - by * sr;
+          var ry = bx * sr + by * cr;
+          var px = cx + rx * scale, py = cy + ry * scale;
+          if (i === 0) { ctx.moveTo(px, py); } else { ctx.lineTo(px, py); }
+        }
+        ctx.stroke();
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
