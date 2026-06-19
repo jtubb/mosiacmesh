@@ -92,12 +92,21 @@ Two pure functions, exposed on `root` next to `MM_ANIMATIONS` (so `index.html`, 
 
 **Portability is the load-bearing constraint** (the reason for xorshift, documented in the module): `Math.imul` does not exist on iOS 5 / Safari 5.1, and a multiplication-based LCG whose product exceeds 2^53 (e.g. `s * 1103515245`) loses exactly the low bits a mask would keep, so its output can differ between Safari 5.1, Node, and modern V8. JS bitwise ops are spec-defined as exact 32-bit (`ToUint32`/`ToInt32`) on every engine, so xorshift32 is bit-identical everywhere — which is precisely what "coordinated across screens" requires. `mmDeriveSeed`'s single `(idx+1) * 0x9E3779B1` is safe because `idx` is a small playlist position (< ~10⁴ ⇒ product < ~2.7×10¹³ ≪ 2^53).
 
-### First consumer / retrofit: `sunMoonTransit`
+### First consumer / showcase: `plasma`
 
-`sunMoonTransit`'s night-sky star field currently uses a hand-rolled LCG with a fixed seed (`s = (s * 1103515245 + 12345) & 0x7fffffff`) — which has the 2^53 portability hazard above (a latent cross-device-determinism bug). Retrofit it:
+`plasma` is the cleanest built showcase because it is a **generative** animation — its appearance is a color field with a configuration space (palette + phase) that a seed can sample — rather than a **time-driven** one (`analogClock`/`wordClock`/`sunMoonTransit`) whose entire state comes from `nowMs` and has nothing meaningful to randomize. Retrofit `plasma` to vary its colorway per run:
+
 - Signature becomes `draw(ctx, tMs, w, h, nowMs, seed)`.
-- Replace the LCG with `var rng = MM_RNG(seed || 12345);` and draw each star from `rng()` (e.g. `sx = rng() * w`, `sy = rng() * h * 0.6`).
-- Effect: stars are **randomized per run, synced across screens, portably deterministic** — proving the seed pipeline end-to-end AND fixing the existing hazard. The other 7 animations ignore the new 6th arg (unchanged).
+- At the top: `var rng = MM_RNG(seed);` then derive a per-run **hue rotation** and **phase offsets**:
+  ```js
+  var hueShift = rng() * 360;                 // whole field rotates to a new colorway each run
+  var ph1 = rng() * 6.283, ph2 = rng() * 6.283,
+      ph3 = rng() * 6.283, ph4 = rng() * 6.283;
+  ```
+- Add each `phN` inside the corresponding `Math.sin(... + tMs/TN + phN)` term, and rotate the hue: `hue = (((c + 4) / 8) * 360 + hueShift) % 360`.
+- Effect: each playback run renders a **different plasma colorway/pattern, identical on every screen at every instant** — the feature's purpose made visible. The motion stays time-driven (`tMs`), so it animates as before; only the per-run *configuration* is seeded.
+
+The other 7 animations ignore the new 6th arg (unchanged). `seed == 0` (no-seed fallback) yields one fixed-but-valid colorway, so `plasma` still renders without a server seed.
 
 ## Error handling / edge cases
 
@@ -115,7 +124,7 @@ All unit-level; no ffmpeg/SSH.
 - `MM_RNG`: same seed → identical stream (first N values deep-equal); different seeds → different streams; every value in `[0, 1)`; seed `0` yields a valid non-constant stream.
 - `mmDeriveSeed`: deterministic; distinct for distinct indices (no collision for indices 0..N); same `(runSeed, idx)` → same uint.
 - **Portability guard:** a test asserting the `js/animations.js` source for `MM_RNG`/`mmDeriveSeed` contains no `Math.imul` and no large-constant multiply in the RNG step (a cheap regression guard for the cross-engine invariant).
-- `sunMoonTransit`: same `(tMs, nowMs, seed)` → identical op log (determinism/sync); different `seed` → different op log (the star positions move); the existing gradient/arc assertions still hold.
+- `plasma`: same `(tMs, seed)` → identical op log (determinism/sync); different `seed` → different op log (the per-run hue rotation + phase offsets change the `fillStyle` sequence); the existing 1200-cell `fillRect` count still holds (the seed perturbs colors/phase, not the grid).
 
 ### Python (`tests/unit/`)
 - `_begin_prepare` sets `display.playSeed` to a 32-bit int (`0 <= seed < 2**32`) on a fresh start.
@@ -126,7 +135,9 @@ All unit-level; no ffmpeg/SSH.
 
 ## Non-goals (follow-ups)
 
-- **New seeded animations.** This spec delivers the *enabling infrastructure* + one retrofit consumer. The "more designs" (e.g. randomized particle bursts, shuffled palettes, per-run generative layouts) are separate leaf additions on top of `MM_RNG`.
+- **`gameOfLife` seeded initial state — the marquee future consumer.** `gameOfLife` is the canonical use of a coordinated seed: the precomputed-cycle's initial grid (today seeded from a *fixed* LFSR so every screen matches) becomes `MM_RNG(seed)`-seeded, so each run starts from a different-but-identical-across-screens board. It is NOT in this spec because `gameOfLife` itself is still deferred (it needs the precomputed-cycle infrastructure); when that lands, the seed is already waiting for it. This is the strongest motivation for building the seed infra now.
+- **New seeded animations** (randomized particle bursts, shuffled palettes, per-run generative layouts). Separate leaf additions on top of `MM_RNG`; this spec ships the infra + `plasma` as the one showcase.
+- **`sunMoonTransit` star-LCG portability cleanup.** Its night-sky stars use a hand-rolled LCG (`s * 1103515245 + ...`) with the 2^53 overflow hazard described above — a latent *cross-screen* divergence bug (independent of this feature). The fix is to swap it to `MM_RNG(12345)` (a **fixed** seed — a portability cleanup, NOT randomization; the time-of-day animation has nothing to randomize). Logged as a separate small follow-up so this spec stays focused on the generative use case.
 - **Per-loop re-seeding.** Run + item granularity only; a looping single item repeats within a run (its motion is still time-driven). Per-loop variation (`mmDeriveSeed(runSeed, itemIndex, loopIndex)`) is a future option.
 - **Mosaic-spanning seeded animations.** Out of scope (depends on the separate per-client mosaic payload work).
 - **Operator-visible seed control** (pinning a seed, re-roll button). Not needed for v1.
