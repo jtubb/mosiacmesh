@@ -6,6 +6,31 @@
  * the shared GoTime.now() value (nowMs), so every display draws the same frame.
  * Animations that don't need wall-clock time ignore the 5th argument. */
 (function (root) {
+  // Seeded PRNG for coordinated randomness. xorshift32 — BITWISE ONLY
+  // (^, <<, >>>), so output is bit-identical on Safari 5.1 / Node / modern V8.
+  // imul() is absent on Safari 5.1 so we use bitwise shifts only; no multiply
+  // that could exceed 2^53 (engine-divergent low bits).
+  // MM_RNG(seed) -> function(): float in [0,1).
+  function MM_RNG(seed) {
+    var s = (seed >>> 0) || 0x9E3779B9;   // 0 -> non-degenerate default
+    return function () {
+      s ^= s << 13; s >>>= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;  s >>>= 0;
+      return (s >>> 0) / 4294967296;
+    };
+  }
+
+  // Per-item seed from the run seed + a SMALL playlist index. The single
+  // (idx+1)*const multiply stays << 2^53 because idx is a tiny index.
+  function mmDeriveSeed(runSeed, idx) {
+    var s = ((runSeed >>> 0) ^ (((idx >>> 0) + 1) * 0x9E3779B1)) >>> 0;
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s >>> 0;
+  }
+
   var animations = [
     {
       key: 'bouncingBalls',
@@ -372,4 +397,6 @@
     }
   ];
   root.MM_ANIMATIONS = animations;
+  root.MM_RNG = MM_RNG;
+  root.mmDeriveSeed = mmDeriveSeed;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
