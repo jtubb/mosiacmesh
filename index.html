@@ -485,7 +485,16 @@
 			if (pos.index !== playback.scriptIndex) { return; } // transition; renderPlayback handles it
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
 			if (animations[name]) {
-				var itemSeed = (typeof mmDeriveSeed === 'function') ? mmDeriveSeed(playback.seed, pos.index) : 0;
+				// Per-loop reseed: recover the loop count playlistIndex discards
+				// (it does elapsedMs % total). loopIdx is a pure function of the
+				// SHARED clock (GoTime.now() - startEpoch) and SHARED durations,
+				// so every screen derives the same itemSeed at the same instant.
+				var total = 0, t;
+				for (t = 0; t < durations.length; t++) { total += durations[t]; }
+				var rawElapsed = GoTime.now() - playback.startEpoch;
+				var loopIdx = (total > 0 && rawElapsed > 0) ? Math.floor(rawElapsed / total) : 0;
+				var itemSeed = (typeof mmLoopItemSeed === 'function')
+					? mmLoopItemSeed(playback.seed || 0, loopIdx, pos.index) : 0;
 				animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed);
 			}
 			playback.scriptRaf = _raf(frame);
