@@ -13,7 +13,8 @@ test('importing js/animations.js populates MM_ANIMATIONS with well-formed entrie
   for (const k of ['bouncingBalls', 'lissajous', 'phyllotaxis', 'wireframeCube',
                    'radialPulse', 'particleGalaxy', 'plasma', 'pendulumWave',
                    'dvdLogo', 'analogClock', 'wordClock', 'sunMoonTransit',
-                   'starfield', 'fireworks', 'truchet', 'spirograph']) {
+                   'starfield', 'fireworks', 'truchet', 'spirograph',
+                   'gameOfLife']) {
     assert.ok(keys.includes(k), `missing animation "${k}"`);
   }
   for (const a of list) {

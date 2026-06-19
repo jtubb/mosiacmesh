@@ -34,6 +34,47 @@
     return s >>> 0;
   }
 
+  // One pure Conway step (toroidal edges). prev/next are Uint8Array(GW*GH) of
+  // 0/1. Live survives on 2-3 neighbours; dead is born on exactly 3.
+  function mmLifeStep(prev, GW, GH) {
+    var cells = GW * GH;
+    var next = new Uint8Array(cells);
+    var x, y, dx, dy;
+    for (y = 0; y < GH; y++) {
+      for (x = 0; x < GW; x++) {
+        var n = 0;
+        for (dy = -1; dy <= 1; dy++) {
+          for (dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) { continue; }
+            var nx = (x + dx + GW) % GW, ny = (y + dy + GH) % GH;
+            n += prev[ny * GW + nx];
+          }
+        }
+        var alive = prev[y * GW + x];
+        next[y * GW + x] = (alive ? (n === 2 || n === 3) : (n === 3)) ? 1 : 0;
+      }
+    }
+    return next;
+  }
+
+  // Precompute a G-generation Game-of-Life cycle from a coordinated seed.
+  // gen 0 is a ~35%-dense random board from MM_RNG(seed); gens 1..G-1 evolve via
+  // mmLifeStep. Returns one Uint8Array(G*GW*GH) (board g at offset g*GW*GH). Pure:
+  // same seed -> identical array -> identical on every screen.
+  function mmPrecomputeLife(seed, GW, GH, G) {
+    var cells = GW * GH;
+    var boards = new Uint8Array(G * cells);
+    var rng = MM_RNG(seed);
+    var i;
+    for (i = 0; i < cells; i++) { boards[i] = (rng() < 0.35) ? 1 : 0; }
+    var g;
+    for (g = 1; g < G; g++) {
+      var prev = boards.subarray((g - 1) * cells, g * cells);
+      boards.set(mmLifeStep(prev, GW, GH), g * cells);
+    }
+    return boards;
+  }
+
   var animations = [
     {
       key: 'bouncingBalls',
@@ -403,6 +444,35 @@
       }
     },
     {
+      key: 'gameOfLife',
+      label: "Conway's Game of Life",
+      description: "Conway's Game of Life evolving from a seeded random board — different every run.",
+      draw: (function () {
+        var GW = 48, GH = 36, G = 300;
+        var cache = { seed: null, boards: null };
+        return function (ctx, tMs, w, h, nowMs, seed) {
+          var s = (seed >>> 0);
+          if (cache.seed !== s || !cache.boards) {
+            cache.boards = mmPrecomputeLife(s, GW, GH, G);
+            cache.seed = s;
+          }
+          var cells = GW * GH;
+          var gen = Math.floor(tMs / 100) % G;
+          if (gen < 0) { gen = 0; }
+          var base = gen * cells;
+          var cw = w / GW, ch = h / GH, x, y;
+          ctx.fillStyle = '#7CFC00';
+          for (y = 0; y < GH; y++) {
+            for (x = 0; x < GW; x++) {
+              if (cache.boards[base + y * GW + x]) {
+                ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1);
+              }
+            }
+          }
+        };
+      })()
+    },
+    {
       key: 'starfield',
       label: 'Starfield',
       description: 'Warp-speed stars streaking outward — a different field every run.',
@@ -537,4 +607,6 @@
   root.MM_ANIMATIONS = animations;
   root.MM_RNG = MM_RNG;
   root.mmDeriveSeed = mmDeriveSeed;
+  root.mmLifeStep = mmLifeStep;
+  root.mmPrecomputeLife = mmPrecomputeLife;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
