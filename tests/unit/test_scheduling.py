@@ -239,6 +239,20 @@ class TestEvaluator:
         assert disp.action == server.PlayState.PLAY
         assert disp.scheduledPlaying is True
 
+    def test_scheduled_play_mints_fresh_seed(self, mock_settings, monkeypatch):
+        # The scheduled/default play path must mint a per-run coordinated seed,
+        # exactly as the manual PLAY path does in _begin_prepare. Without it,
+        # seeded animations (e.g. gameOfLife) replay the default seed-0 board on
+        # every scheduled run — "same seed every time".
+        disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
+        _seed_ready(mock_settings, disp, "P", "Default")
+        mock_settings.schedules = {"s1": _schedule(id="s1", playlistName="P", displayID="Default",
+                                                   startTime="00:00", endTime="23:59")}
+        assert disp.playSeed == 0   # fresh Display, never played
+        server.evaluate_schedules(datetime.datetime(2026, 6, 1, 12, 0))
+        assert disp.scheduledPlaying is True
+        assert disp.playSeed != 0   # minted on scheduled activation
+
     def test_window_closed_no_default_stops(self, mock_settings, monkeypatch):
         disp = self._setup(mock_settings, monkeypatch); self._no_real_render(monkeypatch)
         disp.scheduledEntryId = "s1"; disp.scheduledPlaying = True; disp.action = server.PlayState.PLAY

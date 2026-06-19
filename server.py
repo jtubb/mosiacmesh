@@ -2246,6 +2246,13 @@ def evaluate_schedules(now=None):
                 render_queue.enqueue(playlist_name, display_id)
                 display.scheduledPlaying = False
             elif not getattr(display, "scheduledPlaying", False):
+                # Mint a fresh per-run coordinated seed, as the manual PLAY path
+                # does in _begin_prepare. The scheduled/default path starts
+                # playback directly (no coordinated PREPARE), so without this a
+                # seeded animation (e.g. gameOfLife) would replay the default
+                # seed-0 board on every scheduled run.
+                from mosaicmesh.render import _mint_play_seed
+                display.playSeed = _mint_play_seed()
                 _start_group_playback(display_id)
                 display.scheduledPlaying = True
         except Exception as e:
