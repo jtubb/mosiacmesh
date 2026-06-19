@@ -38,3 +38,11 @@ test('gameOfLife — gen 0 draws a bounded number of live cells', () => {
   const rects = c.__ops.filter((o) => o.op === 'fillRect').length;
   assert.ok(rects > 0 && rects <= GW * GH, `unexpected live count ${rects}`);
 });
+
+test('gameOfLife — gen wraps at G*100ms back to gen 0', () => {
+  // G=300, frame interval 100ms -> tMs=30000 is gen 0 again.
+  const a = makeRecordingCtx(), b = makeRecordingCtx();
+  byKey.gameOfLife(a, 0, W, H, 0, 42);
+  byKey.gameOfLife(b, 300 * 100, W, H, 0, 42);
+  assert.deepStrictEqual(a.__ops, b.__ops);
+});

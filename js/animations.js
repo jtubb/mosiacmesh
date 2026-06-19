@@ -446,7 +446,7 @@
     {
       key: 'gameOfLife',
       label: "Conway's Game of Life",
-      description: 'A cellular-automaton cycle from a seeded random board — different every run.',
+      description: "Conway's Game of Life evolving from a seeded random board — different every run.",
       draw: (function () {
         var GW = 48, GH = 36, G = 300;
         var cache = { seed: null, boards: null };
