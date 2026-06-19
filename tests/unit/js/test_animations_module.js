@@ -12,7 +12,8 @@ test('importing js/animations.js populates MM_ANIMATIONS with well-formed entrie
   const keys = list.map((a) => a.key);
   for (const k of ['bouncingBalls', 'lissajous', 'phyllotaxis', 'wireframeCube',
                    'radialPulse', 'particleGalaxy', 'plasma', 'pendulumWave',
-                   'dvdLogo', 'analogClock', 'wordClock', 'sunMoonTransit']) {
+                   'dvdLogo', 'analogClock', 'wordClock', 'sunMoonTransit',
+                   'starfield', 'fireworks', 'truchet', 'spirograph']) {
     assert.ok(keys.includes(k), `missing animation "${k}"`);
   }
   for (const a of list) {
