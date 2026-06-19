@@ -34,6 +34,15 @@
     return s >>> 0;
   }
 
+  // Per-(loop, item) seed for continuously-looping playlists: fold the loop
+  // index into the run seed, then the item index. Pure composition of the
+  // tested mmDeriveSeed, so it stays bit-identical across Safari 5.1 / Node /
+  // V8. loopIdx is client-derived from the shared clock (see runScriptLoop),
+  // so every screen computes the same value at the same instant -> coordinated.
+  function mmLoopItemSeed(runSeed, loopIdx, itemIdx) {
+    return mmDeriveSeed(mmDeriveSeed(runSeed, loopIdx), itemIdx);
+  }
+
   // One pure Conway step (toroidal edges). prev/next are Uint8Array(GW*GH) of
   // 0/1. Live survives on 2-3 neighbours; dead is born on exactly 3.
   function mmLifeStep(prev, GW, GH) {
@@ -607,6 +616,7 @@
   root.MM_ANIMATIONS = animations;
   root.MM_RNG = MM_RNG;
   root.mmDeriveSeed = mmDeriveSeed;
+  root.mmLoopItemSeed = mmLoopItemSeed;
   root.mmLifeStep = mmLifeStep;
   root.mmPrecomputeLife = mmPrecomputeLife;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

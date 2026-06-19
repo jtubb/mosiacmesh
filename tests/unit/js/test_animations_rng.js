@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 await import('../../../js/animations.js');
-const { MM_RNG, mmDeriveSeed } = globalThis;
+const { MM_RNG, mmDeriveSeed, mmLoopItemSeed } = globalThis;
 
 test('MM_RNG — same seed yields identical stream', () => {
   const a = MM_RNG(12345), b = MM_RNG(12345);
@@ -45,4 +45,26 @@ test('portability guard — no Math.imul in js/animations.js', () => {
   const src = readFileSync(
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../js/animations.js'), 'utf8');
   assert.ok(!/Math\.imul/.test(src), 'MM_RNG must avoid Math.imul (absent on Safari 5.1)');
+});
+
+test('mmLoopItemSeed — deterministic for same (runSeed, loopIdx, itemIdx)', () => {
+  assert.equal(mmLoopItemSeed(777, 0, 3), mmLoopItemSeed(777, 0, 3));
+  assert.equal(mmLoopItemSeed(12345, 9, 1), mmLoopItemSeed(12345, 9, 1));
+});
+
+test('mmLoopItemSeed — distinct per loop index (same item)', () => {
+  const seen = new Set();
+  for (let loop = 0; loop < 64; loop++) seen.add(mmLoopItemSeed(777, loop, 0));
+  assert.equal(seen.size, 64, 'loop index collision in mmLoopItemSeed');
+});
+
+test('mmLoopItemSeed — distinct per item index (same loop)', () => {
+  const seen = new Set();
+  for (let item = 0; item < 64; item++) seen.add(mmLoopItemSeed(777, 5, item));
+  assert.equal(seen.size, 64, 'item index collision in mmLoopItemSeed');
+});
+
+test('mmLoopItemSeed — equals nested mmDeriveSeed composition', () => {
+  // It is exactly mmDeriveSeed(mmDeriveSeed(runSeed, loopIdx), itemIdx).
+  assert.equal(mmLoopItemSeed(42, 7, 2), mmDeriveSeed(mmDeriveSeed(42, 7), 2));
 });
