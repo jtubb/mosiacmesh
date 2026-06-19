@@ -442,6 +442,35 @@
         ctx.arc(cx, cy, rad, 0, Math.PI * 2);
         ctx.fill();
       }
+    },
+    {
+      key: 'gameOfLife',
+      label: "Conway's Game of Life",
+      description: 'A cellular-automaton cycle from a seeded random board — different every run.',
+      draw: (function () {
+        var GW = 48, GH = 36, G = 300;
+        var cache = { seed: null, boards: null };
+        return function (ctx, tMs, w, h, nowMs, seed) {
+          var s = (seed >>> 0);
+          if (cache.seed !== s || !cache.boards) {
+            cache.boards = mmPrecomputeLife(s, GW, GH, G);
+            cache.seed = s;
+          }
+          var cells = GW * GH;
+          var gen = Math.floor(tMs / 100) % G;
+          if (gen < 0) { gen = 0; }
+          var base = gen * cells;
+          var cw = w / GW, ch = h / GH, x, y;
+          ctx.fillStyle = '#7CFC00';
+          for (y = 0; y < GH; y++) {
+            for (x = 0; x < GW; x++) {
+              if (cache.boards[base + y * GW + x]) {
+                ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1);
+              }
+            }
+          }
+        };
+      })()
     }
   ];
   root.MM_ANIMATIONS = animations;
