@@ -1,11 +1,39 @@
 /* js/animations.js — ES5, NO module syntax (so this same file is a valid
  * classic <script> for the iPad-1 display client AND a side-effect ESM import
  * for the admin + Node tests). Single source of truth for SCRIPT animations.
- * Each entry is self-describing; draw(ctx, tMs, w, h, nowMs) is a PURE function
- * of elapsed time (tMs), canvas size, and — for wall-clock animations only —
- * the shared GoTime.now() value (nowMs), so every display draws the same frame.
- * Animations that don't need wall-clock time ignore the 5th argument. */
+ * Each entry is self-describing; draw(ctx, tMs, w, h, nowMs, seed) is a PURE
+ * function of elapsed time (tMs), canvas size, the shared GoTime.now() value
+ * (nowMs, for wall-clock animations), and a per-run coordinated seed (seed, for
+ * generative animations — same seed on every screen, fresh each playback). So
+ * every display draws the same frame. Animations ignore the args they don't
+ * need (e.g. a pure geometric one uses only ctx/tMs/w/h). Use MM_RNG(seed) for
+ * randomness — never Math.random() (it would diverge per screen). */
 (function (root) {
+  // Seeded PRNG for coordinated randomness. xorshift32 — BITWISE ONLY
+  // (^, <<, >>>), so output is bit-identical on Safari 5.1 / Node / modern V8.
+  // imul() is absent on Safari 5.1 so we use bitwise shifts only; no multiply
+  // that could exceed 2^53 (engine-divergent low bits).
+  // MM_RNG(seed) -> function(): float in [0,1).
+  function MM_RNG(seed) {
+    var s = (seed >>> 0) || 0x9E3779B9;   // 0 -> non-degenerate default
+    return function () {
+      s ^= s << 13; s >>>= 0;
+      s ^= s >>> 17;
+      s ^= s << 5;  s >>>= 0;
+      return (s >>> 0) / 4294967296;
+    };
+  }
+
+  // Per-item seed from the run seed + a SMALL playlist index. The single
+  // (idx+1)*const multiply stays << 2^53 because idx is a tiny index.
+  function mmDeriveSeed(runSeed, idx) {
+    var s = ((runSeed >>> 0) ^ (((idx >>> 0) + 1) * 0x9E3779B1)) >>> 0;
+    s ^= s << 13; s >>>= 0;
+    s ^= s >>> 17;
+    s ^= s << 5;  s >>>= 0;
+    return s >>> 0;
+  }
+
   var animations = [
     {
       key: 'bouncingBalls',
@@ -148,20 +176,24 @@
       key: 'plasma',
       label: 'Plasma',
       description: 'Classic demoscene plasma — smoothly shifting color clouds.',
-      draw: function (ctx, tMs, w, h) {
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
         var GW = 40, GH = 30, gx, gy;
         var k1 = 8, k2 = 12, k3 = 10, k4 = 14;
         var T1 = 2500, T2 = 3300, T3 = 4100, T4 = 1900;
+        var rng = MM_RNG(seed);
+        var hueShift = rng() * 360;          // per-run colorway rotation
+        var ph1 = rng() * 6.283, ph2 = rng() * 6.283,
+            ph3 = rng() * 6.283, ph4 = rng() * 6.283;
         var cw = w / GW, ch = h / GH;
         for (gy = 0; gy < GH; gy++) {
           for (gx = 0; gx < GW; gx++) {
             var u = gx / GW, v = gy / GH;
             var du = u - 0.5, dv = v - 0.5;
-            var c = Math.sin(u * k1 + tMs / T1)
-                  + Math.sin(v * k2 + tMs / T2)
-                  + Math.sin((u + v) * k3 + tMs / T3)
-                  + Math.sin(Math.sqrt(du * du + dv * dv) * k4 + tMs / T4);
-            ctx.fillStyle = 'hsl(' + (((c + 4) / 8) * 360) + ', 100%, 50%)';
+            var c = Math.sin(u * k1 + tMs / T1 + ph1)
+                  + Math.sin(v * k2 + tMs / T2 + ph2)
+                  + Math.sin((u + v) * k3 + tMs / T3 + ph3)
+                  + Math.sin(Math.sqrt(du * du + dv * dv) * k4 + tMs / T4 + ph4);
+            ctx.fillStyle = 'hsl(' + ((((c + 4) / 8) * 360 + hueShift) % 360) + ', 100%, 50%)';
             ctx.fillRect(gx * cw, gy * ch, cw + 1, ch + 1);
           }
         }
@@ -372,4 +404,6 @@
     }
   ];
   root.MM_ANIMATIONS = animations;
+  root.MM_RNG = MM_RNG;
+  root.mmDeriveSeed = mmDeriveSeed;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

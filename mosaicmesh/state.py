@@ -36,6 +36,9 @@ class Display():
         self.action = PlayState.NOACTION
         self.currentPlaylistName = None   # name of the playlist whose items are currently applied (None = idle)
         self.playStartEpoch = 0   # server-time ms when playback last (re)started
+        self.playSeed = 0         # per-run coordinated PRNG seed (minted at _begin_prepare);
+                                  # persisted in settings.dat so a late-joiner after a restart
+                                  # shares the same seed as the screens already running
         self.pauseOffset = 0      # ms into the playlist when paused
         self.renderedToken = ""   # token of the last successful SEGMENT render
         self.renderStatus = ""    # "" | "rendering" | "ready" | "error"
@@ -244,6 +247,8 @@ def migrate_client_objects():
         _disp.prepareDeadline = 0
         if not hasattr(_disp, 'renders'):
             _disp.renders = {}
+        if not hasattr(_disp, 'playSeed'):
+            _disp.playSeed = 0
     current_time = time.time()
     for client_key, client in settings.clients.items():
         if not hasattr(client, 'discoveryTime'):

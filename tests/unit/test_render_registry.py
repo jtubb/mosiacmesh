@@ -178,3 +178,17 @@ def test_revalidate_keeps_ready_when_current_and_assets_exist(fresh_settings, mo
     monkeypatch.setattr(R, "_render_assets_exist", lambda name, did, token: True)
     R.revalidate_renders_on_boot()
     assert d.renders["P"]["state"] == R.RENDER_READY   # stayed READY, not demoted
+
+
+def test_new_display_has_zero_playseed():
+    from mosaicmesh.state import Display
+    assert Display().playSeed == 0
+
+
+def test_migration_backfills_playseed(fresh_settings):
+    from mosaicmesh.state import Display, migrate_client_objects
+    d = Display()
+    del d.playSeed            # simulate a Display from a pre-feature settings.dat
+    fresh_settings.displays["G1"] = d
+    migrate_client_objects()
+    assert fresh_settings.displays["G1"].playSeed == 0

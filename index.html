@@ -88,6 +88,7 @@
 	var mediaSequence = null;
 	var mediaReady = false;
 	var playback = { items: [], startEpoch: 0, loop: false, active: false, timer: null,
+		seed: 0,
 		video: null, videoIndex: -1, driftTimer: null, paused: false, startTimer: null,
 		scriptRaf: null, scriptIndex: -1,
 		// Adaptive seek-ahead: a hard seek on the iPad-1 settles ~latency late (the
@@ -483,7 +484,10 @@
 			if (pos === null) { stopPlayback(); return; }
 			if (pos.index !== playback.scriptIndex) { return; } // transition; renderPlayback handles it
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
-			if (animations[name]) { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now()); }
+			if (animations[name]) {
+				var itemSeed = (typeof mmDeriveSeed === 'function') ? mmDeriveSeed(playback.seed, pos.index) : 0;
+				animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed);
+			}
 			playback.scriptRaf = _raf(frame);
 		}
 		playback.scriptRaf = _raf(frame);
@@ -948,6 +952,7 @@
 				hideBlackout();
 				playback.items = data_obj.PAYLOAD.items || [];
 				playback.loop = !!data_obj.PAYLOAD.loop;
+				playback.seed = data_obj.PAYLOAD.seed || 0;
 				playback.active = false;
 				playback.paused = false;
 				playback.prepareId = data_obj.PAYLOAD.prepareId;
@@ -963,6 +968,7 @@
 				playback.items = data_obj.PAYLOAD.items || [];
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
+				playback.seed = data_obj.PAYLOAD.seed || 0;
 				playback.active = true;
 				playback.paused = false;
 				dbg("recv-PLAY");

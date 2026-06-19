@@ -234,7 +234,8 @@ def sync_new_client_to_group(client_key, client):
     broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
     broadcast_to_client(client_key, {
         "REQUEST": "PLAY",
-        "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop}
+        "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop,
+                    "seed": getattr(display, "playSeed", 0)}
     })
 
 

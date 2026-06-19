@@ -33,3 +33,18 @@ test('plasma — fills a 40x30 grid', () => {
   const rects = c.__ops.filter((o) => o.op === 'fillRect').length;
   assert.equal(rects, 1200);
 });
+
+test('plasma — same seed deterministic, different seed differs', () => {
+  const a = makeRecordingCtx(), b = makeRecordingCtx(), c = makeRecordingCtx();
+  byKey.plasma(a, 5000, W, H, 0, 111);
+  byKey.plasma(b, 5000, W, H, 0, 111);   // same (tMs, seed)
+  byKey.plasma(c, 5000, W, H, 0, 222);   // different seed
+  assert.deepStrictEqual(a.__ops, b.__ops);
+  assert.notDeepStrictEqual(a.__ops, c.__ops);   // hue rotation + phase offsets shift
+});
+
+test('plasma — seed perturbs color/phase, NOT the 1200-cell grid', () => {
+  const c = makeRecordingCtx();
+  byKey.plasma(c, 5000, W, H, 0, 999);
+  assert.equal(c.__ops.filter((o) => o.op === 'fillRect').length, 1200);
+});
