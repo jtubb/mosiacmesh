@@ -48,6 +48,13 @@ def test_begin_prepare_mints_32bit_seed(fresh_settings):
     assert d.playSeed != 0
 
 
+def test_mint_play_seed_never_zero(fresh_settings):
+    # getrandbits can (astronomically rarely) return 0; the `or 0x1` guard keeps
+    # the seed non-zero so MM_RNG never silently falls back to its default state.
+    with patch("mosaicmesh.render.random.getrandbits", return_value=0):
+        assert R._mint_play_seed() == 0x1
+
+
 def test_prepare_payload_carries_seed(fresh_settings):
     d, _ = _synced_group(fresh_settings)
     with patch("mosaicmesh.render.broadcast_to_client") as bc:

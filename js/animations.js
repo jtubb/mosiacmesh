@@ -1,10 +1,13 @@
 /* js/animations.js — ES5, NO module syntax (so this same file is a valid
  * classic <script> for the iPad-1 display client AND a side-effect ESM import
  * for the admin + Node tests). Single source of truth for SCRIPT animations.
- * Each entry is self-describing; draw(ctx, tMs, w, h, nowMs) is a PURE function
- * of elapsed time (tMs), canvas size, and — for wall-clock animations only —
- * the shared GoTime.now() value (nowMs), so every display draws the same frame.
- * Animations that don't need wall-clock time ignore the 5th argument. */
+ * Each entry is self-describing; draw(ctx, tMs, w, h, nowMs, seed) is a PURE
+ * function of elapsed time (tMs), canvas size, the shared GoTime.now() value
+ * (nowMs, for wall-clock animations), and a per-run coordinated seed (seed, for
+ * generative animations — same seed on every screen, fresh each playback). So
+ * every display draws the same frame. Animations ignore the args they don't
+ * need (e.g. a pure geometric one uses only ctx/tMs/w/h). Use MM_RNG(seed) for
+ * randomness — never Math.random() (it would diverge per screen). */
 (function (root) {
   // Seeded PRNG for coordinated randomness. xorshift32 — BITWISE ONLY
   // (^, <<, >>>), so output is bit-identical on Safari 5.1 / Node / modern V8.
