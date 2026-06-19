@@ -471,6 +471,137 @@
           }
         };
       })()
+    },
+    {
+      key: 'starfield',
+      label: 'Starfield',
+      description: 'Warp-speed stars streaking outward — a different field every run.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var N = 200, i;
+        var cx = w / 2, cy = h / 2;
+        var SPEED = 3000, SPREAD = Math.min(w, h) * 0.04;
+        var maxR = Math.sqrt(w * w + h * h);
+        for (i = 0; i < N; i++) {
+          var ang = rng() * Math.PI * 2;
+          var phase = rng();
+          var b = 0.4 + rng() * 0.6;
+          var f = ((tMs / SPEED + phase) % 1 + 1) % 1;
+          var z = 1 - f;
+          if (z < 0.001) { continue; }
+          var r = (1 / z - 1) * SPREAD;
+          if (r > maxR) { continue; }
+          var zPrev = z + 0.04; if (zPrev > 1) { zPrev = 1; }
+          var rPrev = (1 / zPrev - 1) * SPREAD;
+          var ca = Math.cos(ang), sa = Math.sin(ang);
+          var g = Math.round(b * 255);
+          ctx.strokeStyle = 'rgb(' + g + ',' + g + ',' + g + ')';
+          ctx.lineWidth = 1 + (1 - z) * 2;
+          ctx.beginPath();
+          ctx.moveTo(cx + ca * rPrev, cy + sa * rPrev);
+          ctx.lineTo(cx + ca * r, cy + sa * r);
+          ctx.stroke();
+        }
+      }
+    },
+    {
+      key: 'fireworks',
+      label: 'Fireworks',
+      description: 'Rockets rise and burst — a continuous, never-repeating show.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var SLOT_MS = 800, RISE_MS = 450, LIFE_MS = 1400, G = 0.0009;
+        var S = Math.floor(tMs / SLOT_MS), n, j;
+        for (n = S - 2; n <= S; n++) {
+          if (n < 0) { continue; }
+          var dt = tMs - n * SLOT_MS;
+          if (dt < 0 || dt >= LIFE_MS) { continue; }
+          var brng = MM_RNG(mmDeriveSeed(seed, n));
+          var lx = brng() * w;
+          var py = h * (0.15 + brng() * 0.35);
+          var hue = brng() * 360;
+          var M = 30 + Math.floor(brng() * 20);
+          var v = 0.12 + brng() * 0.08;
+          if (dt < RISE_MS) {
+            var rp = dt / RISE_MS;
+            var ry = h - (h - py) * rp;
+            ctx.fillStyle = 'hsl(' + hue + ', 90%, 70%)';
+            ctx.fillRect(lx - 1, ry - 1, 3, 3);
+          } else {
+            var et = dt - RISE_MS;
+            var alpha = 1 - et / (LIFE_MS - RISE_MS);
+            if (alpha < 0) { alpha = 0; }
+            ctx.fillStyle = 'hsla(' + hue + ', 90%, 60%, ' + alpha.toFixed(3) + ')';
+            for (j = 0; j < M; j++) {
+              var a = (j / M) * Math.PI * 2;
+              var dx = Math.cos(a) * v * et;
+              var dy = Math.sin(a) * v * et + 0.5 * G * et * et;
+              ctx.fillRect(lx + dx - 1, py + dy - 1, 2, 2);
+            }
+          }
+        }
+      }
+    },
+    {
+      key: 'truchet',
+      label: 'Truchet tiles',
+      description: 'A generative maze of flowing arcs with a traveling color wave.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var cell = Math.min(w, h) / 8;
+        var GW = Math.round(w / cell), GH = Math.round(h / cell);
+        var gx, gy;
+        ctx.lineWidth = Math.max(2, cell * 0.12);
+        for (gy = 0; gy < GH; gy++) {
+          for (gx = 0; gx < GW; gx++) {
+            var o = rng() < 0.5 ? 0 : 1;
+            var x = gx * cell, y = gy * cell;
+            var hue = (((gx + gy) * 8) + tMs / 40) % 360;
+            var wave = (((gx + gy) - (tMs / 500)) % 8 + 8) % 8;
+            var light = (wave < 1) ? 80 : 50;
+            ctx.strokeStyle = 'hsl(' + hue + ', 70%, ' + light + '%)';
+            if (o === 0) {
+              ctx.beginPath(); ctx.arc(x, y, cell / 2, 0, Math.PI / 2); ctx.stroke();
+              ctx.beginPath(); ctx.arc(x + cell, y + cell, cell / 2, Math.PI, Math.PI * 1.5); ctx.stroke();
+            } else {
+              ctx.beginPath(); ctx.arc(x + cell, y, cell / 2, Math.PI / 2, Math.PI); ctx.stroke();
+              ctx.beginPath(); ctx.arc(x, y + cell, cell / 2, Math.PI * 1.5, Math.PI * 2); ctx.stroke();
+            }
+          }
+        }
+      }
+    },
+    {
+      key: 'spirograph',
+      label: 'Spirograph',
+      description: 'A hypotrochoid curve traced over time — a new figure every run.',
+      draw: function (ctx, tMs, w, h, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var R = 0.4 + rng() * 0.1;
+        var r = 0.05 + rng() * 0.25;
+        var d = 0.3 + rng() * 0.6;
+        var N = 500, i;
+        var scale = Math.min(w, h) * 0.45;
+        var cx = w / 2, cy = h / 2;
+        var rot = tMs / 9000;
+        var ratio = (R - r) / r;
+        var thetaMax = Math.PI * 2 * 8;
+        var grow = (tMs / 6000) % 1;
+        var tmax = thetaMax * (0.2 + 0.8 * grow);
+        var cr = Math.cos(rot), sr = Math.sin(rot);
+        ctx.strokeStyle = 'hsl(' + ((tMs / 40) % 360) + ', 70%, 60%)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (i = 0; i <= N; i++) {
+          var th = (i / N) * tmax;
+          var bx = (R - r) * Math.cos(th) + d * r * Math.cos(ratio * th);
+          var by = (R - r) * Math.sin(th) - d * r * Math.sin(ratio * th);
+          var rx = bx * cr - by * sr;
+          var ry = bx * sr + by * cr;
+          var px = cx + rx * scale, py = cy + ry * scale;
+          if (i === 0) { ctx.moveTo(px, py); } else { ctx.lineTo(px, py); }
+        }
+        ctx.stroke();
+      }
     }
   ];
   root.MM_ANIMATIONS = animations;
