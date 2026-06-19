@@ -228,7 +228,13 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
       if (pickerFilter !== 'all') ci = ci.filter((c) => c.kind === pickerFilter);
       ci.forEach((c) => {
         const t = document.createElement('button'); t.className = 'mm-ple-picktile kind-' + c.kind;
-        t.innerHTML = '<span>' + (c.kind === 'image' ? '▦' : c.kind === 'video' ? '▶' : '✦') + '</span>';
+        if (c.kind === 'image') {
+          const im = document.createElement('img'); im.src = c.ref; im.loading = 'lazy'; im.alt = ''; t.appendChild(im);
+        } else if (c.kind === 'video') {
+          const v = document.createElement('video'); v.src = c.ref; v.muted = true; v.preload = 'metadata'; t.appendChild(v);
+        } else {
+          const ic = document.createElement('span'); ic.textContent = '✦'; t.appendChild(ic);
+        }
         const nm = document.createElement('span'); nm.textContent = c.name; t.appendChild(nm);
         t.addEventListener('click', () => {
           const item = contentItemToPlaylistItem(c);

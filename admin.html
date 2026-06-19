@@ -563,6 +563,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-ple-picktile { display:flex; flex-direction:column; gap:4px; align-items:center; font-size:10px; padding:8px 4px; border:1px solid var(--border); border-radius:6px; background:var(--surface-2); color:var(--text); cursor:pointer; }
 .mm-ple-picktile.kind-animation { border-color:#9a7bff; }
 .mm-ple-picktile span:first-child { font-size:18px; }
+.mm-ple-picktile img, .mm-ple-picktile video { width:100%; height:48px; object-fit:cover; border-radius:4px; background:#000; }
 .mm-recurrence-preview { border-top: 1px solid rgba(255,255,255,0.08); padding-top: 10px; font-size: 11px; }
 .mm-recurrence-preview ol { margin: 6px 0 0 18px; padding: 0; }
 .mm-recurrence-preview li { padding: 2px 0; }
@@ -665,6 +666,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
 .mm-content-tile { position:relative; background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:14px 8px; text-align:center; }
 .mm-content-tile.kind-animation { border-color:#9a7bff; }
 .mm-tile-ic { display:block; font-size:22px; margin-bottom:6px; }
+.mm-content-tile img, .mm-content-tile video { width:100%; height:72px; object-fit:cover; border-radius:4px; background:#000; display:block; margin-bottom:6px; }
 .mm-tile-name { font-size:11px; word-break:break-all; }
 .mm-tile-del { position:absolute; top:4px; right:4px; border:none; background:rgba(0,0,0,.4); color:#fff; border-radius:50%; width:18px; height:18px; line-height:16px; cursor:pointer; opacity:0; }
 .mm-content-tile:hover .mm-tile-del { opacity:1; }
@@ -883,7 +885,9 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
           <div class="mm-content-grid">
             <template x-for="it in items" :key="it.kind + ':' + it.ref">
               <div class="mm-content-tile" :class="'kind-' + it.kind">
-                <span class="mm-tile-ic" x-text="iconFor(it.kind)"></span>
+                <template x-if="it.kind==='image'"><img :src="it.ref" loading="lazy" alt=""></template>
+                <template x-if="it.kind==='video'"><video :src="it.ref" muted preload="metadata"></video></template>
+                <span class="mm-tile-ic" x-show="it.kind==='animation'" x-text="iconFor(it.kind)"></span>
                 <span class="mm-tile-name" x-text="it.name"></span>
                 <button class="mm-tile-del" x-show="it.kind!=='animation'" @click="removeItem(it)" title="Delete">×</button>
               </div>
