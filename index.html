@@ -480,7 +480,8 @@
 			if (!playback.active) { return; }
 			var durations = [], k;
 			for (k = 0; k < playback.items.length; k++) { durations.push(playback.items[k].duration); }
-			var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+			var rawElapsed = GoTime.now() - playback.startEpoch;
+			var pos = playlistIndex(rawElapsed, durations, playback.loop);
 			if (pos === null) { stopPlayback(); return; }
 			if (pos.index !== playback.scriptIndex) { return; } // transition; renderPlayback handles it
 			ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -491,7 +492,6 @@
 				// so every screen derives the same itemSeed at the same instant.
 				var total = 0, t;
 				for (t = 0; t < durations.length; t++) { total += durations[t]; }
-				var rawElapsed = GoTime.now() - playback.startEpoch;
 				var loopIdx = (total > 0 && rawElapsed > 0) ? Math.floor(rawElapsed / total) : 0;
 				var itemSeed = (typeof mmLoopItemSeed === 'function')
 					? mmLoopItemSeed(playback.seed || 0, loopIdx, pos.index) : 0;
