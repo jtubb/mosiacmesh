@@ -41,7 +41,7 @@ def _synced_group(fresh_settings, did="G1"):
 
 def test_begin_prepare_mints_32bit_seed(fresh_settings):
     d, _ = _synced_group(fresh_settings)
-    with patch.object(server, "broadcast_to_client"):
+    with patch("mosaicmesh.render.broadcast_to_client"):
         server._begin_prepare("G1")
     assert isinstance(d.playSeed, int)
     assert 0 <= d.playSeed < 2**32
@@ -50,7 +50,7 @@ def test_begin_prepare_mints_32bit_seed(fresh_settings):
 
 def test_prepare_payload_carries_seed(fresh_settings):
     d, _ = _synced_group(fresh_settings)
-    with patch.object(server, "broadcast_to_client") as bc:
+    with patch("mosaicmesh.render.broadcast_to_client") as bc:
         server._begin_prepare("G1")
     payload = bc.call_args[0][1]["PAYLOAD"]
     assert payload["seed"] == d.playSeed
@@ -59,7 +59,7 @@ def test_prepare_payload_carries_seed(fresh_settings):
 def test_play_payload_carries_seed(fresh_settings):
     d, _ = _synced_group(fresh_settings)
     d.playSeed = 0xABCD1234
-    with patch.object(server, "broadcast_to_display_group") as bg:
+    with patch("mosaicmesh.render.broadcast_to_display_group") as bg:
         R._start_group_playback("G1")
     assert bg.call_args[0][1]["PAYLOAD"]["seed"] == 0xABCD1234
 
@@ -68,7 +68,7 @@ def test_start_group_playback_does_not_remint(fresh_settings):
     d, _ = _synced_group(fresh_settings)
     d.playSeed = 555
     d.action = PlayState.PAUSE; d.pauseOffset = 0
-    with patch.object(server, "broadcast_to_display_group"):
+    with patch("mosaicmesh.render.broadcast_to_display_group"):
         R._start_group_playback("G1")
     assert d.playSeed == 555
 

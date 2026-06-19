@@ -1277,7 +1277,7 @@ def _start_group_playback(display_id, resume_epoch=None):
         _broadcast_per_client_play(display_id, display)
     else:
         items = [_media_item_payload(me) for me in display.mediaElements]
-        server.broadcast_to_display_group(display_id, {
+        broadcast_to_display_group(display_id, {
             "REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop,
                         "seed": getattr(display, "playSeed", 0)}})
@@ -1349,7 +1349,7 @@ def _begin_prepare(display_id):
         # segment URL, not the generic source (a renderable client handed the
         # 1080p source can't decode it -> MEDIA_ERR_SRC_NOT_SUPPORTED). Same
         # URLs as the GO.
-        server.broadcast_to_client(key, {
+        broadcast_to_client(key, {
             "REQUEST": "PREPARE",
             "PAYLOAD": {"prepareId": display.prepareId,
                         "items": _per_client_items(display, key, c), "loop": display.loop,
