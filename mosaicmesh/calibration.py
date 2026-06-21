@@ -416,6 +416,64 @@ def _detect_grid(centers, cell_w, cell_h):
     return rows, cols, R, C
 
 
+def rectify_group_grid(display, clients):
+    """Homography-rectify a group's mesh geometry. Maps the (keystoned) screen
+    centers to a regular lattice, applies that homography to each screen's REAL
+    quad corners, and stores Display.meshGlobalRect (device-px rectified canvas)
+    + per-client Client.meshCellQuad (rectified cell, normalized 0..1 TL/TR/BR/BL,
+    native floats for JSON). Returns True on success; on any non-grid/failure it
+    clears the fields to None and returns False so the render path falls back to
+    raw-bbox. Consumed only by the mesh-animation path."""
+    cal = [c for c in clients if getattr(c, "measuredPerimeter", None) is not None]
+
+    def _clear():
+        display.meshGlobalRect = None
+        for c in cal:
+            c.meshCellQuad = None
+
+    if len(cal) < 4:
+        _clear(); return False
+    corners, centers, cws, chs, dws, dhs = [], [], [], [], [], []
+    for c in cal:
+        q = np.array(c.measuredPerimeter, dtype="float64").reshape(-1, 2)
+        corners.append(q)
+        centers.append((float(q[:, 0].mean()), float(q[:, 1].mean())))
+        cws.append(float(q[:, 0].max() - q[:, 0].min()))
+        chs.append(float(q[:, 1].max() - q[:, 1].min()))
+        dws.append(getattr(c, "deviceWidth", 0) or 0)
+        dhs.append(getattr(c, "deviceHeight", 0) or 0)
+    grid = _detect_grid(centers, statistics.median(cws), statistics.median(chs))
+    if grid is None:
+        _clear(); return False
+    rows, cols, R, C = grid
+    src = np.array(centers, dtype="float32")
+    dst = np.array([[cols[i], rows[i]] for i in range(len(cal))], dtype="float32")
+    H, _m = cv.findHomography(src, dst, 0)
+    if H is None:
+        _clear(); return False
+    rect = []
+    for q in corners:
+        out = cv.perspectiveTransform(q.reshape(-1, 1, 2).astype("float32"), H).reshape(-1, 2)
+        rect.append(out)
+    allpts = np.concatenate(rect, axis=0)
+    rbx = float(allpts[:, 0].min()); rby = float(allpts[:, 1].min())
+    rbw = float(allpts[:, 0].max()) - rbx; rbh = float(allpts[:, 1].max()) - rby
+    if rbw <= 0 or rbh <= 0:
+        _clear(); return False
+    rcw = [float(p[:, 0].max() - p[:, 0].min()) for p in rect]
+    rch = [float(p[:, 1].max() - p[:, 1].min()) for p in rect]
+    mcw = statistics.median(rcw); mch = statistics.median(rch)
+    dwv = [d for d in dws if d > 0]; dhv = [d for d in dhs if d > 0]
+    scale_x = (statistics.median(dwv) / mcw) if (dwv and mcw > 0) else 1.0
+    scale_y = (statistics.median(dhv) / mch) if (dhv and mch > 0) else 1.0
+    display.meshGlobalRect = [int(round(rbw * scale_x)), int(round(rbh * scale_y))]
+    for i, c in enumerate(cal):
+        p = rect[i]
+        c.meshCellQuad = [[float((p[j, 0] - rbx) / rbw), float((p[j, 1] - rby) / rbh)]
+                          for j in range(p.shape[0])]
+    return True
+
+
 def assign_group_bounding_boxes():
     """Per display group, set boundingBox/boundingBoxCenter from the ArUco
     screens' quads (photo coords), plus meshGlobal = [GW, GH] — the device-pixel
@@ -449,6 +507,8 @@ def assign_group_bounding_boxes():
                 ratios.append(math.sqrt((dw / float(qw)) * (dh / float(qh))))
         k = statistics.median(ratios) if ratios else 1.0
         display.meshGlobal = [int(round(bw * k)), int(round(bh * k))]
+        if MESH_RECTIFY:
+            rectify_group_grid(display, members.get(display_id, []))
 
 
 def _group_clients(display_id):
