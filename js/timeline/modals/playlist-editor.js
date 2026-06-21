@@ -178,7 +178,7 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
         const wmWrap = document.createElement('label'); wmWrap.textContent = 'Wall mode ';
         const wm = document.createElement('select');
         const wopts = [['mirror', 'Mirror (same on every screen)'],
-                       ['mesh', 'Mesh (span across the wall)']];
+                       ['mesh', 'Mesh (across the wall)']];
         for (const [val, label] of wopts) {
           const o = document.createElement('option');
           o.value = val; o.textContent = label;
