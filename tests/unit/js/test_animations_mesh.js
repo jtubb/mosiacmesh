@@ -38,10 +38,17 @@ test('mmMeshTransform — adjacent screens are continuous across the seam', () =
   assert.ok(Math.abs(apply(right, 500, 300)[0] - 0) < 1e-6);
 });
 
-test('mmMeshTransform — deterministic for same inputs', () => {
-  const a = mmMeshTransform([[0.1,0.2],[0.6,0.15],[0.62,0.9],[0.08,0.85]], 1280, 960, 1024, 768);
-  const b = mmMeshTransform([[0.1,0.2],[0.6,0.15],[0.62,0.9],[0.08,0.85]], 1280, 960, 1024, 768);
-  assert.deepStrictEqual(a, b);
+test('mmMeshTransform — sheared/tilted quad maps its corners correctly', () => {
+  // A non-axis-aligned quad (rotated + sheared) — the case affine-from-quad
+  // exists for. TL/TR/BL must still land on canvas (0,0)/(W,0)/(0,H).
+  const q = [[0.1, 0.2], [0.6, 0.15], [0.62, 0.9], [0.08, 0.85]];
+  const GW = 1280, GH = 960, W = 1024, H = 768;
+  const m = mmMeshTransform(q, GW, GH, W, H);
+  // deterministic too: a second call yields the identical matrix.
+  assert.deepStrictEqual(m, mmMeshTransform(q, GW, GH, W, H));
+  assert.ok(near(apply(m, q[0][0] * GW, q[0][1] * GH), [0, 0]));   // TL -> (0,0)
+  assert.ok(near(apply(m, q[1][0] * GW, q[1][1] * GH), [W, 0]));   // TR -> (W,0)
+  assert.ok(near(apply(m, q[3][0] * GW, q[3][1] * GH), [0, H]));   // BL -> (0,H)
 });
 
 test('mmMeshTransform — degenerate quad (collinear edges) returns null', () => {
