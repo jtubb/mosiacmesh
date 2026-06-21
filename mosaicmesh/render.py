@@ -1086,7 +1086,8 @@ def _media_item_payload(me):
             "playmode": me.playmode.name,
             "backgroundColor": getattr(me, "backgroundColor", "#000000"),
             "startEffect": getattr(me, "startEffect", None),
-            "endEffect": getattr(me, "endEffect", None)}
+            "endEffect": getattr(me, "endEffect", None),
+            "scriptSpan": getattr(me, "scriptSpan", "mirror")}
 
 
 # Per-client URL routing for media-cache-aware clients. See spec
@@ -1155,6 +1156,7 @@ def _build_media_elements(items):
         me.backgroundColor = item.get("backgroundColor", "#000000")
         me.startEffect = item.get("startEffect")
         me.endEffect = item.get("endEffect")
+        me.scriptSpan = item.get("scriptSpan", "mirror")
         elements.append(me)
     return elements
 

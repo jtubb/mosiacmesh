@@ -30,6 +30,10 @@ class Display():
     def __init__(self):
         self.boundingBox = None
         self.boundingBoxCenter = None
+        # [GW, GH] device-pixel global wall canvas size for mesh animations,
+        # computed at calibration (assign_group_bounding_boxes). None until
+        # the group is calibrated; a mesh item with no meshGlobal -> black.
+        self.meshGlobal = None
         self.mediaElements = []
         self.loop = False
         self.currentFrame = 0
@@ -73,6 +77,9 @@ class MediaElement():
         self.backgroundColor = "#000000"
         self.startEffect = None
         self.endEffect = None
+        # 'mirror' (default, every screen draws the full animation) | 'mesh'
+        # (animation spans the calibrated wall; each screen draws its slice).
+        self.scriptSpan = 'mirror'
 
 
 class Playlist():
