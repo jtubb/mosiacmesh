@@ -40,6 +40,8 @@ For a SCRIPT item, the per-client item payload always carries `scriptSpan`; it c
 - All read sites use `getattr(me, 'scriptSpan', 'mirror')` defensively.
 - `render._media_item_payload(me)` echoes `scriptSpan` into every item payload (so the client always knows mirror vs mesh, independent of calibration).
 
+`Display` gains `meshGlobal` (`[GW, GH]` ints, default `None`), the group's device-pixel global canvas size, computed in `assign_group_bounding_boxes` (see below) and persisted alongside `boundingBox`. Backfilled lazily: `None` until the group is (re)calibrated, and a mesh item with no `meshGlobal` → black, same as no quad.
+
 ## Server geometry (reuses calibration normalization)
 
 In `render._per_client_items(display, key, c)`, add a branch for SCRIPT mesh items. For `me.playmode == SCRIPT`:
@@ -47,14 +49,31 @@ In `render._per_client_items(display, key, c)`, add a branch for SCRIPT mesh ite
 ```
 if getattr(me, 'scriptSpan', 'mirror') == 'mesh'
    and c.measuredPerimeter is not None
-   and display.boundingBox:
+   and display.boundingBox and display.meshGlobal:
     bx, by, bw, bh = display.boundingBox
     item["meshQuad"]   = [[(px-bx)/bw, (py-by)/bh] for (px, py) in c.measuredPerimeter]  # 4 corners, 0..1, stored TL/TR/BR/BL order
-    item["meshAspect"] = [bw, bh]
+    item["meshGlobal"] = display.meshGlobal   # [GW, GH], device-pixel wall size (see below)
 # else: omit meshQuad -> client goes black (mesh) or the item is mirror
 ```
 
-This is the same normalization `warp_image_for_screen` already performs (`(px-bx)/bw, (py-by)/bh`), minus the homography — no new geometry math server-side. `meshAspect = [bw, bh]` is the group bbox and is **identical for every client in the group**, so the global canvas dimensions the clients derive from it match across screens (coordination preserved). SCRIPT items are not `_is_renderable`, so this adds no render assets and no render-readiness gating; `item["file"]` stays the animation name (the existing `else` branch).
+The quad normalization is the same `warp_image_for_screen` already performs (`(px-bx)/bw, (py-by)/bh`), minus the homography — no new geometry math at PLAY time. `meshGlobal = display.meshGlobal` is the group's global canvas size, **identical for every client in the group** (computed once at calibration, below), so all screens draw into the same coordinate space (coordination preserved). SCRIPT items are not `_is_renderable`, so this adds no render assets and no render-readiness gating; `item["file"]` stays the animation name (the existing `else` branch).
+
+### `Display.meshGlobal` — global wall size from bbox + resolution (computed at calibration)
+
+`calibration.assign_group_bounding_boxes` already sets `display.boundingBox`/`boundingBoxCenter` per group; extend it to also set `display.meshGlobal = [GW, GH]`, the wall's size in **device-pixel-equivalent** units. The bbox gives the wall's *aspect* (`bw/bh`, photo px); per-screen resolution converts that to device pixels:
+
+```
+bx, by, bw, bh = group_bounding_box(quads)        # photo px
+ratios = []
+for each calibrated client c in the group:
+    qx, qy, qw, qh = axis-aligned bounding rect of c.measuredPerimeter   # photo px
+    if qw > 0 and qh > 0 and c.deviceWidth > 0 and c.deviceHeight > 0:
+        ratios.append( sqrt((c.deviceWidth/qw) * (c.deviceHeight/qh)) )  # device px per photo px
+k = median(ratios) if ratios else 1.0              # robust to one mis-measured quad
+display.meshGlobal = [round(bw * k), round(bh * k)]
+```
+
+`k` is the median device-px-per-photo-px across screens, so `GW=bw·k, GH=bh·k` preserves the bbox aspect while landing the global canvas at ≈ the wall's true pixel extent (physical gaps included as dead pixels — correct). One global unit ≈ one device pixel, so absolute-size animation features match mirror-mode physical size and fraction-of-`(w,h)` features scale to the whole wall. Persisted on `Display` like `boundingBox`; recomputed on recalibration. Guard: if no client has usable resolution, `k=1` (global canvas falls back to photo-px bbox — still correct, just absolute feature sizes are photo-px-based).
 
 **Delivery:** mesh requires calibration, and calibrated groups already receive playback via the **per-client** PLAY/PREPARE broadcasts that call `_per_client_items` (`_broadcast_per_client_play`, the PREPARE seed sites). Mesh geometry rides that existing path; no new broadcast plumbing. (A group-wide PLAY path also exists for simple/uncalibrated groups; those carry no `meshQuad`, so a mesh item there → black, which is the correct "uncalibrated" outcome.)
 
@@ -91,7 +110,7 @@ Derivation: with global edge vectors `E1=Q1-Q0`, `E3=Q3-Q0`, any global point's 
 
 ### Global wall size
 
-Derive a stable global canvas from `meshAspect = [bw, bh]`: `GH = 1000`, `GW = round(1000 * bw / bh)`. Identical on every client (same `meshAspect`). Absolute scale only sets how large animation features are relative to the wall; fixing `GH` keeps feature sizes predictable and the wall aspect undistorted.
+The client does **not** compute the global size — it uses `item.meshGlobal = [GW, GH]` straight from the payload (server-computed once per group, above). This guarantees every screen shares the exact same global canvas and that absolute-pixel features render at mirror-mode physical size.
 
 ### `runScriptLoop` (`index.html`)
 
@@ -102,9 +121,8 @@ var it = playback.items[pos.index];                         // the item being dr
 var span = (it && it.scriptSpan) || 'mirror';
 var mq = it && it.meshQuad;
 if (span === 'mesh') {
-  if (mq) {
-    var bw = it.meshAspect[0], bh = it.meshAspect[1];
-    var GH = 1000, GW = Math.round(1000 * bw / bh);
+  if (mq && it.meshGlobal) {
+    var GW = it.meshGlobal[0], GH = it.meshGlobal[1];
     var m = mmMeshTransform(mq, GW, GH, canvas.width, canvas.height);
     if (m) {
       ctx.save();
@@ -122,7 +140,7 @@ if (span === 'mesh') {
 
 `paintBlack` = `ctx.setTransform(1,0,0,1,0,0); ctx.fillStyle='#000'; ctx.fillRect(0,0,canvas.width,canvas.height);` (and no `draw` call). The loop keeps running cheaply so a later PLAY (e.g. after that screen is calibrated) updates it.
 
-The item object must be reachable in the loop. `playlistIndex` already returns `{index, offsetMs}`; the loop has `playback.items`, so use `playback.items[pos.index]` for `scriptSpan`/`meshQuad`/`meshAspect` (no change to `playlistIndex` needed). **Animation `draw` functions are unchanged** — mesh just hands them global wall dimensions with a pre-applied transform; the canvas auto-clips drawing to its own bounds.
+The item object must be reachable in the loop. `playlistIndex` already returns `{index, offsetMs}`; the loop has `playback.items`, so use `playback.items[pos.index]` for `scriptSpan`/`meshQuad`/`meshGlobal` (no change to `playlistIndex` needed). **Animation `draw` functions are unchanged** — mesh just hands them global wall dimensions with a pre-applied transform; the canvas auto-clips drawing to its own bounds.
 
 ### Why coordination is free
 
@@ -145,7 +163,7 @@ In mesh mode each screen computes the **full** global animation and the canvas c
   - Determinism: same inputs → same matrix.
   - Degenerate quad (collinear edges, det≈0) → `null`.
 - **Mirror path unchanged:** existing `tests/unit/js/test_animations_*.js` op-log suites still pass (no signature change to `draw`).
-- **Server:** a unit test that `_per_client_items` adds `meshQuad`+`meshAspect` for a calibrated client on a SCRIPT mesh item, omits them for an uncalibrated client (→ black) and for a mirror item, and that `_media_item_payload` echoes `scriptSpan`. Plus a `MediaElement` migration test (old object → `scriptSpan='mirror'`).
+- **Server:** a unit test that `_per_client_items` adds `meshQuad`+`meshGlobal` for a calibrated client on a SCRIPT mesh item, omits them for an uncalibrated client (→ black) and for a mirror item, and that `_media_item_payload` echoes `scriptSpan`. A test for the `meshGlobal` computation in `assign_group_bounding_boxes`: given clients with known quads + resolutions, `display.meshGlobal` preserves the bbox aspect (`GW/GH ≈ bw/bh`) and scales by the median device-px-per-photo-px ratio; falls back to `[bw, bh]` (k=1) when no client has usable resolution. Plus a `MediaElement` migration test (old object → `scriptSpan='mirror'`).
 - **iPad-1 sign-off:** on the calibrated OEB group, a meshed animation spans the wall in lockstep across screens; the one uncalibrated screen is black; a mirror item still shows the full animation on every screen.
 
 ## Non-goals
