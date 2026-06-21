@@ -96,3 +96,53 @@ def test_meshglobal_fallback_when_no_resolution(fresh_settings):
     d = fresh_settings.displays["G"]
     bx, by, bw, bh = d.boundingBox
     assert d.meshGlobal == [bw, bh]
+
+
+import json
+
+
+def _mesh_group(fresh_settings, did="G"):
+    d = Display()
+    d.boundingBox = [0, 0, 200, 100]
+    d.meshGlobal = [1774, 887]
+    me = MediaElement(); me.id = "a"; me.file = "plasma"
+    me.playmode = PlayMode.SCRIPT; me.duration = 5.0; me.scriptSpan = "mesh"
+    d.mediaElements = [me]
+    fresh_settings.displays[did] = d
+    return d
+
+
+def _calibrated_client(did="G", quad=None):
+    c = Client(); c.displayID = did
+    q = quad or [[0, 0], [100, 0], [100, 100], [0, 100]]
+    c.measuredPerimeter = np.array(q, dtype="int32").reshape(-1, 1, 2)  # production (4,1,2) shape
+    return c
+
+
+def test_per_client_items_mesh_attaches_quad_for_calibrated(fresh_settings):
+    d = _mesh_group(fresh_settings)
+    c = _calibrated_client()
+    items = R._per_client_items(d, "c1", c)
+    assert items[0]["meshGlobal"] == [1774, 887]
+    # left-half screen of a 200-wide bbox -> normalized x in {0, 0.5}
+    q = items[0]["meshQuad"]
+    assert q[0] == [0.0, 0.0] and q[1] == [0.5, 0.0]
+    assert q[2] == [0.5, 1.0] and q[3] == [0.0, 1.0]
+    # meshQuad coords must be native Python floats so the payload is JSON-serializable
+    assert all(type(v) is float for pair in q for v in pair)
+    json.dumps(items)  # must not raise (no numpy types leak into the payload)
+
+
+def test_per_client_items_mesh_black_for_uncalibrated(fresh_settings):
+    d = _mesh_group(fresh_settings)
+    c = Client(); c.displayID = "G"; c.measuredPerimeter = None  # uncalibrated
+    items = R._per_client_items(d, "c1", c)
+    assert "meshQuad" not in items[0] and "meshGlobal" not in items[0]
+
+
+def test_per_client_items_mirror_has_no_mesh_fields(fresh_settings):
+    d = _mesh_group(fresh_settings)
+    d.mediaElements[0].scriptSpan = "mirror"
+    c = _calibrated_client()
+    items = R._per_client_items(d, "c1", c)
+    assert "meshQuad" not in items[0] and "meshGlobal" not in items[0]
