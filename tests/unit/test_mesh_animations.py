@@ -165,3 +165,38 @@ def test_meshglobal_backfills_stale_precomputed_group(fresh_settings):
     assert mg is not None and mg[0] > 0 and mg[1] > 0
     # boundingBox recomputed from the stored quad — no longer the stale value.
     assert fresh_settings.displays["G"].boundingBox != [0, 0, 999, 999]
+
+
+def test_start_group_playback_delivers_meshquad_for_script_only_mesh(fresh_settings):
+    # REGRESSION: a SCRIPT-only mesh playlist has no renderable items, so the GO
+    # must STILL use the per-client PLAY path — else clients get no meshQuad and
+    # paint black. Verify _start_group_playback broadcasts per-client with meshQuad
+    # and does NOT use the group-wide broadcast for PLAY.
+    from unittest.mock import patch
+    d = _mesh_group(fresh_settings)            # mesh SCRIPT item + bbox + meshGlobal
+    c = _calibrated_client()
+    fresh_settings.clients["c1"] = c
+    sent = {}
+    def _cap_client(key, msg):
+        if msg.get("REQUEST") == "PLAY": sent.setdefault("client", []).append((key, msg))
+    def _cap_group(did, msg):
+        if msg.get("REQUEST") == "PLAY": sent.setdefault("group", []).append((did, msg))
+    with patch("mosaicmesh.render.broadcast_to_client", _cap_client), \
+         patch("mosaicmesh.render.broadcast_to_display_group", _cap_group):
+        R._start_group_playback("G")
+    assert "group" not in sent, "PLAY must NOT be group-wide for a mesh animation"
+    assert sent.get("client"), "PLAY must be delivered per-client"
+    item0 = sent["client"][0][1]["PAYLOAD"]["items"][0]
+    assert "meshQuad" in item0 and "meshGlobal" in item0
+
+
+def test_needs_per_client_delivery_predicate():
+    from mosaicmesh.state import MediaElement, PlayMode
+    def me(pm, span=None):
+        m = MediaElement(); m.playmode = pm
+        if span: m.scriptSpan = span
+        return m
+    assert R._needs_per_client_delivery([me(PlayMode.SCRIPT, "mesh")]) is True
+    assert R._needs_per_client_delivery([me(PlayMode.SCRIPT, "mirror")]) is False
+    assert R._needs_per_client_delivery([me(PlayMode.SEGMENT)]) is True
+    assert R._needs_per_client_delivery([me(PlayMode.SCRIPT)]) is False  # default mirror

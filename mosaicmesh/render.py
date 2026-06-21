@@ -408,6 +408,22 @@ def _is_renderable(me):
     return me.playmode in (PlayMode.SEGMENT, PlayMode.INDIVIDUAL, PlayMode.FULL)
 
 
+def _needs_per_client_delivery(elements):
+    """True if PLAY/PREPARE must go PER-CLIENT, not group-wide. Two cases need
+    per-client payloads: any renderable item (each client gets its own warped
+    media URL) OR any MESH SCRIPT animation (each client needs its own meshQuad,
+    attached by _per_client_items). A group-wide broadcast can't carry per-client
+    geometry, so a mesh animation sent group-wide arrives with no meshQuad and
+    the client paints black — hence a SCRIPT-only mesh playlist must still take
+    the per-client path even though it has nothing to render."""
+    for me in elements:
+        if _is_renderable(me):
+            return True
+        if me.playmode == PlayMode.SCRIPT and getattr(me, "scriptSpan", "mirror") == "mesh":
+            return True
+    return False
+
+
 def _set_render_state(display, playlist_name, state, token=None, error=None,
                       percent=None, eta=None, started=None):
     """Single writer for a Display.renders[name] entry. Creates the entry if
@@ -1299,7 +1315,7 @@ def _start_group_playback(display_id, resume_epoch=None):
         resume_epoch = now_ms - display.pauseOffset if display.action == PlayState.PAUSE else now_ms
     display.playStartEpoch = resume_epoch
     display.action = PlayState.PLAY
-    if any(_is_renderable(me) for me in display.mediaElements):
+    if _needs_per_client_delivery(display.mediaElements):
         _broadcast_per_client_play(display_id, display)
     else:
         items = [_media_item_payload(me) for me in display.mediaElements]
