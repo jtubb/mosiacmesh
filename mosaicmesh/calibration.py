@@ -377,6 +377,45 @@ def letterbox_to_aspect(img, target_w, target_h, bg_bgr):
     return canvas
 
 
+def _cluster_1d(vals, threshold):
+    """Assign each value to a band; a new band starts where the sorted gap to the
+    previous value exceeds `threshold`. Returns band indices in the SAME order as
+    `vals`, numbered ascending by value."""
+    n = len(vals)
+    if n == 0:
+        return []
+    order = sorted(range(n), key=lambda i: vals[i])
+    bands = [0] * n
+    band = 0
+    for si in range(1, n):
+        if vals[order[si]] - vals[order[si - 1]] > threshold:
+            band += 1
+        bands[order[si]] = band
+    return bands
+
+
+def _detect_grid(centers, cell_w, cell_h):
+    """Cluster screen centers into rows (by y) and cols (by x), splitting on a gap
+    larger than half a median cell extent. Returns (rows, cols, R, C) per-center,
+    or None if the result is not a clean full grid (R*C != N, or any cell
+    empty/doubled) -> caller falls back to raw-bbox."""
+    n = len(centers)
+    if n < 4:
+        return None
+    cols = _cluster_1d([c[0] for c in centers], cell_w * 0.5)
+    rows = _cluster_1d([c[1] for c in centers], cell_h * 0.5)
+    R = max(rows) + 1
+    C = max(cols) + 1
+    if R * C != n:
+        return None
+    seen = set()
+    for rc in zip(rows, cols):
+        if rc in seen:
+            return None
+        seen.add(rc)
+    return rows, cols, R, C
+
+
 def assign_group_bounding_boxes():
     """Per display group, set boundingBox/boundingBoxCenter from the ArUco
     screens' quads (photo coords), plus meshGlobal = [GW, GH] — the device-pixel
