@@ -56,3 +56,41 @@ def test_media_item_payload_scriptspan_defaults_mirror_on_old_object():
     me.playmode = PlayMode.SCRIPT; me.duration = 1.0
     del me.scriptSpan  # simulate an object from an older settings.dat
     assert R._media_item_payload(me)["scriptSpan"] == "mirror"
+
+
+from mosaicmesh import calibration as CAL
+
+
+def _client_with_quad(did, quad, dw, dh):
+    c = Client(); c.displayID = did; c.measuredPerimeter = quad
+    c.deviceWidth = dw; c.deviceHeight = dh
+    return c
+
+
+def test_meshglobal_preserves_bbox_aspect_and_scales(fresh_settings):
+    # Two screens side by side, each quad occupying 100x100 photo px.
+    # Each screen is 1024x768 device px.
+    # ratio per screen = sqrt((1024/100)*(768/100)) = sqrt(78.64) ~= 8.868
+    # cv2.boundingRect gives bw=201, bh=101 for points spanning [0..200]x[0..100].
+    # GW = bw*k, GH = bh*k -> aspect stays ~2:1.
+    fresh_settings.clients["a"] = _client_with_quad(
+        "G", [[0, 0], [100, 0], [100, 100], [0, 100]], 1024, 768)
+    fresh_settings.clients["b"] = _client_with_quad(
+        "G", [[100, 0], [200, 0], [200, 100], [100, 100]], 1024, 768)
+    CAL.assign_group_bounding_boxes()
+    d = fresh_settings.displays["G"]
+    bx, by, bw, bh = d.boundingBox
+    gw, gh = d.meshGlobal
+    assert gw > 0 and gh > 0
+    assert abs(gw / float(gh) - 2.0) < 0.02          # aspect preserved
+    assert abs(gh - round(bh * 8.868)) <= 2          # scaled by median ratio
+
+
+def test_meshglobal_fallback_when_no_resolution(fresh_settings):
+    # Clients calibrated but with no device resolution -> k=1 -> meshGlobal == bbox dims.
+    fresh_settings.clients["a"] = _client_with_quad(
+        "G", [[0, 0], [100, 0], [100, 100], [0, 100]], 0, 0)
+    CAL.assign_group_bounding_boxes()
+    d = fresh_settings.displays["G"]
+    bx, by, bw, bh = d.boundingBox
+    assert d.meshGlobal == [bw, bh]
