@@ -495,7 +495,28 @@
 				var loopIdx = (total > 0 && rawElapsed > 0) ? Math.floor(rawElapsed / total) : 0;
 				var itemSeed = (typeof mmLoopItemSeed === 'function')
 					? mmLoopItemSeed(playback.seed || 0, loopIdx, pos.index) : 0;
-				animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed);
+				var it = playback.items[pos.index];
+				var span = (it && it.scriptSpan) || 'mirror';
+				if (span === 'mesh') {
+					// Mesh: render this screen's affine slice of the global wall canvas.
+					var m = (it && it.meshQuad && it.meshGlobal && typeof mmMeshTransform === 'function')
+						? mmMeshTransform(it.meshQuad, it.meshGlobal[0], it.meshGlobal[1], canvas.width, canvas.height)
+						: null;
+					if (m) {
+						ctx.save();
+						ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+						animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed);
+						ctx.restore();
+					} else {
+						// Uncalibrated screen in a mesh group (or degenerate quad): go black.
+						ctx.setTransform(1, 0, 0, 1, 0, 0);
+						ctx.fillStyle = '#000';
+						ctx.fillRect(0, 0, canvas.width, canvas.height);
+					}
+				} else {
+					// Mirror (default): full animation on this screen — unchanged behavior.
+					animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed);
+				}
 			}
 			playback.scriptRaf = _raf(frame);
 		}
