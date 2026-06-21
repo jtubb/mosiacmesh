@@ -13,6 +13,7 @@ try:
 finally:
     argparse.ArgumentParser.parse_args = _orig
 
+import numpy as np
 import pytest
 from unittest.mock import MagicMock
 from mosaicmesh.state import Settings, Display, Client, MediaElement, PlayMode
@@ -62,7 +63,8 @@ from mosaicmesh import calibration as CAL
 
 
 def _client_with_quad(did, quad, dw, dh):
-    c = Client(); c.displayID = did; c.measuredPerimeter = quad
+    c = Client(); c.displayID = did
+    c.measuredPerimeter = np.array(quad, dtype="int32").reshape(-1, 1, 2)
     c.deviceWidth = dw; c.deviceHeight = dh
     return c
 

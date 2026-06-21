@@ -395,9 +395,9 @@ def assign_group_bounding_boxes():
         display.boundingBoxCenter = [bx + bw // 2, by + bh // 2]
         ratios = []
         for c in members.get(display_id, []):
-            q = c.measuredPerimeter
-            xs = [p[0] for p in q]; ys = [p[1] for p in q]
-            qw = max(xs) - min(xs); qh = max(ys) - min(ys)
+            q = np.array(c.measuredPerimeter).reshape(-1, 2)
+            qw = float(q[:, 0].max() - q[:, 0].min())
+            qh = float(q[:, 1].max() - q[:, 1].min())
             dw = getattr(c, "deviceWidth", 0) or 0
             dh = getattr(c, "deviceHeight", 0) or 0
             if qw > 0 and qh > 0 and dw > 0 and dh > 0:
