@@ -34,6 +34,10 @@ class Display():
         # computed at calibration (assign_group_bounding_boxes). None until
         # the group is calibrated; a mesh item with no meshGlobal -> black.
         self.meshGlobal = None
+        # [GW, GH] device-pixel RECTIFIED global wall canvas (homography-rectified
+        # grid). None unless MESH_RECTIFY computed it. Used by mesh animations only
+        # when calibration.MESH_RECTIFY is on; else the raw meshGlobal/bbox is used.
+        self.meshGlobalRect = None
         self.mediaElements = []
         self.loop = False
         self.currentFrame = 0
@@ -180,6 +184,9 @@ class Client():
         self.canvasHeight = 0   # orientation; device* is the raw screen resolution
         self.measuredCenter = None
         self.measuredPerimeter = None
+        # Homography-rectified cell quad (normalized 0..1, TL/TR/BR/BL) for mesh
+        # animations; None unless MESH_RECTIFY computed it. See calibration.rectify_group_grid.
+        self.meshCellQuad = None
         self.userAgent = None
         self.ip = ""
         self.hostname = ""              # reverse-DNS (PTR) of ip, when resolvable

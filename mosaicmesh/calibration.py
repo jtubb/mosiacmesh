@@ -10,6 +10,12 @@ import statistics
 import numpy as np
 import cv2 as cv
 
+# Opt-in (default OFF): when True, mesh-animation geometry is homography-rectified
+# (keystone removed) — see rectify_group_grid + docs/.../2026-06-21-mesh-rectify-design.md.
+# Gates BOTH the compute (assign_group_bounding_boxes) and the use (_per_client_items),
+# so OFF == today's raw-bbox behavior. Flip True + restart to A/B on the wall.
+MESH_RECTIFY = False
+
 
 def order_points(pts):
     """Reduce a set of quad points (Nx1x2 or Nx2) to 4 corners [TL, TR, BR, BL]."""
