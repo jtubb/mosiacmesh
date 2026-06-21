@@ -107,6 +107,17 @@ def _cell_centroid(clients):
     return (sum(p[0] for p in cs) / len(cs), sum(p[1] for p in cs) / len(cs))
 
 
+def _row_gap_nonuniformity(quads_norm, R=4, C=6):
+    """Spread of inter-row gaps relative to the mean gap, from normalized quads.
+    Cell center y's sort cleanly into R rows of C (rows never interleave); a
+    keystoned layout has uneven row gaps (high), a rectified one ~uniform (~0)."""
+    import statistics as _st
+    cys = sorted(sum(p[1] for p in q) / 4.0 for q in quads_norm)
+    rows_y = [_st.mean(cys[i * C:(i + 1) * C]) for i in range(R)]
+    gaps = [rows_y[i + 1] - rows_y[i] for i in range(R - 1)]
+    return (max(gaps) - min(gaps)) / _st.mean(gaps)
+
+
 def test_rectify_centers_keystoned_grid(fresh_settings):
     d = Display()
     clients = _keystoned_clients("G")
@@ -118,6 +129,22 @@ def test_rectify_centers_keystoned_grid(fresh_settings):
     assert abs(my - 0.5) < 0.02, my
     q = clients[0].meshCellQuad
     assert len(q) == 4 and all(type(v) is float for pair in q for v in pair)
+
+    # Falsifiable: the raw (bbox-normalized) fixture must have a real keystone
+    # bias, and rectification must flatten the inter-row spacing.
+    allx, ally = [], []
+    for c in clients:
+        q = np.array(c.measuredPerimeter, dtype="float64").reshape(-1, 2)
+        allx += list(q[:, 0]); ally += list(q[:, 1])
+    bx, by = min(allx), min(ally); bw = max(allx) - bx; bh = max(ally) - by
+    raw_norm = []
+    for c in clients:
+        q = np.array(c.measuredPerimeter, dtype="float64").reshape(-1, 2)
+        raw_norm.append([[(p[0] - bx) / bw, (p[1] - by) / bh] for p in q])
+    raw_nu = _row_gap_nonuniformity(raw_norm)
+    rect_nu = _row_gap_nonuniformity([c.meshCellQuad for c in clients])
+    assert raw_nu > 0.02, ("fixture not keystoned enough", raw_nu)
+    assert rect_nu < 0.01, ("rectified rows not uniform", rect_nu)
 
 
 def test_rectify_skips_non_grid(fresh_settings):

@@ -456,6 +456,8 @@ def rectify_group_grid(display, clients):
         out = cv.perspectiveTransform(q.reshape(-1, 1, 2).astype("float32"), H).reshape(-1, 2)
         rect.append(out)
     allpts = np.concatenate(rect, axis=0)
+    if not np.all(np.isfinite(allpts)):
+        _clear(); return False
     rbx = float(allpts[:, 0].min()); rby = float(allpts[:, 1].min())
     rbw = float(allpts[:, 0].max()) - rbx; rbh = float(allpts[:, 1].max()) - rby
     if rbw <= 0 or rbh <= 0:
