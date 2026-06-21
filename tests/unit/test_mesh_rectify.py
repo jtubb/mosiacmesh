@@ -163,3 +163,38 @@ def test_assign_calls_rectify_only_when_flag_on(fresh_settings):
     with patch.object(CAL, "MESH_RECTIFY", True):
         CAL.assign_group_bounding_boxes()
     assert fresh_settings.displays["G"].meshGlobalRect is not None
+
+
+import json
+
+
+def _mesh_display(fresh_settings, did="G"):
+    d = Display()
+    d.boundingBox = [0, 0, 200, 100]
+    d.meshGlobal = [1774, 887]
+    d.meshGlobalRect = [2000, 1000]
+    me = MediaElement(); me.id = "a"; me.file = "plasma"
+    me.playmode = PlayMode.SCRIPT; me.duration = 5.0; me.scriptSpan = "mesh"
+    d.mediaElements = [me]
+    fresh_settings.displays[did] = d
+    return d
+
+
+def test_per_client_items_uses_rectified_when_flag_on(fresh_settings):
+    d = _mesh_display(fresh_settings)
+    c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
+    c.meshCellQuad = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    with patch.object(CAL, "MESH_RECTIFY", True):
+        items = R._per_client_items(d, "c1", c)
+    assert items[0]["meshGlobal"] == [2000, 1000]
+    assert items[0]["meshQuad"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    json.dumps(items)
+
+
+def test_per_client_items_raw_when_flag_off(fresh_settings):
+    d = _mesh_display(fresh_settings)
+    c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
+    c.meshCellQuad = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]  # present but ignored
+    items = R._per_client_items(d, "c1", c)   # MESH_RECTIFY default False
+    assert items[0]["meshGlobal"] == [1774, 887]
+    assert items[0]["meshQuad"][0] == [0.0, 0.0] and items[0]["meshQuad"][1] == [0.5, 0.0]

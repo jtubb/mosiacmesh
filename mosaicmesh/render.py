@@ -33,6 +33,7 @@ from mosaicmesh.state import (
 from mosaicmesh.broadcast import (
     broadcast_to_client, broadcast_to_display_group,
 )
+from mosaicmesh import calibration
 from mosaicmesh.calibration import (
     _render_output_dims, warp_image_for_screen,
     _hex_to_bgr, letterbox_to_aspect,
@@ -1210,15 +1211,23 @@ def _per_client_items(display, key, c):
         # Omitted otherwise -> the client goes black (mesh) or mirrors (mirror).
         # measuredPerimeter is a numpy (4,1,2) array in production -> reshape(-1,2);
         # cast coords to native float so the JSON payload has no numpy types.
-        if (me.playmode == PlayMode.SCRIPT
-                and getattr(me, "scriptSpan", "mirror") == "mesh"
-                and c.measuredPerimeter is not None
-                and display.boundingBox and getattr(display, "meshGlobal", None)):
-            bx, by, bw, bh = display.boundingBox
-            quad = np.array(c.measuredPerimeter).reshape(-1, 2)
-            item["meshQuad"] = [[float((px - bx) / float(bw)), float((py - by) / float(bh))]
-                                for (px, py) in quad]
-            item["meshGlobal"] = list(display.meshGlobal)
+        if me.playmode == PlayMode.SCRIPT and getattr(me, "scriptSpan", "mirror") == "mesh":
+            if (calibration.MESH_RECTIFY
+                    and getattr(display, "meshGlobalRect", None)
+                    and getattr(c, "meshCellQuad", None)):
+                # Homography-rectified geometry (keystone removed).
+                item["meshQuad"] = c.meshCellQuad
+                item["meshGlobal"] = list(display.meshGlobalRect)
+            elif (c.measuredPerimeter is not None
+                    and display.boundingBox and getattr(display, "meshGlobal", None)):
+                # Raw-bbox path (today's behavior). measuredPerimeter is numpy
+                # (4,1,2) -> reshape(-1,2); native float for the JSON payload.
+                bx, by, bw, bh = display.boundingBox
+                quad = np.array(c.measuredPerimeter).reshape(-1, 2)
+                item["meshQuad"] = [[float((px - bx) / float(bw)), float((py - by) / float(bh))]
+                                    for (px, py) in quad]
+                item["meshGlobal"] = list(display.meshGlobal)
+            # else: omit -> client goes black (uncalibrated mesh)
         items.append(item)
     return items
 
