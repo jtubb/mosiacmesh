@@ -85,7 +85,7 @@ class MediaElement():
 class Playlist():
     def __init__(self):
         self.name = ""
-        self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect
+        self.items = []      # list of item dicts: id, file, duration, playmode, backgroundColor, startEffect, endEffect, scriptSpan
         self.loop = False
         # Monotonic version bumped on each PUT via the REST API. 0 = never persisted
         # via the REST surface (e.g. instances created in pre-PR-2 code paths or
