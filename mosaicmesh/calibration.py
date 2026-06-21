@@ -395,24 +395,33 @@ def _cluster_1d(vals, threshold):
 
 
 def _detect_grid(centers, cell_w, cell_h):
-    """Cluster screen centers into rows (by y) and cols (by x), splitting on a gap
-    larger than half a median cell extent. Returns (rows, cols, R, C) per-center,
-    or None if the result is not a clean full grid (R*C != N, or any cell
-    empty/doubled) -> caller falls back to raw-bbox."""
+    """Detect an R×C grid from screen centers, robust to keystone. Rows separate
+    cleanly in y (they don't vertically overlap), so cluster y into R rows on a
+    gap larger than half a median cell height; then columns are assigned by
+    x-RANK WITHIN each row — never comparing x across rows, which keystone makes
+    unreliable (a column is a slanted line, not a single x). Returns (rows, cols,
+    R, C) per-center, or None if not a clean grid (n<4, n % R != 0, or any row
+    has != C members) -> caller falls back to raw-bbox. (cell_w is unused by the
+    row-first detection; kept in the signature for the caller + a possible
+    column-first fallback.)"""
     n = len(centers)
     if n < 4:
         return None
-    cols = _cluster_1d([c[0] for c in centers], cell_w * 0.5)
-    rows = _cluster_1d([c[1] for c in centers], cell_h * 0.5)
-    R = max(rows) + 1
-    C = max(cols) + 1
-    if R * C != n:
+    rowband = _cluster_1d([c[1] for c in centers], cell_h * 0.5)
+    R = max(rowband) + 1
+    if R < 1 or n % R != 0:
         return None
-    seen = set()
-    for rc in zip(rows, cols):
-        if rc in seen:
+    C = n // R
+    rows = [0] * n
+    cols = [0] * n
+    for rb in range(R):
+        members = [i for i in range(n) if rowband[i] == rb]
+        if len(members) != C:
             return None
-        seen.add(rc)
+        members.sort(key=lambda i: centers[i][0])   # left-to-right within the row
+        for rank, i in enumerate(members):
+            rows[i] = rb
+            cols[i] = rank
     return rows, cols, R, C
 
 

@@ -198,3 +198,22 @@ def test_per_client_items_raw_when_flag_off(fresh_settings):
     items = R._per_client_items(d, "c1", c)   # MESH_RECTIFY default False
     assert items[0]["meshGlobal"] == [1774, 887]
     assert items[0]["meshQuad"][0] == [0.0, 0.0] and items[0]["meshQuad"][1] == [0.5, 0.0]
+
+
+def test_detect_grid_strong_keystone_row_first():
+    # Columns overlap in x across rows (top x-compressed, bottom x-expanded) —
+    # the real-wall failure mode where independent x-clustering merges columns.
+    # Row-first detection (rank x within each row) must still recover a clean 4x6.
+    R, C = 4, 6
+    centers = []
+    for r in range(R):
+        for c in range(C):
+            sx = 1.0 + 0.6 * r                       # bottom rows wider in x
+            x = 1000 + (c - (C - 1) / 2.0) * 120 * sx
+            y = r * 400.0                            # rows separate cleanly in y
+            centers.append((x, y))
+    res = CAL._detect_grid(centers, 100.0, 100.0)
+    assert res is not None
+    rows, cols, Rn, Cn = res
+    assert Rn == 4 and Cn == 6
+    assert sorted(zip(rows, cols)) == sorted((r, c) for r in range(4) for c in range(6))
