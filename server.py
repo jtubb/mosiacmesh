@@ -2367,6 +2367,16 @@ if __name__ == '__main__':
             settings = jsonpickle.decode(data)
             # Migrate old client objects to include new discovery fields
             migrate_client_objects()
+            # Backfill Display.boundingBox/boundingBoxCenter/meshGlobal from the
+            # persisted client quads. Groups calibrated before meshGlobal existed
+            # have it None on disk; mesh animations gate on it, so without this a
+            # plain restart would render mesh items black until a re-calibrate.
+            # Recomputes from stored measuredPerimeter — idempotent (same bbox as
+            # the last calibration); a no-op when nothing is calibrated.
+            try:
+                assign_group_bounding_boxes()
+            except Exception as e:
+                logging.error("meshGlobal backfill on boot failed: %s", e)
             try:
                 revalidate_renders_on_boot()
             except Exception as e:

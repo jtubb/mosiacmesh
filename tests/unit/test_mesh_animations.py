@@ -146,3 +146,22 @@ def test_per_client_items_mirror_has_no_mesh_fields(fresh_settings):
     c = _calibrated_client()
     items = R._per_client_items(d, "c1", c)
     assert "meshQuad" not in items[0] and "meshGlobal" not in items[0]
+
+
+def test_meshglobal_backfills_stale_precomputed_group(fresh_settings):
+    # Boot scenario: a group calibrated before meshGlobal existed has a (stale)
+    # boundingBox on disk but meshGlobal=None, while its client's
+    # measuredPerimeter is persisted. The boot-time assign_group_bounding_boxes()
+    # call must populate meshGlobal (and recompute boundingBox) from the stored
+    # quad, so mesh animations work after a plain restart with no re-calibrate.
+    d = Display()
+    d.boundingBox = [0, 0, 999, 999]   # stale value from a prior calibration
+    d.meshGlobal = None                # field didn't exist at last calibration
+    fresh_settings.displays["G"] = d
+    fresh_settings.clients["a"] = _client_with_quad(
+        "G", [[0, 0], [100, 0], [100, 100], [0, 100]], 1024, 768)
+    CAL.assign_group_bounding_boxes()
+    mg = fresh_settings.displays["G"].meshGlobal
+    assert mg is not None and mg[0] > 0 and mg[1] > 0
+    # boundingBox recomputed from the stored quad — no longer the stale value.
+    assert fresh_settings.displays["G"].boundingBox != [0, 0, 999, 999]
