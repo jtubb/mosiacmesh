@@ -173,6 +173,26 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
           render();
         });
         ptWrap.appendChild(pt); box.appendChild(ptWrap);
+      } else {
+        // Animation (SCRIPT): mirror (every screen) vs mesh (span the wall).
+        const wmWrap = document.createElement('label'); wmWrap.textContent = 'Wall mode ';
+        const wm = document.createElement('select');
+        const wopts = [['mirror', 'Mirror (same on every screen)'],
+                       ['mesh', 'Mesh (across the wall)']];
+        for (const [val, label] of wopts) {
+          const o = document.createElement('option');
+          o.value = val; o.textContent = label;
+          if ((it.scriptSpan || 'mirror') === val) o.selected = true;
+          wm.appendChild(o);
+        }
+        wm.addEventListener('change', () => {
+          if (wm.value === 'mesh') it.scriptSpan = 'mesh'; else delete it.scriptSpan;
+          render();
+        });
+        wmWrap.appendChild(wm); box.appendChild(wmWrap);
+        const wmHint = document.createElement('span'); wmHint.className = 'mm-ple-hint';
+        wmHint.textContent = 'Mesh needs a calibrated group; uncalibrated screens go black';
+        wmWrap.appendChild(wmHint);
       }
 
       // Duration — blank means Auto (natural length / default).

@@ -43,6 +43,30 @@
     return mmDeriveSeed(mmDeriveSeed(runSeed, loopIdx), itemIdx);
   }
 
+  // Affine mapping GLOBAL wall coords -> this screen's canvas pixels for mesh
+  // animations. Fixed by 3 corner correspondences (canvas TL/TR/BL <-> the
+  // quad's TL/TR/BL scaled into the GW x GH global canvas; BR is ignored, as
+  // an affine is determined by 3 points). meshQuad: [[u,v]x4] normalized 0..1
+  // in TL,TR,BR,BL order. Returns {a,b,c,d,e,f} for ctx.setTransform, or null
+  // for a degenerate (collinear-edge) quad so the caller can go black.
+  function mmMeshTransform(meshQuad, GW, GH, canvasW, canvasH) {
+    var g0x = meshQuad[0][0] * GW, g0y = meshQuad[0][1] * GH;   // TL -> (0,0)
+    var g1x = meshQuad[1][0] * GW, g1y = meshQuad[1][1] * GH;   // TR -> (W,0)
+    var g3x = meshQuad[3][0] * GW, g3y = meshQuad[3][1] * GH;   // BL -> (0,H)
+    var e1x = g1x - g0x, e1y = g1y - g0y;
+    var e3x = g3x - g0x, e3y = g3y - g0y;
+    var det = e1x * e3y - e3x * e1y;
+    if (det > -1e-9 && det < 1e-9) { return null; }
+    var W = canvasW, H = canvasH;
+    var a = (W * e3y) / det;
+    var c = (-W * e3x) / det;
+    var b = (-H * e1y) / det;
+    var d = (H * e1x) / det;
+    var e = -(a * g0x + c * g0y);
+    var f = -(b * g0x + d * g0y);
+    return { a: a, b: b, c: c, d: d, e: e, f: f };
+  }
+
   // One pure Conway step (toroidal edges). prev/next are Uint8Array(GW*GH) of
   // 0/1. Live survives on 2-3 neighbours; dead is born on exactly 3.
   function mmLifeStep(prev, GW, GH) {
@@ -625,5 +649,6 @@
   root.MM_RNG = MM_RNG;
   root.mmDeriveSeed = mmDeriveSeed;
   root.mmLoopItemSeed = mmLoopItemSeed;
+  root.mmMeshTransform = mmMeshTransform;
   root.mmLifeStep = mmLifeStep;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

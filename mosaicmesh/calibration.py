@@ -5,6 +5,8 @@ bounding boxes for perspective rendering.
 The HTTP route handlers (generateAruco, calibrate) stay in server.py and
 call into this module for the pure-math/CV operations.
 """
+import math
+import statistics
 import numpy as np
 import cv2 as cv
 
@@ -371,18 +373,37 @@ def letterbox_to_aspect(img, target_w, target_h, bg_bgr):
 
 def assign_group_bounding_boxes():
     """Per display group, set boundingBox/boundingBoxCenter from the ArUco
-    screens' quads (photo coords). Call after calibration."""
+    screens' quads (photo coords), plus meshGlobal = [GW, GH] — the device-pixel
+    global wall canvas for mesh animations. GW/GH preserve the bbox aspect and
+    scale by the median device-px-per-photo-px ratio across calibrated screens
+    (one global unit ~= one device pixel). Call after calibration."""
     import server
     groups = {}
+    members = {}
     for key, client in server.settings.clients.items():
         if client.measuredPerimeter is not None and client.displayID:
             groups.setdefault(client.displayID, []).append(client.measuredPerimeter)
+            members.setdefault(client.displayID, []).append(client)
     for display_id, quads in groups.items():
         display = server.settings.displays.setdefault(display_id, server.Display())
         bbox = group_bounding_box(quads)
         display.boundingBox = bbox
-        if bbox:
-            display.boundingBoxCenter = [bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2]
+        if not bbox:
+            display.meshGlobal = None
+            continue
+        bx, by, bw, bh = bbox
+        display.boundingBoxCenter = [bx + bw // 2, by + bh // 2]
+        ratios = []
+        for c in members.get(display_id, []):
+            q = np.array(c.measuredPerimeter).reshape(-1, 2)
+            qw = float(q[:, 0].max() - q[:, 0].min())
+            qh = float(q[:, 1].max() - q[:, 1].min())
+            dw = getattr(c, "deviceWidth", 0) or 0
+            dh = getattr(c, "deviceHeight", 0) or 0
+            if qw > 0 and qh > 0 and dw > 0 and dh > 0:
+                ratios.append(math.sqrt((dw / float(qw)) * (dh / float(qh))))
+        k = statistics.median(ratios) if ratios else 1.0
+        display.meshGlobal = [int(round(bw * k)), int(round(bh * k))]
 
 
 def _group_clients(display_id):

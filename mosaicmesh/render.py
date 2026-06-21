@@ -1086,7 +1086,8 @@ def _media_item_payload(me):
             "playmode": me.playmode.name,
             "backgroundColor": getattr(me, "backgroundColor", "#000000"),
             "startEffect": getattr(me, "startEffect", None),
-            "endEffect": getattr(me, "endEffect", None)}
+            "endEffect": getattr(me, "endEffect", None),
+            "scriptSpan": getattr(me, "scriptSpan", "mirror")}
 
 
 # Per-client URL routing for media-cache-aware clients. See spec
@@ -1155,6 +1156,7 @@ def _build_media_elements(items):
         me.backgroundColor = item.get("backgroundColor", "#000000")
         me.startEffect = item.get("startEffect")
         me.endEffect = item.get("endEffect")
+        me.scriptSpan = item.get("scriptSpan", "mirror")
         elements.append(me)
     return elements
 
@@ -1202,6 +1204,21 @@ def _per_client_items(display, key, c):
             f = me.file  # SCRIPT animation ref, or uncalibrated fallback
         item = _media_item_payload(me)
         item["file"] = f
+        # Mesh animation geometry: a SCRIPT item set to span the wall gets this
+        # client's quad (normalized into the group bbox) + the global canvas size,
+        # but ONLY when the client is calibrated and the group has bbox+meshGlobal.
+        # Omitted otherwise -> the client goes black (mesh) or mirrors (mirror).
+        # measuredPerimeter is a numpy (4,1,2) array in production -> reshape(-1,2);
+        # cast coords to native float so the JSON payload has no numpy types.
+        if (me.playmode == PlayMode.SCRIPT
+                and getattr(me, "scriptSpan", "mirror") == "mesh"
+                and c.measuredPerimeter is not None
+                and display.boundingBox and getattr(display, "meshGlobal", None)):
+            bx, by, bw, bh = display.boundingBox
+            quad = np.array(c.measuredPerimeter).reshape(-1, 2)
+            item["meshQuad"] = [[float((px - bx) / float(bw)), float((py - by) / float(bh))]
+                                for (px, py) in quad]
+            item["meshGlobal"] = list(display.meshGlobal)
         items.append(item)
     return items
 
