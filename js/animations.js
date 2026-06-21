@@ -34,6 +34,15 @@
     return s >>> 0;
   }
 
+  // Per-(loop, item) seed for continuously-looping playlists: fold the loop
+  // index into the run seed, then the item index. Pure composition of the
+  // tested mmDeriveSeed, so it stays bit-identical across Safari 5.1 / Node /
+  // V8. loopIdx is client-derived from the shared clock (see runScriptLoop),
+  // so every screen computes the same value at the same instant -> coordinated.
+  function mmLoopItemSeed(runSeed, loopIdx, itemIdx) {
+    return mmDeriveSeed(mmDeriveSeed(runSeed, loopIdx), itemIdx);
+  }
+
   // One pure Conway step (toroidal edges). prev/next are Uint8Array(GW*GH) of
   // 0/1. Live survives on 2-3 neighbours; dead is born on exactly 3.
   function mmLifeStep(prev, GW, GH) {
@@ -55,24 +64,6 @@
       }
     }
     return next;
-  }
-
-  // Precompute a G-generation Game-of-Life cycle from a coordinated seed.
-  // gen 0 is a ~35%-dense random board from MM_RNG(seed); gens 1..G-1 evolve via
-  // mmLifeStep. Returns one Uint8Array(G*GW*GH) (board g at offset g*GW*GH). Pure:
-  // same seed -> identical array -> identical on every screen.
-  function mmPrecomputeLife(seed, GW, GH, G) {
-    var cells = GW * GH;
-    var boards = new Uint8Array(G * cells);
-    var rng = MM_RNG(seed);
-    var i;
-    for (i = 0; i < cells; i++) { boards[i] = (rng() < 0.35) ? 1 : 0; }
-    var g;
-    for (g = 1; g < G; g++) {
-      var prev = boards.subarray((g - 1) * cells, g * cells);
-      boards.set(mmLifeStep(prev, GW, GH), g * cells);
-    }
-    return boards;
   }
 
   var animations = [
@@ -448,24 +439,50 @@
       label: "Conway's Game of Life",
       description: "Conway's Game of Life evolving from a seeded random board — different every run.",
       draw: (function () {
-        var GW = 48, GH = 36, G = 300;
-        var cache = { seed: null, boards: null };
+        var GW = 48, GH = 36, G = 300, STEP_PER_FRAME = 12;
+        // Incremental cache: gen 0 is seeded immediately (computed=1); each frame
+        // evolves at most STEP_PER_FRAME generations via mmLifeStep until `done`.
+        // No synchronous all-at-once precompute -> no JS-thread freeze on iPad-1.
+        var cache = { seed: null, boards: null, computed: 0, done: false };
         return function (ctx, tMs, w, h, nowMs, seed) {
           var s = (seed >>> 0);
-          if (cache.seed !== s || !cache.boards) {
-            cache.boards = mmPrecomputeLife(s, GW, GH, G);
-            cache.seed = s;
-          }
           var cells = GW * GH;
+          if (cache.seed !== s || !cache.boards) {
+            cache.boards = new Uint8Array(G * cells);
+            var rng = MM_RNG(s);
+            var i;
+            for (i = 0; i < cells; i++) { cache.boards[i] = (rng() < 0.35) ? 1 : 0; }
+            cache.seed = s; cache.computed = 1; cache.done = false;
+          }
+          if (!cache.done) {
+            var budget = STEP_PER_FRAME;
+            while (cache.computed < G && budget-- > 0) {
+              var prev = cache.boards.subarray((cache.computed - 1) * cells, cache.computed * cells);
+              cache.boards.set(mmLifeStep(prev, GW, GH), cache.computed * cells);
+              cache.computed++;
+            }
+            if (cache.computed >= G) { cache.done = true; }
+          }
           var gen = Math.floor(tMs / 100) % G;
           if (gen < 0) { gen = 0; }
-          var base = gen * cells;
           var cw = w / GW, ch = h / GH, x, y;
-          ctx.fillStyle = '#7CFC00';
-          for (y = 0; y < GH; y++) {
-            for (x = 0; x < GW; x++) {
-              if (cache.boards[base + y * GW + x]) {
-                ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1);
+          if (gen < cache.computed) {
+            // Board for this generation is ready — render live cells.
+            var base = gen * cells;
+            ctx.fillStyle = '#7CFC00';
+            for (y = 0; y < GH; y++) {
+              for (x = 0; x < GW; x++) {
+                if (cache.boards[base + y * GW + x]) { ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1); }
+              }
+            }
+          } else {
+            // Not computed yet — seeded coordinated noise (shared tMs bucket ->
+            // screens in the noise state at the same 100ms tick draw the same grid).
+            var nrng = MM_RNG(mmDeriveSeed(s, Math.floor(tMs / 100)));
+            ctx.fillStyle = '#3a5a3a';   // dim "warming up" tint
+            for (y = 0; y < GH; y++) {
+              for (x = 0; x < GW; x++) {
+                if (nrng() < 0.5) { ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1); }
               }
             }
           }
@@ -607,6 +624,6 @@
   root.MM_ANIMATIONS = animations;
   root.MM_RNG = MM_RNG;
   root.mmDeriveSeed = mmDeriveSeed;
+  root.mmLoopItemSeed = mmLoopItemSeed;
   root.mmLifeStep = mmLifeStep;
-  root.mmPrecomputeLife = mmPrecomputeLife;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
