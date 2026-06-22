@@ -1231,8 +1231,17 @@ def _per_client_items(display, key, c):
             if (calibration.MESH_RECTIFY
                     and getattr(display, "meshGlobalRect", None)
                     and getattr(c, "meshCellQuad", None)):
-                # Homography-rectified geometry (keystone removed).
-                item["meshQuad"] = c.meshCellQuad
+                # Homography-rectified geometry (keystone removed). Build a FRESH
+                # per-item list (not the shared c.meshCellQuad object) and cast to
+                # native float: the broadcast is jsonpickle-encoded with reference
+                # tracking on, so handing the SAME list object to multiple mesh
+                # items makes every occurrence after the first serialize as a
+                # {"py/id": N} back-reference. The iPad's JSON.parse then sees an
+                # object instead of a [u,v] array and mmMeshTransform throws on
+                # meshQuad[3][0] -> the RAF loop dies and that screen goes black.
+                # (The raw-bbox path below is immune: its comprehension already
+                # builds a distinct list per item.)
+                item["meshQuad"] = [[float(pt[0]), float(pt[1])] for pt in c.meshCellQuad]
                 item["meshGlobal"] = list(display.meshGlobalRect)
             elif (c.measuredPerimeter is not None
                     and display.boundingBox and getattr(display, "meshGlobal", None)):

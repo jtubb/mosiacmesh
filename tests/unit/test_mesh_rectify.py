@@ -33,7 +33,7 @@ def fresh_settings():
 def test_defaults_and_flag():
     assert Client().meshCellQuad is None
     assert Display().meshGlobalRect is None
-    assert CAL.MESH_RECTIFY is False   # opt-in: off by default
+    assert CAL.MESH_RECTIFY is True   # rectification is the production default
 
 
 def _grid_centers(R, C, pitch=100.0, x0=0.0, y0=0.0):
@@ -155,12 +155,13 @@ def test_rectify_skips_non_grid(fresh_settings):
     assert all(c.meshCellQuad is None for c in clients)
 
 
-def test_assign_calls_rectify_only_when_flag_on(fresh_settings):
+def test_assign_calls_rectify_per_flag(fresh_settings):
     for i, c in enumerate(_keystoned_clients("G")):
         fresh_settings.clients["c%d" % i] = c
-    CAL.assign_group_bounding_boxes()                       # flag OFF (default)
+    with patch.object(CAL, "MESH_RECTIFY", False):          # OFF -> no rectified rect
+        CAL.assign_group_bounding_boxes()
     assert fresh_settings.displays["G"].meshGlobalRect is None
-    with patch.object(CAL, "MESH_RECTIFY", True):
+    with patch.object(CAL, "MESH_RECTIFY", True):           # ON -> rectified rect computed
         CAL.assign_group_bounding_boxes()
     assert fresh_settings.displays["G"].meshGlobalRect is not None
 
@@ -195,9 +196,41 @@ def test_per_client_items_raw_when_flag_off(fresh_settings):
     d = _mesh_display(fresh_settings)
     c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
     c.meshCellQuad = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]  # present but ignored
-    items = R._per_client_items(d, "c1", c)   # MESH_RECTIFY default False
+    with patch.object(CAL, "MESH_RECTIFY", False):
+        items = R._per_client_items(d, "c1", c)
     assert items[0]["meshGlobal"] == [1774, 887]
     assert items[0]["meshQuad"][0] == [0.0, 0.0] and items[0]["meshQuad"][1] == [0.5, 0.0]
+
+
+def test_rectified_multiple_mesh_items_survive_jsonpickle_refs(fresh_settings):
+    """Two mesh items must each carry their OWN meshQuad list. The broadcast is
+    jsonpickle-encoded with reference tracking on; if both items referenced the
+    SAME c.meshCellQuad object, every occurrence after the first would serialize
+    as a {"py/id": N} back-reference. The iPad does JSON.parse (no jsonpickle
+    decode), so it would see an object instead of a [u,v] array and mmMeshTransform
+    would throw on meshQuad[3][0] -> that screen goes black. Regression for the
+    on-wall "2nd+ mesh animation renders black" bug."""
+    import jsonpickle
+    d = _mesh_display(fresh_settings)
+    me2 = MediaElement(); me2.id = "b"; me2.file = "gameOfLife"
+    me2.playmode = PlayMode.SCRIPT; me2.duration = 5.0; me2.scriptSpan = "mesh"
+    d.mediaElements.append(me2)                      # now: [plasma/mesh, gameOfLife/mesh]
+    c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
+    c.meshCellQuad = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    with patch.object(CAL, "MESH_RECTIFY", True):
+        items = R._per_client_items(d, "c1", c)
+    # Root cause: the two items must not share the same list object.
+    assert items[0]["meshQuad"] is not items[1]["meshQuad"]
+    # Faithful to the wire: jsonpickle-encode (broadcast) -> plain JSON-decode (client).
+    encoded = jsonpickle.encode(items)
+    assert "py/id" not in encoded
+    decoded = json.loads(encoded)
+    for it in decoded:
+        q = it["meshQuad"]
+        assert isinstance(q, list) and len(q) == 4, "client must see a 4-point array, not a py/id ref"
+        for pt in q:
+            assert isinstance(pt, list) and len(pt) == 2
+            assert all(isinstance(v, (int, float)) for v in pt)
 
 
 def test_detect_grid_strong_keystone_row_first():

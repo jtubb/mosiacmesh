@@ -230,6 +230,43 @@
 				' src=' + (v && v.getAttribute('src') ? '1' : '0') +
 				' evt=' + window._mmVidEvt;
 		}, 500);
+
+		// Catch EVERY uncaught error on the device (not just the one wrapped in
+		// runScriptLoop's draw try/catch). Routes to the server -v log as a
+		// CLIENTLOG 'jserror' line. ES5 / iOS 5 safe (5-arg window.onerror).
+		window.onerror = function (msg, src, line, col, err) {
+			try {
+				// WebKit 534's window.onerror is only (msg, url, line) and often
+				// passes the string "undefined" for url; the richer location lives
+				// on the Error object's Safari-specific .sourceURL / .line.
+				var esrc = (err && err.sourceURL) || src;
+				var eline = (err && (err.line || err.lineNumber)) || line;
+				dbg('jserror', {
+					msg: '' + msg,
+					src: esrc ? ('' + esrc).split('/').pop() : null,
+					line: eline || null
+				});
+			} catch (_e) {}
+			return false;   // don't swallow — still log to the device console
+		};
+
+		// One-shot boot beacon: proves WHICH index.html each screen is actually
+		// running. SockJS reconnect != page reload, so stale JS can persist across
+		// reconnects; without this we can't tell "no error" from "device never
+		// loaded the probe". Bump MM_DBG_VER on every probe edit, then look for
+		// `boot ver=<this value>` per screen in the -v log before trusting any
+		// other CLIENTLOG line. Retries until the socket is OPEN, then fires once.
+		var MM_DBG_VER = 'mesh-rectify';
+		var _bootSent = false;
+		var _bootTimer = setInterval(function () {
+			if (_bootSent) { clearInterval(_bootTimer); return; }
+			if (typeof SockJS === 'undefined' || sock == null ||
+				sock.readyState !== SockJS.OPEN) { return; }
+			_bootSent = true;
+			clearInterval(_bootTimer);
+			dbg('boot', { ver: MM_DBG_VER, w: window.innerWidth, h: window.innerHeight,
+				ua: ('' + navigator.userAgent).slice(0, 40) });
+		}, 500);
 	}
 
 	// JS mirror of server.playlist_index — keep the two in sync.
@@ -499,13 +536,29 @@
 				var span = (it && it.scriptSpan) || 'mirror';
 				if (span === 'mesh') {
 					// Mesh: render this screen's affine slice of the global wall canvas.
-					var m = (it && it.meshQuad && it.meshGlobal && typeof mmMeshTransform === 'function')
-						? mmMeshTransform(it.meshQuad, it.meshGlobal[0], it.meshGlobal[1], canvas.width, canvas.height)
-						: null;
+					// Wrap the transform compute so a throw HERE (e.g. a malformed quad
+					// hitting meshQuad[3][0] inside mmMeshTransform) is captured with the
+					// offending quad instead of escaping to window.onerror and silently
+					// killing the RAF loop -> black. One-shot per item.
+					var m = null;
+					try {
+						m = (it && it.meshQuad && it.meshGlobal && typeof mmMeshTransform === 'function')
+							? mmMeshTransform(it.meshQuad, it.meshGlobal[0], it.meshGlobal[1], canvas.width, canvas.height)
+							: null;
+					} catch (em) {
+						if (!frame._mfail) {
+							frame._mfail = true;
+							dbg('mesh-mfail', { nm: name, msg: '' + ((em && em.message) || em),
+								quad: (it && it.meshQuad && typeof JSON !== 'undefined') ? JSON.stringify(it.meshQuad) : ('' + (it && it.meshQuad)),
+								glob: (it && it.meshGlobal && typeof JSON !== 'undefined') ? JSON.stringify(it.meshGlobal) : ('' + (it && it.meshGlobal)) });
+						}
+						m = null;
+					}
 					if (m) {
 						ctx.save();
 						ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
-						animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed);
+						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed); }
+						catch (e1) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e1 && e1.message) || e1) }); } }
 						ctx.restore();
 					} else {
 						// Uncalibrated screen in a mesh group (or degenerate quad): go black.
@@ -515,7 +568,7 @@
 					}
 				} else {
 					// Mirror (default): full animation on this screen — unchanged behavior.
-					animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed);
+					try { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed); } catch (e2) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e2 && e2.message) || e2) }); } }
 				}
 			}
 			playback.scriptRaf = _raf(frame);
