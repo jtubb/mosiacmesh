@@ -365,7 +365,8 @@ def render_token(media_elements, display_id):
         pm = me.playmode.name if hasattr(me.playmode, "name") else str(me.playmode)
         items.append((me.id, me.file, me.duration, pm,
                       getattr(me, "backgroundColor", "#000000"),
-                      getattr(me, "startEffect", None), getattr(me, "endEffect", None)))
+                      _audio_fade_sig(getattr(me, "startEffect", None)),
+                      _audio_fade_sig(getattr(me, "endEffect", None))))
     clients = []
     for key, c in _group_clients(display_id):
         perim = None
@@ -499,6 +500,21 @@ def _normalize_effect(field):
     if isinstance(field, dict) and field.get("name"):
         return field
     return None
+
+
+def _audio_fade_sig(field):
+    """Token contribution for an effect field: ("afade", duration) only when the
+    effect bakes an audio fade (audioFade truthy), else None. Visual params
+    (type, direction, scope, and duration when audioFade is off) are deliberately
+    excluded so client-side visual edits don't invalidate the cached render."""
+    spec = _normalize_effect(field)
+    if not spec:
+        return None
+    p = (spec.get("params") or {})
+    audio_on = p.get("audioFade", True if spec.get("name") in ("fade", "wipe") else False)
+    if not audio_on:
+        return None
+    return ("afade", p.get("duration", 600))
 
 
 def _resolve_effect_filters(me, duration_ms, out_w, out_h):

@@ -913,6 +913,52 @@ class TestEffectRenderHook:
         me.startEffect = {"name": "fade", "params": {"duration": 600}}
         assert server.compute_render_token("Default") != t1
 
+    def _token_setup(self, mock_settings):
+        """Shared display+client setup for audio-fade-sig token tests."""
+        server.settings = mock_settings
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.id = "a"; me.file = "/media/server/x.jpg"
+        me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
+        disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
+        c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
+        c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
+        mock_settings.clients = {"c1": c}
+        return me
+
+    def test_token_unchanged_by_visual_only_effect_change(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": True}}
+        t1 = server.compute_render_token("Default")
+        # Switch to a wipe with same audioFade + same duration — only visual params differ.
+        me.startEffect = {"name": "wipe", "params": {"direction": "up", "scope": "wall",
+                                                      "duration": 600, "audioFade": True}}
+        t2 = server.compute_render_token("Default")
+        assert t1 == t2, "visual-only param changes should not invalidate the render token"
+
+    def test_token_changes_when_audioFade_toggled(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": True}}
+        t1 = server.compute_render_token("Default")
+        me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": False}}
+        t2 = server.compute_render_token("Default")
+        assert t1 != t2, "toggling audioFade must change the render token"
+
+    def test_token_changes_when_audio_duration_changes(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": True}}
+        t1 = server.compute_render_token("Default")
+        me.startEffect = {"name": "fade", "params": {"duration": 1200, "audioFade": True}}
+        t2 = server.compute_render_token("Default")
+        assert t1 != t2, "changing duration when audioFade is on must change the render token"
+
+    def test_token_unchanged_by_visual_duration_when_audio_off(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": False}}
+        t1 = server.compute_render_token("Default")
+        me.startEffect = {"name": "fade", "params": {"duration": 1200, "audioFade": False}}
+        t2 = server.compute_render_token("Default")
+        assert t1 == t2, "duration change when audioFade is off should not change the render token"
+
     def test_normalize_effect_tolerates_shapes(self):
         assert server._normalize_effect(None) is None
         assert server._normalize_effect("fade") == {"name": "fade", "params": {}}
