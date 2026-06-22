@@ -289,6 +289,27 @@ def test_per_client_items_attaches_meshQuad_to_nonmesh_items(fresh_settings):
     assert "meshGrid" not in items[0] and "meshCells" not in items[0]
 
 
+def test_per_client_items_attaches_meshQuad_to_full_mirror_media(fresh_settings):
+    # FULL (Mirror) MEDIA takes its own file-resolution branch (the shared
+    # full_<token>_<i> asset), distinct from SCRIPT/SEGMENT. The meshQuad attach
+    # sits after that branch and is playmode-independent, so a calibrated client
+    # must STILL get meshQuad on a FULL item -> a wall-scope wipe sweeps across
+    # the physical wall (calibration-aware), not per-screen. Locks the real-world
+    # "wall wipe on mirror content" case.
+    d = _mesh_display(fresh_settings)
+    d.renderedToken = "tok"
+    me = MediaElement(); me.id = "m"; me.file = "clip.mp4"
+    me.playmode = PlayMode.FULL; me.duration = 5.0
+    d.mediaElements = [me]
+    c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
+    c.meshCellQuad = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    items = R._per_client_items(d, "c1", c)       # MESH_RECTIFY default True
+    assert items[0]["file"] == "/media/server/videos/full_tok_0.mp4"   # FULL branch taken
+    assert "meshQuad" in items[0]                 # present for wall-wipe
+    assert items[0]["meshQuad"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    assert "meshGlobal" not in items[0]           # animation-only, not on media items
+
+
 def test_per_client_items_no_meshQuad_when_uncalibrated(fresh_settings):
     d = _mesh_display(fresh_settings)
     d.mediaElements[0].scriptSpan = "mirror"

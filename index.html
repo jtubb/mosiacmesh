@@ -574,6 +574,20 @@
 						ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
 						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed, meshGridObj); }
 						catch (e1) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e1 && e1.message) || e1) }); } }
+						// In-frame wipe cover: drawn under the SAME transform as the content and in the
+						// SAME RAF, so the leading edge is frame-locked to the animation (no second
+						// canvas/RAF -> no inter-loop jitter, one fewer full-screen composite). Fade is
+						// handled as element opacity elsewhere.
+						if ((it.startEffect || it.endEffect) && typeof mmTransitionState === 'function'
+								&& typeof mmWipeCoverRect === 'function') {
+							var stc = mmTransitionState(it.startEffect || null, it.endEffect || null,
+								pos.offsetMs, it.duration || 0, null, it.meshQuad || null);
+							if (stc.wipe) {
+								var fc = mmWipeCoverRect(stc.wipe.scope, stc.wipe.direction, stc.wipe.front,
+									it.meshGlobal[0], it.meshGlobal[1], it.meshQuad);
+								if (fc) { ctx.fillStyle = it.backgroundColor || '#000000'; ctx.fillRect(fc.x, fc.y, fc.w, fc.h); }
+							}
+						}
 						ctx.restore();
 					} else {
 						// Uncalibrated screen in a mesh group (or degenerate quad): go black.
@@ -840,28 +854,72 @@
 		var s = item.startEffect, e = item.endEffect;
 		var needs = (s && s.name === 'wipe') || (e && e.name === 'wipe');
 		var c = document.getElementById('mmTransCover');
-		if (!needs) { if (c) { c.style.display = 'none'; } return null; }
+		var cv = document.getElementById('mmTransCoverCanvas');
+		if (!needs) { if (c) { c.style.display = 'none'; } if (cv) { cv.style.display = 'none'; } return null; }
 		if (!c) {
 			c = document.createElement('div'); c.id = 'mmTransCover';
-			// Body-level fixed overlay so it covers ALL media types, including the
-			// persistent <video> (fixed at body level). Above video+canvas, below
-			// the tap/blackout/tdbg overlays.
+			// Legacy translate cover (UNCALIBRATED fallback): a body-level fixed,
+			// viewport-sized colored div that mmApplyTransition slides off. Above
+			// video+canvas, below the tap/blackout/tdbg overlays.
 			c.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:2;pointer-events:none;';
 			document.body.appendChild(c);
 		}
+		if (!cv) {
+			// AFFINE cover: a VIEWPORT-sized canvas (not a giant transformed div).
+			// Drawn each frame with the SAME ctx.setTransform the content uses, so the
+			// front follows the panel rotation/shear with no large-layer tiling. ES5.
+			cv = document.createElement('canvas'); cv.id = 'mmTransCoverCanvas';
+			cv.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:2;pointer-events:none;display:none;';
+			document.body.appendChild(cv);
+		}
+		// Match the content canvas resolution so the shared mmMeshTransform maps 1:1.
+		if (cv.width !== window.innerWidth) { cv.width = window.innerWidth; }
+		if (cv.height !== window.innerHeight) { cv.height = window.innerHeight; }
+		cv.style.display = 'none';                       // affine path shows+draws per frame
 		c.style.background = item.backgroundColor || '#000000';
-		c.style.display = 'block';
+		c.style.display = 'none';                        // apply path shows the right cover
 		return c;
+	}
+
+	// Draw the AFFINE cover into the viewport canvas: clear, then fill the un-revealed
+	// global-px rect under the SAME mmMeshTransform matrix as content (one fillRect, no
+	// reflow/tiling). fill === null -> fully revealed, hide. ES5 / Safari-5.1 canvas 2d.
+	function drawAffineCover(cv, m, fill, bg) {
+		if (!cv) { return; }
+		var ctx = cv.getContext('2d');
+		ctx.setTransform(1, 0, 0, 1, 0, 0);
+		ctx.clearRect(0, 0, cv.width, cv.height);
+		if (fill === null) { cv.style.display = 'none'; return; }
+		cv.style.display = 'block';
+		ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+		ctx.fillStyle = bg;
+		ctx.fillRect(fill.x, fill.y, fill.w, fill.h);
 	}
 
 	// Apply the current transition state for item i at offsetMs (from the shared
 	// clock) to the mounted element. wall-wipe uses this screen's normalized global
-	// rect (its meshQuad bbox); mirror/uncalibrated items have no meshQuad -> null
-	// rect -> per-screen behavior.
+	// rect (its meshQuad bbox). A calibrated client gets meshQuad on EVERY item
+	// (segment/individual/mirror/animation alike), so wall wipes are calibration-
+	// aware for all play types; only UNCALIBRATED items lack meshQuad -> null rect
+	// -> per-screen behavior.
 	function applyTransitionNow(i, offsetMs) {
 		var item = playback.items[i];
+		var coverCanvas = document.getElementById('mmTransCoverCanvas');
 		if (!item || (!item.startEffect && !item.endEffect) || typeof mmTransitionState !== 'function' || typeof mmApplyTransition !== 'function') {
 			if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
+			if (coverCanvas) { coverCanvas.style.display = 'none'; }
+			return;
+		}
+		// MESH animations draw their wipe IN-CANVAS (runScriptLoop), frame-locked to the
+		// content. Here we only manage element opacity (fade); the cover overlay is unused
+		// for them — that avoids a second canvas/RAF and the choppy off-loop edge.
+		if (item.playmode === 'SCRIPT' && (item.scriptSpan || 'mirror') === 'mesh'
+				&& item.meshQuad && item.meshGlobal) {
+			var sts = mmTransitionState(item.startEffect || null, item.endEffect || null,
+				offsetMs, item.duration || 0, null, item.meshQuad);
+			if (coverCanvas) { coverCanvas.style.display = 'none'; }
+			if (playback.transCover) { playback.transCover.style.display = 'none'; }
+			if (playback.currentEl) { playback.currentEl.style.opacity = sts.wipe ? '1' : ('' + sts.opacity); }
 			return;
 		}
 		var rect = null;
@@ -872,8 +930,27 @@
 			rect = { x: minx, y: miny,
 				w: Math.max.apply(null, xs) - minx, h: Math.max.apply(null, ys) - miny };
 		}
+		var quad = item.meshQuad || null;
 		var st = mmTransitionState(item.startEffect || null, item.endEffect || null,
-			offsetMs, item.duration || 0, rect);
+			offsetMs, item.duration || 0, rect, quad);
+		// Calibrated MESH wipe -> AFFINE cover: warp the cover with the SAME matrix
+		// the content uses so the wipe front follows each panel's true rotation/shear
+		// (a single coherent global front). Needs meshGlobal (sent only for mesh items)
+		// to size the global canvas. Everything else falls back to the translate cover.
+		if (st.wipe && quad && item.meshGlobal && typeof mmMeshTransform === 'function'
+				&& typeof mmWipeCoverRect === 'function') {
+			var GW = item.meshGlobal[0], GH = item.meshGlobal[1], m = null;
+			try { m = mmMeshTransform(quad, GW, GH, window.innerWidth, window.innerHeight); }
+			catch (em) { m = null; }
+			if (m) {
+				var fill = mmWipeCoverRect(st.wipe.scope, st.wipe.direction, st.wipe.front, GW, GH, quad);
+				if (playback.transCover) { playback.transCover.style.display = 'none'; }   // hide legacy div
+				drawAffineCover(coverCanvas, m, fill, item.backgroundColor || '#000000');
+				if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
+				return;
+			}
+		}
+		if (coverCanvas) { coverCanvas.style.display = 'none'; }   // not affine -> hide canvas overlay
 		mmApplyTransition(playback.currentEl, playback.transCover, st);
 	}
 
