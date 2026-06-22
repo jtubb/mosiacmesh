@@ -34,11 +34,13 @@ test('wipe per-screen: reveal == progress, opacity 1', () => {
   assert.equal(st.wipe.direction, 'left');
 });
 
-test('wipe wall (left): a panel reveals over its own [a,b] sub-window', () => {
-  const rect = { x: 0.5, y: 0, w: 1 / 6, h: 1 };   // panel spans global x [0.5, 0.667]
-  assert.equal(S(WIPE_WALL, null, 400, 10000, rect).wipe.reveal, 0);          // F=0.4 < a -> 0
-  assert.ok(Math.abs(S(WIPE_WALL, null, 5000, 10000, rect).wipe.reveal - 0.5) < 1e-3); // mid-panel
-  assert.equal(S(WIPE_WALL, null, 7000, 10000, rect).wipe.reveal, 1);          // F=0.7 > b -> 1
+test('wipe wall (left): a panel reveals over its own bbox sub-window', () => {
+  // wipe duration 1000ms = sweep window; front F = offsetMs/1000 sweeps 0..1.
+  // Panel bbox spans global x [0.5, 0.667] (edge x=0.5, width 1/6).
+  const rect = { x: 0.5, y: 0, w: 1 / 6, h: 1 };
+  assert.equal(S(WIPE_WALL, null, 400, 10000, rect).wipe.reveal, 0);          // F=0.40 < 0.5  -> 0
+  assert.ok(Math.abs(S(WIPE_WALL, null, 583, 10000, rect).wipe.reveal - 0.5) < 1e-2); // F=0.583 mid
+  assert.equal(S(WIPE_WALL, null, 700, 10000, rect).wipe.reveal, 1);          // F=0.70 > 0.667 -> 1
 });
 
 test('wipe wall falls back to per-screen when rect is null', () => {
