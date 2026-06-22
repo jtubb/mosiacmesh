@@ -67,6 +67,19 @@ def effect_catalog():
             for e in EFFECTS.values()]
 
 
+def effect_audio_fade_default(name):
+    """The declared default of an effect's 'audioFade' param (bool); False if the
+    effect or param doesn't exist. Lets callers resolve a missing audioFade key on
+    legacy data without duplicating the schema default."""
+    eff = EFFECTS.get(name)
+    if eff is None:
+        return False
+    for ps in eff.params:
+        if ps.key == "audioFade":
+            return bool(ps.default)
+    return False
+
+
 def _fmt(x):
     return "%g" % x
 

@@ -56,3 +56,9 @@ def test_wipe_bakes_nothing_when_audioFade_off():
     wipe = effects.get_effect("wipe")
     v, a = wipe.video_filters("start", wipe.resolve({"duration": 600, "audioFade": False}), {"duration_ms": 5000})
     assert v == [] and a == []
+
+
+def test_effect_audio_fade_default():
+    assert effects.effect_audio_fade_default("fade") is True
+    assert effects.effect_audio_fade_default("wipe") is True
+    assert effects.effect_audio_fade_default("nope") is False

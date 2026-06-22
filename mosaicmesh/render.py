@@ -510,8 +510,8 @@ def _audio_fade_sig(field):
     spec = _normalize_effect(field)
     if not spec:
         return None
-    p = (spec.get("params") or {})
-    audio_on = p.get("audioFade", True if spec.get("name") in ("fade", "wipe") else False)
+    p = spec.get("params") or {}
+    audio_on = p.get("audioFade", effects.effect_audio_fade_default(spec.get("name")))
     if not audio_on:
         return None
     return ("afade", p.get("duration", 600))
