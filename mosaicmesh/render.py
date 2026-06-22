@@ -492,10 +492,16 @@ def _token_is_live(token):
 
 
 def _normalize_effect(field):
-    """Tolerate an effect field as {name, params} | bare-string name | None."""
+    """Tolerate an effect field as {name, params} | bare-string name | None.
+    Legacy 'audiofade' (now folded into the audioFade toggle on fade/wipe) ->
+    a fade with audio on, so its baked afade is preserved on re-render. The
+    visual half is moot: the client receives the raw stored value and a legacy
+    string has no duration, so it shows no visual transition."""
     if not field:
         return None
     if isinstance(field, str):
+        if field == "audiofade":
+            return {"name": "fade", "params": {"audioFade": True}}
         return {"name": field, "params": {}}
     if isinstance(field, dict) and field.get("name"):
         return field

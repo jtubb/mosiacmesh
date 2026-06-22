@@ -963,6 +963,8 @@ class TestEffectRenderHook:
         assert server._normalize_effect(None) is None
         assert server._normalize_effect("fade") == {"name": "fade", "params": {}}
         assert server._normalize_effect({"name": "fade", "params": {"duration": 1}})["name"] == "fade"
+        assert server._normalize_effect("audiofade") == {"name": "fade", "params": {"audioFade": True}}
+        assert server._normalize_effect("") is None
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
