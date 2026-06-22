@@ -127,6 +127,24 @@ function buildEffectControl({ label, getEffect, setEffect, catalog, it }) {
 
     // Collect live param values for writeback. Rebuilt each renderParams() call.
     const live = {};
+
+    // Seed live with all declared params (including those skipped below) using
+    // current or default so the effect object is always complete.
+    function commitEffect() {
+      const params = {};
+      for (const p of (efDef.params || [])) {
+        if (p.key in live) {
+          params[p.key] = live[p.key];
+        } else {
+          const val = (p.key in existingParams) ? existingParams[p.key] : p.default;
+          if (p.type === 'number') params[p.key] = Number(val);
+          else if (p.type === 'boolean') params[p.key] = !!(val);
+          else params[p.key] = val;
+        }
+      }
+      setEffect({ name: chosenName, params });
+    }
+
     for (const p of (efDef.params || [])) {
       const existingVal = (p.key in existingParams) ? existingParams[p.key] : p.default;
 
@@ -141,6 +159,7 @@ function buildEffectControl({ label, getEffect, setEffect, catalog, it }) {
         const inp = document.createElement('input');
         inp.type = 'number';
         if (p.min != null) inp.min = String(p.min);
+        if (p.max != null) inp.max = String(p.max);
         inp.value = String(existingVal != null ? existingVal : p.default);
         live[p.key] = Number(inp.value);
         inp.addEventListener('input', () => {
@@ -176,23 +195,6 @@ function buildEffectControl({ label, getEffect, setEffect, catalog, it }) {
       }
 
       paramsWrap.appendChild(pWrap);
-    }
-
-    // Seed live with all declared params (including those skipped above) using
-    // current or default so the effect object is always complete.
-    function commitEffect() {
-      const params = {};
-      for (const p of (efDef.params || [])) {
-        if (p.key in live) {
-          params[p.key] = live[p.key];
-        } else {
-          const val = (p.key in existingParams) ? existingParams[p.key] : p.default;
-          if (p.type === 'number') params[p.key] = Number(val);
-          else if (p.type === 'boolean') params[p.key] = !!(val);
-          else params[p.key] = val;
-        }
-      }
-      setEffect({ name: chosenName, params });
     }
 
     // Initial commit so the effect object reflects the current params state
