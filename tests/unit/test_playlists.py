@@ -257,7 +257,7 @@ class TestAssignPlaylist:
         server.settings = mock_settings
         server.socketmanager = MagicMock()
         disp = mock_settings.displays["Default"]
-        disp.boundingBox = [[0, 0], [10, 0], [10, 10], [0, 10]]
+        disp.boundingBox = [0, 0, 10, 10]  # [bx, by, bw, bh] scalars (not a contour)
         # Add a calibrated client so _group_is_calibrated passes.
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 100; c.deviceHeight = 100
         c.measuredPerimeter = [0, 0, 5, 0, 5, 5, 0, 5]

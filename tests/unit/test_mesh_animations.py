@@ -141,11 +141,16 @@ def test_per_client_items_mesh_black_for_uncalibrated(fresh_settings):
 
 
 def test_per_client_items_mirror_has_no_mesh_fields(fresh_settings):
+    # Under the transition-effects feature a calibrated client gets meshQuad on EVERY
+    # item (including mirror) so wall-spanning wipe transitions work on all media types.
+    # meshGlobal/meshGrid/meshCells remain mesh-SCRIPT-only (animation canvas fields).
     d = _mesh_group(fresh_settings)
     d.mediaElements[0].scriptSpan = "mirror"
     c = _calibrated_client()
     items = R._per_client_items(d, "c1", c)
-    assert "meshQuad" not in items[0] and "meshGlobal" not in items[0]
+    assert "meshQuad" in items[0]           # present for wall-wipe on non-mesh items
+    assert "meshGlobal" not in items[0]     # animation-only, not on non-mesh items
+    assert "meshGrid" not in items[0] and "meshCells" not in items[0]
 
 
 def test_meshglobal_backfills_stale_precomputed_group(fresh_settings):

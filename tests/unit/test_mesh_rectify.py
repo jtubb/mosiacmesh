@@ -273,3 +273,26 @@ def test_detect_grid_strong_keystone_row_first():
     rows, cols, Rn, Cn = res
     assert Rn == 4 and Cn == 6
     assert sorted(zip(rows, cols)) == sorted((r, c) for r in range(4) for c in range(6))
+
+
+def test_per_client_items_attaches_meshQuad_to_nonmesh_items(fresh_settings):
+    # A non-mesh (e.g. mirror SCRIPT) item on a calibrated client still gets meshQuad
+    # (so wall-spanning wipe transitions work), but NOT the animation-only mesh fields.
+    d = _mesh_display(fresh_settings)
+    d.mediaElements[0].scriptSpan = "mirror"      # make the item NON-mesh
+    c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
+    c.meshCellQuad = [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    items = R._per_client_items(d, "c1", c)       # MESH_RECTIFY default True -> rectified path
+    assert "meshQuad" in items[0]                 # present for wall-wipe
+    assert items[0]["meshQuad"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    assert "meshGlobal" not in items[0]           # animation-only, not on non-mesh items
+    assert "meshGrid" not in items[0] and "meshCells" not in items[0]
+
+
+def test_per_client_items_no_meshQuad_when_uncalibrated(fresh_settings):
+    d = _mesh_display(fresh_settings)
+    d.mediaElements[0].scriptSpan = "mirror"
+    c = _client("G", [[0, 0], [100, 0], [100, 100], [0, 100]])
+    c.measuredPerimeter = None                    # uncalibrated
+    items = R._per_client_items(d, "c1", c)
+    assert "meshQuad" not in items[0]

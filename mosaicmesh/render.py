@@ -1243,33 +1243,28 @@ def _per_client_items(display, key, c):
             f = me.file  # SCRIPT animation ref, or uncalibrated fallback
         item = _media_item_payload(me)
         item["file"] = f
-        # Mesh animation geometry: a SCRIPT item set to span the wall gets this
-        # client's quad (normalized into the group bbox) + the global canvas size,
-        # but ONLY when the client is calibrated and the group has bbox+meshGlobal.
-        # Omitted otherwise -> the client goes black (mesh) or mirrors (mirror).
-        # measuredPerimeter is a numpy (4,1,2) array in production -> reshape(-1,2);
-        # cast coords to native float so the JSON payload has no numpy types.
+        # meshQuad: this screen's normalized quad in global space. Attached to EVERY
+        # item for a calibrated client so wall-spanning transitions (wipe) work on
+        # ALL media types, not just mesh animations. Rectified path uses the
+        # homography cell quad; else the raw bbox-normalized measuredPerimeter. Built
+        # as a FRESH per-item list (jsonpickle reference-tracking would otherwise turn
+        # a shared list into a {"py/id":N} back-ref the iPad's JSON.parse can't read).
+        if (calibration.MESH_RECTIFY
+                and getattr(display, "meshGlobalRect", None)
+                and getattr(c, "meshCellQuad", None)):
+            item["meshQuad"] = [[float(pt[0]), float(pt[1])] for pt in c.meshCellQuad]
+        elif c.measuredPerimeter is not None and display.boundingBox:
+            bx, by, bw, bh = display.boundingBox
+            quad = np.array(c.measuredPerimeter).reshape(-1, 2)
+            item["meshQuad"] = [[float((px - bx) / float(bw)), float((py - by) / float(bh))]
+                                for (px, py) in quad]
+        # Mesh SCRIPT items additionally carry the global wall canvas size + screen
+        # grid for the animation itself (omitted on uncalibrated -> client goes black).
         if me.playmode == PlayMode.SCRIPT and getattr(me, "scriptSpan", "mirror") == "mesh":
             if (calibration.MESH_RECTIFY
                     and getattr(display, "meshGlobalRect", None)
                     and getattr(c, "meshCellQuad", None)):
-                # Homography-rectified geometry (keystone removed). Build a FRESH
-                # per-item list (not the shared c.meshCellQuad object) and cast to
-                # native float: the broadcast is jsonpickle-encoded with reference
-                # tracking on, so handing the SAME list object to multiple mesh
-                # items makes every occurrence after the first serialize as a
-                # {"py/id": N} back-reference. The iPad's JSON.parse then sees an
-                # object instead of a [u,v] array and mmMeshTransform throws on
-                # meshQuad[3][0] -> the RAF loop dies and that screen goes black.
-                # (The raw-bbox path below is immune: its comprehension already
-                # builds a distinct list per item.)
-                item["meshQuad"] = [[float(pt[0]), float(pt[1])] for pt in c.meshCellQuad]
                 item["meshGlobal"] = list(display.meshGlobalRect)
-                # Physical screen grid [cols, rows] + exact per-screen rects so
-                # grid-aware animations choreograph correctly. Fresh lists per item
-                # (same jsonpickle-shared-ref hazard as meshQuad above). meshCells
-                # accounts for real bezel gaps so "light the screen under a point"
-                # doesn't bleed into neighbors (uniform cols/rows would).
                 if getattr(display, "meshGrid", None):
                     item["meshGrid"] = [int(display.meshGrid[0]), int(display.meshGrid[1])]
                 if getattr(display, "meshCells", None):
@@ -1277,14 +1272,7 @@ def _per_client_items(display, key, c):
                                          for cell in display.meshCells]
             elif (c.measuredPerimeter is not None
                     and display.boundingBox and getattr(display, "meshGlobal", None)):
-                # Raw-bbox path (today's behavior). measuredPerimeter is numpy
-                # (4,1,2) -> reshape(-1,2); native float for the JSON payload.
-                bx, by, bw, bh = display.boundingBox
-                quad = np.array(c.measuredPerimeter).reshape(-1, 2)
-                item["meshQuad"] = [[float((px - bx) / float(bw)), float((py - by) / float(bh))]
-                                    for (px, py) in quad]
                 item["meshGlobal"] = list(display.meshGlobal)
-            # else: omit -> client goes black (uncalibrated mesh)
         items.append(item)
     return items
 
