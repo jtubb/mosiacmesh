@@ -1,50 +1,48 @@
 /**
- * plasma: a 40x30 fillRect grid colored by a sum-of-sines field. The
- * synchronization-critical property is determinism of the field; we assert
- * deterministic op log, animation over time, and the exact 40*30 cell count.
+ * plasma: a FIELD animation. shade() fills a 40x30 RGBA buffer from a
+ * sum-of-sines color field and the framework scales it (smoothed) to the
+ * canvas with one blit — no per-cell fillRect/'hsl()' string (the old hot path
+ * that blocked the iPad-1 thread and delayed item transitions). The
+ * sync-critical property is determinism of the field, so we test shade()
+ * directly: pure, no DOM, returns the same buffer for the same (tMs, seed).
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { makeRecordingCtx } from './_canvas_stub.js';
 await import('../../../js/animations.js');
-const byKey = Object.fromEntries(globalThis.MM_ANIMATIONS.map((a) => [a.key, a.draw]));
+const plasma = globalThis.MM_ANIMATIONS.find((a) => a.key === 'plasma');
+const COLS = 40, ROWS = 30;
 
-const W = 1024, H = 768;
+function shadeBuf(tMs, seed) {
+  const data = new Uint8ClampedArray(COLS * ROWS * 4);
+  plasma.shade(data, COLS, ROWS, tMs, 0, seed);
+  return data;
+}
 
-test('plasma — deterministic at same tMs', () => {
-  const a = makeRecordingCtx();
-  const b = makeRecordingCtx();
-  byKey.plasma(a, 31415, W, H);
-  byKey.plasma(b, 31415, W, H);
-  assert.deepStrictEqual(a.__ops, b.__ops);
+test('plasma — declares a 40x30 field grid + smoothing, auto-wrapped to draw()', () => {
+  assert.deepStrictEqual(plasma.grid, { cols: COLS, rows: ROWS });
+  assert.equal(plasma.smooth, true);
+  assert.equal(typeof plasma.shade, 'function');
+  assert.equal(typeof plasma.draw, 'function');   // framework auto-wraps shade()
 });
 
-test('plasma — animates (different tMs ⇒ different output)', () => {
-  const a = makeRecordingCtx();
-  const b = makeRecordingCtx();
-  byKey.plasma(a, 1000, W, H);
-  byKey.plasma(b, 6000, W, H);
-  assert.notDeepStrictEqual(a.__ops, b.__ops);
+test('plasma — deterministic at same (tMs, seed)', () => {
+  assert.deepStrictEqual(shadeBuf(31415, 7), shadeBuf(31415, 7));
 });
 
-test('plasma — fills a 40x30 grid', () => {
-  const c = makeRecordingCtx();
-  byKey.plasma(c, 5000, W, H);
-  const rects = c.__ops.filter((o) => o.op === 'fillRect').length;
-  assert.equal(rects, 1200);
+test('plasma — animates (different tMs ⇒ different field)', () => {
+  assert.notDeepStrictEqual(shadeBuf(1000, 7), shadeBuf(6000, 7));
 });
 
 test('plasma — same seed deterministic, different seed differs', () => {
-  const a = makeRecordingCtx(), b = makeRecordingCtx(), c = makeRecordingCtx();
-  byKey.plasma(a, 5000, W, H, 0, 111);
-  byKey.plasma(b, 5000, W, H, 0, 111);   // same (tMs, seed)
-  byKey.plasma(c, 5000, W, H, 0, 222);   // different seed
-  assert.deepStrictEqual(a.__ops, b.__ops);
-  assert.notDeepStrictEqual(a.__ops, c.__ops);   // hue rotation + phase offsets shift
+  assert.deepStrictEqual(shadeBuf(5000, 111), shadeBuf(5000, 111));
+  assert.notDeepStrictEqual(shadeBuf(5000, 111), shadeBuf(5000, 222));
 });
 
-test('plasma — seed perturbs color/phase, NOT the 1200-cell grid', () => {
-  const c = makeRecordingCtx();
-  byKey.plasma(c, 5000, W, H, 0, 999);
-  assert.equal(c.__ops.filter((o) => o.op === 'fillRect').length, 1200);
+test('plasma — colors the whole 40x30 field (full-saturation, rarely black)', () => {
+  const data = shadeBuf(5000, 1);
+  let nonzero = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] || data[i + 1] || data[i + 2]) nonzero++;
+  }
+  assert.ok(nonzero > COLS * ROWS * 0.5, `expected most cells colored, got ${nonzero}`);
 });

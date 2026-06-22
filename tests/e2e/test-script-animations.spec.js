@@ -159,8 +159,8 @@ export default async function () {
     assert.ok(probe4.ok, `analogClock drew no pixels: ${JSON.stringify(probe4)}`);
     await stop(page);
 
-    // --- plasma: a pure full-canvas fillRect-grid animation (batch 2). Fills
-    // every cell, so the pixel probe is robust. ---
+    // --- plasma: a FIELD animation (shade() -> small RGBA buffer, scaled to the
+    // canvas via one drawImage). Fills every pixel opaque, so the probe is robust. ---
     const hadCanvas5 = await renderAndProbe(page, 'plasma');
     assert.ok(hadCanvas5, 'expected a <canvas> under #canvas after PLAY(plasma)');
     await page.waitForFunction(() => {

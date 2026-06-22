@@ -90,6 +90,71 @@
     return next;
   }
 
+  // --- Field animations -----------------------------------------------------
+  // A FULL-FIELD effect (plasma, life — every cell colored every frame) is
+  // expensive the naive way: cols*rows ctx.fillRect calls plus a 'hsl(...)'
+  // STRING allocation per cell. On the iPad-1's single thread that blocks for
+  // ~100ms+/frame, which (because the item swap can only fire between frames)
+  // delays playlist transitions and desyncs start/end across the wall.
+  //
+  // Instead, a field animation declares { grid:{cols,rows}, smooth, shade(...) }
+  // and writes raw RGBA into a small fixed buffer; the framework paints it into
+  // a cols x rows offscreen canvas ONCE and scales it to the target with a single
+  // drawImage. cols*rows array writes + one blit — no per-cell fill, no strings.
+  // mmMakeFieldDraw auto-wraps shade() into the standard draw(ctx,...) at module
+  // load, so a FUTURE field script needs zero canvas/scaling code: just shade().
+  // shade() is a PURE function of (tMs, nowMs, seed) -> buffer, so it stays unit-
+  // testable without a DOM (the wrapper is the only browser-only part).
+
+  // HSL -> RGB written straight into an RGBA buffer (no per-pixel string alloc).
+  // h in [0,360), s & l in [0,1]. Writes data[o..o+2]; alpha is owned by the
+  // wrapper (set once to 255). Bit-portable: only +,-,*,/ and Math.abs.
+  function mmHsl2Rgb(h, s, l, data, o) {
+    h = ((h % 360) + 360) % 360;
+    var c = (1 - Math.abs(2 * l - 1)) * s;
+    var hp = h / 60;
+    var x = c * (1 - Math.abs((hp % 2) - 1));
+    var m = l - c / 2;
+    var r = 0, g = 0, b = 0;
+    if (hp < 1) { r = c; g = x; }
+    else if (hp < 2) { r = x; g = c; }
+    else if (hp < 3) { g = c; b = x; }
+    else if (hp < 4) { g = x; b = c; }
+    else if (hp < 5) { r = x; b = c; }
+    else { r = c; b = x; }
+    data[o] = (r + m) * 255;
+    data[o + 1] = (g + m) * 255;
+    data[o + 2] = (b + m) * 255;
+  }
+
+  // Wrap a field entry's shade() into the standard draw(ctx,tMs,w,h,nowMs,seed).
+  // Lazily allocates the cols x rows offscreen canvas on first paint so module
+  // load stays Node-safe (no document at import; field draws are browser-only).
+  // ES5 / Safari 5.1 safe (vendor-prefixed image-smoothing flag; CanvasPixelArray
+  // indexed writes). Alpha is initialized to 255 once so shade() writes RGB only.
+  function mmMakeFieldDraw(entry) {
+    var cols = entry.grid.cols, rows = entry.grid.rows;
+    var off = null, octx = null, img = null;
+    return function (ctx, tMs, w, h, nowMs, seed) {
+      if (off === null) {
+        off = document.createElement('canvas');
+        off.width = cols; off.height = rows;
+        octx = off.getContext('2d');
+        img = octx.createImageData(cols, rows);
+        var a;
+        for (a = 3; a < img.data.length; a += 4) { img.data[a] = 255; }
+      }
+      entry.shade(img.data, cols, rows, tMs, nowMs, seed);
+      octx.putImageData(img, 0, 0);
+      var sm = !!entry.smooth;
+      ctx.imageSmoothingEnabled = sm;
+      ctx.webkitImageSmoothingEnabled = sm;
+      ctx.mozImageSmoothingEnabled = sm;
+      ctx.msImageSmoothingEnabled = sm;
+      ctx.drawImage(off, 0, 0, w, h);
+    };
+  }
+
   var animations = [
     {
       key: 'bouncingBalls',
@@ -232,25 +297,29 @@
       key: 'plasma',
       label: 'Plasma',
       description: 'Classic demoscene plasma — smoothly shifting color clouds.',
-      draw: function (ctx, tMs, w, h, nowMs, seed) {
-        var GW = 40, GH = 30, gx, gy;
+      // Field animation: write the sum-of-sines color field into a 40x30 RGBA
+      // buffer; the framework scales it (smoothed) to the canvas with one blit.
+      // Same field math as before, but no per-cell fillRect / 'hsl()' string.
+      grid: { cols: 40, rows: 30 },
+      smooth: true,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
         var k1 = 8, k2 = 12, k3 = 10, k4 = 14;
         var T1 = 2500, T2 = 3300, T3 = 4100, T4 = 1900;
         var rng = MM_RNG(seed);
         var hueShift = rng() * 360;          // per-run colorway rotation
         var ph1 = rng() * 6.283, ph2 = rng() * 6.283,
             ph3 = rng() * 6.283, ph4 = rng() * 6.283;
-        var cw = w / GW, ch = h / GH;
-        for (gy = 0; gy < GH; gy++) {
-          for (gx = 0; gx < GW; gx++) {
-            var u = gx / GW, v = gy / GH;
+        var gx, gy, o = 0;
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            var u = gx / cols, v = gy / rows;
             var du = u - 0.5, dv = v - 0.5;
             var c = Math.sin(u * k1 + tMs / T1 + ph1)
                   + Math.sin(v * k2 + tMs / T2 + ph2)
                   + Math.sin((u + v) * k3 + tMs / T3 + ph3)
                   + Math.sin(Math.sqrt(du * du + dv * dv) * k4 + tMs / T4 + ph4);
-            ctx.fillStyle = 'hsl(' + ((((c + 4) / 8) * 360 + hueShift) % 360) + ', 100%, 50%)';
-            ctx.fillRect(gx * cw, gy * ch, cw + 1, ch + 1);
+            mmHsl2Rgb((((c + 4) / 8) * 360 + hueShift) % 360, 1, 0.5, data, o);
+            o += 4;
           }
         }
       }
@@ -462,13 +531,17 @@
       key: 'gameOfLife',
       label: "Conway's Game of Life",
       description: "Conway's Game of Life evolving from a seeded random board — different every run.",
-      draw: (function () {
+      // Field animation: the incremental board cache is unchanged; each frame
+      // writes live=green / dead=black (or the dim "warming up" noise tint) into
+      // a 48x36 RGBA buffer that the framework blits crisply (smooth:false). No
+      // per-cell fillRect — the old hot path that blocked the iPad-1 thread.
+      grid: { cols: 48, rows: 36 },
+      smooth: false,
+      shade: (function () {
         var GW = 48, GH = 36, G = 300, STEP_PER_FRAME = 12;
-        // Incremental cache: gen 0 is seeded immediately (computed=1); each frame
-        // evolves at most STEP_PER_FRAME generations via mmLifeStep until `done`.
-        // No synchronous all-at-once precompute -> no JS-thread freeze on iPad-1.
+        // Live #7CFC00 = (124,252,0); dead = black; noise tint #3a5a3a = (58,90,58).
         var cache = { seed: null, boards: null, computed: 0, done: false };
-        return function (ctx, tMs, w, h, nowMs, seed) {
+        return function (data, cols, rows, tMs, nowMs, seed) {
           var s = (seed >>> 0);
           var cells = GW * GH;
           if (cache.seed !== s || !cache.boards) {
@@ -489,24 +562,26 @@
           }
           var gen = Math.floor(tMs / 100) % G;
           if (gen < 0) { gen = 0; }
-          var cw = w / GW, ch = h / GH, x, y;
+          var x, y, o;
           if (gen < cache.computed) {
-            // Board for this generation is ready — render live cells.
+            // Board for this generation is ready — live cells green, dead black.
             var base = gen * cells;
-            ctx.fillStyle = '#7CFC00';
             for (y = 0; y < GH; y++) {
               for (x = 0; x < GW; x++) {
-                if (cache.boards[base + y * GW + x]) { ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1); }
+                o = (y * GW + x) * 4;
+                if (cache.boards[base + y * GW + x]) { data[o] = 124; data[o + 1] = 252; data[o + 2] = 0; }
+                else { data[o] = 0; data[o + 1] = 0; data[o + 2] = 0; }
               }
             }
           } else {
             // Not computed yet — seeded coordinated noise (shared tMs bucket ->
             // screens in the noise state at the same 100ms tick draw the same grid).
             var nrng = MM_RNG(mmDeriveSeed(s, Math.floor(tMs / 100)));
-            ctx.fillStyle = '#3a5a3a';   // dim "warming up" tint
             for (y = 0; y < GH; y++) {
               for (x = 0; x < GW; x++) {
-                if (nrng() < 0.5) { ctx.fillRect(x * cw, y * ch, cw + 1, ch + 1); }
+                o = (y * GW + x) * 4;
+                if (nrng() < 0.5) { data[o] = 58; data[o + 1] = 90; data[o + 2] = 58; }
+                else { data[o] = 0; data[o + 1] = 0; data[o + 2] = 0; }
               }
             }
           }
@@ -645,10 +720,25 @@
       }
     }
   ];
+  // Auto-wrap field entries (those exposing shade()) into a uniform draw(), once
+  // at module load, so EVERY consumer (iPad client, admin preview, tests) reads a
+  // ready-to-call entry.draw with no per-caller field handling. Imperative (vector)
+  // entries keep their hand-written draw untouched.
+  (function () {
+    var i;
+    for (i = 0; i < animations.length; i++) {
+      if (typeof animations[i].draw !== 'function' && typeof animations[i].shade === 'function') {
+        animations[i].draw = mmMakeFieldDraw(animations[i]);
+      }
+    }
+  })();
+
   root.MM_ANIMATIONS = animations;
   root.MM_RNG = MM_RNG;
   root.mmDeriveSeed = mmDeriveSeed;
   root.mmLoopItemSeed = mmLoopItemSeed;
   root.mmMeshTransform = mmMeshTransform;
   root.mmLifeStep = mmLifeStep;
+  root.mmHsl2Rgb = mmHsl2Rgb;
+  root.mmMakeFieldDraw = mmMakeFieldDraw;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

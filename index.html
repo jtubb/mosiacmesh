@@ -103,7 +103,11 @@
 		// ONE persistent <video> (pvid) across items and bless it once via a tap
 		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
 		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null,
-		boundaryTimer: null };
+		boundaryTimer: null,
+		// shownIndex: the playlist index whose DOM (canvas/<video>) is currently
+		// mounted. renderPlayback polls near each boundary and only (re)mounts when
+		// the clock-derived index actually changes (-1 forces a mount on first run).
+		shownIndex: -1 };
 
 	// Play video UNMUTED. Restores sound on every screen, at the cost of needing
 	// a tap-to-start (a muted <video> is exempt from autoplay policy and would
@@ -256,7 +260,7 @@
 		// loaded the probe". Bump MM_DBG_VER on every probe edit, then look for
 		// `boot ver=<this value>` per screen in the -v log before trusting any
 		// other CLIENTLOG line. Retries until the socket is OPEN, then fires once.
-		var MM_DBG_VER = 'mesh-rectify';
+		var MM_DBG_VER = 'mesh-rectify-1';
 		var _bootSent = false;
 		var _bootTimer = setInterval(function () {
 			if (_bootSent) { clearInterval(_bootTimer); return; }
@@ -806,6 +810,9 @@
 
 	// Frame-accurate, self-correcting render loop: each transition recomputes the
 	// current item from the shared clock and schedules the exact next boundary.
+	// Item-transition scheduler. Re-derives the clock-position on every wake and only
+	// (re)mounts the DOM when the clock-derived index actually changes (shownIndex
+	// gate) so a redundant call can't re-create the canvas/<video> and flash it.
 	function renderPlayback() {
 		if (!playback.active || playback.paused) { return; }
 		window._mmRenderN = (window._mmRenderN || 0) + 1;   // tdbg: re-render/flash counter
@@ -815,7 +822,26 @@
 		var elapsed = GoTime.now() - playback.startEpoch;
 		var pos = playlistIndex(elapsed, durations, playback.loop);
 		if (pos === null) { stopPlayback(); return; }
-		showItem(pos.index, pos.offsetMs);
+		// Only (re)mount on a real index change, so a redundant renderPlayback call
+		// (e.g. a reconnect re-sending PLAY) can't re-create the canvas/<video> mid-item
+		// and flash/restart it.
+		if (pos.index !== playback.shownIndex) {
+			playback.shownIndex = pos.index;
+			// MEASUREMENT (?tdbg): one row per boundary crossing. The SERVER's CLIENTLOG
+			// receive timestamp is the common-observer ground truth (spread across screens
+			// for the same bIdx == true visible skew + net jitter). lateMs = how far past
+			// THIS screen's own clock-boundary the swap actually fired (late-fire term);
+			// off/prec in the standard payload carry the clock-residual term.
+			if (window._mmDbg) {
+				var _tot = 0, _sp = 0, _k;
+				for (_k = 0; _k < durations.length; _k++) { _tot += durations[_k]; if (_k < pos.index) { _sp += durations[_k]; } }
+				var _loopIdx = (_tot > 0 && elapsed > 0) ? Math.floor(elapsed / _tot) : 0;
+				dbg('item-start', { bIdx: _loopIdx * durations.length + pos.index, sidx: pos.index,
+					lateMs: Math.round(pos.offsetMs),
+					bEpoch: Math.round(playback.startEpoch + _loopIdx * _tot + _sp) });
+			}
+			showItem(pos.index, pos.offsetMs);
+		}
 		var msToNext = durations[pos.index] - pos.offsetMs;
 		if (msToNext < 16) { msToNext = 16; } // floor to avoid a 0ms busy loop
 		playback.timer = setTimeout(renderPlayback, msToNext);
@@ -1052,6 +1078,7 @@
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.seed = data_obj.PAYLOAD.seed || 0;
+				playback.shownIndex = -1;   // force a fresh mount of the first item this run
 				playback.active = true;
 				playback.paused = false;
 				dbg("recv-PLAY");
