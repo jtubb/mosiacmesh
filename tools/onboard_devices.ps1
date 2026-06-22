@@ -847,6 +847,64 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4c-2) WiFi idle keepalive: max out DisassociationInterval in
+    #       com.apple.wifi.plist (iOS default 1800 s = 30 min) to INT_MAX
+    #       (2147483647 s ~= 68 y) so the BCM4329 radio doesn't proactively
+    #       disassociate while the wall sits idle. Soak-validated 2026-06
+    #       (MAX arm vs 1800 control). Edited the PROVEN way: scp the binary
+    #       plist to the host, set the float via plistlib (set_wifi_disassociation.py
+    #       -- preserves every other key + the binary format wifid expects; a
+    #       `defaults write` is cfprefsd-mediated and may not land on the raw
+    #       file wifid reads), scp it back. It is a persisted plist value
+    #       (survives reboot); doing it here restores it after any reflash/
+    #       re-onboard that resets the plist to 1800. (Auto-rejoin after an AP
+    #       reboot is already handled by JoinMode=Automatic + mStageAutoJoin=True
+    #       plus the client's SockJS reconnect watchdog -- no extra knob needed.)
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $wifiPlist  = '/var/preferences/SystemConfiguration/com.apple.wifi.plist'
+        $wifiHelper = Join-Path $PSScriptRoot 'set_wifi_disassociation.py'
+        $pyExe = (@((Get-Command python -ErrorAction SilentlyContinue),
+                    (Get-Command py -ErrorAction SilentlyContinue),
+                    (Get-Command python3 -ErrorAction SilentlyContinue)) |
+                  Where-Object { $_ } | Select-Object -First 1)
+        if (-not $pyExe) {
+            Write-Host "  wifi idle: host has no python -- skipped (DisassociationInterval left at default)" -ForegroundColor Yellow
+        } elseif (-not (Test-Path $wifiHelper)) {
+            Write-Host "  wifi idle: helper missing at $wifiHelper -- skipped" -ForegroundColor Yellow
+        } else {
+            $lWifi = Join-Path $env:TEMP ("wifi_{0}.plist" -f ($hostName -replace '[^\w.-]', '_'))
+            Remove-Item $lWifi -ErrorAction SilentlyContinue
+            try {
+                # Back up the original on-device once, then pull the live plist.
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "[ -f ${wifiPlist}.preonboard.bak ] || cp $wifiPlist ${wifiPlist}.preonboard.bak" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy "${User}@${hostName}:$wifiPlist" $lWifi 2>&1 | Out-Null
+                if (-not (Test-Path $lWifi)) {
+                    Write-Host "  wifi idle: could not pull com.apple.wifi.plist -- skipped" -ForegroundColor Yellow
+                } else {
+                    $edit = (& $pyExe.Source $wifiHelper $lWifi 2147483647 2>&1) | Out-String
+                    if ($edit -match 'NEW=2147483647') {
+                        # scp is byte-identical, so push + on-device non-empty check
+                        # is a sufficient verify (same rationale as the insomnia step).
+                        & $scp -i $KeyPath -P $p @sshLegacy $lWifi "${User}@${hostName}:$wifiPlist" 2>&1 | Out-Null
+                        $chk = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "[ -s $wifiPlist ] && echo WIFI_OK || echo WIFI_EMPTY" 2>&1) | Out-String
+                        if ($chk -match 'WIFI_OK') {
+                            $oldv = if ($edit -match 'OLD=([0-9.]+)') { $matches[1] } else { '?' }
+                            Write-Host "  wifi idle: DisassociationInterval -> INT_MAX (was $oldv; applies on next wifi cycle/respring)" -ForegroundColor Green
+                        } else {
+                            Write-Host "  wifi idle: pushed but file empty on device -- rerun" -ForegroundColor Yellow
+                        }
+                    } else {
+                        Write-Host "  wifi idle: local plist edit failed: $($edit.Trim())" -ForegroundColor Yellow
+                    }
+                }
+            } catch {
+                Write-Host "  wifi idle config failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            } finally {
+                Remove-Item $lWifi -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
     # 5.4d) deploy /etc/lighttpd/lighttpd.conf via scp from the local
     #       repo (tools/lighttpd.conf). Earlier version of this step
     #       built the file via a PowerShell -> ssh -> bash heredoc, but
