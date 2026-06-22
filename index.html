@@ -21,7 +21,7 @@
   <script src="/js/GoTime.js"></script>
   <script src="/js/mosiacmesh.js"></script>
   <script src="/js/animations.js"></script>
-	<script src="js/transitions.js"></script>
+  <script src="/js/transitions.js"></script>
   <script>
     var blink = true;
     // Tracks whether we have already told the server "my
@@ -828,19 +828,26 @@
 		playback.videoIndex = -1;
 	}
 
-	// Build/reuse an opaque overlay div over #canvas for wipe transitions (the
-	// cover slides off to reveal the media). Returns the cover, or null when
-	// neither boundary is a wipe (and hides any existing cover). ES5.
+	// Build/reuse an opaque overlay div for wipe transitions (the cover slides
+	// off to reveal the media). Returns the cover, or null when neither boundary
+	// is a wipe (and hides any existing cover). ES5.
+	// The cover is at BODY level (position:fixed) so it sits above the persistent
+	// <video> element (also body-level, fixed, z-index:1).  z-index:2 matches the
+	// #blackout cover; both are body-level so DOM order determines stacking when
+	// z-index ties — #blackout appears after the cover in the DOM and therefore
+	// renders on top when shown, satisfying "cover is below blackout/tapstart/tdbg".
 	function ensureCover(item) {
 		var s = item.startEffect, e = item.endEffect;
 		var needs = (s && s.name === 'wipe') || (e && e.name === 'wipe');
-		var host = document.getElementById('canvas');
 		var c = document.getElementById('mmTransCover');
 		if (!needs) { if (c) { c.style.display = 'none'; } return null; }
 		if (!c) {
 			c = document.createElement('div'); c.id = 'mmTransCover';
-			c.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;z-index:50;pointer-events:none;';
-			host.appendChild(c);
+			// Body-level fixed overlay so it covers ALL media types, including the
+			// persistent <video> (fixed at body level). Above video+canvas, below
+			// the tap/blackout/tdbg overlays.
+			c.style.cssText = 'position:fixed;left:0;top:0;width:100%;height:100%;z-index:2;pointer-events:none;';
+			document.body.appendChild(c);
 		}
 		c.style.background = item.backgroundColor || '#000000';
 		c.style.display = 'block';
@@ -853,7 +860,7 @@
 	// rect -> per-screen behavior.
 	function applyTransitionNow(i, offsetMs) {
 		var item = playback.items[i];
-		if (!item || (!item.startEffect && !item.endEffect) || typeof mmTransitionState !== 'function') {
+		if (!item || (!item.startEffect && !item.endEffect) || typeof mmTransitionState !== 'function' || typeof mmApplyTransition !== 'function') {
 			if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
 			return;
 		}
