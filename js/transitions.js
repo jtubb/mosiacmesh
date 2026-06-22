@@ -43,6 +43,32 @@
     return { role: role, opacity: p, wipe: null };   // fade
   }
 
+  // Apply a transition state to a mounted element. `cover` is an opaque overlay
+  // div (item background color), sized over the element, used for wipes; pass null
+  // for fade. ES5 / Safari-5.1: opacity + -webkit-transform only (no clip-path).
+  // For a wipe, the cover starts fully covering the element (reveal 0) and slides
+  // off in `direction` as reveal -> 1. (Direction sense can be flipped on-wall; the
+  // per-screen vs wall sweep is already encoded in st.wipe.reveal.)
+  function mmApplyTransition(el, cover, st) {
+    if (!el) { return; }
+    if (st.wipe && cover) {
+      el.style.opacity = '1';
+      cover.style.display = 'block';
+      var r = st.wipe.reveal, d = st.wipe.direction, tx = 0, ty = 0;
+      if (d === 'left') { tx = -r * 100; }
+      else if (d === 'right') { tx = r * 100; }
+      else if (d === 'up') { ty = -r * 100; }
+      else { ty = r * 100; }
+      var t = 'translate(' + tx + '%,' + ty + '%)';
+      cover.style.webkitTransform = t; cover.style.transform = t;
+      if (r >= 1) { cover.style.display = 'none'; }      // fully revealed
+    } else {
+      if (cover) { cover.style.display = 'none'; }
+      el.style.opacity = '' + st.opacity;
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
+  root.mmApplyTransition = mmApplyTransition;
   root._mmWallReveal = _wallReveal;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

@@ -46,3 +46,18 @@ test('wipe wall (left): a panel reveals over its own bbox sub-window', () => {
 test('wipe wall falls back to per-screen when rect is null', () => {
   assert.ok(Math.abs(S(WIPE_WALL, null, 250, 10000, null).wipe.reveal - 0.25) < 1e-9);
 });
+
+test('mmApplyTransition sets opacity for fade', () => {
+  const el = { style: {} };
+  globalThis.mmApplyTransition(el, null, S(FADE, null, 500, 10000, null));
+  assert.equal(el.style.opacity, '0.5');
+});
+
+test('mmApplyTransition slides the cover for a wipe (reveal 0.25, left)', () => {
+  const el = { style: {} };
+  const cover = { style: {} };
+  globalThis.mmApplyTransition(el, cover, S(WIPE_SCREEN, null, 250, 10000, null));
+  assert.equal(el.style.opacity, '1');
+  // left wipe revealing 25%: cover gets a translate transform
+  assert.ok(/translate/.test(cover.style.webkitTransform || cover.style.transform));
+});
