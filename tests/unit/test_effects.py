@@ -1,7 +1,12 @@
+"""Unit tests for effects.py — effect catalog, parameter schemas, and ffmpeg filter generation."""
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import effects
+
+
+def test_get_effect_unknown_returns_none():
+    assert effects.get_effect("nope") is None
 
 
 def test_catalog_has_fade_and_wipe_only():

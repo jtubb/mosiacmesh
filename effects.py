@@ -83,7 +83,11 @@ def _fade_st_d(role, params, ctx):
 
 
 def _afade(role, params, ctx):
-    """afade fragment list when audioFade is on for this role, else []."""
+    """afade fragment list when audioFade is on for this role, else [].
+
+    Expects resolve()d params so that 'duration' and 'audioFade' are present;
+    'audioFade' is evaluated as a plain Python bool (truthy/falsy).
+    """
     if not params.get("audioFade"):
         return []
     st, d = _fade_st_d(role, params, ctx)

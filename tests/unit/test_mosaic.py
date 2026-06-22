@@ -872,28 +872,30 @@ class TestEffectRenderHook:
         await server.render_group_async("Default")
         return calls
 
-    async def test_segment_video_bakes_fade(self, mock_settings, monkeypatch):
+    async def test_segment_video_fade_bakes_audio_not_video(self, mock_settings, monkeypatch):
         server.settings = mock_settings; server.socketmanager = MagicMock()
         self._video_group(mock_settings, server.PlayMode.SEGMENT,
-                          start={"name": "fade", "params": {"duration": 600}},
-                          end={"name": "fade", "params": {"duration": 600}})
+                          start={"name": "fade", "params": {"duration": 600, "audioFade": True}},
+                          end={"name": "fade", "params": {"duration": 600, "audioFade": True}})
         calls = await self._run_capture(monkeypatch)
         vf = calls[0][calls[0].index("-vf") + 1]
         assert "perspective=" in vf and "scale=80:60" in vf
-        assert "fade=t=in:st=0:d=0.6" in vf and "fade=t=out:st=4.4:d=0.6" in vf
-        assert "-af" not in calls[0]   # fade is video-only
+        assert "fade=" not in vf   # visual fade is client-side, never baked
+        af = calls[0][calls[0].index("-af") + 1]
+        assert "afade=t=in:st=0:d=0.6" in af    # start audio fade baked
+        assert "afade=t=out:st=4.4:d=0.6" in af  # end audio fade baked (chained in same -af)
 
-    async def test_individual_video_bakes_audiofade(self, mock_settings, monkeypatch):
+    async def test_individual_video_fade_bakes_audio(self, mock_settings, monkeypatch):
         server.settings = mock_settings; server.socketmanager = MagicMock()
         self._video_group(mock_settings, server.PlayMode.INDIVIDUAL,
-                          start={"name": "audiofade", "params": {"duration": 1000}})
+                          start={"name": "fade", "params": {"duration": 1000, "audioFade": True}})
         calls = await self._run_capture(monkeypatch)
         assert calls[0][calls[0].index("-af") + 1] == "afade=t=in:st=0:d=1"
 
     async def test_wipe_bakes_nothing(self, mock_settings, monkeypatch):
         server.settings = mock_settings; server.socketmanager = MagicMock()
         self._video_group(mock_settings, server.PlayMode.SEGMENT,
-                          start={"name": "wipe", "params": {"direction": "left", "duration": 600}})
+                          start={"name": "wipe", "params": {"direction": "left", "duration": 600, "audioFade": False}})
         calls = await self._run_capture(monkeypatch)
         vf = calls[0][calls[0].index("-vf") + 1]
         assert "fade" not in vf and "-af" not in calls[0]
@@ -933,7 +935,7 @@ class TestEffectFfmpegIntegration:
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
         me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
-        me.startEffect = {"name": "fade", "params": {"duration": 300}}
+        me.startEffect = {"name": "fade", "params": {"duration": 300, "audioFade": False}}
         disp.mediaElements = [me]; disp.boundingBox = [0, 0, 320, 240]
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 160; c.deviceHeight = 120
         c.measuredPerimeter = np.array([[[0, 0]], [[160, 0]], [[160, 240]], [[0, 240]]])
