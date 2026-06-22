@@ -4,6 +4,9 @@ Each effect declares a parameter schema and contributes ffmpeg filter
 fragments that are baked into the per-screen render (see render_group_async).
 Adding an effect = define an Effect subclass + @register; it then appears in
 the editor (via /api/effects) and is honored at render with no other changes.
+
+Visual transitions (fade/wipe) are now handled client-side; only audio fades
+are baked into the render (via afade) when the audioFade param is True.
 """
 
 
@@ -11,7 +14,7 @@ class ParamSpec:
     """One declared effect parameter."""
     def __init__(self, key, ptype, default, choices=None, minimum=None, maximum=None):
         self.key = key
-        self.type = ptype          # "number" | "choice"
+        self.type = ptype          # "number" | "choice" | "boolean"
         self.default = default
         self.choices = choices
         self.minimum = minimum
@@ -79,36 +82,34 @@ def _fade_st_d(role, params, ctx):
     return _fmt(st), _fmt(d)
 
 
+def _afade(role, params, ctx):
+    """afade fragment list when audioFade is on for this role, else []."""
+    if not params.get("audioFade"):
+        return []
+    st, d = _fade_st_d(role, params, ctx)
+    typ = "in" if role == "start" else "out"
+    return ["afade=t=" + typ + ":st=" + st + ":d=" + d]
+
+
 @register
 class FadeEffect(Effect):
     name = "fade"
-    label = "Fade (video)"
-    params = [ParamSpec("duration", "number", 600, minimum=0)]
+    label = "Fade"
+    params = [ParamSpec("duration", "number", 600, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
 
     def video_filters(self, role, params, ctx):
-        st, d = _fade_st_d(role, params, ctx)
-        typ = "in" if role == "start" else "out"
-        return (["fade=t=" + typ + ":st=" + st + ":d=" + d], [])
-
-
-@register
-class AudioFadeEffect(Effect):
-    name = "audiofade"
-    label = "Audio fade"
-    params = [ParamSpec("duration", "number", 600, minimum=0)]
-
-    def video_filters(self, role, params, ctx):
-        st, d = _fade_st_d(role, params, ctx)
-        typ = "in" if role == "start" else "out"
-        return ([], ["afade=t=" + typ + ":st=" + st + ":d=" + d])
+        return ([], _afade(role, params, ctx))     # visual fade is client-side
 
 
 @register
 class WipeEffect(Effect):
     name = "wipe"
-    label = "Wipe (coming soon)"
+    label = "Wipe"
     params = [ParamSpec("direction", "choice", "left", choices=["left", "right", "up", "down"]),
-              ParamSpec("duration", "number", 600, minimum=0)]
+              ParamSpec("scope", "choice", "screen", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 600, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
 
     def video_filters(self, role, params, ctx):
-        return ([], [])   # placeholder: geometry baked in a later slice
+        return ([], _afade(role, params, ctx))     # visual wipe is client-side
