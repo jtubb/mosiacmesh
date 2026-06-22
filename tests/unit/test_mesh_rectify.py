@@ -34,6 +34,7 @@ def test_defaults_and_flag():
     assert Client().meshCellQuad is None
     assert Display().meshGlobalRect is None
     assert Display().meshGrid is None
+    assert Display().meshCells is None
     assert CAL.MESH_RECTIFY is True   # rectification is the production default
 
 
@@ -126,6 +127,16 @@ def test_rectify_centers_keystoned_grid(fresh_settings):
     assert res is True
     assert d.meshGlobalRect and d.meshGlobalRect[0] > 0 and d.meshGlobalRect[1] > 0
     assert d.meshGrid == [6, 4]   # [cols, rows] of the 4-row x 6-col fixture
+    # meshCells: one 4-corner quad per screen, normalized inside [0,1]; each quad's
+    # extent narrower than a uniform slot (bezel gaps) -> the no-bleed guarantee.
+    assert d.meshCells is not None and len(d.meshCells) == len(clients)
+    for quad in d.meshCells:
+        assert len(quad) == 4
+        xs = [p[0] for p in quad]; ys = [p[1] for p in quad]
+        assert all(0.0 <= v <= 1.0 for v in xs + ys)
+        assert (max(xs) - min(xs)) < 1.0 / 6 + 0.01    # narrower than a uniform slot
+        assert (max(ys) - min(ys)) < 1.0 / 4 + 0.01
+        assert all(type(v) is float for p in quad for v in p)
     mx, my = _cell_centroid(clients)
     assert abs(mx - 0.5) < 0.02, mx
     assert abs(my - 0.5) < 0.02, my
@@ -155,6 +166,7 @@ def test_rectify_skips_non_grid(fresh_settings):
     assert CAL.rectify_group_grid(d, clients) is False
     assert d.meshGlobalRect is None
     assert d.meshGrid is None
+    assert d.meshCells is None
     assert all(c.meshCellQuad is None for c in clients)
 
 
@@ -178,6 +190,8 @@ def _mesh_display(fresh_settings, did="G"):
     d.meshGlobal = [1774, 887]
     d.meshGlobalRect = [2000, 1000]
     d.meshGrid = [3, 2]
+    d.meshCells = [[[0.05, 0.05], [0.30, 0.05], [0.30, 0.45], [0.05, 0.45]],
+                   [[0.40, 0.05], [0.65, 0.05], [0.65, 0.45], [0.40, 0.45]]]
     me = MediaElement(); me.id = "a"; me.file = "plasma"
     me.playmode = PlayMode.SCRIPT; me.duration = 5.0; me.scriptSpan = "mesh"
     d.mediaElements = [me]
@@ -194,6 +208,8 @@ def test_per_client_items_uses_rectified_when_flag_on(fresh_settings):
     assert items[0]["meshGlobal"] == [2000, 1000]
     assert items[0]["meshQuad"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
     assert items[0]["meshGrid"] == [3, 2]   # [cols, rows] threaded for grid-aware anims
+    assert items[0]["meshCells"] == [[[0.05, 0.05], [0.30, 0.05], [0.30, 0.45], [0.05, 0.45]],
+                                      [[0.40, 0.05], [0.65, 0.05], [0.65, 0.45], [0.40, 0.45]]]
     json.dumps(items)
 
 
@@ -205,7 +221,8 @@ def test_per_client_items_raw_when_flag_off(fresh_settings):
         items = R._per_client_items(d, "c1", c)
     assert items[0]["meshGlobal"] == [1774, 887]
     assert items[0]["meshQuad"][0] == [0.0, 0.0] and items[0]["meshQuad"][1] == [0.5, 0.0]
-    assert "meshGrid" not in items[0]   # raw-bbox path: grid-aware anims use 1x1 fallback
+    assert "meshGrid" not in items[0]    # raw-bbox path: grid-aware anims fall back
+    assert "meshCells" not in items[0]
 
 
 def test_rectified_multiple_mesh_items_survive_jsonpickle_refs(fresh_settings):

@@ -127,6 +127,28 @@
     data[o + 2] = (b + m) * 255;
   }
 
+  // Fire ramp: heat 0..1 -> black -> red -> orange -> yellow -> white, written
+  // straight into data[o..o+2]. Cheap (no strings), bit-portable.
+  function mmFireRamp(heat, data, o) {
+    var r = heat * 3, g = heat * 3 - 1.1, b = heat * 3 - 2.2;
+    data[o] = (r < 0 ? 0 : r > 1 ? 1 : r) * 255;
+    data[o + 1] = (g < 0 ? 0 : g > 1 ? 1 : g) * 255;
+    data[o + 2] = (b < 0 ? 0 : b > 1 ? 1 : b) * 255;
+  }
+
+  // Ray-cast point-in-polygon (x,y vs poly=[[px,py],...]). Used by grid-aware
+  // animations to find which screen quad a point falls in. ES5 / bit-portable.
+  function mmPointInPoly(x, y, poly) {
+    var inside = false, n = poly.length, i, j;
+    for (i = 0, j = n - 1; i < n; j = i++) {
+      var xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
+      if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
   // Wrap a field entry's shade() into the standard draw(ctx,tMs,w,h,nowMs,seed).
   // Lazily allocates the cols x rows offscreen canvas on first paint so module
   // load stays Node-safe (no document at import; field draws are browser-only).
@@ -159,17 +181,39 @@
     {
       key: 'bouncingBalls',
       label: 'Bouncing balls',
-      description: 'Four balls drifting around the screen.',
-      draw: function (ctx, tMs, w, h) {
-        var colors = ['#e74c3c', '#27ae60', '#2980b9', '#f1c40f'];
-        var r = Math.max(12, Math.min(w, h) * 0.06), n = 4, i;
+      description: 'Soft colored orbs drifting and blending across the wall.',
+      // Field animation (smooth one-blit render): four soft colored glows drift on
+      // sinusoidal paths; their light ADDS where they overlap. Low-frequency field
+      // -> fluid on the iPad-1, no tracked vector sprites. Pure function of tMs.
+      grid: { cols: 64, rows: 54 },
+      smooth: true,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
+        var n = 4, i;
+        var hues = [0, 130, 215, 50];
+        var bxs = [], bys = [], bcol = [];
         for (i = 0; i < n; i++) {
-          var px = (Math.sin(tMs / (900 + i * 220) + i) + 1) / 2;        // 0..1
-          var py = (Math.sin(tMs / (700 + i * 180) + i * 1.7) + 1) / 2;  // 0..1
-          ctx.fillStyle = colors[i % colors.length];
-          ctx.beginPath();
-          ctx.arc(r + px * (w - 2 * r), r + py * (h - 2 * r), r, 0, Math.PI * 2);
-          ctx.fill();
+          bxs.push((Math.sin(tMs / (900 + i * 220) + i) + 1) / 2);
+          bys.push((Math.sin(tMs / (700 + i * 180) + i * 1.7) + 1) / 2);
+          var tmp = [0, 0, 0, 0];
+          mmHsl2Rgb(hues[i], 0.9, 0.5, tmp, 0);
+          bcol.push([tmp[0] / 255, tmp[1] / 255, tmp[2] / 255]);
+        }
+        var rad = 0.22, o = 0, gx, gy;
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            var u = (gx + 0.5) / cols, v = (gy + 0.5) / rows;
+            var rr = 0, gg = 0, bb = 0;
+            for (i = 0; i < n; i++) {
+              var dx = u - bxs[i], dy = v - bys[i];
+              var d = Math.sqrt(dx * dx + dy * dy) / rad;
+              var b = d < 1 ? (1 - d) * (1 - d) : 0;
+              rr += bcol[i][0] * b; gg += bcol[i][1] * b; bb += bcol[i][2] * b;
+            }
+            data[o] = (rr > 1 ? 1 : rr) * 255;
+            data[o + 1] = (gg > 1 ? 1 : gg) * 255;
+            data[o + 2] = (bb > 1 ? 1 : bb) * 255;
+            o += 4;
+          }
         }
       }
     },
@@ -720,152 +764,169 @@
       }
     },
     {
-      key: 'gridHop',
-      label: 'Hopping figure',
-      description: 'A stick figure that hops from screen to screen across the wall.',
-      // Grid-aware: gets grid={cols,rows} (1x1 fallback when mirror/uncalibrated).
-      // Snakes cell-to-cell (boustrophedon) with a parabolic launch arc, squash/
-      // stretch, and a landing dust puff. Pure function of (tMs, seed): every screen
-      // draws the same global figure, so it appears on whichever screen owns it.
-      draw: function (ctx, tMs, w, h, nowMs, seed, grid) {
-        var C = (grid && grid.cols) || 1, R = (grid && grid.rows) || 1;
-        var total = C * R;
-        var rng = MM_RNG(seed);
-        var hue = Math.floor(rng() * 360);
-        var startK = Math.floor(rng() * total);
-        var HOP_MS = 850;
-        var cellW = w / C, cellH = h / R;
-        var k = Math.floor(tMs / HOP_MS) + startK;
-        var p = (tMs % HOP_MS) / HOP_MS;
-        function orderAt(kk) {                        // ping-pong: no big wrap leap
-          var per = 2 * total;
-          var mm = ((kk % per) + per) % per;
-          return mm < total ? mm : (per - 1 - mm);
-        }
-        function cellOf(order) {
-          var j = Math.floor(order / C) % R;
-          var posInRow = order % C;
-          var i = (j % 2 === 0) ? posInRow : (C - 1 - posInRow);
-          return { cx: (i + 0.5) * cellW, cy: (j + 0.5) * cellH };
-        }
-        var a = cellOf(orderAt(k)), b = cellOf(orderAt(k + 1));
-        var arc = Math.min(cellW, cellH) * 0.55;
-        var x = a.cx + (b.cx - a.cx) * p;
-        var y = (a.cy + (b.cy - a.cy) * p) - arc * Math.sin(Math.PI * p);
-        var s = Math.min(cellW, cellH) * 0.16;        // limb unit
-        var stretch = 1 + 0.35 * Math.sin(Math.PI * p);
-        var squash = 1 - 0.18 * Math.sin(Math.PI * p);
-        var col = 'hsl(' + hue + ', 85%, 65%)';
-        if (p < 0.16) {                               // landing dust puff at cell a
-          var puff = p / 0.16;
-          var pr = s * (0.4 + puff * 1.4), dz;
-          ctx.strokeStyle = 'rgba(200,200,200,' + (0.5 * (1 - puff)).toFixed(3) + ')';
-          ctx.lineWidth = Math.max(1, s * 0.12);
-          for (dz = -1; dz <= 1; dz += 2) {
-            ctx.beginPath();
-            ctx.arc(a.cx + dz * pr, a.cy + s * 2.0, pr * 0.5, 0, Math.PI * 2);
-            ctx.stroke();
-          }
-        }
-        ctx.strokeStyle = col; ctx.fillStyle = col;
-        ctx.lineWidth = Math.max(1.5, s * 0.28);
-        var headR = s * 0.7 * squash;
-        var hipY = y + s * 1.0 * stretch;
-        var shoulderY = y - s * 0.6 * stretch;
-        ctx.beginPath();                              // head
-        ctx.arc(x, shoulderY - headR - s * 0.2, headR, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();                              // spine
-        ctx.moveTo(x, shoulderY); ctx.lineTo(x, hipY); ctx.stroke();
-        var armSwing = Math.sin(Math.PI * p) * s * 1.1;   // arms
-        ctx.beginPath();
-        ctx.moveTo(x, shoulderY + s * 0.2); ctx.lineTo(x - s * 1.1, shoulderY + s * 0.2 - armSwing);
-        ctx.moveTo(x, shoulderY + s * 0.2); ctx.lineTo(x + s * 1.1, shoulderY + s * 0.2 + armSwing);
-        ctx.stroke();
-        var spread = s * (0.5 + 0.8 * (1 - Math.sin(Math.PI * p)));   // legs
-        var legLen = s * 1.6 * stretch;
-        ctx.beginPath();
-        ctx.moveTo(x, hipY); ctx.lineTo(x - spread, hipY + legLen);
-        ctx.moveTo(x, hipY); ctx.lineTo(x + spread, hipY + legLen);
-        ctx.stroke();
-      }
-    },
-    {
-      key: 'stadiumWave',
-      label: 'Stadium wave',
-      description: 'A wave of light sweeps screen-by-screen across the wall.',
-      // Grid-aware: a front advances over time; each cell lights as the front
-      // passes and fades behind it. seed picks direction + colorway. ~cols*rows
-      // fillRects/frame (~24) -> trivially cheap. 1x1 fallback when mirror.
-      draw: function (ctx, tMs, w, h, nowMs, seed, grid) {
-        var C = (grid && grid.cols) || 1, R = (grid && grid.rows) || 1;
-        var rng = MM_RNG(seed);
-        var mode = Math.floor(rng() * 3);             // 0 L->R, 1 T->B, 2 diagonal
-        var hue0 = Math.floor(rng() * 360);
-        var SWEEP_MS = 2600, TAIL = 0.35;
-        var front = (tMs / SWEEP_MS) % 1;
-        var cellW = w / C, cellH = h / R, i, j;
-        var denomD = ((C - 1) + (R - 1)) || 1;
-        for (j = 0; j < R; j++) {
-          for (i = 0; i < C; i++) {
-            var phase;
-            if (mode === 0) { phase = (C > 1) ? i / (C - 1) : 0; }
-            else if (mode === 1) { phase = (R > 1) ? j / (R - 1) : 0; }
-            else { phase = (i + j) / denomD; }
-            var d = ((front - phase) % 1 + 1) % 1;    // time since front passed
-            var bright = d < TAIL ? (1 - d / TAIL) : 0;
-            if (bright <= 0) { ctx.fillStyle = '#000'; }
-            else { ctx.fillStyle = 'hsl(' + ((hue0 + phase * 120) % 360) + ', 90%, ' + (8 + bright * 52).toFixed(1) + '%)'; }
-            ctx.fillRect(i * cellW, j * cellH, cellW + 1, cellH + 1);
-          }
-        }
-      }
-    },
-    {
       key: 'ballLights',
-      label: 'Bouncing ball',
-      description: 'A ball bounces across the wall, lighting up whichever screen it is on.',
-      // Grid-aware: deterministic edge-bounce across the global canvas; the cell
-      // containing the ball flashes, ball + fading trail drawn on top. 1x1 fallback.
-      draw: function (ctx, tMs, w, h, nowMs, seed, grid) {
-        var C = (grid && grid.cols) || 1, R = (grid && grid.rows) || 1;
+      label: 'Roaming spotlight',
+      description: 'A soft glowing orb drifts across the wall, lighting each screen as it passes.',
+      // Field animation (smooth one-blit render): a soft radial glow bounces around
+      // the wall. As a low-frequency field it stays fluid on the iPad-1 (no tracked
+      // vector sprite to expose frame jitter) and softly illuminates whichever
+      // panel(s) it is over. Pure function of (tMs, seed).
+      grid: { cols: 72, rows: 60 },
+      smooth: true,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
         var rng = MM_RNG(seed);
-        var hue0 = Math.floor(rng() * 360);
-        var cellW = w / C, cellH = h / R;
-        var r = Math.min(cellW, cellH) * 0.16;
-        var vx = (120 + rng() * 120) * (rng() < 0.5 ? -1 : 1);
-        var vy = (90 + rng() * 110) * (rng() < 0.5 ? -1 : 1);
-        var rangeX = w - 2 * r, rangeY = h - 2 * r;
-        var ox = rng() * (rangeX > 0 ? rangeX : 0), oy = rng() * (rangeY > 0 ? rangeY : 0);
-        function bounce(raw, range) {
-          if (range <= 0) { return 0; }
-          var per = 2 * range;
-          var m = ((raw % per) + per) % per;
-          return m <= range ? m : (per - m);
+        var hue0 = rng() * 360;
+        var vx = (0.13 + rng() * 0.10) * (rng() < 0.5 ? -1 : 1);
+        var vy = (0.11 + rng() * 0.09) * (rng() < 0.5 ? -1 : 1);
+        var ox = rng(), oy = rng();
+        var t = tMs / 1000;
+        function tri(p) { var m = ((p % 2) + 2) % 2; return m <= 1 ? m : (2 - m); }  // 0..1 bounce
+        var bx = tri(ox + vx * t), by = tri(oy + vy * t);
+        var rad = 0.26, hue = (hue0 + tMs / 40) % 360;
+        var o = 0, gx, gy;
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            var dx = (gx + 0.5) / cols - bx, dy = (gy + 0.5) / rows - by;
+            var d = Math.sqrt(dx * dx + dy * dy) / rad;
+            var b = d < 1 ? (1 - d) * (1 - d) : 0;            // soft quadratic falloff
+            mmHsl2Rgb(hue, 0.85, 0.03 + b * 0.62, data, o);
+            o += 4;
+          }
         }
-        function posAt(t) {
-          return { x: r + bounce(ox + vx * t / 1000, rangeX),
-                   y: r + bounce(oy + vy * t / 1000, rangeY) };
+      }
+    },
+    {
+      key: 'hyperTunnel',
+      label: 'Hyperspace tunnel',
+      description: 'A perspective wormhole rushing toward you across the whole wall.',
+      // Full-bleed field: per-pixel angle+radius -> a tunnel texture scrolling
+      // inward, fading to black at the vanishing point (wall center). Smooth blit.
+      grid: { cols: 64, rows: 56 },
+      smooth: true,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var hue0 = rng() * 360;
+        var t = tMs / 1000, o = 0, gx, gy;
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            var du = (gx + 0.5) / cols - 0.5;
+            var dv = (gy + 0.5) / rows - 0.5;
+            var rho = Math.sqrt(du * du + dv * dv) + 1e-4;
+            var ang = Math.atan2(dv, du);
+            var depth = 0.35 / rho + t * 1.2;            // rush inward
+            var ring = 0.5 + 0.5 * Math.sin(depth * 6.2831);
+            var seg = 0.5 + 0.5 * Math.sin(ang * 8 + depth * 2);
+            var vign = rho * 3; if (vign > 1) { vign = 1; }
+            var bright = ring * (0.4 + 0.6 * seg) * vign;
+            var hue = (hue0 + ang * 57.3 + depth * 40) % 360;
+            if (hue < 0) { hue += 360; }
+            mmHsl2Rgb(hue, 0.9, 0.06 + bright * 0.5, data, o);
+            o += 4;
+          }
         }
-        var b = posAt(tMs);
-        var ci = Math.floor(b.x / cellW); if (ci < 0) { ci = 0; } if (ci >= C) { ci = C - 1; }
-        var cj = Math.floor(b.y / cellH); if (cj < 0) { cj = 0; } if (cj >= R) { cj = R - 1; }
-        var hue = (hue0 + tMs / 40) % 360;
-        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = 'hsl(' + hue + ', 80%, 22%)';
-        ctx.fillRect(ci * cellW, cj * cellH, cellW + 1, cellH + 1);
-        var tt, n = 5;
-        for (tt = n; tt >= 1; tt--) {
-          var pp = posAt(tMs - tt * 45);
-          ctx.fillStyle = 'hsla(' + hue + ', 90%, 65%, ' + (0.12 * (n - tt + 1) / n).toFixed(3) + ')';
-          ctx.beginPath();
-          ctx.arc(pp.x, pp.y, r * (0.5 + 0.4 * (n - tt) / n), 0, Math.PI * 2);
-          ctx.fill();
+      }
+    },
+    {
+      key: 'fire',
+      label: 'Fire',
+      description: 'Flames climbing the entire bottom edge of the wall.',
+      // Full-bleed field: STATELESS procedural fire (upward-scrolling sin
+      // turbulence over a bottom-hot gradient) so late-joining screens match
+      // without shared history. Fire ramp palette. Smooth blit.
+      grid: { cols: 72, rows: 54 },
+      smooth: true,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
+        var rng = MM_RNG(seed);
+        var ph = rng() * 6.283;
+        var t = tMs / 1000, o = 0, gx, gy;
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            var x = gx / cols, y = gy / rows;            // y: 0 top .. 1 bottom
+            var ys = y + t * 0.6;                        // scroll flames upward
+            var turb = Math.sin(x * 9 + ph + Math.sin(ys * 7) * 1.5)
+                     + Math.sin(x * 17 - ys * 11 + ph * 2) * 0.6
+                     + Math.sin(x * 4 + ys * 5) * 0.4;
+            var heat = (y * 1.35 - 0.35) + (turb / 2.0) * 0.28;
+            if (heat < 0) { heat = 0; } else if (heat > 1) { heat = 1; }
+            mmFireRamp(heat, data, o);
+            o += 4;
+          }
         }
-        ctx.fillStyle = 'hsl(' + hue + ', 90%, 70%)';
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
-        ctx.fill();
+      }
+    },
+    {
+      key: 'ripplePool',
+      label: 'Ripple pool',
+      description: 'Drops strike the wall; concentric waves spread and interfere.',
+      // Full-bleed field: STATELESS sum of expanding rings from seeded drops.
+      // Each drop j spawns at j*DROP_MS at a seeded point; its ring front is at
+      // SPEED*age with a linear decay. Interference where rings overlap. Smooth.
+      grid: { cols: 60, rows: 52 },
+      smooth: true,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
+        var t = tMs / 1000;
+        var DROP_MS = 650, NACTIVE = 5, SPEED = 0.55, K = 26;
+        var curDrop = Math.floor(tMs / DROP_MS);
+        var dx = [], dy = [], dage = [], j;
+        for (j = 0; j < NACTIVE; j++) {
+          var idx = curDrop - j;
+          if (idx < 0) { continue; }
+          var r = MM_RNG(mmDeriveSeed(seed, idx));
+          dx.push(r()); dy.push(r()); dage.push(t - idx * DROP_MS / 1000);
+        }
+        var n = dx.length, o = 0, gx, gy, k2;
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            var x = gx / cols, y = gy / rows, hsum = 0;
+            for (k2 = 0; k2 < n; k2++) {
+              var ddx = x - dx[k2], ddy = y - dy[k2];
+              var dist = Math.sqrt(ddx * ddx + ddy * ddy);
+              var front = SPEED * dage[k2];
+              if (dist < front) {
+                var amp = (1 / (1 + dage[k2] * 2)) * (1 - (front - dist) * 3);
+                if (amp > 0) { hsum += Math.sin(K * (dist - front)) * amp; }
+              }
+            }
+            var b = 0.5 + hsum * 0.9;
+            if (b < 0) { b = 0; } else if (b > 1) { b = 1; }
+            mmHsl2Rgb(205, 0.7, 0.1 + b * 0.55, data, o);
+            o += 4;
+          }
+        }
+      }
+    },
+    {
+      key: 'matrixRain',
+      label: 'Matrix rain',
+      description: 'Bright green glyph-streaks pouring down the full wall height.',
+      // Full-bleed field, CRISP (smooth:false). Per column: a falling bright head
+      // (seeded speed/offset) with a fading green trail above it + per-cell time-
+      // bucketed flicker. Stateless -> deterministic across screens.
+      grid: { cols: 72, rows: 54 },
+      smooth: false,
+      shade: function (data, cols, rows, tMs, nowMs, seed) {
+        var t = tMs / 1000, c, gx, gy, o;
+        var spd = [], off = [];
+        for (c = 0; c < cols; c++) {
+          var r = MM_RNG(mmDeriveSeed(seed, c));
+          spd.push(6 + r() * 14); off.push(r() * rows);
+        }
+        var period = rows + 16, bucket = Math.floor(t * 8);
+        for (gy = 0; gy < rows; gy++) {
+          for (gx = 0; gx < cols; gx++) {
+            o = (gy * cols + gx) * 4;
+            var head = (off[gx] + spd[gx] * t) % period;
+            var d = head - gy;                           // >0 = trail above head
+            if (d >= 0 && d < 16) {
+              if (d < 1) { data[o] = 190; data[o + 1] = 255; data[o + 2] = 190; }
+              else {
+                var fr = MM_RNG(((gx * 131 + gy * 17 + bucket) >>> 0));
+                var g = (1 - d / 16) * (0.6 + 0.4 * fr());
+                data[o] = 0; data[o + 1] = g * 220; data[o + 2] = 0;
+              }
+            } else { data[o] = 0; data[o + 1] = 0; data[o + 2] = 0; }
+          }
+        }
       }
     }
   ];
@@ -889,5 +950,7 @@
   root.mmMeshTransform = mmMeshTransform;
   root.mmLifeStep = mmLifeStep;
   root.mmHsl2Rgb = mmHsl2Rgb;
+  root.mmFireRamp = mmFireRamp;
+  root.mmPointInPoly = mmPointInPoly;
   root.mmMakeFieldDraw = mmMakeFieldDraw;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

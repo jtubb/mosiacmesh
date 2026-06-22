@@ -1243,11 +1243,16 @@ def _per_client_items(display, key, c):
                 # builds a distinct list per item.)
                 item["meshQuad"] = [[float(pt[0]), float(pt[1])] for pt in c.meshCellQuad]
                 item["meshGlobal"] = list(display.meshGlobalRect)
-                # Physical screen grid [cols, rows] so grid-aware animations can
-                # choreograph per-screen motion (hop, wave, ball). Fresh list per
-                # item (same jsonpickle-shared-ref hazard as meshQuad above).
+                # Physical screen grid [cols, rows] + exact per-screen rects so
+                # grid-aware animations choreograph correctly. Fresh lists per item
+                # (same jsonpickle-shared-ref hazard as meshQuad above). meshCells
+                # accounts for real bezel gaps so "light the screen under a point"
+                # doesn't bleed into neighbors (uniform cols/rows would).
                 if getattr(display, "meshGrid", None):
                     item["meshGrid"] = [int(display.meshGrid[0]), int(display.meshGrid[1])]
+                if getattr(display, "meshCells", None):
+                    item["meshCells"] = [[[float(pt[0]), float(pt[1])] for pt in cell]
+                                         for cell in display.meshCells]
             elif (c.measuredPerimeter is not None
                     and display.boundingBox and getattr(display, "meshGlobal", None)):
                 # Raw-bbox path (today's behavior). measuredPerimeter is numpy

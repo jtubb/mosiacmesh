@@ -14,7 +14,8 @@ test('importing js/animations.js populates MM_ANIMATIONS with well-formed entrie
                    'radialPulse', 'particleGalaxy', 'plasma', 'pendulumWave',
                    'dvdLogo', 'analogClock', 'wordClock', 'sunMoonTransit',
                    'starfield', 'fireworks', 'truchet', 'spirograph',
-                   'gameOfLife', 'gridHop', 'stadiumWave', 'ballLights']) {
+                   'gameOfLife', 'ballLights',
+                   'hyperTunnel', 'fire', 'ripplePool', 'matrixRain']) {
     assert.ok(keys.includes(k), `missing animation "${k}"`);
   }
   for (const a of list) {

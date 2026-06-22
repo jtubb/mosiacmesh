@@ -260,7 +260,7 @@
 		// loaded the probe". Bump MM_DBG_VER on every probe edit, then look for
 		// `boot ver=<this value>` per screen in the -v log before trusting any
 		// other CLIENTLOG line. Retries until the socket is OPEN, then fires once.
-		var MM_DBG_VER = 'mesh-rectify-2';
+		var MM_DBG_VER = 'mesh-rectify-4';
 		var _bootSent = false;
 		var _bootTimer = setInterval(function () {
 			if (_bootSent) { clearInterval(_bootTimer); return; }
@@ -538,10 +538,13 @@
 					? mmLoopItemSeed(playback.seed || 0, loopIdx, pos.index) : 0;
 				var it = playback.items[pos.index];
 				var span = (it && it.scriptSpan) || 'mirror';
-				// Physical screen grid for grid-aware animations (hop/wave/ball). Present
-				// only on rectified mesh items; null otherwise -> those animations fall
-				// back to a 1x1 grid (whole screen as one cell).
-				var meshGridObj = (it && it.meshGrid) ? { cols: it.meshGrid[0], rows: it.meshGrid[1] } : null;
+				// Physical screen layout for grid-aware animations. cells = exact
+				// per-screen [x,y,w,h] normalized rects (bezel-accurate, no bleed);
+				// cols/rows = the uniform grid summary. Present only on rectified mesh
+				// items; null otherwise -> grid-aware animations fall back gracefully.
+				var meshGridObj = (it && it.meshGrid)
+					? { cols: it.meshGrid[0], rows: it.meshGrid[1], cells: (it.meshCells || null) }
+					: null;
 				if (span === 'mesh') {
 					// Mesh: render this screen's affine slice of the global wall canvas.
 					// Wrap the transform compute so a throw HERE (e.g. a malformed quad

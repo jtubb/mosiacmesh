@@ -1,47 +1,38 @@
 /**
- * ballLights: a grid-aware mesh animation — a ball bounces across the global wall
- * canvas (deterministic edge bounce) and the cell it occupies flashes. Pure
- * function of (tMs, seed, grid). Tests: determinism, animation over time, grid-
- * awareness, and a null-grid (mirror) fallback that doesn't throw.
+ * ballLights ("Roaming spotlight"): a FIELD animation — a soft radial glow bounces
+ * around the wall, rendered as one scaled blit (smooth on the iPad-1, no tracked
+ * vector sprite). shade() is a pure function of (tMs, seed) -> RGBA buffer; tested
+ * without a DOM: determinism, motion over time, seed-varied path/color, and that
+ * the glow is localized (not a full-bright or all-black field).
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
-import { makeRecordingCtx } from './_canvas_stub.js';
 await import('../../../js/animations.js');
-const ballLights = globalThis.MM_ANIMATIONS.find((a) => a.key === 'ballLights').draw;
-const W = 4975, H = 4405;
-const GRID = { cols: 6, rows: 4 };
+const e = globalThis.MM_ANIMATIONS.find((a) => a.key === 'ballLights');
+const C = e.grid.cols, R = e.grid.rows;
+function buf(tMs, seed) { const d = new Uint8ClampedArray(C * R * 4); e.shade(d, C, R, tMs, 0, seed); return d; }
+function brightCells(d) { let n = 0; for (let i = 0; i < d.length; i += 4) if (d[i] + d[i + 1] + d[i + 2] > 120) n++; return n; }
 
-test('ballLights — deterministic at same (tMs, seed, grid)', () => {
-  const a = makeRecordingCtx(), b = makeRecordingCtx();
-  ballLights(a, 3000, W, H, 0, 9, GRID);
-  ballLights(b, 3000, W, H, 0, 9, GRID);
-  assert.deepStrictEqual(a.__ops, b.__ops);
+test('ballLights — declares a field grid + smoothing, auto-wrapped to draw()', () => {
+  assert.equal(typeof e.shade, 'function');
+  assert.equal(typeof e.draw, 'function');
+  assert.equal(e.smooth, true);
 });
 
-test('ballLights — animates (ball moves ⇒ different output)', () => {
-  const a = makeRecordingCtx(), b = makeRecordingCtx();
-  ballLights(a, 1000, W, H, 0, 9, GRID);
-  ballLights(b, 4000, W, H, 0, 9, GRID);
-  assert.notDeepStrictEqual(a.__ops, b.__ops);
+test('ballLights — deterministic at same (tMs, seed)', () => {
+  assert.deepStrictEqual(buf(3000, 9), buf(3000, 9));
+});
+
+test('ballLights — animates (glow moves over time)', () => {
+  assert.notDeepStrictEqual(buf(1000, 9), buf(4000, 9));
 });
 
 test('ballLights — seed varies trajectory/colorway', () => {
-  const a = makeRecordingCtx(), b = makeRecordingCtx();
-  ballLights(a, 3000, W, H, 0, 1, GRID);
-  ballLights(b, 3000, W, H, 0, 2, GRID);
-  assert.notDeepStrictEqual(a.__ops, b.__ops);
+  assert.notDeepStrictEqual(buf(3000, 1), buf(3000, 2));
 });
 
-test('ballLights — grid-aware (different grid ⇒ different lit cell rect)', () => {
-  const a = makeRecordingCtx(), b = makeRecordingCtx();
-  ballLights(a, 3000, W, H, 0, 9, { cols: 6, rows: 4 });
-  ballLights(b, 3000, W, H, 0, 9, { cols: 2, rows: 2 });
-  assert.notDeepStrictEqual(a.__ops, b.__ops);
-});
-
-test('ballLights — null grid (mirror) falls back to 1x1 without throwing', () => {
-  const c = makeRecordingCtx();
-  assert.doesNotThrow(() => ballLights(c, 3000, 768, 928, 0, 9, null));
-  assert.ok(c.__ops.length > 0);
+test('ballLights — glow is localized (a spotlight, not full-bright or all-black)', () => {
+  const lit = brightCells(buf(3000, 9));
+  assert.ok(lit > 0, 'expected a lit glow region');
+  assert.ok(lit < C * R, 'glow should not cover the entire field');
 });

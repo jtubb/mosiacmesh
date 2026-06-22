@@ -43,6 +43,12 @@ class Display():
         # Passed to mesh animations so they can choreograph per-screen motion
         # (a cell center is ((i+0.5)/cols*GW, (j+0.5)/rows*GH)).
         self.meshGrid = None
+        # Per-screen EXACT 4-corner quads (normalized in meshGlobalRect space) —
+        # each calibrated screen's rectified cell quad. The full quad, not its bbox,
+        # so an animation that lights "the screen under a point" fills the precise
+        # (possibly skewed) panel region and never bleeds into neighbors — important
+        # for keystoned rows where the bbox would overshoot. None unless MESH_RECTIFY.
+        self.meshCells = None
         self.mediaElements = []
         self.loop = False
         self.currentFrame = 0
