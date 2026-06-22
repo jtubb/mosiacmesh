@@ -32,6 +32,7 @@ import { buildContentItems, contentItemToPlaylistItem, mediaItemsMissingPlayType
 function basename(p) { return String(p || '').split('/').pop() || ''; }
 function asObject(it) { return (typeof it === 'string') ? { file: it } : { ...it }; }
 function isAnim(it) { return it.playmode === 'SCRIPT'; }
+function isVideo(file) { return /\.(mp4|m4v|mov|webm|ogv)$/i.test(file || ''); }
 
 /**
  * Wire the drilled-in (Schedule timeline) entry points. Two listeners:
@@ -73,6 +74,145 @@ export function attachPlaylistEditor(store) {
     ev.stopPropagation();
     openPlaylistEditor(store, row.dataset.playlistName, Number(item.dataset.itemIndex || 0));
   }, true);
+}
+
+/**
+ * Build one effect control group (Start or End) and append it to `container`.
+ *
+ * @param {object} opts
+ *   label        - display label ("Start effect" / "End effect")
+ *   getEffect    - () => it.startEffect or it.endEffect (null/undefined = none)
+ *   setEffect    - (val) => assigns or deletes the field on `it`
+ *   catalog      - store.effectCatalog array
+ *   it           - the current draft item (for isVideo check on audioFade)
+ */
+function buildEffectControl({ label, getEffect, setEffect, catalog, it }) {
+  const wrap = document.createElement('div');
+  wrap.className = 'mm-ple-effect-group';
+
+  const lbl = document.createElement('label');
+  lbl.textContent = label + ' ';
+
+  const sel = document.createElement('select');
+  // "None" option
+  const noneOpt = document.createElement('option');
+  noneOpt.value = ''; noneOpt.textContent = 'None';
+  sel.appendChild(noneOpt);
+  for (const ef of catalog) {
+    const o = document.createElement('option');
+    o.value = ef.name; o.textContent = ef.label;
+    sel.appendChild(o);
+  }
+  const current = getEffect();
+  sel.value = current ? (current.name || '') : '';
+
+  lbl.appendChild(sel);
+  wrap.appendChild(lbl);
+
+  // Params container — rebuilt when the select changes.
+  const paramsWrap = document.createElement('div');
+  paramsWrap.className = 'mm-ple-effect-params';
+  wrap.appendChild(paramsWrap);
+
+  function renderParams() {
+    paramsWrap.innerHTML = '';
+    const chosenName = sel.value;
+    if (!chosenName) return;
+    const efDef = catalog.find((e) => e.name === chosenName);
+    if (!efDef) return;
+    const existingEffect = getEffect();
+    const existingParams = (existingEffect && existingEffect.name === chosenName)
+      ? (existingEffect.params || {})
+      : {};
+
+    // Collect live param values for writeback. Rebuilt each renderParams() call.
+    const live = {};
+    for (const p of (efDef.params || [])) {
+      const existingVal = (p.key in existingParams) ? existingParams[p.key] : p.default;
+
+      // audioFade (boolean) is video-only — skip for non-video items.
+      if (p.type === 'boolean' && p.key === 'audioFade' && !isVideo(it.file)) continue;
+
+      const pWrap = document.createElement('label');
+      pWrap.className = 'mm-ple-effect-param';
+
+      if (p.type === 'number') {
+        pWrap.textContent = p.key + ' ';
+        const inp = document.createElement('input');
+        inp.type = 'number';
+        if (p.min != null) inp.min = String(p.min);
+        inp.value = String(existingVal != null ? existingVal : p.default);
+        live[p.key] = Number(inp.value);
+        inp.addEventListener('input', () => {
+          live[p.key] = Number(inp.value);
+          commitEffect();
+        });
+        pWrap.appendChild(inp);
+      } else if (p.type === 'choice') {
+        pWrap.textContent = p.key + ' ';
+        const csel = document.createElement('select');
+        for (const ch of (p.choices || [])) {
+          const co = document.createElement('option');
+          co.value = ch; co.textContent = ch;
+          if (ch === (existingVal != null ? existingVal : p.default)) co.selected = true;
+          csel.appendChild(co);
+        }
+        live[p.key] = csel.value;
+        csel.addEventListener('change', () => {
+          live[p.key] = csel.value;
+          commitEffect();
+        });
+        pWrap.appendChild(csel);
+      } else if (p.type === 'boolean') {
+        const cb = document.createElement('input'); cb.type = 'checkbox';
+        cb.checked = !!(existingVal != null ? existingVal : p.default);
+        live[p.key] = cb.checked;
+        cb.addEventListener('change', () => {
+          live[p.key] = cb.checked;
+          commitEffect();
+        });
+        pWrap.appendChild(cb);
+        pWrap.appendChild(document.createTextNode(' ' + p.key));
+      }
+
+      paramsWrap.appendChild(pWrap);
+    }
+
+    // Seed live with all declared params (including those skipped above) using
+    // current or default so the effect object is always complete.
+    function commitEffect() {
+      const params = {};
+      for (const p of (efDef.params || [])) {
+        if (p.key in live) {
+          params[p.key] = live[p.key];
+        } else {
+          const val = (p.key in existingParams) ? existingParams[p.key] : p.default;
+          if (p.type === 'number') params[p.key] = Number(val);
+          else if (p.type === 'boolean') params[p.key] = !!(val);
+          else params[p.key] = val;
+        }
+      }
+      setEffect({ name: chosenName, params });
+    }
+
+    // Initial commit so the effect object reflects the current params state
+    // even if the operator never touches a param.
+    commitEffect();
+  }
+
+  sel.addEventListener('change', () => {
+    if (!sel.value) {
+      setEffect(null);
+      paramsWrap.innerHTML = '';
+    } else {
+      renderParams();
+    }
+  });
+
+  // Render params for the initially-selected effect (if any).
+  renderParams();
+
+  return wrap;
 }
 
 export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
@@ -220,6 +360,25 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
       bg.value = it.backgroundColor || '';
       bg.addEventListener('input', () => { const v = bg.value.trim(); if (v) it.backgroundColor = v; else delete it.backgroundColor; });
       bgWrap.appendChild(bg); box.appendChild(bgWrap);
+
+      // Start effect — driven by store.effectCatalog (Task 6).
+      const catalog = store.effectCatalog || [];
+      box.appendChild(buildEffectControl({
+        label: 'Start effect',
+        getEffect: () => it.startEffect || null,
+        setEffect: (val) => { if (val) it.startEffect = val; else delete it.startEffect; },
+        catalog,
+        it,
+      }));
+
+      // End effect
+      box.appendChild(buildEffectControl({
+        label: 'End effect',
+        getEffect: () => it.endEffect || null,
+        setEffect: (val) => { if (val) it.endEffect = val; else delete it.endEffect; },
+        catalog,
+        it,
+      }));
 
       root.appendChild(box);
     }

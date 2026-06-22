@@ -48,6 +48,9 @@ export function makeStore() {
     schedules: [],
     media: { images: [], videos: [], videoDurations: {} },
     profiles: {},
+    // Task 6: transition-effects catalog. Hydrated from GET /api/effects.
+    // Shape: [{name, label, params:[{key, type, default, choices?, min?, max?}]}]
+    effectCatalog: [],
 
     viewMode: 'day',
     viewDate: todayIso(),
@@ -136,6 +139,15 @@ export function makeStore() {
         this.setRenders(rd.renders, rd.queueDepth);
       } catch (e) {
         console.warn('[timeline] getRenders failed:', e);
+      }
+      // Task 6: fetch the transition-effects catalog. Separate try/catch so a
+      // missing /api/effects route (pre-Task-6 server) doesn't block hydrate.
+      this.effectCatalog = [];
+      try {
+        const r = await fetch('/api/effects');
+        if (r.ok) this.effectCatalog = (await r.json()).effects || [];
+      } catch (e) {
+        console.warn('[timeline] effectCatalog fetch failed:', e);
       }
     },
 
