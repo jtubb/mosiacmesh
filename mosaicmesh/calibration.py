@@ -439,6 +439,7 @@ def rectify_group_grid(display, clients):
 
     def _clear():
         display.meshGlobalRect = None
+        display.meshGrid = None
         for c in cal:
             c.meshCellQuad = None
 
@@ -480,6 +481,7 @@ def rectify_group_grid(display, clients):
     scale_x = (statistics.median(dwv) / mcw) if (dwv and mcw > 0) else 1.0
     scale_y = (statistics.median(dhv) / mch) if (dhv and mch > 0) else 1.0
     display.meshGlobalRect = [int(round(rbw * scale_x)), int(round(rbh * scale_y))]
+    display.meshGrid = [int(C), int(R)]   # [cols, rows] physical screen grid
     for i, c in enumerate(cal):
         p = rect[i]
         c.meshCellQuad = [[float((p[j, 0] - rbx) / rbw), float((p[j, 1] - rby) / rbh)]

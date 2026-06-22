@@ -38,6 +38,11 @@ class Display():
         # grid). None unless MESH_RECTIFY computed it. Used by mesh animations only
         # when calibration.MESH_RECTIFY is on; else the raw meshGlobal/bbox is used.
         self.meshGlobalRect = None
+        # [cols, rows] physical screen-grid dimensions detected during rectify
+        # (e.g. [6, 4] for the OEB wall). None unless MESH_RECTIFY computed it.
+        # Passed to mesh animations so they can choreograph per-screen motion
+        # (a cell center is ((i+0.5)/cols*GW, (j+0.5)/rows*GH)).
+        self.meshGrid = None
         self.mediaElements = []
         self.loop = False
         self.currentFrame = 0

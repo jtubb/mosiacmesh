@@ -718,6 +718,155 @@
         }
         ctx.stroke();
       }
+    },
+    {
+      key: 'gridHop',
+      label: 'Hopping figure',
+      description: 'A stick figure that hops from screen to screen across the wall.',
+      // Grid-aware: gets grid={cols,rows} (1x1 fallback when mirror/uncalibrated).
+      // Snakes cell-to-cell (boustrophedon) with a parabolic launch arc, squash/
+      // stretch, and a landing dust puff. Pure function of (tMs, seed): every screen
+      // draws the same global figure, so it appears on whichever screen owns it.
+      draw: function (ctx, tMs, w, h, nowMs, seed, grid) {
+        var C = (grid && grid.cols) || 1, R = (grid && grid.rows) || 1;
+        var total = C * R;
+        var rng = MM_RNG(seed);
+        var hue = Math.floor(rng() * 360);
+        var startK = Math.floor(rng() * total);
+        var HOP_MS = 850;
+        var cellW = w / C, cellH = h / R;
+        var k = Math.floor(tMs / HOP_MS) + startK;
+        var p = (tMs % HOP_MS) / HOP_MS;
+        function orderAt(kk) {                        // ping-pong: no big wrap leap
+          var per = 2 * total;
+          var mm = ((kk % per) + per) % per;
+          return mm < total ? mm : (per - 1 - mm);
+        }
+        function cellOf(order) {
+          var j = Math.floor(order / C) % R;
+          var posInRow = order % C;
+          var i = (j % 2 === 0) ? posInRow : (C - 1 - posInRow);
+          return { cx: (i + 0.5) * cellW, cy: (j + 0.5) * cellH };
+        }
+        var a = cellOf(orderAt(k)), b = cellOf(orderAt(k + 1));
+        var arc = Math.min(cellW, cellH) * 0.55;
+        var x = a.cx + (b.cx - a.cx) * p;
+        var y = (a.cy + (b.cy - a.cy) * p) - arc * Math.sin(Math.PI * p);
+        var s = Math.min(cellW, cellH) * 0.16;        // limb unit
+        var stretch = 1 + 0.35 * Math.sin(Math.PI * p);
+        var squash = 1 - 0.18 * Math.sin(Math.PI * p);
+        var col = 'hsl(' + hue + ', 85%, 65%)';
+        if (p < 0.16) {                               // landing dust puff at cell a
+          var puff = p / 0.16;
+          var pr = s * (0.4 + puff * 1.4), dz;
+          ctx.strokeStyle = 'rgba(200,200,200,' + (0.5 * (1 - puff)).toFixed(3) + ')';
+          ctx.lineWidth = Math.max(1, s * 0.12);
+          for (dz = -1; dz <= 1; dz += 2) {
+            ctx.beginPath();
+            ctx.arc(a.cx + dz * pr, a.cy + s * 2.0, pr * 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+          }
+        }
+        ctx.strokeStyle = col; ctx.fillStyle = col;
+        ctx.lineWidth = Math.max(1.5, s * 0.28);
+        var headR = s * 0.7 * squash;
+        var hipY = y + s * 1.0 * stretch;
+        var shoulderY = y - s * 0.6 * stretch;
+        ctx.beginPath();                              // head
+        ctx.arc(x, shoulderY - headR - s * 0.2, headR, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();                              // spine
+        ctx.moveTo(x, shoulderY); ctx.lineTo(x, hipY); ctx.stroke();
+        var armSwing = Math.sin(Math.PI * p) * s * 1.1;   // arms
+        ctx.beginPath();
+        ctx.moveTo(x, shoulderY + s * 0.2); ctx.lineTo(x - s * 1.1, shoulderY + s * 0.2 - armSwing);
+        ctx.moveTo(x, shoulderY + s * 0.2); ctx.lineTo(x + s * 1.1, shoulderY + s * 0.2 + armSwing);
+        ctx.stroke();
+        var spread = s * (0.5 + 0.8 * (1 - Math.sin(Math.PI * p)));   // legs
+        var legLen = s * 1.6 * stretch;
+        ctx.beginPath();
+        ctx.moveTo(x, hipY); ctx.lineTo(x - spread, hipY + legLen);
+        ctx.moveTo(x, hipY); ctx.lineTo(x + spread, hipY + legLen);
+        ctx.stroke();
+      }
+    },
+    {
+      key: 'stadiumWave',
+      label: 'Stadium wave',
+      description: 'A wave of light sweeps screen-by-screen across the wall.',
+      // Grid-aware: a front advances over time; each cell lights as the front
+      // passes and fades behind it. seed picks direction + colorway. ~cols*rows
+      // fillRects/frame (~24) -> trivially cheap. 1x1 fallback when mirror.
+      draw: function (ctx, tMs, w, h, nowMs, seed, grid) {
+        var C = (grid && grid.cols) || 1, R = (grid && grid.rows) || 1;
+        var rng = MM_RNG(seed);
+        var mode = Math.floor(rng() * 3);             // 0 L->R, 1 T->B, 2 diagonal
+        var hue0 = Math.floor(rng() * 360);
+        var SWEEP_MS = 2600, TAIL = 0.35;
+        var front = (tMs / SWEEP_MS) % 1;
+        var cellW = w / C, cellH = h / R, i, j;
+        var denomD = ((C - 1) + (R - 1)) || 1;
+        for (j = 0; j < R; j++) {
+          for (i = 0; i < C; i++) {
+            var phase;
+            if (mode === 0) { phase = (C > 1) ? i / (C - 1) : 0; }
+            else if (mode === 1) { phase = (R > 1) ? j / (R - 1) : 0; }
+            else { phase = (i + j) / denomD; }
+            var d = ((front - phase) % 1 + 1) % 1;    // time since front passed
+            var bright = d < TAIL ? (1 - d / TAIL) : 0;
+            if (bright <= 0) { ctx.fillStyle = '#000'; }
+            else { ctx.fillStyle = 'hsl(' + ((hue0 + phase * 120) % 360) + ', 90%, ' + (8 + bright * 52).toFixed(1) + '%)'; }
+            ctx.fillRect(i * cellW, j * cellH, cellW + 1, cellH + 1);
+          }
+        }
+      }
+    },
+    {
+      key: 'ballLights',
+      label: 'Bouncing ball',
+      description: 'A ball bounces across the wall, lighting up whichever screen it is on.',
+      // Grid-aware: deterministic edge-bounce across the global canvas; the cell
+      // containing the ball flashes, ball + fading trail drawn on top. 1x1 fallback.
+      draw: function (ctx, tMs, w, h, nowMs, seed, grid) {
+        var C = (grid && grid.cols) || 1, R = (grid && grid.rows) || 1;
+        var rng = MM_RNG(seed);
+        var hue0 = Math.floor(rng() * 360);
+        var cellW = w / C, cellH = h / R;
+        var r = Math.min(cellW, cellH) * 0.16;
+        var vx = (120 + rng() * 120) * (rng() < 0.5 ? -1 : 1);
+        var vy = (90 + rng() * 110) * (rng() < 0.5 ? -1 : 1);
+        var rangeX = w - 2 * r, rangeY = h - 2 * r;
+        var ox = rng() * (rangeX > 0 ? rangeX : 0), oy = rng() * (rangeY > 0 ? rangeY : 0);
+        function bounce(raw, range) {
+          if (range <= 0) { return 0; }
+          var per = 2 * range;
+          var m = ((raw % per) + per) % per;
+          return m <= range ? m : (per - m);
+        }
+        function posAt(t) {
+          return { x: r + bounce(ox + vx * t / 1000, rangeX),
+                   y: r + bounce(oy + vy * t / 1000, rangeY) };
+        }
+        var b = posAt(tMs);
+        var ci = Math.floor(b.x / cellW); if (ci < 0) { ci = 0; } if (ci >= C) { ci = C - 1; }
+        var cj = Math.floor(b.y / cellH); if (cj < 0) { cj = 0; } if (cj >= R) { cj = R - 1; }
+        var hue = (hue0 + tMs / 40) % 360;
+        ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+        ctx.fillStyle = 'hsl(' + hue + ', 80%, 22%)';
+        ctx.fillRect(ci * cellW, cj * cellH, cellW + 1, cellH + 1);
+        var tt, n = 5;
+        for (tt = n; tt >= 1; tt--) {
+          var pp = posAt(tMs - tt * 45);
+          ctx.fillStyle = 'hsla(' + hue + ', 90%, 65%, ' + (0.12 * (n - tt + 1) / n).toFixed(3) + ')';
+          ctx.beginPath();
+          ctx.arc(pp.x, pp.y, r * (0.5 + 0.4 * (n - tt) / n), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = 'hsl(' + hue + ', 90%, 70%)';
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
   ];
   // Auto-wrap field entries (those exposing shade()) into a uniform draw(), once

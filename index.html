@@ -260,7 +260,7 @@
 		// loaded the probe". Bump MM_DBG_VER on every probe edit, then look for
 		// `boot ver=<this value>` per screen in the -v log before trusting any
 		// other CLIENTLOG line. Retries until the socket is OPEN, then fires once.
-		var MM_DBG_VER = 'mesh-rectify-1';
+		var MM_DBG_VER = 'mesh-rectify-2';
 		var _bootSent = false;
 		var _bootTimer = setInterval(function () {
 			if (_bootSent) { clearInterval(_bootTimer); return; }
@@ -538,6 +538,10 @@
 					? mmLoopItemSeed(playback.seed || 0, loopIdx, pos.index) : 0;
 				var it = playback.items[pos.index];
 				var span = (it && it.scriptSpan) || 'mirror';
+				// Physical screen grid for grid-aware animations (hop/wave/ball). Present
+				// only on rectified mesh items; null otherwise -> those animations fall
+				// back to a 1x1 grid (whole screen as one cell).
+				var meshGridObj = (it && it.meshGrid) ? { cols: it.meshGrid[0], rows: it.meshGrid[1] } : null;
 				if (span === 'mesh') {
 					// Mesh: render this screen's affine slice of the global wall canvas.
 					// Wrap the transform compute so a throw HERE (e.g. a malformed quad
@@ -561,7 +565,7 @@
 					if (m) {
 						ctx.save();
 						ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
-						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed); }
+						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed, meshGridObj); }
 						catch (e1) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e1 && e1.message) || e1) }); } }
 						ctx.restore();
 					} else {
@@ -572,7 +576,7 @@
 					}
 				} else {
 					// Mirror (default): full animation on this screen — unchanged behavior.
-					try { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed); } catch (e2) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e2 && e2.message) || e2) }); } }
+					try { animations[name](ctx, pos.offsetMs, canvas.width, canvas.height, GoTime.now(), itemSeed, null); } catch (e2) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e2 && e2.message) || e2) }); } }
 				}
 			}
 			playback.scriptRaf = _raf(frame);

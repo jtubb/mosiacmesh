@@ -33,6 +33,7 @@ def fresh_settings():
 def test_defaults_and_flag():
     assert Client().meshCellQuad is None
     assert Display().meshGlobalRect is None
+    assert Display().meshGrid is None
     assert CAL.MESH_RECTIFY is True   # rectification is the production default
 
 
@@ -124,6 +125,7 @@ def test_rectify_centers_keystoned_grid(fresh_settings):
     res = CAL.rectify_group_grid(d, clients)
     assert res is True
     assert d.meshGlobalRect and d.meshGlobalRect[0] > 0 and d.meshGlobalRect[1] > 0
+    assert d.meshGrid == [6, 4]   # [cols, rows] of the 4-row x 6-col fixture
     mx, my = _cell_centroid(clients)
     assert abs(mx - 0.5) < 0.02, mx
     assert abs(my - 0.5) < 0.02, my
@@ -152,6 +154,7 @@ def test_rectify_skips_non_grid(fresh_settings):
     clients = _keystoned_clients("G")[:-1]   # 23 -> not a clean 6x4
     assert CAL.rectify_group_grid(d, clients) is False
     assert d.meshGlobalRect is None
+    assert d.meshGrid is None
     assert all(c.meshCellQuad is None for c in clients)
 
 
@@ -174,6 +177,7 @@ def _mesh_display(fresh_settings, did="G"):
     d.boundingBox = [0, 0, 200, 100]
     d.meshGlobal = [1774, 887]
     d.meshGlobalRect = [2000, 1000]
+    d.meshGrid = [3, 2]
     me = MediaElement(); me.id = "a"; me.file = "plasma"
     me.playmode = PlayMode.SCRIPT; me.duration = 5.0; me.scriptSpan = "mesh"
     d.mediaElements = [me]
@@ -189,6 +193,7 @@ def test_per_client_items_uses_rectified_when_flag_on(fresh_settings):
         items = R._per_client_items(d, "c1", c)
     assert items[0]["meshGlobal"] == [2000, 1000]
     assert items[0]["meshQuad"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
+    assert items[0]["meshGrid"] == [3, 2]   # [cols, rows] threaded for grid-aware anims
     json.dumps(items)
 
 
@@ -200,6 +205,7 @@ def test_per_client_items_raw_when_flag_off(fresh_settings):
         items = R._per_client_items(d, "c1", c)
     assert items[0]["meshGlobal"] == [1774, 887]
     assert items[0]["meshQuad"][0] == [0.0, 0.0] and items[0]["meshQuad"][1] == [0.5, 0.0]
+    assert "meshGrid" not in items[0]   # raw-bbox path: grid-aware anims use 1x1 fallback
 
 
 def test_rectified_multiple_mesh_items_survive_jsonpickle_refs(fresh_settings):
