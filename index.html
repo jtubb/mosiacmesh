@@ -610,6 +610,11 @@
 									it.meshGlobal[0], it.meshGlobal[1], it.meshQuad);
 								if (fc) { ctx.fillStyle = it.backgroundColor || '#000000'; ctx.fillRect(fc.x, fc.y, fc.w, fc.h); }
 							}
+							if (stc.effect && stc.effect.family === 'mask' && typeof mmDrawMaskInCanvas === 'function') {
+								mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
+									it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
+									(playback.seed | 0), it.backgroundColor || '#000000');
+							}
 						}
 						ctx.restore();
 					} else {
@@ -973,6 +978,29 @@
 				var fill = mmWipeCoverRect(st.wipe.scope, st.wipe.direction, st.wipe.front, GW, GH, quad);
 				if (playback.transCover) { playback.transCover.style.display = 'none'; }   // hide legacy div
 				drawAffineCover(coverCanvas, m, fill, item.backgroundColor || '#000000');
+				if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
+				return;
+			}
+		}
+		// Calibrated MESH mask (iris/dissolve) -> OVERLAY canvas: warp same matrix as
+		// content, draw mask region via mmDrawMaskOverlay (bg fill + composite reveal).
+		if (st.effect && st.effect.family === 'mask' && quad && item.meshGlobal
+				&& typeof mmMeshTransform === 'function' && typeof mmDrawMaskOverlay === 'function') {
+			var GWm = item.meshGlobal[0], GHm = item.meshGlobal[1], mm = null;
+			try { mm = mmMeshTransform(quad, GWm, GHm, window.innerWidth, window.innerHeight); }
+			catch (em2) { mm = null; }
+			if (mm) {
+				if (playback.transCover) { playback.transCover.style.display = 'none'; }
+				var cvm = document.getElementById('mmTransCoverCanvas');
+				if (cvm) {
+					var cmx = cvm.getContext('2d');
+					cmx.setTransform(1, 0, 0, 1, 0, 0);
+					cmx.clearRect(0, 0, cvm.width, cvm.height);
+					cvm.style.display = 'block';
+					cmx.setTransform(mm.a, mm.b, mm.c, mm.d, mm.e, mm.f);
+					mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
+						GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');
+				}
 				if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
 				return;
 			}

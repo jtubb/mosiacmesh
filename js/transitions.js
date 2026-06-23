@@ -203,6 +203,75 @@
     }
   }
 
+  function _mmMaskRegion(scope, quad, GW, GH) {
+    if (scope !== 'wall' && quad && quad.length >= 4) {
+      var xs = [], ys = [], i;
+      for (i = 0; i < quad.length; i++) { xs.push(quad[i][0]); ys.push(quad[i][1]); }
+      var lx = Math.min.apply(null, xs) * GW, ly = Math.min.apply(null, ys) * GH;
+      return { x: lx, y: ly, w: Math.max.apply(null, xs) * GW - lx, h: Math.max.apply(null, ys) * GH - ly };
+    }
+    return { x: 0, y: 0, w: GW, h: GH };
+  }
+
+  // OVERLAY canvas (content is on a layer BELOW). Cover the region with bg, then REVEAL.
+  // iris: fill, then destination-out a growing circle (hole shows content below).
+  // dissolve: fill ONLY not-yet-revealed cells (revealed cells stay clear -> show content).
+  function mmDrawMaskOverlay(ctx, name, params, front, GW, GH, quad, scope, seed, bg) {
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    if (name === 'iris') {
+      ctx.fillStyle = bg; ctx.fillRect(reg.x, reg.y, reg.w, reg.h);
+      var c = mmIrisCircle(front, GW, GH, scope, quad);
+      if (c.r > 0) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.beginPath(); ctx.arc(c.cx, c.cy, c.r, 0, 6.2831853, false); ctx.fill();
+        ctx.restore();
+      }
+    } else if (name === 'dissolve') {
+      var blocks = (params && params.blocks) || 16, n = blocks * blocks;
+      var revealed = n - mmDissolveCovered(front, n);
+      var order = mmDissolveOrder(n, seed | 0);
+      var cw = reg.w / blocks, ch = reg.h / blocks, k, cell, col, rw;
+      ctx.fillStyle = bg;
+      for (k = revealed; k < n; k++) {
+        cell = order[k]; col = cell % blocks; rw = Math.floor(cell / blocks);
+        ctx.fillRect(reg.x + col * cw, reg.y + rw * ch, cw + 1, ch + 1);
+      }
+    }
+  }
+
+  // IN-CANVAS (drawn onto the SAME canvas as content, AFTER the content draw).
+  // iris: destination-in a growing circle (keeps content inside circle, clears rest ->
+  //       item background shows through). dissolve: fill not-yet-revealed cells with bg.
+  function mmDrawMaskInCanvas(ctx, name, params, front, GW, GH, quad, scope, seed, bg) {
+    if (name === 'iris') {
+      // destination-in here acts on the WHOLE canvas by design: this in-canvas path is
+      // only ever called for mesh SCRIPT animations, whose canvas holds exactly THIS
+      // panel's slice — so "keep inside the circle, clear the rest" is correct for both
+      // wall and screen scope (scope still selects the circle's center via mmIrisCircle).
+      // It deliberately does NOT clip to _mmMaskRegion (dissolve/overlay do); reusing this
+      // for a canvas that composites multiple regions would clear unrelated content.
+      var c = mmIrisCircle(front, GW, GH, scope, quad);
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.beginPath();
+      if (c.r > 0) { ctx.arc(c.cx, c.cy, c.r, 0, 6.2831853, false); }
+      ctx.fill();
+      ctx.restore();
+    } else if (name === 'dissolve') {
+      var reg = _mmMaskRegion(scope, quad, GW, GH);
+      var blocks = (params && params.blocks) || 16, n = blocks * blocks;
+      var revealed = n - mmDissolveCovered(front, n);
+      var order = mmDissolveOrder(n, seed | 0);
+      var cw = reg.w / blocks, ch = reg.h / blocks, k, cell, col, rw;
+      ctx.fillStyle = bg;
+      for (k = revealed; k < n; k++) {
+        cell = order[k]; col = cell % blocks; rw = Math.floor(cell / blocks);
+        ctx.fillRect(reg.x + col * cw, reg.y + rw * ch, cw + 1, ch + 1);
+      }
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -213,4 +282,6 @@
   root.mmIrisCircle = mmIrisCircle;
   root.mmDissolveOrder = mmDissolveOrder;
   root.mmDissolveCovered = mmDissolveCovered;
+  root.mmDrawMaskOverlay = mmDrawMaskOverlay;
+  root.mmDrawMaskInCanvas = mmDrawMaskInCanvas;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
