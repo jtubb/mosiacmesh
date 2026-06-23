@@ -79,16 +79,23 @@ from mosaicmesh.render import (
 from mosaicmesh.calibration import (
     _group_clients,
 )
+from mosaicmesh.websocket.session_store import session_request
 
 
 def msg_response(msg,session):
     import server
     clientid = session.id
-    logging.debug(session.request.headers['User-Agent'])
+    # session.request is None for xhr_send-delivered MESSAGEs (the iPad-1 polling
+    # transport), so fall back to the request captured at OPEN. Still guard None — a
+    # session whose OPEN had no request must not crash the handler before dispatch.
+    req = session_request(session)
+    if req is not None:
+        logging.debug(req.headers.get('User-Agent'))
 
     response = {"DEST":clientid,"REQUEST": msg["REQUEST"], "PAYLOAD": {}}
 
-    logging.debug(session.request.remote)
+    if req is not None:
+        logging.debug(req.remote)
     logging.debug(msg["SRC"])
 
     if(msg["REQUEST"] == "SERVERTIME"):
@@ -184,13 +191,13 @@ def msg_response(msg,session):
 
         # Enhanced registration with discovery tracking
         client.clientID = clientid
-        client.userAgent = session.request.headers['User-Agent']
+        client.userAgent = req.headers.get('User-Agent', '') if req is not None else ''
         client.deviceWidth = msg["PAYLOAD"]["width"]
         client.deviceHeight = msg["PAYLOAD"]["height"]
         # Rendered viewport (older clients omit it -> fall back to device res)
         client.canvasWidth = msg["PAYLOAD"].get("canvasWidth") or client.deviceWidth
         client.canvasHeight = msg["PAYLOAD"].get("canvasHeight") or client.deviceHeight
-        _new_ip = server._client_ip(session.request)
+        _new_ip = server._client_ip(req) if req is not None else getattr(client, 'ip', '')
         if _new_ip != getattr(client, 'ip', ''):
             client.hostnameResolved = False   # new IP -> re-resolve its hostname
         client.ip = _new_ip
@@ -216,7 +223,7 @@ def msg_response(msg,session):
         client.connectionCount += 1
 
         # Device detection and fingerprinting
-        device = DeviceDetector(session.request.headers['User-Agent']).parse()
+        device = DeviceDetector(client.userAgent or '').parse()
         client.osName = device.os_name()
         client.osVersion = device.os_version()
         client.engine = server._engine_str(device.engine())
