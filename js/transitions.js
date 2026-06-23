@@ -121,6 +121,22 @@
     return { s: scale + (1 - scale) * f, alpha: f };
   }
 
+  // Circle (global px) for an Iris reveal. Center = wall center (wall) or panel bbox
+  // center (screen); radius ramps 0 -> half the region diagonal (so front 1 fully
+  // covers the region's farthest corner). Pure.
+  function mmIrisCircle(front, GW, GH, scope, quad) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var loX = 0, loY = 0, hiX = GW, hiY = GH, i;
+    if (scope !== 'wall' && quad && quad.length >= 4) {
+      var xs = [], ys = [];
+      for (i = 0; i < quad.length; i++) { xs.push(quad[i][0]); ys.push(quad[i][1]); }
+      loX = Math.min.apply(null, xs) * GW; hiX = Math.max.apply(null, xs) * GW;
+      loY = Math.min.apply(null, ys) * GH; hiY = Math.max.apply(null, ys) * GH;
+    }
+    var hx = (hiX - loX) / 2, hy = (hiY - loY) / 2;
+    return { cx: loX + hx, cy: loY + hy, r: f * Math.sqrt(hx * hx + hy * hy) };
+  }
+
   // Global-px offset for a Slide. 'direction' is the motion direction; content enters
   // from the opposite edge. front 0 -> one wall off; front 1 -> {0,0}. Pure.
   function mmSlideOffset(front, direction, GW, GH) {
@@ -165,4 +181,5 @@
   root._mmWallReveal = _wallReveal;
   root.mmSlideOffset = mmSlideOffset;
   root.mmZoomFactor = mmZoomFactor;
+  root.mmIrisCircle = mmIrisCircle;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

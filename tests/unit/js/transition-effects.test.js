@@ -27,3 +27,18 @@ test('mmZoomFactor: scale ramps to 1, alpha ramps to 1', () => {
 test('mmZoomFactor: default scale 0.6 when omitted', () => {
   assert.deepEqual(Zoom(0, null), { s: 0.6, alpha: 0 });
 });
+
+const Iris = globalThis.mmIrisCircle;
+const QUAD = [[0.5, 0], [1, 0], [1, 1], [0.5, 1]]; // right half, full height
+
+test('mmIrisCircle: wall scope centered, radius 0->halfDiagonal', () => {
+  assert.deepEqual(Iris(0, 200, 100, 'wall', null), { cx: 100, cy: 50, r: 0 });
+  const full = Iris(1, 200, 100, 'wall', null);
+  assert.ok(full.cx === 100 && full.cy === 50);
+  assert.ok(Math.abs(full.r - Math.sqrt(100 * 100 + 50 * 50)) < 1e-9);
+});
+test('mmIrisCircle: screen scope centers on the panel bbox', () => {
+  const c = Iris(0.5, 200, 100, 'screen', QUAD);
+  assert.ok(Math.abs(c.cx - 150) < 1e-9 && Math.abs(c.cy - 50) < 1e-9);
+  assert.ok(Math.abs(c.r - 0.5 * Math.sqrt(50 * 50 + 50 * 50)) < 1e-9);
+});
