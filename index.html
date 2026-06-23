@@ -657,6 +657,10 @@
 									if (_im.box) { ctx.drawImage(irisMaskSprite(_bgc), _im.box.x, _im.box.y, _im.box.w, _im.box.h); }
 									ctx.fillStyle = _bgc;
 									for (var _si = 0; _si < _im.strips.length; _si++) { var _sp = _im.strips[_si]; ctx.fillRect(_sp.x, _sp.y, _sp.w, _sp.h); }
+								} else if (stc.effect.name === 'beerfill' && typeof mmDrawBeer === 'function') {
+									mmDrawBeer(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
+										GoTime.now(), it.meshGlobal[0], it.meshGlobal[1], it.meshQuad,
+										stc.effect.scope, playback.seed | 0);
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
@@ -935,7 +939,7 @@
 		// The overlay cover canvas is needed by wipe AND the mask-family effects
 		// (iris/dissolve) on media/mirror items. Slide/zoom use an element transform
 		// (no canvas), so they stay out of this gate.
-		var _cvEff = function (x) { return x && (x.name === 'wipe' || x.name === 'iris' || x.name === 'dissolve'); };
+		var _cvEff = function (x) { return x && (x.name === 'wipe' || x.name === 'iris' || x.name === 'dissolve' || x.name === 'beerfill'); };
 		var needs = _cvEff(s) || _cvEff(e);
 		var c = document.getElementById('mmTransCover');
 		var cv = document.getElementById('mmTransCoverCanvas');
@@ -1050,8 +1054,13 @@
 					cmx.clearRect(0, 0, cvm.width, cvm.height);
 					cvm.style.display = 'block';
 					cmx.setTransform(mm.a, mm.b, mm.c, mm.d, mm.e, mm.f);
-					mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
-						GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');
+					if (st.effect.name === 'beerfill' && typeof mmDrawBeer === 'function') {
+						mmDrawBeer(cmx, st.effect.params, st.effect.phase, st.effect.front,
+							GoTime.now(), GWm, GHm, quad, st.effect.scope, playback.seed | 0);
+					} else {
+						mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
+							GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');
+					}
 				}
 				if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
 				return;
