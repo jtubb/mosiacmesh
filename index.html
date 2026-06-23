@@ -120,6 +120,25 @@
 	// can't flash black during a long playlist.
 	var clockEverReady = false;
 
+	// Iris mask sprites, baked once per background color: a 512x512 canvas that is the
+	// bg color OUTSIDE an inscribed circle and TRANSPARENT inside. Drawn each frame scaled
+	// to the iris circle's bbox so the transparent hole = the reveal. The hole is punched
+	// with a one-time donut clip (clip RENDERS correctly on Safari 5.1 — only PER-FRAME
+	// clip is too slow), so the per-frame iris path stays clip-free (drawImage + fillRect).
+	var _irisMasks = {};
+	function irisMaskSprite(color) {
+		if (_irisMasks[color]) { return _irisMasks[color]; }
+		var c = document.createElement('canvas'); c.width = 512; c.height = 512;
+		var x = c.getContext('2d');
+		x.beginPath();
+		x.rect(0, 0, 512, 512);
+		x.arc(256, 256, 256, 0, 6.2831853, true);   // CCW inner arc -> rect MINUS circle
+		x.clip();
+		x.fillStyle = color; x.fillRect(0, 0, 512, 512);
+		_irisMasks[color] = c;
+		return c;
+	}
+
 	// Play video UNMUTED. Restores sound on every screen, at the cost of needing
 	// a tap-to-start (a muted <video> is exempt from autoplay policy and would
 	// start without a gesture, but iOS+Safari require a real user gesture before
@@ -629,10 +648,20 @@
 									it.meshGlobal[0], it.meshGlobal[1], it.meshQuad);
 								if (fc) { ctx.fillStyle = it.backgroundColor || '#000000'; ctx.fillRect(fc.x, fc.y, fc.w, fc.h); }
 							}
-							if (stc.effect && stc.effect.family === 'mask' && typeof mmDrawMaskInCanvas === 'function') {
-								mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
-									it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
-									(playback.seed | 0), it.backgroundColor || '#000000');
+							if (stc.effect && stc.effect.family === 'mask') {
+								if (stc.effect.name === 'iris' && typeof mmIrisMaskRects === 'function') {
+									// No-clip iris: draw the once-baked sprite over the circle's bbox, then fillRect
+									// the surround strips (drawImage + fillRect only -- no per-frame clip/composite).
+									var _bgc = it.backgroundColor || '#000000';
+									var _im = mmIrisMaskRects(stc.effect.front, it.meshGlobal[0], it.meshGlobal[1], stc.effect.scope, it.meshQuad);
+									if (_im.box) { ctx.drawImage(irisMaskSprite(_bgc), _im.box.x, _im.box.y, _im.box.w, _im.box.h); }
+									ctx.fillStyle = _bgc;
+									for (var _si = 0; _si < _im.strips.length; _si++) { var _sp = _im.strips[_si]; ctx.fillRect(_sp.x, _sp.y, _sp.w, _sp.h); }
+								} else if (typeof mmDrawMaskInCanvas === 'function') {
+									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
+										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
+										(playback.seed | 0), it.backgroundColor || '#000000');
+								}
 							}
 						}
 						ctx.restore();

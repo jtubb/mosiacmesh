@@ -43,6 +43,25 @@ test('mmIrisCircle: screen scope centers on the panel bbox', () => {
   assert.ok(Math.abs(c.r - 0.5 * Math.sqrt(50 * 50 + 50 * 50)) < 1e-9);
 });
 
+const IMask = globalThis.mmIrisMaskRects;
+
+test('mmIrisMaskRects: front 0 -> no box, whole-region cover strip', () => {
+  const m = IMask(0, 200, 100, 'wall', null);
+  assert.equal(m.box, null);
+  assert.deepEqual(m.strips, [{ x: 0, y: 0, w: 200, h: 100 }]);
+});
+test('mmIrisMaskRects: front 1 -> box covers region, no strips', () => {
+  const m = IMask(1, 200, 100, 'wall', null);  // r=halfDiag=111.8 > region half-extents
+  assert.ok(m.box && m.strips.length === 0);
+});
+test('mmIrisMaskRects: mid -> box inside region + 4 surround strips', () => {
+  const m = IMask(0.2, 200, 100, 'wall', null); // r=0.2*111.8=22.36, box well inside region
+  assert.ok(m.box);
+  assert.equal(m.strips.length, 4);
+  const top = m.strips[0];                       // top strip height == box top offset
+  assert.ok(top.y === 0 && Math.abs(top.h - m.box.y) < 1e-6);
+});
+
 const Order = globalThis.mmDissolveOrder;
 const Covered = globalThis.mmDissolveCovered;
 

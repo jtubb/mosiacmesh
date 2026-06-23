@@ -213,20 +213,44 @@
     return { x: 0, y: 0, w: GW, h: GH };
   }
 
+  // No-clip iris geometry (smooth on iPad-1: per-frame uses only drawImage + fillRect,
+  // never clip/composite). Returns the circle's bounding BOX (where the caller draws a
+  // ONCE-baked black-with-transparent-hole sprite) and the BLACK STRIPS that cover the
+  // rest of the region (region minus the box). box is null when the iris is fully closed
+  // (front 0) -> strips cover the whole region. The 4 strips are the standard
+  // rect-around-a-box decomposition, clamped to the region. Pure.
+  function mmIrisMaskRects(front, GW, GH, scope, quad) {
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var rx = reg.x, ry = reg.y, rR = reg.x + reg.w, rB = reg.y + reg.h;
+    var c = mmIrisCircle(front, GW, GH, scope, quad);
+    var r = c.r;
+    if (r <= 0) { return { box: null, strips: [{ x: rx, y: ry, w: reg.w, h: reg.h }] }; }
+    var bx = c.cx - r, by = c.cy - r, bX = c.cx + r, bY = c.cy + r;
+    var strips = [];
+    if (by > ry) { strips.push({ x: rx, y: ry, w: reg.w, h: by - ry }); }   // top
+    if (bY < rB) { strips.push({ x: rx, y: bY, w: reg.w, h: rB - bY }); }   // bottom
+    var ty = by > ry ? by : ry, bb = bY < rB ? bY : rB;
+    if (bx > rx && bb > ty) { strips.push({ x: rx, y: ty, w: bx - rx, h: bb - ty }); }  // left
+    if (bX < rR && bb > ty) { strips.push({ x: bX, y: ty, w: rR - bX, h: bb - ty }); }  // right
+    return { box: { x: bx, y: by, w: 2 * r, h: 2 * r }, strips: strips };
+  }
+
   // OVERLAY canvas (content is on a layer BELOW). Cover the region with bg, then REVEAL.
   // iris: fill, then destination-out a growing circle (hole shows content below).
   // dissolve: fill ONLY not-yet-revealed cells (revealed cells stay clear -> show content).
   function mmDrawMaskOverlay(ctx, name, params, front, GW, GH, quad, scope, seed, bg) {
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     if (name === 'iris') {
-      ctx.fillStyle = bg; ctx.fillRect(reg.x, reg.y, reg.w, reg.h);
+      // Donut clip (rect MINUS circle) + fillRect bg, NOT destination-out (unreliable on
+      // iPad-1/iOS-5). Leaves the circle transparent so the content layer below shows.
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(reg.x, reg.y, reg.w, reg.h);
       var c = mmIrisCircle(front, GW, GH, scope, quad);
-      if (c.r > 0) {
-        ctx.save();
-        ctx.globalCompositeOperation = 'destination-out';
-        ctx.beginPath(); ctx.arc(c.cx, c.cy, c.r, 0, 6.2831853, false); ctx.fill();
-        ctx.restore();
-      }
+      if (c.r > 0) { ctx.arc(c.cx, c.cy, c.r, 0, 6.2831853, true); }
+      ctx.clip();
+      ctx.fillStyle = bg; ctx.fillRect(reg.x, reg.y, reg.w, reg.h);
+      ctx.restore();
     } else if (name === 'dissolve') {
       var blocks = (params && params.blocks) || 16, n = blocks * blocks;
       var revealed = n - mmDissolveCovered(front, n);
@@ -244,21 +268,10 @@
   // iris: destination-in a growing circle (keeps content inside circle, clears rest ->
   //       item background shows through). dissolve: fill not-yet-revealed cells with bg.
   function mmDrawMaskInCanvas(ctx, name, params, front, GW, GH, quad, scope, seed, bg) {
-    if (name === 'iris') {
-      // destination-in here acts on the WHOLE canvas by design: this in-canvas path is
-      // only ever called for mesh SCRIPT animations, whose canvas holds exactly THIS
-      // panel's slice — so "keep inside the circle, clear the rest" is correct for both
-      // wall and screen scope (scope still selects the circle's center via mmIrisCircle).
-      // It deliberately does NOT clip to _mmMaskRegion (dissolve/overlay do); reusing this
-      // for a canvas that composites multiple regions would clear unrelated content.
-      var c = mmIrisCircle(front, GW, GH, scope, quad);
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-in';
-      ctx.beginPath();
-      if (c.r > 0) { ctx.arc(c.cx, c.cy, c.r, 0, 6.2831853, false); }
-      ctx.fill();
-      ctx.restore();
-    } else if (name === 'dissolve') {
+    // iris is NOT handled here: the in-canvas iris uses a once-baked sprite + fillRect
+    // strips (no per-frame clip/composite — see index.html), because clip() is too slow
+    // and destination-* is unreliable on the iPad-1. Only dissolve (cheap fillRects) here.
+    if (name === 'dissolve') {
       var reg = _mmMaskRegion(scope, quad, GW, GH);
       var blocks = (params && params.blocks) || 16, n = blocks * blocks;
       var revealed = n - mmDissolveCovered(front, n);
@@ -280,6 +293,7 @@
   root.mmSlideOffset = mmSlideOffset;
   root.mmZoomFactor = mmZoomFactor;
   root.mmIrisCircle = mmIrisCircle;
+  root.mmIrisMaskRects = mmIrisMaskRects;
   root.mmDissolveOrder = mmDissolveOrder;
   root.mmDissolveCovered = mmDissolveCovered;
   root.mmDrawMaskOverlay = mmDrawMaskOverlay;
