@@ -30,6 +30,7 @@ import jsonpickle
 import sockjs
 
 from mosaicmesh.websocket.legacy import msg_response
+from mosaicmesh.websocket.session_store import remember_request, forget_request
 
 
 def handle_client_disconnect(session_id):
@@ -54,6 +55,9 @@ async def ws_handler(manager, session, msg):
     if manager is None:
         return
     if msg.type == sockjs.MsgType.OPEN:
+        # Remember the connecting request NOW (it's valid at OPEN); msg_response falls
+        # back to it because session.request is None for xhr_send-delivered MESSAGEs.
+        remember_request(session)
         # Enhanced discovery notification with client info
         client_info = {
             "sessionId": session.id,
@@ -92,5 +96,6 @@ async def ws_handler(manager, session, msg):
         session.send(msg_response(jsonpickle.decode(msg.data),session))
     elif msg.type == sockjs.MsgType.CLOSED:
         # Enhanced disconnect notification
+        forget_request(session.id)
         handle_client_disconnect(session.id)
         manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
