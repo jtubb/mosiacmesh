@@ -114,6 +114,13 @@
     return { role: role, opacity: p, wipe: null };   // fade
   }
 
+  // Scale + opacity for a Zoom. s ramps scale->1, alpha ramps 0->1 with front. Pure.
+  function mmZoomFactor(front, scale) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    if (scale == null) { scale = 0.6; }
+    return { s: scale + (1 - scale) * f, alpha: f };
+  }
+
   // Global-px offset for a Slide. 'direction' is the motion direction; content enters
   // from the opposite edge. front 0 -> one wall off; front 1 -> {0,0}. Pure.
   function mmSlideOffset(front, direction, GW, GH) {
@@ -157,4 +164,5 @@
   root.mmWipeCoverRect = mmWipeCoverRect;
   root._mmWallReveal = _wallReveal;
   root.mmSlideOffset = mmSlideOffset;
+  root.mmZoomFactor = mmZoomFactor;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
