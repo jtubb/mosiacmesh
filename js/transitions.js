@@ -302,6 +302,28 @@
     return lv < 0 ? 0 : (lv > 1 ? 1 : lv);
   }
 
+  function mmFoamWaveY(xFrac, t, amp, baseY) {
+    return baseY
+      + Math.sin(xFrac * 15.0 + t * 9.4) * amp * 0.5
+      + Math.sin(xFrac * 41.0 - t * 6.3) * amp * 0.3;
+  }
+
+  function mmBeerBubbles(seed, count) {
+    var rnd = _mmLcg(seed >>> 0), arr = [], i;
+    for (i = 0; i < count; i++) {
+      arr.push({ x: rnd(), phase: rnd(), r: 1 + rnd() * 2.4, spd: 0.45 + rnd() * 0.8 });
+    }
+    return arr;
+  }
+
+  function mmFoamBubbles(seed, count) {
+    var rnd = _mmLcg(((seed >>> 0) ^ 0x9e3779b9) >>> 0), arr = [], i;
+    for (i = 0; i < count; i++) {
+      arr.push({ x: rnd(), yf: rnd(), r: 1 + rnd() * 3.2, a: 0.22 + rnd() * 0.4 });
+    }
+    return arr;
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -319,4 +341,7 @@
   root.mmBeerPhase = mmBeerPhase;
   root.mmBeerDuration = mmBeerDuration;
   root.mmBeerLevel = mmBeerLevel;
+  root.mmFoamWaveY = mmFoamWaveY;
+  root.mmBeerBubbles = mmBeerBubbles;
+  root.mmFoamBubbles = mmFoamBubbles;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
