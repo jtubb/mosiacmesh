@@ -285,6 +285,23 @@
     }
   }
 
+  var _BEER = {
+    pale:  { beerTop: '#F6C744', beerBot: '#E0A21A', foam: '#FFF8E7', headH: 0.11, bubbleDensity: 34, foamBubbles: 30 },
+    amber: { beerTop: '#C9791C', beerBot: '#8A4A0E', foam: '#F3E0C0', headH: 0.14, bubbleDensity: 22, foamBubbles: 26 },
+    stout: { beerTop: '#3A241A', beerBot: '#160C07', foam: '#E8C9A0', headH: 0.20, bubbleDensity: 12, foamBubbles: 34 }
+  };
+  function mmBeerPalette(beerType) { return _BEER[beerType] || _BEER.pale; }
+  function mmBeerPhase(role) { return role === 'out' ? 'fill' : 'drain'; }
+  function mmBeerDuration(params, role) {
+    var ms = role === 'out' ? (params && params.fillMs) : (params && params.drainMs);
+    ms = +ms;
+    return (ms > 0) ? ms : 2500;
+  }
+  function mmBeerLevel(phase, p) {
+    var lv = phase === 'fill' ? p : (1 - p);
+    return lv < 0 ? 0 : (lv > 1 ? 1 : lv);
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -298,4 +315,8 @@
   root.mmDissolveCovered = mmDissolveCovered;
   root.mmDrawMaskOverlay = mmDrawMaskOverlay;
   root.mmDrawMaskInCanvas = mmDrawMaskInCanvas;
+  root.mmBeerPalette = mmBeerPalette;
+  root.mmBeerPhase = mmBeerPhase;
+  root.mmBeerDuration = mmBeerDuration;
+  root.mmBeerLevel = mmBeerLevel;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
