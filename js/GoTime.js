@@ -206,6 +206,35 @@ var GoTime = (function f() {
         return offset + move;
     };
 
+    // Pure robust target offset: median of recent (within windowMs) samples whose
+    // precision passes a RELATIVE gate (max(2*bestInWindow, precisionFloorMs)), so a
+    // single PSM-jittery high-RTT sample can't move it. Returns null when fewer than
+    // minSamples pass. samples: [{offset, precision, t}]. nowMs: GoTime.now().
+    _robustTarget = function(samples, nowMs, opts) {
+        var windowMs = (opts && opts.windowMs != null) ? opts.windowMs : 120000;
+        var minS = (opts && opts.minSamples != null) ? opts.minSamples : 3;
+        var floor = (opts && opts.precisionFloorMs != null) ? opts.precisionFloorMs : 60;
+        var i, recent = [];
+        for (i = 0; i < samples.length; i++) {
+            if (samples[i].t >= nowMs - windowMs) { recent.push(samples[i]); }
+        }
+        if (recent.length === 0) { return null; }
+        var best = recent[0].precision;
+        for (i = 1; i < recent.length; i++) {
+            if (recent[i].precision < best) { best = recent[i].precision; }
+        }
+        var gate = 2 * best;
+        if (gate < floor) { gate = floor; }
+        var kept = [];
+        for (i = 0; i < recent.length; i++) {
+            if (recent[i].precision <= gate) { kept.push(recent[i].offset); }
+        }
+        if (kept.length < minS) { return null; }
+        kept.sort(function(a, b) { return a - b; });
+        var h = Math.floor(kept.length / 2);
+        return (kept.length % 2) ? kept[h] : (kept[h - 1] + kept[h]) / 2;
+    };
+
     _reviseOffset = function(sample, method) {
         var timestamp;
         if (isNaN(sample.offset) || isNaN(sample.precision)) {
@@ -344,7 +373,8 @@ var GoTime = (function f() {
 			       (phaseStd <= maxStd) && (Math.abs(phaseMean) <= maxMean);
 		},
 
-		_steerStep: _steerStep
+		_steerStep: _steerStep,
+		_robustTarget: _robustTarget
 	}
     
 })();
