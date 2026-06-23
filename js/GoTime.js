@@ -245,6 +245,28 @@ var GoTime = (function f() {
         return (kept.length % 2) ? kept[h] : (kept[h - 1] + kept[h]) / 2;
     };
 
+    // One maintenance iteration: pull _offset toward the robust target via _steerStep.
+    // Flips _steering true the first time a target is available, transferring offset
+    // ownership from the ratchet to the slew. dtMs is real local elapsed time, so a
+    // skipped beat can't over-correct beyond cap*dt. getAccurateTimestamp() is the raw
+    // (offset-free) local clock, so dt is immune to offset changes.
+    _steerTick = function() {
+        var nowLocal = getAccurateTimestamp();
+        var dtMs = (options._lastSteerAt == null) ? 1000 : (nowLocal - options._lastSteerAt);
+        options._lastSteerAt = nowLocal;
+        if (dtMs <= 0) { return; }
+        var opts = {
+            deadbandMs: options._steerDeadbandMs, snapMs: options._steerSnapMs,
+            capMsPerSec: options._steerCapMsPerSec, windowMs: options._steerWindowMs,
+            minSamples: options._steerMinSamples, precisionFloorMs: options._steerPrecisionFloorMs
+        };
+        var target = _robustTarget(options._steerSamples, GoTime.now(), opts);
+        if (target === null) { return; }
+        options._steering = true;
+        options._lastSteerTarget = target;
+        options._offset = Math.round(_steerStep(options._offset, target, dtMs, opts));
+    };
+
     _reviseOffset = function(sample, method) {
         var timestamp;
         if (isNaN(sample.offset) || isNaN(sample.precision)) {
@@ -270,9 +292,11 @@ var GoTime = (function f() {
         // offset is fine here: the beat absorbs the drift. (_lastAcceptTime is retained
         // only so ?tdbg can report offset age; nothing gates on it anymore.)
         if (sample.precision <= options._precision) {
-            options._offset = Math.round(sample.offset);
             options._precision = sample.precision;
             options._lastAcceptTime = timestamp;
+            // Initial lock only: once steering owns the offset, a late better-precision
+            // sample must NOT step it (would defeat the smooth slew).
+            if (!options._steering) { options._offset = Math.round(sample.offset); }
         }
         if (!options._firstSyncCallbackRan && (options._firstSyncCallback != null)) {
             options._firstSyncCallbackRan = true;
@@ -396,6 +420,7 @@ var GoTime = (function f() {
                      offset: options._offset, target: options._lastSteerTarget };
         },
 
+		steerTick: function() { return _steerTick(); },
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget
 	}

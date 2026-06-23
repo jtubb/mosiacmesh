@@ -126,3 +126,33 @@ test('ring is bounded (does not grow without limit)', () => {
   for (var i = 0; i < 200; i++) { s._reviseOffset({ offset: 100, precision: 10 }, 't'); }
   assert.ok(s.GoTime.getSteerState().samples <= 64);
 });
+
+test('steerTick: no usable samples -> no-op, stays un-steering', () => {
+  const s = loadGoTime();
+  s.GoTime.steerTick();
+  const st = s.GoTime.getSteerState();
+  assert.equal(st.steering, false);
+  assert.equal(st.offset, 0);
+});
+
+test('steerTick: hand-off then bounded slew (ratchet stops moving offset)', () => {
+  const s = loadGoTime();
+  s.GoTime.setOptions({ SteerMinSamples: 3, SteerCapMsPerSec: 15,
+    SteerWindowMs: 120000, SteerDeadbandMs: 33, SteerSnapMs: 500 });
+  // 3 good samples at offset 1000 -> ratchet locks _offset to 1000
+  s._reviseOffset({ offset: 1000, precision: 10 }, 't');
+  s._reviseOffset({ offset: 1000, precision: 10 }, 't');
+  s._reviseOffset({ offset: 1000, precision: 10 }, 't');
+  s.GoTime.steerTick();                       // target 1000, err 0 -> flips steering, no move
+  let st = s.GoTime.getSteerState();
+  assert.equal(st.steering, true);
+  assert.equal(st.offset, 1000);
+  // New truth drifts to 1300; with steering on, the ratchet must NOT jump _offset
+  s._reviseOffset({ offset: 1300, precision: 10 }, 't');
+  s._reviseOffset({ offset: 1300, precision: 10 }, 't');
+  s._reviseOffset({ offset: 1300, precision: 10 }, 't');
+  assert.equal(s.GoTime.getSteerState().offset, 1000); // ratchet disabled by hand-off
+  s.__setNow(1001000);                        // advance local clock 1s so dt = 1000
+  s.GoTime.steerTick();                        // median[1000,1000,1000,1300,1300,1300]=1150; err 150; slew 15
+  assert.equal(s.GoTime.getSteerState().offset, 1015);
+});
