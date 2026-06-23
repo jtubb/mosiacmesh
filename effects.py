@@ -180,3 +180,22 @@ class DissolveEffect(Effect):
 
     def video_filters(self, role, params, ctx):
         return ([], _afade(role, params, ctx))
+
+
+@register
+class BeerFillEffect(Effect):
+    name = "beerfill"
+    label = "Beer Fill"
+    params = [ParamSpec("beerType", "choice", "pale", choices=["pale", "amber", "stout"]),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("fillMs", "number", 2500, minimum=0),
+              ParamSpec("drainMs", "number", 2500, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        # Visual is client-side. Audio fade length follows the active phase:
+        # fill (end role) uses fillMs, drain (start role) uses drainMs.
+        dur = params.get("fillMs") if role == "end" else params.get("drainMs")
+        p = dict(params)
+        p["duration"] = dur
+        return ([], _afade(role, p, ctx))

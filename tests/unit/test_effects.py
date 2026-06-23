@@ -11,7 +11,7 @@ def test_get_effect_unknown_returns_none():
 
 def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
-    assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve"}
+    assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve", "beerfill"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -94,3 +94,30 @@ def test_new_effects_bake_audio_only():
         assert v == [] and a == ["afade=t=in:st=0:d=0.6"]
         v2, a2 = eff.video_filters("start", eff.resolve({"duration": 600, "audioFade": False}), {"duration_ms": 5000})
         assert v2 == [] and a2 == []
+
+
+def test_beerfill_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "beerfill")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["beerType"]["choices"] == ["pale", "amber", "stout"] and by["beerType"]["default"] == "pale"
+    assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
+    assert by["fillMs"]["type"] == "number" and by["fillMs"]["default"] == 2500
+    assert by["drainMs"]["type"] == "number" and by["drainMs"]["default"] == 2500
+    assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
+
+
+def test_beerfill_audio_uses_fillMs_on_end_drainMs_on_start():
+    bf = effects.get_effect("beerfill")
+    ctx = {"duration_ms": 6000}
+    # start role (drain) -> fade in over drainMs
+    v, a = bf.video_filters("start", bf.resolve({"drainMs": 2000, "audioFade": True}), ctx)
+    assert v == [] and a == ["afade=t=in:st=0:d=2"]
+    # end role (fill) -> fade out over fillMs, ending at clip end
+    v2, a2 = bf.video_filters("end", bf.resolve({"fillMs": 1500, "audioFade": True}), ctx)
+    assert v2 == [] and a2 == ["afade=t=out:st=4.5:d=1.5"]
+
+
+def test_beerfill_no_audio_when_off():
+    bf = effects.get_effect("beerfill")
+    v, a = bf.video_filters("end", bf.resolve({"audioFade": False}), {"duration_ms": 6000})
+    assert v == [] and a == []
