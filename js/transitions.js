@@ -111,6 +111,12 @@
       return { role: role, opacity: 1,
                wipe: { reveal: reveal, direction: dir, slide: slide, front: p, scope: scope } };
     }
+    if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
+      var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
+      var esc = (eff.params && eff.params.scope) || 'wall';
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: eff.name, family: fam, front: p, scope: esc, params: eff.params || {} } };
+    }
     return { role: role, opacity: p, wipe: null };   // fade
   }
 

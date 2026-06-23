@@ -57,3 +57,29 @@ test('mmDissolveCovered: monotonic, n at front 0, 0 at front 1', () => {
   assert.equal(Covered(1, 256), 0);
   assert.ok(Covered(0.25, 256) > Covered(0.75, 256));
 });
+
+const SLIDE = { name: 'slide', params: { direction: 'left', scope: 'wall', duration: 1000 } };
+const ZOOM  = { name: 'zoom',  params: { scale: 0.6, scope: 'wall', duration: 1000 } };
+const IRIS  = { name: 'iris',  params: { scope: 'wall', duration: 1000 } };
+const DISS  = { name: 'dissolve', params: { blocks: 16, duration: 1000 } };
+
+test('mmTransitionState: new effects yield an effect descriptor with family + front', () => {
+  const s1 = S(SLIDE, null, 250, 1000, null, null);
+  assert.equal(s1.effect.name, 'slide');
+  assert.equal(s1.effect.family, 'transform');
+  assert.ok(Math.abs(s1.effect.front - 0.25) < 1e-9);
+  assert.equal(s1.effect.scope, 'wall');
+  assert.equal(s1.wipe, null);
+  assert.equal(S(ZOOM, null, 250, 1000, null, null).effect.family, 'transform');
+  assert.equal(S(IRIS, null, 250, 1000, null, null).effect.family, 'mask');
+  assert.equal(S(DISS, null, 250, 1000, null, null).effect.family, 'mask');
+});
+
+test('mmTransitionState: fade and wipe descriptors are unchanged (no effect field)', () => {
+  const fade = { name: 'fade', params: { duration: 1000 } };
+  const wipe = { name: 'wipe', params: { direction: 'down', scope: 'wall', duration: 1000 } };
+  const f = S(fade, null, 500, 10000, null, null);
+  assert.ok(Math.abs(f.opacity - 0.5) < 1e-9 && !f.effect && f.wipe === null);
+  const w = S(wipe, null, 250, 1000, { x: 0, y: 0, w: 1, h: 1 }, null);
+  assert.ok(w.wipe && !w.effect);
+});
