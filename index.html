@@ -903,7 +903,11 @@
 	// renders on top when shown, satisfying "cover is below blackout/tapstart/tdbg".
 	function ensureCover(item) {
 		var s = item.startEffect, e = item.endEffect;
-		var needs = (s && s.name === 'wipe') || (e && e.name === 'wipe');
+		// The overlay cover canvas is needed by wipe AND the mask-family effects
+		// (iris/dissolve) on media/mirror items. Slide/zoom use an element transform
+		// (no canvas), so they stay out of this gate.
+		var _cvEff = function (x) { return x && (x.name === 'wipe' || x.name === 'iris' || x.name === 'dissolve'); };
+		var needs = _cvEff(s) || _cvEff(e);
 		var c = document.getElementById('mmTransCover');
 		var cv = document.getElementById('mmTransCoverCanvas');
 		if (!needs) { if (c) { c.style.display = 'none'; } if (cv) { cv.style.display = 'none'; } return null; }
