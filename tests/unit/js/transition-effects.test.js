@@ -42,3 +42,18 @@ test('mmIrisCircle: screen scope centers on the panel bbox', () => {
   assert.ok(Math.abs(c.cx - 150) < 1e-9 && Math.abs(c.cy - 50) < 1e-9);
   assert.ok(Math.abs(c.r - 0.5 * Math.sqrt(50 * 50 + 50 * 50)) < 1e-9);
 });
+
+const Order = globalThis.mmDissolveOrder;
+const Covered = globalThis.mmDissolveCovered;
+
+test('mmDissolveOrder: deterministic permutation per seed', () => {
+  const a = Order(16, 42), b = Order(16, 42), c = Order(16, 99);
+  assert.deepEqual(a, b);                              // same seed -> same order
+  assert.notDeepEqual(a, c);                           // different seed -> different
+  assert.deepEqual(a.slice().sort((x, y) => x - y), Array.from({ length: 16 }, (_, i) => i)); // valid perm
+});
+test('mmDissolveCovered: monotonic, n at front 0, 0 at front 1', () => {
+  assert.equal(Covered(0, 256), 256);
+  assert.equal(Covered(1, 256), 0);
+  assert.ok(Covered(0.25, 256) > Covered(0.75, 256));
+});

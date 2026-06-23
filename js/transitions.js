@@ -137,6 +137,29 @@
     return { cx: loX + hx, cy: loY + hy, r: f * Math.sqrt(hx * hx + hy * hy) };
   }
 
+  // Tiny deterministic LCG (per-seed) -> [0,1) generator. Pure; ES5/bit-portable.
+  function _mmLcg(seed) {
+    var s = (seed >>> 0) || 1;
+    return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  }
+  // Seeded reveal order: a permutation of 0..n-1 (Fisher-Yates over _mmLcg). The SAME
+  // seed (playback.seed) on every screen -> identical order -> wall-coherent dissolve.
+  function mmDissolveOrder(n, seed) {
+    var arr = [], i;
+    for (i = 0; i < n; i++) { arr.push(i); }
+    var rnd = _mmLcg(seed);
+    for (i = n - 1; i > 0; i--) {
+      var j = Math.floor(rnd() * (i + 1));
+      var t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+  // Count of cells still covered at this front (cells revealed = floor(front*n)). Pure.
+  function mmDissolveCovered(front, n) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    return n - Math.floor(f * n);
+  }
+
   // Global-px offset for a Slide. 'direction' is the motion direction; content enters
   // from the opposite edge. front 0 -> one wall off; front 1 -> {0,0}. Pure.
   function mmSlideOffset(front, direction, GW, GH) {
@@ -182,4 +205,6 @@
   root.mmSlideOffset = mmSlideOffset;
   root.mmZoomFactor = mmZoomFactor;
   root.mmIrisCircle = mmIrisCircle;
+  root.mmDissolveOrder = mmDissolveOrder;
+  root.mmDissolveCovered = mmDissolveCovered;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
