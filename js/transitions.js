@@ -114,6 +114,18 @@
     return { role: role, opacity: p, wipe: null };   // fade
   }
 
+  // Global-px offset for a Slide. 'direction' is the motion direction; content enters
+  // from the opposite edge. front 0 -> one wall off; front 1 -> {0,0}. Pure.
+  function mmSlideOffset(front, direction, GW, GH) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var k = 1 - f, dx = 0, dy = 0;
+    if (direction === 'left') { dx = k * GW; }
+    else if (direction === 'right') { dx = -k * GW; }
+    else if (direction === 'up') { dy = k * GH; }
+    else { dy = -k * GH; }   // down
+    return { dx: dx, dy: dy };
+  }
+
   // Apply a transition state to a mounted element. `cover` is an opaque overlay
   // div (item background color), sized over the element, used for wipes; pass null
   // for fade. ES5 / Safari-5.1: opacity + -webkit-transform only (no clip-path).
@@ -144,4 +156,5 @@
   root.mmWipeSlide = mmWipeSlide;
   root.mmWipeCoverRect = mmWipeCoverRect;
   root._mmWallReveal = _wallReveal;
+  root.mmSlideOffset = mmSlideOffset;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
