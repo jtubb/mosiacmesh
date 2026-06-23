@@ -43,6 +43,7 @@
         recordTickPhase(currentTime);
         _lastTickAt = Date.now();
         triggerPulse();
+        if (typeof GoTime !== 'undefined' && GoTime.steerTick) { GoTime.steerTick(); }
         if(ProgrammableTimer.isSynced())
         {
             // One-shot announce: tell the server our clock has converged
@@ -112,6 +113,12 @@
 		// Transition engine: the currently-mounted media element, its wipe cover
 		// overlay, and the transition RAF handle.
 		currentEl: null, transCover: null, transRaf: null };
+
+	// One-way latch: animations hold black until the shared clock is ready the FIRST
+	// time (defends the render path against pre-sync / fresh-join starts that bypass
+	// the GO gate). Once ready it never re-gates, so a brief mid-run isSynced() dip
+	// can't flash black during a long playlist.
+	var clockEverReady = false;
 
 	// Play video UNMUTED. Restores sound on every screen, at the cost of needing
 	// a tap-to-start (a muted <video> is exempt from autoplay policy and would
@@ -523,6 +530,22 @@
 		var ctx = canvas.getContext('2d');
 		function frame() {
 			if (!playback.active) { return; }
+			// Pre-sync guard: until the shared clock is ready the first time, hold black
+			// rather than paint a wrong, desynced position (GoTime.now() is unreliable
+			// before the offset locks) that would snap into place when sync completes.
+			if (!clockEverReady) {
+				if (typeof clockReady === 'function' && clockReady()) {
+					clockEverReady = true;
+				} else {
+					var bgItem = playback.items[playback.scriptIndex];
+					ctx.setTransform(1, 0, 0, 1, 0, 0);
+					ctx.clearRect(0, 0, canvas.width, canvas.height);
+					ctx.fillStyle = (bgItem && bgItem.backgroundColor) || '#000';
+					ctx.fillRect(0, 0, canvas.width, canvas.height);
+					playback.scriptRaf = _raf(frame);
+					return;
+				}
+			}
 			var durations = [], k;
 			for (k = 0; k < playback.items.length; k++) { durations.push(playback.items[k].duration); }
 			var rawElapsed = GoTime.now() - playback.startEpoch;
@@ -608,6 +631,10 @@
 	// Keep the active video aligned to the shared clock: a proportional playbackRate
 	// controller for small drift, a hard seek for large drift (the latter is also the
 	// iOS-5 path, where playbackRate may be ignored so error grows until it is seeked).
+	// INVARIANT (clock-drift design): driftTick is a pure FOLLOWER of GoTime.now() —
+	// it never writes GoTime._offset. The offset is steered separately (GoTime.steerTick),
+	// and steerCapMsPerSec stays well under this controller's authority, so the two layer
+	// (reference-correction beneath element-follow) and never compound.
 	function driftTick() {
 		var v = playback.video;
 		if (!v || !playback.active) { return; }

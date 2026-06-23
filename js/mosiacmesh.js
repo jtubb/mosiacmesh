@@ -194,7 +194,7 @@ function getUDID() {
 		// precision down. The offset itself is HELD (monotonic ratchet, see GoTime
 		// _reviseOffset); ongoing oscillator drift is corrected at the beat by
 		// ProgrammableTimer's median drift loop, which is what keeps displays aligned.
-		SyncInterval: 60000
+		SyncInterval: 30000
 	});
 
 
