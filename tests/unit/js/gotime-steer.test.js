@@ -99,3 +99,30 @@ test('_robustTarget: gate uses 2*best above the floor (admits 70 when best=40, d
                    smp(120, 70, now - 3000), smp(999, 90, now - 1500)];
   assert.equal(s.GoTime._robustTarget(samples, now, RT), 110); // median[100,110,120]
 });
+
+test('getSteerState: initial state', () => {
+  const s = loadGoTime();
+  const st = s.GoTime.getSteerState();
+  assert.equal(st.steering, false);
+  assert.equal(st.samples, 0);
+  assert.equal(st.offset, 0);
+});
+
+test('setOptions: steer knobs are accepted', () => {
+  const s = loadGoTime();
+  s.GoTime.setOptions({ SteerCapMsPerSec: 25, SteerMinSamples: 2 });
+  assert.equal(s.GoTime.getSteerState().samples, 0);
+});
+
+test('_reviseOffset records samples into the ring', () => {
+  const s = loadGoTime();
+  s._reviseOffset({ offset: 100, precision: 10 }, 't');
+  s._reviseOffset({ offset: 110, precision: 12 }, 't');
+  assert.equal(s.GoTime.getSteerState().samples, 2);
+});
+
+test('ring is bounded (does not grow without limit)', () => {
+  const s = loadGoTime();
+  for (var i = 0; i < 200; i++) { s._reviseOffset({ offset: 100, precision: 10 }, 't'); }
+  assert.ok(s.GoTime.getSteerState().samples <= 64);
+});

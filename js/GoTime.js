@@ -136,7 +136,17 @@ var GoTime = (function f() {
         _firstSyncCallback: null,
         _onSyncCallback: null,
         _wsCall: null,
-        _wsRequestTime: null
+        _wsRequestTime: null,
+        _steerSamples: [],
+        _steering: false,
+        _lastSteerAt: null,
+        _lastSteerTarget: null,
+        _steerDeadbandMs: 33,
+        _steerSnapMs: 500,
+        _steerCapMsPerSec: 15,
+        _steerWindowMs: 120000,
+        _steerMinSamples: 3,
+        _steerPrecisionFloorMs: 60
     };
     
 	// Private Methods
@@ -243,6 +253,8 @@ var GoTime = (function f() {
         timestamp = GoTime.now();
         options._lastSyncTime = timestamp;
         options._lastSyncMethod = method;
+        options._steerSamples.push({ offset: sample.offset, precision: sample.precision, t: timestamp });
+        while (options._steerSamples.length > 64) { options._steerSamples.shift(); }
         // Add to history
         /*options._history.push({
             Sample: sample,
@@ -326,6 +338,12 @@ var GoTime = (function f() {
 			if (opts.SyncInterval != null) {
 				options._syncInterval = opts.SyncInterval;
 			}
+            if (opts.SteerDeadbandMs != null) { options._steerDeadbandMs = opts.SteerDeadbandMs; }
+            if (opts.SteerSnapMs != null) { options._steerSnapMs = opts.SteerSnapMs; }
+            if (opts.SteerCapMsPerSec != null) { options._steerCapMsPerSec = opts.SteerCapMsPerSec; }
+            if (opts.SteerWindowMs != null) { options._steerWindowMs = opts.SteerWindowMs; }
+            if (opts.SteerMinSamples != null) { options._steerMinSamples = opts.SteerMinSamples; }
+            if (opts.SteerPrecisionFloorMs != null) { options._steerPrecisionFloorMs = opts.SteerPrecisionFloorMs; }
 			if (opts.OnSync != null) {
 				options._onSyncCallback = opts.OnSync;
 			}
@@ -372,6 +390,11 @@ var GoTime = (function f() {
 			return (precisionMs <= maxPrec) && (accAgeMs <= maxAge) &&
 			       (phaseStd <= maxStd) && (Math.abs(phaseMean) <= maxMean);
 		},
+
+		getSteerState: function() {
+            return { steering: options._steering, samples: options._steerSamples.length,
+                     offset: options._offset, target: options._lastSteerTarget };
+        },
 
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget
