@@ -60,3 +60,32 @@ test('mmFoamBubbles: deterministic, distinct stream from beer bubbles', () => {
   assert.notDeepEqual(f.map(b => b.x), mmBeerBubbles(7, 15).map(b => b.x)); // different stream
   f.forEach(b => { assert.ok(b.a >= 0.22 && b.a <= 0.62 && b.r >= 1 && b.r <= 4.2); });
 });
+
+const State = globalThis.mmTransitionState;
+
+test('mmTransitionState: beerfill end-role = fill phase, level rises', () => {
+  const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000, scope: 'wall' } };
+  // duration 6000, offset 5000 -> 1000ms into the 2000ms fill (out), progress p=0.5 -> level 0.5
+  const st = State(null, end, 5000, 6000, null, null);
+  assert.equal(st.role, 'out');
+  assert.equal(st.effect.name, 'beerfill');
+  assert.equal(st.effect.family, 'mask');
+  assert.equal(st.effect.phase, 'fill');
+  assert.ok(Math.abs(st.effect.front - 0.5) < 1e-9);   // fill: level == progress
+  assert.equal(st.effect.scope, 'wall');
+});
+
+test('mmTransitionState: beerfill start-role = drain phase, level falls', () => {
+  const start = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000 } };
+  // offset 500 -> p=0.25 into drain -> level 1-0.25 = 0.75
+  const st = State(start, null, 500, 6000, null, null);
+  assert.equal(st.role, 'in');
+  assert.equal(st.effect.phase, 'drain');
+  assert.ok(Math.abs(st.effect.front - 0.75) < 1e-9);
+  assert.equal(st.effect.scope, 'wall');               // default when unset
+});
+
+test('mmTransitionState: beerfill inactive mid-item', () => {
+  const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000 } };
+  assert.equal(State(null, end, 1000, 6000, null, null).role, 'none');  // 1000 < 6000-2000
+});

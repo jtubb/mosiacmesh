@@ -3,7 +3,11 @@
  * + DOM apply helpers. mmTransitionState is a pure function of the shared-clock
  * offset, so every panel computes the same state and transitions in lockstep. */
 (function (root) {
-  function _dur(eff) { return (eff && eff.params && +eff.params.duration) || 0; }
+  function _dur(eff, role) {
+    if (!eff || !eff.params) { return 0; }
+    if (eff.name === 'beerfill') { return mmBeerDuration(eff.params, role); }
+    return (+eff.params.duration) || 0;
+  }
 
   // Per-screen reveal for a wall-spanning wipe. The global front F sweeps 0..1
   // along the wipe axis over the wipe's duration; a panel whose normalized global
@@ -85,7 +89,7 @@
   // global bbox for wall wipes, or null. quad: this panel's normalized global
   // [TL,TR,BR,BL] for orientation-aware wall wipes, or null. Returns {role,opacity,wipe}.
   function mmTransitionState(startEff, endEff, offsetMs, durationMs, rect, quad) {
-    var sd = _dur(startEff), ed = _dur(endEff), role = 'none', eff = null, p = 1;
+    var sd = _dur(startEff, 'in'), ed = _dur(endEff, 'out'), role = 'none', eff = null, p = 1;
     if (startEff && sd > 0 && offsetMs < sd) { role = 'in'; eff = startEff; p = offsetMs / sd; }
     else if (endEff && ed > 0 && offsetMs > durationMs - ed) {
       role = 'out'; eff = endEff; p = (durationMs - offsetMs) / ed;
@@ -110,6 +114,13 @@
       // translate cover used as the uncalibrated fallback.
       return { role: role, opacity: 1,
                wipe: { reveal: reveal, direction: dir, slide: slide, front: p, scope: scope } };
+    }
+    if (eff.name === 'beerfill') {
+      var bsc = (eff.params && eff.params.scope) || 'wall';
+      var phase = mmBeerPhase(role === 'out' ? 'out' : 'in');
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'beerfill', family: 'mask', front: mmBeerLevel(phase, p),
+                         scope: bsc, params: eff.params || {}, phase: phase } };
     }
     if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
       var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
