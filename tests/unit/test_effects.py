@@ -87,6 +87,24 @@ def test_dissolve_params():
     by = {p["key"]: p for p in e["params"]}
     assert by["blocks"]["type"] == "number" and by["blocks"]["default"] == 16
 
+def test_end_fade_survives_none_duration_ms():
+    # The render path feeds the item's length as ctx['duration_ms']. An "Auto"
+    # (duration=None) item could leave it None; the END fade computed
+    # float(ctx['duration_ms']) and crashed the whole render. It must clamp to 0
+    # instead (fade-out starts at st=0), never raise.
+    fade = effects.get_effect("fade")
+    v, a = fade.video_filters("end", fade.resolve({"duration": 600, "audioFade": True}),
+                              {"duration_ms": None})
+    assert v == [] and a == ["afade=t=out:st=0:d=0.6"]
+
+
+def test_end_fade_missing_duration_ms_key():
+    # Same guard when the key is absent entirely.
+    fade = effects.get_effect("fade")
+    v, a = fade.video_filters("end", fade.resolve({"duration": 600, "audioFade": True}), {})
+    assert a == ["afade=t=out:st=0:d=0.6"]
+
+
 def test_new_effects_bake_audio_only():
     for name in ("slide", "zoom", "iris", "dissolve"):
         eff = effects.get_effect(name)

@@ -91,7 +91,11 @@ def _fade_st_d(role, params, ctx):
     if role == "start":
         st = 0.0
     else:
-        st = max(0.0, (float(ctx.get("duration_ms", 0)) - d_ms) / 1000.0)
+        # `or 0` (not a .get default) so a present-but-None duration_ms — an
+        # "Auto"-duration item before length resolution — clamps to 0 instead of
+        # crashing float(None). Callers should pass the resolved length; defense
+        # in depth alongside the call-site fix in render._encode_group.
+        st = max(0.0, (float(ctx.get("duration_ms") or 0) - d_ms) / 1000.0)
     return _fmt(st), _fmt(d)
 
 

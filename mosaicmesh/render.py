@@ -617,7 +617,7 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
                 out_dir = os.path.join("media", "server", "videos")
                 Path(out_dir).mkdir(parents=True, exist_ok=True)
                 out_path = os.path.join(out_dir, "full_" + token + "_" + str(i) + ".mp4")
-                evf, eaf = _resolve_effect_filters(me, me.duration, tw, th)
+                evf, eaf = _resolve_effect_filters(me, _duration_ms(me), tw, th)
                 cmd = build_ffmpeg_transcode_cmd(src_path, out_path, tw, th,
                                                  extra_video_filters=evf, extra_audio_filters=eaf)
                 video_jobs.append((cmd, "server/full_" + str(i)))
@@ -644,11 +644,12 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
                 out_dir = os.path.join("media", key, "videos")
                 Path(out_dir).mkdir(parents=True, exist_ok=True)
                 out_w, out_h = _render_output_dims(c)
-                # NOTE: ffmpeg fade st= is in SECONDS, so this passes the
-                # seconds-domain duration (the param name 'duration_ms' is a
-                # misnomer). Do NOT convert to ms here — only the client
-                # playback payload (_media_item_payload) needs ms.
-                evf, eaf = _resolve_effect_filters(me, me.duration,
+                # Pass the RESOLVED item length in ms (_duration_ms): an "Auto"
+                # item has me.duration None (-> float() crash) and a set duration
+                # is in SECONDS, but _fade_st_d's ctx['duration_ms'] is milliseconds
+                # (it subtracts the ms effect duration). _duration_ms(me) yields ms
+                # and never None, so the end fade-out starts at the right time.
+                evf, eaf = _resolve_effect_filters(me, _duration_ms(me),
                                                    out_w, out_h)
                 if me.playmode == PlayMode.INDIVIDUAL:
                     quad_pts = np.array(c.measuredPerimeter, dtype="int32").reshape(-1, 2)

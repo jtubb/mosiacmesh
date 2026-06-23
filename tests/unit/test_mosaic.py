@@ -851,7 +851,7 @@ class TestEffectRenderHook:
     def _video_group(self, mock_settings, playmode, start=None, end=None):
         disp = mock_settings.displays["Default"]
         me = server.MediaElement(); me.id = "v"; me.file = "/media/server/clip.mp4"
-        me.duration = 5000; me.playmode = playmode
+        me.duration = 5; me.playmode = playmode   # 5 SECONDS (model stores seconds; _duration_ms -> 5000ms)
         me.startEffect = start; me.endEffect = end
         disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
