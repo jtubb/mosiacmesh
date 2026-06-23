@@ -9,9 +9,9 @@ def test_get_effect_unknown_returns_none():
     assert effects.get_effect("nope") is None
 
 
-def test_catalog_has_fade_and_wipe_only():
+def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
-    assert names == {"fade", "wipe"}          # audiofade folded into the audioFade toggle
+    assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -62,3 +62,35 @@ def test_effect_audio_fade_default():
     assert effects.effect_audio_fade_default("fade") is True
     assert effects.effect_audio_fade_default("wipe") is True
     assert effects.effect_audio_fade_default("nope") is False
+
+
+def test_slide_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "slide")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["direction"]["choices"] == ["left", "right", "up", "down"]
+    assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
+    assert by["duration"]["type"] == "number" and by["audioFade"]["type"] == "boolean"
+
+def test_zoom_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "zoom")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["scale"]["type"] == "number" and by["scale"]["default"] == 0.6
+    assert by["scope"]["choices"] == ["screen", "wall"]
+
+def test_iris_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "iris")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["scope"]["choices"] == ["screen", "wall"] and by["duration"]["type"] == "number"
+
+def test_dissolve_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "dissolve")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["blocks"]["type"] == "number" and by["blocks"]["default"] == 16
+
+def test_new_effects_bake_audio_only():
+    for name in ("slide", "zoom", "iris", "dissolve"):
+        eff = effects.get_effect(name)
+        v, a = eff.video_filters("start", eff.resolve({"duration": 600, "audioFade": True}), {"duration_ms": 5000})
+        assert v == [] and a == ["afade=t=in:st=0:d=0.6"]
+        v2, a2 = eff.video_filters("start", eff.resolve({"duration": 600, "audioFade": False}), {"duration_ms": 5000})
+        assert v2 == [] and a2 == []

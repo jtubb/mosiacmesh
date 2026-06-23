@@ -130,3 +130,53 @@ class WipeEffect(Effect):
 
     def video_filters(self, role, params, ctx):
         return ([], _afade(role, params, ctx))     # visual wipe is client-side
+
+
+@register
+class SlideEffect(Effect):
+    name = "slide"
+    label = "Slide"
+    params = [ParamSpec("direction", "choice", "left", choices=["left", "right", "up", "down"]),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 600, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))
+
+
+@register
+class ZoomEffect(Effect):
+    name = "zoom"
+    label = "Zoom"
+    params = [ParamSpec("scale", "number", 0.6, minimum=0.05, maximum=1),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 600, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))
+
+
+@register
+class IrisEffect(Effect):
+    name = "iris"
+    label = "Iris"
+    params = [ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 600, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))
+
+
+@register
+class DissolveEffect(Effect):
+    name = "dissolve"
+    label = "Dissolve"
+    params = [ParamSpec("blocks", "number", 16, minimum=2, maximum=64),
+              ParamSpec("duration", "number", 600, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))
