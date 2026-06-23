@@ -89,3 +89,39 @@ test('mmTransitionState: beerfill inactive mid-item', () => {
   const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000 } };
   assert.equal(State(null, end, 1000, 6000, null, null).role, 'none');  // 1000 < 6000-2000
 });
+
+const Beer = globalThis.mmDrawBeer;
+
+function recCtx() {
+  return {
+    rects: [], fills: 0, arcs: 0, _grad: { addColorStop() {} },
+    fillStyle: '#000', _started: false,
+    createLinearGradient() { return this._grad; },
+    fillRect(x, y, w, h) { this.rects.push({ x, y, w, h }); },
+    beginPath() {}, moveTo() {}, lineTo() {}, closePath() {},
+    arc() { this.arcs++; }, fill() { this.fills++; }
+  };
+}
+
+test('mmDrawBeer: level 0 draws nothing', () => {
+  const c = recCtx();
+  Beer(c, { beerType: 'pale' }, 'fill', 0, 0, 300, 200, null, 'wall', 1);
+  assert.equal(c.rects.length, 0);
+});
+
+test('mmDrawBeer: fill draws beer body covering bottom level fraction + pour', () => {
+  const c = recCtx();
+  Beer(c, { beerType: 'pale' }, 'fill', 0.5, 0, 300, 200, null, 'wall', 1);
+  // beer body: a rect whose top is at y=100 (half of 200), height ~100
+  const body = c.rects.find(r => Math.abs(r.y - 100) < 1 && Math.abs(r.h - 100) < 1 && r.w === 300);
+  assert.ok(body, 'beer body rect present');
+  // pour stream present in fill phase: a narrow rect starting at region top (y=0)
+  assert.ok(c.rects.some(r => r.y === 0 && r.w < 300 * 0.5), 'pour stream present');
+  assert.ok(c.arcs > 0, 'bubbles drawn');
+});
+
+test('mmDrawBeer: drain phase draws no pour stream', () => {
+  const c = recCtx();
+  Beer(c, { beerType: 'pale' }, 'drain', 0.5, 0, 300, 200, null, 'wall', 1);
+  assert.ok(!c.rects.some(r => r.y === 0), 'no pour stream rect at region top');
+});

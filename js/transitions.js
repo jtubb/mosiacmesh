@@ -335,6 +335,60 @@
     return arr;
   }
 
+  // Draw opaque beer covering the bottom `level` fraction of the region.
+  // phase 'fill' adds a pour stream from the region top. Used both in-canvas
+  // (mesh SCRIPT, drawn in global coords then warped) and on the overlay (media).
+  // ctx primitives only: fillRect / arc+fill / polyline / linear gradient. No clip.
+  function mmDrawBeer(ctx, params, phase, level, t, GW, GH, quad, scope, seed) {
+    var lv = level < 0 ? 0 : (level > 1 ? 1 : level);
+    if (lv <= 0) { return; }
+    var pal = mmBeerPalette(params && params.beerType);
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var beerH = lv * reg.h, bottom = reg.y + reg.h, surfaceY = bottom - beerH;
+    var ts = t * 0.001;   // ms -> s-ish for wave/bubble motion
+
+    // beer body (vertical gradient)
+    var g = ctx.createLinearGradient(0, surfaceY, 0, bottom);
+    g.addColorStop(0, pal.beerTop); g.addColorStop(1, pal.beerBot);
+    ctx.fillStyle = g; ctx.fillRect(reg.x, surfaceY, reg.w, beerH);
+
+    // rising bubbles inside the beer (seeded; identical across screens for a wall)
+    var bubs = mmBeerBubbles(seed >>> 0, pal.bubbleDensity), i, by;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    for (i = 0; i < bubs.length; i++) {
+      by = bottom - (((bubs[i].phase + ts * bubs[i].spd * 0.35) % 1) * beerH);
+      if (by < surfaceY + 4) { continue; }
+      ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r, 0, 6.2832); ctx.fill();
+    }
+
+    // foam head with a wavy top edge (one polyline path)
+    var fh = reg.h * pal.headH, topBase = surfaceY - fh;
+    var amp = fh * 0.4 < 2.5 ? 2.5 : fh * 0.4, steps = 60, s, sx;
+    ctx.fillStyle = pal.foam;
+    ctx.beginPath(); ctx.moveTo(reg.x, surfaceY + 2); ctx.lineTo(reg.x, topBase);
+    for (s = 0; s <= steps; s++) {
+      sx = s / steps;
+      ctx.lineTo(reg.x + sx * reg.w, mmFoamWaveY(sx, ts, amp, topBase));
+    }
+    ctx.lineTo(reg.x + reg.w, surfaceY + 2); ctx.closePath(); ctx.fill();
+
+    // scattered foam bubbles
+    var fbs = mmFoamBubbles(seed >>> 0, pal.foamBubbles), k, f;
+    for (k = 0; k < fbs.length; k++) {
+      f = fbs[k];
+      ctx.fillStyle = 'rgba(255,255,255,' + f.a + ')';
+      ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r, 0, 6.2832); ctx.fill();
+    }
+
+    // pour stream from the region top (fill phase only)
+    if (phase === 'fill') {
+      var pw = reg.w * 0.10, px = reg.x + reg.w / 2, ph = topBase - reg.y;
+      if (ph < 0) { ph = 0; }
+      ctx.fillStyle = pal.beerTop; ctx.fillRect(px - pw / 2, reg.y, pw, ph);
+      ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(px - pw * 0.18, reg.y, pw * 0.36, ph);
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -355,4 +409,5 @@
   root.mmFoamWaveY = mmFoamWaveY;
   root.mmBeerBubbles = mmBeerBubbles;
   root.mmFoamBubbles = mmFoamBubbles;
+  root.mmDrawBeer = mmDrawBeer;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
