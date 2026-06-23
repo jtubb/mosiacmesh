@@ -595,17 +595,36 @@
 					if (m) {
 						ctx.save();
 						ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+						// Transform effects (slide/zoom) — global-space, in-canvas (wall-coherent).
+						// stc is hoisted here so it can serve both the pre-animation transform and
+						// the post-animation wipe/mask covers below.
+						var stc = ((it.startEffect || it.endEffect) && typeof mmTransitionState === 'function')
+							? mmTransitionState(it.startEffect || null, it.endEffect || null,
+								pos.offsetMs, it.duration || 0, null, it.meshQuad || null)
+							: null;
+						if (stc && stc.effect && stc.effect.family === 'transform') {
+							if (stc.effect.name === 'slide' && typeof mmSlideOffset === 'function') {
+								var _so = mmSlideOffset(stc.effect.front, (stc.effect.params && stc.effect.params.direction) || 'left',
+									it.meshGlobal[0], it.meshGlobal[1]);
+								ctx.translate(_so.dx, _so.dy);
+							} else if (stc.effect.name === 'zoom' && typeof mmZoomFactor === 'function') {
+								var _zf = mmZoomFactor(stc.effect.front, (stc.effect.params && stc.effect.params.scale));
+								// Always wall-center for mesh content (scope ignored here on purpose):
+								// scaling each panel's slice about its OWN center would tear the seams.
+								// Per-screen ('screen' scope) zoom is the element path's job (mirror/media).
+								var _zcx = it.meshGlobal[0] / 2, _zcy = it.meshGlobal[1] / 2;
+								ctx.translate(_zcx, _zcy); ctx.scale(_zf.s, _zf.s); ctx.translate(-_zcx, -_zcy);
+								ctx.globalAlpha = _zf.alpha;
+							}
+						}
 						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed, meshGridObj); }
 						catch (e1) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e1 && e1.message) || e1) }); } }
 						// In-frame wipe cover: drawn under the SAME transform as the content and in the
 						// SAME RAF, so the leading edge is frame-locked to the animation (no second
 						// canvas/RAF -> no inter-loop jitter, one fewer full-screen composite). Fade is
 						// handled as element opacity elsewhere.
-						if ((it.startEffect || it.endEffect) && typeof mmTransitionState === 'function'
-								&& typeof mmWipeCoverRect === 'function') {
-							var stc = mmTransitionState(it.startEffect || null, it.endEffect || null,
-								pos.offsetMs, it.duration || 0, null, it.meshQuad || null);
-							if (stc.wipe) {
+						if (stc) {
+							if (stc.wipe && typeof mmWipeCoverRect === 'function') {
 								var fc = mmWipeCoverRect(stc.wipe.scope, stc.wipe.direction, stc.wipe.front,
 									it.meshGlobal[0], it.meshGlobal[1], it.meshQuad);
 								if (fc) { ctx.fillStyle = it.backgroundColor || '#000000'; ctx.fillRect(fc.x, fc.y, fc.w, fc.h); }
@@ -1004,6 +1023,23 @@
 				if (playback.currentEl) { playback.currentEl.style.opacity = '1'; }
 				return;
 			}
+		}
+		// Transform effects (slide/zoom) for non-mesh-animation items (media, mirror SCRIPT).
+		// Mesh SCRIPT animations early-return above; this path handles element-level transforms.
+		if (st.effect && st.effect.family === 'transform' && playback.currentEl) {
+			var el = playback.currentEl;
+			var cvt = document.getElementById('mmTransCoverCanvas'); if (cvt) { cvt.style.display = 'none'; }
+			if (playback.transCover) { playback.transCover.style.display = 'none'; }
+			if (st.effect.name === 'slide' && typeof mmSlideOffset === 'function') {
+				var so2 = mmSlideOffset(st.effect.front, (st.effect.params && st.effect.params.direction) || 'left', 100, 100);
+				var t2 = 'translate(' + so2.dx + '%,' + so2.dy + '%)';
+				el.style.webkitTransform = t2; el.style.transform = t2; el.style.opacity = '1';
+			} else if (typeof mmZoomFactor === 'function') {
+				var zf2 = mmZoomFactor(st.effect.front, (st.effect.params && st.effect.params.scale));
+				var t3 = 'scale(' + zf2.s + ')';
+				el.style.webkitTransform = t3; el.style.transform = t3; el.style.opacity = '' + zf2.alpha;
+			}
+			return;
 		}
 		if (coverCanvas) { coverCanvas.style.display = 'none'; }   // not affine -> hide canvas overlay
 		mmApplyTransition(playback.currentEl, playback.transCover, st);
