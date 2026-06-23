@@ -188,6 +188,24 @@ var GoTime = (function f() {
         };
     };
 
+    // Pure hybrid correction step: deadband (ignore tiny error) / bounded slew /
+    // snap (large error only). dtMs = wall ms since the previous step. opts:
+    // {deadbandMs, snapMs, capMsPerSec}. Returns the new offset (float).
+    _steerStep = function(offset, target, dtMs, opts) {
+        var dead = (opts && opts.deadbandMs != null) ? opts.deadbandMs : 33;
+        var snap = (opts && opts.snapMs != null) ? opts.snapMs : 500;
+        var cap = (opts && opts.capMsPerSec != null) ? opts.capMsPerSec : 15;
+        var err = target - offset;
+        var aerr = err < 0 ? -err : err;
+        if (aerr <= dead) { return offset; }
+        if (aerr >= snap) { return target; }
+        var maxMove = cap * (dtMs / 1000);
+        var move = err;
+        if (move > maxMove) { move = maxMove; }
+        else if (move < -maxMove) { move = -maxMove; }
+        return offset + move;
+    };
+
     _reviseOffset = function(sample, method) {
         var timestamp;
         if (isNaN(sample.offset) || isNaN(sample.precision)) {
@@ -324,7 +342,9 @@ var GoTime = (function f() {
 			var maxMean = (opts.maxMeanMs      != null) ? opts.maxMeanMs      : 20;
 			return (precisionMs <= maxPrec) && (accAgeMs <= maxAge) &&
 			       (phaseStd <= maxStd) && (Math.abs(phaseMean) <= maxMean);
-		}
+		},
+
+		_steerStep: _steerStep
 	}
     
 })();
