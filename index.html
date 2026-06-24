@@ -222,13 +222,16 @@
 	// is created lazily on first use (the <video> is in <body> by then). ES5-safe.
 	// Scatter tuning knobs (work with or without ?tdbg, so on-wall A/B needs no
 	// redeploy): ?scount=N overrides copy count, ?sgiant=0 drops the giant,
+	// ?sgscale=N sets the giant peak as a fraction of region height (e.g. 0.4),
 	// ?snocull=1 disables screen-local culling. Read once; mmDrawScatter honors them.
 	(function () {
 		var h = location.href, m, sd = {};
 		if ((m = /[?&]scount=(\d+)/.exec(h))) { sd.count = parseInt(m[1], 10); }
 		if (/[?&]sgiant=0/.test(h)) { sd.nogiant = true; }
 		if (/[?&]snocull=1/.test(h)) { sd.nocull = true; }
-		if ((m = /[?&]sgscale=([\d.]+)/.exec(h))) { sd.gscale = parseFloat(m[1]); }
+		// require >=1 digit, at most one dot -> never NaN (a malformed value would
+		// silently hide the giant via the gh>2 guard, confusing on-wall tuning).
+		if ((m = /[?&]sgscale=([0-9]*\.?[0-9]+)/.exec(h))) { sd.gscale = parseFloat(m[1]); }
 		window._mmSdbg = sd;
 	})();
 	if (/tdbg/.test(location.href)) {
