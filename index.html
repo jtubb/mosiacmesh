@@ -463,7 +463,14 @@
 			fps: (window._mmFpsEma > 0) ? Math.round(1000 / window._mmFpsEma) : null,
 			frameMs: (window._mmFpsEma > 0) ? Math.round(window._mmFpsEma) : null,
 			sc: window._mmScatterStat || null,
-			sknobs: window._mmSdbg || null
+			sknobs: window._mmSdbg || null,
+			// Video letterbox diagnosis: live viewport (vw x vh), the persistent
+			// <video> element BOX size (velW x velH), and the loaded video's INTRINSIC
+			// size (vidW x vidH). A 16:9 letterbox of a portrait warp shows up here as
+			// a mismatch between any of these.
+			vw: window.innerWidth, vh: window.innerHeight,
+			velW: v ? v.offsetWidth : null, velH: v ? v.offsetHeight : null,
+			vidW: v ? (v.videoWidth || null) : null, vidH: v ? (v.videoHeight || null) : null
 		};
 		if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { payload[k] = extra[k]; } } }
 		sendMsg("CLIENTLOG", payload);
