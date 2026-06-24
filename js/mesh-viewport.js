@@ -43,13 +43,15 @@
   // and source-subrect-clip the blit: ctx.setTransform + the 9-arg drawImage drop
   // iOS 5.1 WebKit off the GPU fast path onto a CPU sampler (measured markedly
   // slower on-wall), which dwarfs any saving from drawing fewer source pixels.
+  // Returns true if it drew, false if it culled / no-op'd (lets callers tally
+  // drawn-vs-culled for ?tdbg tuning telemetry).
   function mmStampSprite(ctx, vp, img, gx, gy, globalSize, angle) {
     var iw = img.width, ih = img.height;
-    if (!iw || !ih || !(globalSize > 0)) { return; }
+    if (!iw || !ih || !(globalSize > 0)) { return false; }
     var k = globalSize / ih;                          // local px -> global px
     if (vp) {                                          // cull when off this screen
       var gRad = 0.5 * k * Math.sqrt(iw * iw + ih * ih);   // circumscribed global radius
-      if (!vp.intersects(gx, gy, gRad)) { return; }
+      if (!vp.intersects(gx, gy, gRad)) { return false; }
     }
     ctx.save();
     ctx.translate(gx, gy);
@@ -57,6 +59,7 @@
     ctx.scale(k, k);
     ctx.drawImage(img, -iw / 2, -ih / 2);
     ctx.restore();
+    return true;
   }
 
   root.mmStampSprite = mmStampSprite;

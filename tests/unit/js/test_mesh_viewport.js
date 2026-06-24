@@ -84,6 +84,13 @@ test('mmStampSprite: an on-screen giant also uses the fast path (no setTransform
   assert.equal(c.rots, 1);                        // rotated once for its angle
 });
 
+test('mmStampSprite: returns true when drawn, false when culled (for tuning tally)', () => {
+  const drew = g.mmStampSprite(recCtx(), vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 100, 100, 40, 0);
+  const culled = g.mmStampSprite(recCtx(), vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 1000, 1000, 40, 0);
+  assert.equal(drew, true);
+  assert.equal(culled, false);
+});
+
 test('mmStampSprite: null viewport -> ambient draw, no rotate when angle 0', () => {
   const c = recCtx();
   g.mmStampSprite(c, null, sprite, 100, 100, 40, 0);

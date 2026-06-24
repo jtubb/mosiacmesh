@@ -452,7 +452,8 @@
   // Draw the scatter cover: backing disc (clean coverage) + erupting sprite copies + giant center.
   // drawImage/arc only; no clip/composite. No-op stamps until img is decoded.
   function mmDrawScatter(ctx, params, phase, p, GW, GH, quad, scope, seed, img, bg, canvasW, canvasH) {
-    var vp = (quad && typeof mmMeshViewport === 'function')
+    var sd = root._mmSdbg || {};                        // ?tdbg live tuning knobs (no redeploy)
+    var vp = (quad && !sd.nocull && typeof mmMeshViewport === 'function')
       ? mmMeshViewport(quad, GW, GH, canvasW, canvasH) : null;
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
@@ -464,10 +465,11 @@
       ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, 6.283185307); ctx.fill();
     }
     if (!img || !img.width) { return; }                 // sprite not decoded yet -> disc only
-    var count = (params && params.count) || 40;
+    var count = (sd.count > 0 ? sd.count : ((params && params.count) || 40));
     var dist = mmScatterDist(phase, p) * maxR;
     var parts = mmScatterParticles(seed >>> 0, count), i, pt, d, sz, ang, x, y, bi, spr;
     var baseH = reg.h * 0.12;
+    var _dbg = root._mmDbg, _drawn = 0, _culled = 0, _gdrew = false, _ok;
     // Bake the pre-rotated/downscaled atlas once per image (iPad-1 fast path);
     // null on platforms without a canvas API -> per-stamp rotate fallback below.
     if (img._mmAtlas === undefined) { img._mmAtlas = mmBuildSpriteAtlas(img, 96, 24); }
@@ -480,16 +482,18 @@
         bi = Math.round(ang / (6.283185307 / atlas.buckets));
         bi = ((bi % atlas.buckets) + atlas.buckets) % atlas.buckets;
         spr = atlas.canvases[bi];
-        mmStampSprite(ctx, vp, spr, x, y, atlas.dim * (sz / atlas.sh), 0);
+        _ok = mmStampSprite(ctx, vp, spr, x, y, atlas.dim * (sz / atlas.sh), 0);
       } else {                                          // fallback: rotate the full source per stamp
-        mmStampSprite(ctx, vp, img, x, y, sz, ang);
+        _ok = mmStampSprite(ctx, vp, img, x, y, sz, ang);
       }
+      if (_dbg) { if (_ok) { _drawn++; } else { _culled++; } }
     }
-    // giant center
+    // giant center (?tdbg: ?sgiant=0 drops it to A/B whether it's the cost)
     var gh = reg.h * 1.43 * c;
-    if (gh > 2) {
-      mmStampSprite(ctx, vp, img, cx, cy, gh, mmScatterGiantAngle(phase, p));
+    if (gh > 2 && !sd.nogiant) {
+      _gdrew = mmStampSprite(ctx, vp, img, cx, cy, gh, mmScatterGiantAngle(phase, p));
     }
+    if (_dbg) { root._mmScatterStat = { drawn: _drawn, culled: _culled, total: count, giant: !!_gdrew }; }
   }
 
   root.mmTransitionState = mmTransitionState;

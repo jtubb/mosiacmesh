@@ -220,6 +220,16 @@
 	// flashing on a device: live clock(el) vs video(ct), drift(err), look-ahead,
 	// and a tick counter (rapidly climbing # == a re-render/flash loop). Element
 	// is created lazily on first use (the <video> is in <body> by then). ES5-safe.
+	// Scatter tuning knobs (work with or without ?tdbg, so on-wall A/B needs no
+	// redeploy): ?scount=N overrides copy count, ?sgiant=0 drops the giant,
+	// ?snocull=1 disables screen-local culling. Read once; mmDrawScatter honors them.
+	(function () {
+		var h = location.href, m, sd = {};
+		if ((m = /[?&]scount=(\d+)/.exec(h))) { sd.count = parseInt(m[1], 10); }
+		if (/[?&]sgiant=0/.test(h)) { sd.nogiant = true; }
+		if (/[?&]snocull=1/.test(h)) { sd.nocull = true; }
+		window._mmSdbg = sd;
+	})();
 	if (/tdbg/.test(location.href)) {
 		window._mmDbg = true;   // also stream debug to the server log (CLIENTLOG)
 		window._tdbg = function(pos, v, errorMs) {
@@ -274,6 +284,30 @@
 				' src=' + (v && v.getAttribute('src') ? '1' : '0') +
 				' evt=' + window._mmVidEvt;
 		}, 500);
+
+		// Scatter perf HUD (tdbg3): animation-loop fps (the choppiness signal,
+		// from the inter-frame EMA updated in runScriptLoop) + last scatter draw
+		// stats (copies drawn vs culled / giant on) + the active tuning knobs.
+		// Cyan so it reads apart from the green drift HUD + yellow arm line.
+		setInterval(function () {
+			if (!document.body) { return; }
+			var el3 = document.getElementById('tdbg3');
+			if (!el3) {
+				el3 = document.createElement('div'); el3.id = 'tdbg3';
+				el3.style.cssText = 'position:fixed;left:0;bottom:40px;z-index:99999;' +
+					'background:rgba(0,0,0,0.7);color:#0ff;font:12px monospace;' +
+					'padding:3px 5px;white-space:pre;pointer-events:none;';
+				document.body.appendChild(el3);
+			}
+			var ema = window._mmFpsEma, fps = (ema && ema > 0) ? Math.round(1000 / ema) : '-';
+			var s = window._mmScatterStat, sd = window._mmSdbg || {};
+			var knobs = (sd.count ? ' count=' + sd.count : '') +
+				(sd.nogiant ? ' NOGIANT' : '') + (sd.nocull ? ' NOCULL' : '');
+			el3.textContent = 'fps=' + fps + ' frameMs=' + (ema ? Math.round(ema) : '-') +
+				(s ? ('  scatter drawn=' + s.drawn + ' culled=' + s.culled +
+					'/' + s.total + ' giant=' + (s.giant ? 1 : 0)) : '  scatter:-') +
+				(knobs ? '  knobs:' + knobs : '');
+		}, 400);
 
 		// Catch EVERY uncaught error on the device (not just the one wrapped in
 		// runScriptLoop's draw try/catch). Routes to the server -v log as a
@@ -559,6 +593,16 @@
 		var ctx = canvas.getContext('2d');
 		function frame() {
 			if (!playback.active) { return; }
+			// ?tdbg fps meter: EMA of the animation loop's inter-frame interval —
+			// the objective choppiness signal the scatter HUD (tdbg3) reads.
+			if (window._mmDbg) {
+				var _ft = (Date.now ? Date.now() : new Date().getTime());
+				if (window._mmFt0) {
+					var _dt = _ft - window._mmFt0;
+					window._mmFpsEma = window._mmFpsEma ? (window._mmFpsEma * 0.85 + _dt * 0.15) : _dt;
+				}
+				window._mmFt0 = _ft;
+			}
 			// Pre-sync guard: until the shared clock is ready the first time, hold black
 			// rather than paint a wrong, desynced position (GoTime.now() is unreliable
 			// before the offset locks) that would snap into place when sync completes.
