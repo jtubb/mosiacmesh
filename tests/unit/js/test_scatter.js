@@ -197,3 +197,32 @@ test('mmDrawScatter: full-wall viewport draws more than a half-wall view + keeps
     assert.ok(full.imgs >= 1, 'the centered giant is always within the full wall');
   });
 });
+
+test('mmScatterDiscCase: none/arc/fill by radius vs an off-center rect', () => {
+  const rect = { x: 1000, y: 1000, w: 200, h: 200 };   // nearR≈1414, farR≈1697 from (0,0)
+  assert.equal(g.mmScatterDiscCase(0, 0, 1000, rect), 'none');   // disc hasn't reached
+  assert.equal(g.mmScatterDiscCase(0, 0, 1500, rect), 'arc');    // edge crossing
+  assert.equal(g.mmScatterDiscCase(0, 0, 1800, rect), 'fill');   // fully covers
+});
+test('mmScatterDiscCase: center inside rect never none; fills past far corner', () => {
+  const rect = { x: -100, y: -100, w: 200, h: 200 };   // center (0,0) inside; farR≈141
+  assert.equal(g.mmScatterDiscCase(0, 0, 50, rect), 'arc');      // inside, edge still within
+  assert.equal(g.mmScatterDiscCase(0, 0, 200, rect), 'fill');    // past far corner
+});
+test('mmDrawScatter: disc uses fillRect (no arc) when it fully covers the screen', () => {
+  const c = recCtx();
+  const im = { width: 100, height: 120 };
+  const FULL = [[0, 0], [1, 0], [1, 1], [0, 1]];        // screen == whole wall
+  // p=1 cover -> c=1 -> disc radius = maxR (full) -> covers the screen -> 'fill'
+  g.mmDrawScatter(c, { count: 5 }, 'cover', 1, 1000, 800, FULL, 'wall', 7, im, '#140d06', 1000, 800);
+  assert.equal(c.arcs, 0);              // no arc tessellation
+  assert.ok(c.rects.length >= 1);       // disc drawn as a fillRect
+});
+test('mmDrawScatter: disc uses the arc while its edge crosses a partial screen', () => {
+  const c = recCtx();
+  const im = { width: 100, height: 120 };
+  const LEFT = [[0, 0], [0.5, 0], [0.5, 1], [0, 1]];    // left half; wall center on its edge
+  // c=0.5 -> r=0.5*maxR (<farR) with center on the rect -> 'arc'
+  g.mmDrawScatter(c, { count: 5 }, 'cover', 0.5, 1000, 800, LEFT, 'wall', 7, im, '#140d06', 200, 160);
+  assert.ok(c.arcs >= 1);               // curved edge drawn
+});

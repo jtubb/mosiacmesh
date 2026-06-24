@@ -449,6 +449,25 @@
     return { canvases: canvases, dim: dim, sh: sh, buckets: buckets };
   }
 
+  // Per-screen backing-disc case for a radial disc of radius r centered at global
+  // (cx,cy) vs this screen's global rect {x,y,w,h}: 'none' (disc not yet reached),
+  // 'arc' (edge crossing -> draw the curved edge), 'fill' (fully covers -> cheap
+  // solid, no huge-circle tessellation). Pure.
+  function mmScatterDiscCase(cx, cy, r, rect) {
+    var dx = Math.max(rect.x - cx, 0, cx - (rect.x + rect.w));
+    var dy = Math.max(rect.y - cy, 0, cy - (rect.y + rect.h));
+    var nearR = Math.sqrt(dx * dx + dy * dy);
+    if (r < nearR) { return 'none'; }
+    var x2 = rect.x + rect.w, y2 = rect.y + rect.h;
+    var xs = [rect.x, x2, x2, rect.x], ys = [rect.y, rect.y, y2, y2];
+    var farR = 0, i, ex, ey, d;
+    for (i = 0; i < 4; i++) {
+      ex = xs[i] - cx; ey = ys[i] - cy; d = Math.sqrt(ex * ex + ey * ey);
+      if (d > farR) { farR = d; }
+    }
+    return (r >= farR) ? 'fill' : 'arc';
+  }
+
   // Draw the scatter cover: backing disc (clean coverage) + erupting sprite copies + giant center.
   // drawImage/arc only; no clip/composite. No-op stamps until img is decoded.
   function mmDrawScatter(ctx, params, phase, p, GW, GH, quad, scope, seed, img, bg, canvasW, canvasH) {
@@ -459,12 +478,19 @@
     var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
     var maxR = Math.sqrt((reg.w / 2) * (reg.w / 2) + (reg.h / 2) * (reg.h / 2));
     var c = mmScatterCover(phase, p);
-    // backing disc (item bg) — guarantees a clean, gap-free cover. At scope:wall
-    // its radius is the wall half-diagonal (a huge per-frame arc+fill); ?tdbg
-    // ?sdisc=0 drops it to A/B its cost (NOTE: without it the cover can show gaps).
+    // backing disc (item bg) — guarantees gap-free cover. Screen-bounded when a
+    // viewport is known: per screen, skip until the disc arrives, draw the arc
+    // while its edge crosses, and a cheap fillRect once it fully covers (the long
+    // covered tail, which used to be a wall-diagonal arc). ?sdisc=0 drops it.
     if (!sd.nodisc && c * maxR >= 0.5) {
       ctx.fillStyle = bg || '#000000';
-      ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, 6.283185307); ctx.fill();
+      var _dc = vp ? mmScatterDiscCase(cx, cy, c * maxR, vp.globalRect) : 'arc';
+      if (_dc === 'fill') {
+        ctx.fillRect(vp.globalRect.x, vp.globalRect.y, vp.globalRect.w, vp.globalRect.h);
+      } else if (_dc === 'arc') {
+        ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, 6.283185307); ctx.fill();
+      }
+      // 'none' -> disc hasn't reached this screen -> draw nothing
     }
     if (!img || !img.width) { return; }                 // sprite not decoded yet -> disc only
     var count = (sd.count > 0 ? sd.count : ((params && params.count) || 40));
@@ -533,5 +559,6 @@
   root.mmScatterDist = mmScatterDist;
   root.mmScatterGiantAngle = mmScatterGiantAngle;
   root.mmScatterSpriteUrl = mmScatterSpriteUrl;
+  root.mmScatterDiscCase = mmScatterDiscCase;
   root.mmDrawScatter = mmDrawScatter;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
