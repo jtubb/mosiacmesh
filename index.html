@@ -139,6 +139,15 @@
 		return c;
 	}
 
+	// Sprite-URL Image cache used by scatter and other effect helpers that load
+	// external sprite sheets. Returned Image may be incomplete on the first RAF
+	// after the src is set; subsequent frames will paint correctly once loaded.
+	var _mmSpriteCache = {};
+	function mmSprite(url) {
+		if (!_mmSpriteCache[url]) { var im = new Image(); im.src = url; _mmSpriteCache[url] = im; }
+		return _mmSpriteCache[url];
+	}
+
 	// Play video UNMUTED. Restores sound on every screen, at the cost of needing
 	// a tap-to-start (a muted <video> is exempt from autoplay policy and would
 	// start without a gesture, but iOS+Safari require a real user gesture before
@@ -661,6 +670,11 @@
 									mmDrawBeer(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
 										GoTime.now(), it.meshGlobal[0], it.meshGlobal[1], it.meshQuad,
 										stc.effect.scope, playback.seed | 0);
+								} else if (stc.effect.name === 'scatter' && typeof mmDrawScatter === 'function') {
+									mmDrawScatter(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
+										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
+										playback.seed | 0, mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)),
+										it.backgroundColor || '#000000');
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
@@ -939,7 +953,7 @@
 		// The overlay cover canvas is needed by wipe AND the mask-family effects
 		// (iris/dissolve) on media/mirror items. Slide/zoom use an element transform
 		// (no canvas), so they stay out of this gate.
-		var _cvEff = function (x) { return x && (x.name === 'wipe' || x.name === 'iris' || x.name === 'dissolve' || x.name === 'beerfill'); };
+		var _cvEff = function (x) { return x && (x.name === 'wipe' || x.name === 'iris' || x.name === 'dissolve' || x.name === 'beerfill' || x.name === 'scatter'); };
 		var needs = _cvEff(s) || _cvEff(e);
 		var c = document.getElementById('mmTransCover');
 		var cv = document.getElementById('mmTransCoverCanvas');
@@ -1057,6 +1071,11 @@
 					if (st.effect.name === 'beerfill' && typeof mmDrawBeer === 'function') {
 						mmDrawBeer(cmx, st.effect.params, st.effect.phase, st.effect.front,
 							GoTime.now(), GWm, GHm, quad, st.effect.scope, playback.seed | 0);
+					} else if (st.effect.name === 'scatter' && typeof mmDrawScatter === 'function') {
+						mmDrawScatter(cmx, st.effect.params, st.effect.phase, st.effect.front,
+							GWm, GHm, quad, st.effect.scope, playback.seed | 0,
+							mmSprite(mmScatterSpriteUrl(st.effect.params && st.effect.params.sprite)),
+							item.backgroundColor || '#000000');
 					} else {
 						mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
 							GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');
