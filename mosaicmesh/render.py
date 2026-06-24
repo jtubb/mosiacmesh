@@ -375,7 +375,9 @@ def render_token(media_elements, display_id):
         clients.append((key, c.deviceWidth, c.deviceHeight, perim))
     # Bump this when the encode settings change, to invalidate stale renders.
     # v6: encoder default reverted libx264 (NVENC SPS rejected by iPad-1).
-    encode_ver = "grid025-cbl-v6"
+    # v7: output dims reverted to calibrated device res (was canvas/viewport,
+    #     which letterboxed); forces re-encode of stale canvas-sized assets.
+    encode_ver = "grid025-cbl-v7"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 

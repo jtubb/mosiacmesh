@@ -324,19 +324,19 @@ def reconcile_screen_quad(marker_quad, border_contour, cw, ch, marker_px=300, mi
 
 
 def _render_output_dims(client):
-    """Per-screen render output size: the canvas/viewport ASPECT (true shape and
-    orientation), scaled to FIT WITHIN the device's reported screen resolution so
-    it stays displayable AND decodable on the panel — a 1st-gen iPad's H.264
-    decoder maxes near its 768x1024 screen, and the viewport can't exceed the
-    screen anyway. Returns even (w, h) for libx264."""
-    aw = int(getattr(client, "canvasWidth", 0) or client.deviceWidth) or 1
-    ah = int(getattr(client, "canvasHeight", 0) or client.deviceHeight) or 1
-    dw = int(getattr(client, "deviceWidth", 0) or 0)
-    dh = int(getattr(client, "deviceHeight", 0) or 0)
-    if dw and dh:
-        s = min(1.0, dw / float(aw), dh / float(ah))
-        aw = int(round(aw * s)); ah = int(round(ah * s))
-    return max(2, aw - aw % 2), max(2, ah - ah % 2)
+    """Per-screen render output size: the CALIBRATED device screen resolution
+    (deviceWidth x deviceHeight) — the stable per-screen target the warp fills.
+    Returns even (w, h) for libx264.
+
+    NOTE: do NOT key this on canvasWidth/canvasHeight (the browser viewport). That
+    value is volatile (it shrinks with Safari chrome, varies by launch mode, and
+    re-registers on every reconnect) and, crucially, render_token() keys the render
+    cache on deviceWidth/deviceHeight — so encoding to the canvas while caching by
+    device desynced the two and letterboxed the video whenever viewport != screen.
+    The calibration is the stable contract; render to it. (Reverts ee4e1c2.)"""
+    dw = int(getattr(client, "deviceWidth", 0) or 0) or 1
+    dh = int(getattr(client, "deviceHeight", 0) or 0) or 1
+    return max(2, dw - dw % 2), max(2, dh - dh % 2)
 
 
 def warp_image_for_screen(source_img, bbox, screen_quad, out_w, out_h):

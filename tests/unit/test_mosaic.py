@@ -180,11 +180,11 @@ class TestRender:
         assert disp.renderedToken == server.compute_render_token("Default")
         assert (tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")).exists()
 
-    async def test_render_uses_canvas_aspect_capped_to_device_even(self, mock_settings, tmp_path, monkeypatch):
-        # Output keeps the canvas ASPECT (true shape/orientation) but is capped to
-        # FIT WITHIN the device screen res (decodable on the panel) and rounded to
-        # even (libx264). Device 80x60 (landscape) + canvas 61x121 (portrait, odd):
-        # fit-within scale = min(80/61, 60/121) = 0.4959 -> 30x60 (portrait, even).
+    async def test_render_uses_calibrated_device_res_even(self, mock_settings, tmp_path, monkeypatch):
+        # Output is the CALIBRATED device screen resolution (the stable per-screen
+        # target), rounded to even (libx264) — NOT the volatile browser canvas. The
+        # canvas below is bogus on purpose to prove it's ignored. Device 80x60 ->
+        # 80x60 output (warp PNG shape (h=60, w=80)).
         monkeypatch.chdir(tmp_path)
         src_dir = tmp_path / "media" / "server" / "images"; src_dir.mkdir(parents=True)
         img = np.zeros((100, 100, 3), dtype=np.uint8); img[:, :50] = (0, 0, 255)
@@ -196,7 +196,7 @@ class TestRender:
         me.duration = 1000; me.playmode = server.PlayMode.SEGMENT
         disp.mediaElements = [me]; disp.boundingBox = [0, 0, 100, 100]
         c = server.Client(); c.displayID = "Default"; c.deviceWidth = 80; c.deviceHeight = 60
-        c.canvasWidth = 61; c.canvasHeight = 121   # portrait + odd
+        c.canvasWidth = 61; c.canvasHeight = 121   # bogus viewport -> ignored (calibrated wins)
         c.measuredPerimeter = np.array([[[0, 0]], [[50, 0]], [[50, 100]], [[0, 100]]])
         mock_settings.clients = {"c1": c}
 
@@ -205,18 +205,22 @@ class TestRender:
         assert result["status"] == "ready"
         out_png = tmp_path / "media" / "c1" / "images" / ("seg_" + disp.renderedToken + "_0.png")
         assert out_png.exists()
-        assert cv.imread(str(out_png)).shape == (60, 30, 3)   # canvas aspect, capped, even
+        assert cv.imread(str(out_png)).shape == (60, 80, 3)   # calibrated device res (h=60, w=80)
 
-    def test_render_output_dims_caps_to_device(self):
-        # iPad-like: canvas (bogusly) larger than the 768x1024 screen -> capped.
+    def test_render_output_dims_uses_calibrated_device_res(self):
+        # Renders to the CALIBRATED device screen resolution, IGNORING the volatile
+        # browser canvas/viewport (regression ee4e1c2 keyed output on canvas, which
+        # desynced from the device-keyed render_token and letterboxed when the
+        # viewport != the screen). Canvas values below are bogus on purpose.
         c = server.Client(); c.deviceWidth = 768; c.deviceHeight = 1024
-        c.canvasWidth = 980; c.canvasHeight = 1185
-        w, h = server._render_output_dims(c)
-        assert w <= 768 and h <= 1024 and w % 2 == 0 and h % 2 == 0
-        # Windows-like: canvas already fits the big screen -> unchanged (even).
+        c.canvasWidth = 980; c.canvasHeight = 1185           # ignored
+        assert server._render_output_dims(c) == (768, 1024)
         c2 = server.Client(); c2.deviceWidth = 2560; c2.deviceHeight = 1440
-        c2.canvasWidth = 1278; c2.canvasHeight = 1260
-        assert server._render_output_dims(c2) == (1278, 1260)
+        c2.canvasWidth = 1278; c2.canvasHeight = 1260        # ignored
+        assert server._render_output_dims(c2) == (2560, 1440)
+        # odd device dims -> floored to even for libx264
+        c3 = server.Client(); c3.deviceWidth = 61; c3.deviceHeight = 121
+        assert server._render_output_dims(c3) == (60, 120)
 
     async def test_render_video_invokes_ffmpeg_per_screen(self, mock_settings, monkeypatch):
         import mosaicmesh.render as _render
