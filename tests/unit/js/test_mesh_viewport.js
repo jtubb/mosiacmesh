@@ -41,3 +41,54 @@ test('mmMeshViewport: degenerate quad -> null', () => {
   const DEG = [[0, 0], [0, 0], [0, 0], [0, 0]];
   assert.equal(g.mmMeshViewport(DEG, 1000, 800, 200, 160), null);
 });
+
+// Recording ctx capturing transform + drawImage (incl. the 9-arg source-subrect form).
+function recCtx() {
+  return { imgs: 0, rots: 0, last: null,
+    save(){}, restore(){}, translate(){}, rotate(){ this.rots++; }, scale(){},
+    setTransform(){},
+    drawImage() { this.imgs++; this.last = Array.prototype.slice.call(arguments); } };
+}
+function vpStub(rect) {   // identity-scale affine; AABB intersect against rect
+  return { m: { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }, globalRect: rect, scale: 1,
+    toDevice: function (l) { return l; },
+    intersects: function (gx, gy, gr) {
+      return (gx + gr) >= rect.x && (gx - gr) <= (rect.x + rect.w) &&
+             (gy + gr) >= rect.y && (gy - gr) <= (rect.y + rect.h);
+    } };
+}
+const sprite = { width: 512, height: 512 };
+
+test('mmStampSprite: culls a sprite fully outside the viewport', () => {
+  const c = recCtx();
+  g.mmStampSprite(c, vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 1000, 1000, 50, 0);
+  assert.equal(c.imgs, 0);                       // culled, nothing drawn
+});
+
+test('mmStampSprite: small sprite fully inside -> draws the full source', () => {
+  const c = recCtx();
+  g.mmStampSprite(c, vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 100, 100, 40, 0);
+  assert.equal(c.imgs, 1);
+  // 9-arg form: img, sx, sy, sw, sh, dx, dy, dw, dh — full source means sw==sh==512
+  assert.equal(c.last[3], 512);                  // sw
+  assert.equal(c.last[4], 512);                  // sh
+});
+
+test('mmStampSprite: giant spanning beyond the viewport -> source sub-rect is bounded', () => {
+  const c = recCtx();
+  // wall-center giant 1000 global px tall; this screen sees only [0,200]x[0,200]
+  g.mmStampSprite(c, vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 500, 500, 1000, 0);
+  assert.equal(c.imgs, 1);
+  assert.ok(c.last[3] < 512);                    // sw < full width: only the visible slice
+  assert.ok(c.last[3] > 0);
+});
+
+test('mmStampSprite: null viewport -> legacy ambient draw, no rotate when angle 0', () => {
+  const c = recCtx();
+  g.mmStampSprite(c, null, sprite, 100, 100, 40, 0);
+  assert.equal(c.imgs, 1);
+  assert.equal(c.rots, 0);                       // angle 0 -> no ctx.rotate (atlas-bucket case)
+  const c2 = recCtx();
+  g.mmStampSprite(c2, null, sprite, 100, 100, 40, 1.2);
+  assert.equal(c2.rots, 1);                      // non-zero angle -> one rotate
+});
