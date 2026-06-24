@@ -85,8 +85,10 @@ export function attachPlaylistEditor(store) {
  *   setEffect    - (val) => assigns or deletes the field on `it`
  *   catalog      - store.effectCatalog array
  *   it           - the current draft item (for isVideo check on audioFade)
+ *   spriteOptions- transparent-PNG media URLs for the scatter `sprite` picker
  */
-function buildEffectControl({ label, getEffect, setEffect, catalog, it }) {
+function buildEffectControl({ label, getEffect, setEffect, catalog, it, spriteOptions }) {
+  spriteOptions = spriteOptions || [];
   const wrap = document.createElement('div');
   wrap.className = 'mm-ple-effect-group';
 
@@ -154,7 +156,28 @@ function buildEffectControl({ label, getEffect, setEffect, catalog, it }) {
       const pWrap = document.createElement('label');
       pWrap.className = 'mm-ple-effect-param';
 
-      if (p.type === 'number') {
+      if (p.key === 'sprite') {
+        // Sprite picker: a dropdown of transparent PNGs from the media library.
+        // Stored value is the image URL; the display client's mmScatterSpriteUrl
+        // accepts a full '/media/...' URL as-is (or a bare name -> .../<name>.png).
+        pWrap.textContent = p.key + ' ';
+        const ssel = document.createElement('select');
+        const curVal = (existingVal != null ? existingVal : p.default);
+        const curUrl = (String(curVal).charAt(0) === '/')
+          ? curVal : ('/media/server/images/' + curVal + '.png');
+        const opts = spriteOptions.slice();
+        if (opts.indexOf(curUrl) === -1) opts.unshift(curUrl); // keep current selectable
+        for (const u of opts) {
+          const o = document.createElement('option');
+          o.value = u;
+          o.textContent = u.split('/').pop(); // basename
+          if (u === curUrl) o.selected = true;
+          ssel.appendChild(o);
+        }
+        live[p.key] = ssel.value;
+        ssel.addEventListener('change', () => { live[p.key] = ssel.value; commitEffect(); });
+        pWrap.appendChild(ssel);
+      } else if (p.type === 'number') {
         pWrap.textContent = p.key + ' ';
         const inp = document.createElement('input');
         inp.type = 'number';
@@ -365,12 +388,17 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
 
       // Start effect — driven by store.effectCatalog (Task 6).
       const catalog = store.effectCatalog || [];
+      // Transparent PNGs from the media library, for the scatter `sprite` picker.
+      const _media = store.media || {};
+      const spriteOptions = (_media.images || []).filter(
+        (u) => _media.transparent && _media.transparent[u]);
       box.appendChild(buildEffectControl({
         label: 'Start effect',
         getEffect: () => it.startEffect || null,
         setEffect: (val) => { if (val) it.startEffect = val; else delete it.startEffect; },
         catalog,
         it,
+        spriteOptions,
       }));
 
       // End effect
@@ -380,6 +408,7 @@ export function openPlaylistEditor(store, playlistName, initialIndex = 0) {
         setEffect: (val) => { if (val) it.endEffect = val; else delete it.endEffect; },
         catalog,
         it,
+        spriteOptions,
       }));
 
       root.appendChild(box);
