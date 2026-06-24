@@ -6,6 +6,7 @@
   function _dur(eff, role) {
     if (!eff || !eff.params) { return 0; }
     if (eff.name === 'beerfill') { return mmBeerDuration(eff.params, role); }
+    if (eff.name === 'scatter') { return mmScatterDuration(eff.params, role); }
     return (+eff.params.duration) || 0;
   }
 
@@ -121,6 +122,15 @@
       return { role: role, opacity: 1, wipe: null,
                effect: { name: 'beerfill', family: 'mask', front: mmBeerLevel(phase, p),
                          scope: bsc, params: eff.params || {}, phase: phase } };
+    }
+    if (eff.name === 'scatter') {
+      var ssc = (eff.params && eff.params.scope) || 'wall';
+      // front = LOCAL phase progress 0->1. mmTransitionState's `p` counts down on
+      // the 'out' window (1->0), so invert there; 'in' already counts up.
+      var slp = (role === 'out') ? (1 - p) : p;
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'scatter', family: 'mask', front: slp,
+                         scope: ssc, params: eff.params || {}, phase: mmScatterPhase(role) } };
     }
     if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
       var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
@@ -390,6 +400,14 @@
   }
 
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+  function mmScatterParticles(seed, count) {
+    var rnd = _mmLcg(seed >>> 0), arr = [], i;
+    for (i = 0; i < count; i++) {
+      arr.push({ ang: rnd() * 6.283185307, sp: 0.6 + rnd() * 0.9,
+                 rot0: rnd() * 6.283185307, rps: (rnd() - 0.5) * 1.4 });
+    }
+    return arr;
+  }
   function mmScatterPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
   function mmScatterDuration(params, role) {
     var ms = +(role === 'out' ? (params && params.fillMs) : (params && params.drainMs));
@@ -430,6 +448,7 @@
   root.mmBeerBubbles = mmBeerBubbles;
   root.mmFoamBubbles = mmFoamBubbles;
   root.mmDrawBeer = mmDrawBeer;
+  root.mmScatterParticles = mmScatterParticles;
   root.mmScatterPhase = mmScatterPhase;
   root.mmScatterDuration = mmScatterDuration;
   root.mmScatterCover = mmScatterCover;

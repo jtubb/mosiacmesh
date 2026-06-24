@@ -36,3 +36,33 @@ test('mmScatterSpriteUrl: name vs path', () => {
   assert.equal(g.mmScatterSpriteUrl('hop'), '/media/server/images/hop.png');
   assert.equal(g.mmScatterSpriteUrl('/media/server/images/x.png'), '/media/server/images/x.png');
 });
+test('mmScatterParticles: deterministic per seed, ranges, count', () => {
+  const a = g.mmScatterParticles(9, 40), b = g.mmScatterParticles(9, 40), c = g.mmScatterParticles(10, 40);
+  assert.equal(a.length, 40);
+  assert.deepEqual(a, b);
+  assert.notDeepEqual(a, c);
+  a.forEach(p => {
+    assert.ok(p.ang >= 0 && p.ang < 6.2832);
+    assert.ok(p.sp >= 0.6 && p.sp < 1.5);
+    assert.ok(p.rot0 >= 0 && p.rot0 < 6.2832);
+    assert.ok(p.rps >= -0.7 && p.rps < 0.7);
+  });
+});
+test('mmTransitionState: scatter end=cover, start=reveal (mask family)', () => {
+  const S = g.mmTransitionState;
+  const end = { name: 'scatter', params: { fillMs: 2000, drainMs: 2000, scope: 'wall' } };
+  // offset 4500 of 6000 with ed=2000 -> raw p=(6000-4500)/2000=0.75 -> front=1-0.75=0.25
+  // (distinguishes local-progress from raw p; near the end of the item, cover is only 25% in)
+  let st = S(null, end, 4500, 6000, null, null);
+  assert.equal(st.role, 'out');
+  assert.equal(st.effect.name, 'scatter');
+  assert.equal(st.effect.family, 'mask');
+  assert.equal(st.effect.phase, 'cover');
+  assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);   // local progress, NOT raw p (0.75)
+  assert.equal(st.effect.scope, 'wall');
+  const start = { name: 'scatter', params: { fillMs: 2000, drainMs: 2000 } };
+  st = S(start, null, 500, 6000, null, null);       // in-window: raw p=0.25, front=0.25
+  assert.equal(st.effect.phase, 'reveal');
+  assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);
+  assert.equal(st.effect.scope, 'wall');            // default
+});
