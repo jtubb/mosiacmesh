@@ -427,6 +427,40 @@
     return (String(sprite).charAt(0) === '/') ? sprite : ('/media/server/images/' + sprite + '.png');
   }
 
+  // Draw the scatter cover: backing disc (clean coverage) + erupting sprite copies + giant center.
+  // drawImage/arc only; no clip/composite. No-op stamps until img is decoded.
+  function mmDrawScatter(ctx, params, phase, p, GW, GH, quad, scope, seed, img, bg) {
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
+    var maxR = Math.sqrt((reg.w / 2) * (reg.w / 2) + (reg.h / 2) * (reg.h / 2));
+    var c = mmScatterCover(phase, p);
+    // backing disc (item bg) — guarantees a clean, gap-free cover
+    if (c * maxR >= 0.5) {
+      ctx.fillStyle = bg || '#000000';
+      ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, 6.283185307); ctx.fill();
+    }
+    if (!img || !img.width) { return; }                 // sprite not decoded yet -> disc only
+    var count = (params && params.count) || 40;
+    var dist = mmScatterDist(phase, p) * maxR;
+    var parts = mmScatterParticles(seed >>> 0, count), i, pt, d, sz, sc;
+    var baseH = reg.h * 0.12;
+    for (i = 0; i < parts.length; i++) {
+      pt = parts[i]; d = dist * pt.sp; sz = baseH * (0.55 + 0.5 * c); sc = sz / img.height;
+      ctx.save();
+      ctx.translate(cx + Math.cos(pt.ang) * d, cy + Math.sin(pt.ang) * d);
+      ctx.rotate(pt.rot0 + p * pt.rps * 6); ctx.scale(sc, sc);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2);
+      ctx.restore();
+    }
+    // giant center
+    var gh = reg.h * 1.43 * c;
+    if (gh > 2) {
+      var gsc = gh / img.height;
+      ctx.save(); ctx.translate(cx, cy); ctx.rotate(mmScatterGiantAngle(phase, p)); ctx.scale(gsc, gsc);
+      ctx.drawImage(img, -img.width / 2, -img.height / 2); ctx.restore();
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -455,4 +489,5 @@
   root.mmScatterDist = mmScatterDist;
   root.mmScatterGiantAngle = mmScatterGiantAngle;
   root.mmScatterSpriteUrl = mmScatterSpriteUrl;
+  root.mmDrawScatter = mmDrawScatter;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

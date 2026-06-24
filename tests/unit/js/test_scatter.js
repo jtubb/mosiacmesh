@@ -66,3 +66,30 @@ test('mmTransitionState: scatter end=cover, start=reveal (mask family)', () => {
   assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);
   assert.equal(st.effect.scope, 'wall');            // default
 });
+
+function recCtx() {
+  return { rects: [], imgs: 0, arcs: 0, fills: 0, fillStyle: '#000',
+    save(){}, restore(){}, translate(){}, rotate(){}, scale(){},
+    beginPath(){}, arc(){ this.arcs++; }, fill(){ this.fills++; },
+    fillRect(x,y,w,h){ this.rects.push({x,y,w,h}); },
+    drawImage(){ this.imgs++; } };
+}
+const fakeImg = { width: 100, height: 120 };          // "loaded"
+const noImg = { width: 0, height: 0 };                 // not yet decoded
+
+test('mmDrawScatter: disc only when sprite not loaded', () => {
+  const c = recCtx();
+  g.mmDrawScatter(c, { count: 40 }, 'cover', 0.5, 300, 200, null, 'wall', 7, noImg, '#140d06');
+  assert.equal(c.imgs, 0);          // no stamps
+  assert.ok(c.arcs >= 1);           // backing disc drawn
+});
+test('mmDrawScatter: stamps count copies + giant when loaded', () => {
+  const c = recCtx();
+  g.mmDrawScatter(c, { count: 40 }, 'cover', 0.6, 300, 200, null, 'wall', 7, fakeImg, '#140d06');
+  assert.equal(c.imgs, 41);         // 40 copies + 1 giant
+});
+test('mmDrawScatter: cover=0 draws nothing visible', () => {
+  const c = recCtx();
+  g.mmDrawScatter(c, { count: 40 }, 'reveal', 1, 300, 200, null, 'wall', 7, fakeImg, '#140d06');  // c=0
+  assert.equal(c.arcs, 0);          // no disc at c=0
+});
