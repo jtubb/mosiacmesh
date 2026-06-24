@@ -35,55 +35,27 @@
   }
 
   // Draw img (Image or canvas) centered at global (gx,gy), height globalSize
-  // global px, rotated `angle` rad. With a viewport: cull if off-screen, else
-  // draw only the visible source sub-rect under the composed global->device
-  // transform so the destination is bounded to the screen (no oversized blit).
-  // With vp null: legacy draw under the ctx's ambient transform.
+  // global px, rotated `angle` rad, in GLOBAL coords under the ctx's ambient
+  // transform (the mesh affine). With a viewport, cull first: skip the draw when
+  // the sprite can't appear on this screen — that's the win (most wall-spanning
+  // copies fall off any one screen). The draw ITSELF stays a plain drawImage on
+  // the iPad-1's accelerated blit path. We deliberately do NOT reset the transform
+  // and source-subrect-clip the blit: ctx.setTransform + the 9-arg drawImage drop
+  // iOS 5.1 WebKit off the GPU fast path onto a CPU sampler (measured markedly
+  // slower on-wall), which dwarfs any saving from drawing fewer source pixels.
   function mmStampSprite(ctx, vp, img, gx, gy, globalSize, angle) {
     var iw = img.width, ih = img.height;
     if (!iw || !ih || !(globalSize > 0)) { return; }
     var k = globalSize / ih;                          // local px -> global px
-    if (!vp) {                                         // legacy ambient global draw
-      ctx.save();
-      ctx.translate(gx, gy);
-      if (angle) { ctx.rotate(angle); }
-      ctx.scale(k, k);
-      ctx.drawImage(img, -iw / 2, -ih / 2);
-      ctx.restore();
-      return;
+    if (vp) {                                          // cull when off this screen
+      var gRad = 0.5 * k * Math.sqrt(iw * iw + ih * ih);   // circumscribed global radius
+      if (!vp.intersects(gx, gy, gRad)) { return; }
     }
-    var gRad = 0.5 * k * Math.sqrt(iw * iw + ih * ih);   // circumscribed global radius
-    if (!vp.intersects(gx, gy, gRad)) { return; }
-    var ca = Math.cos(angle), sa = Math.sin(angle);
-    // Visible source sub-rect: map the viewport's global corners into local-
-    // centered coords (inverse of translate(gx,gy).rotate(angle).scale(k)),
-    // take the bbox, shift to image coords, pad 1px, clamp to [0,iw]x[0,ih].
-    var gr = vp.globalRect, lx, ly, minx = 1e30, maxx = -1e30, miny = 1e30, maxy = -1e30;
-    var cx4 = [gr.x, gr.x + gr.w, gr.x + gr.w, gr.x], cy4 = [gr.y, gr.y, gr.y + gr.h, gr.y + gr.h];
-    for (var i = 0; i < 4; i++) {
-      var dxg = cx4[i] - gx, dyg = cy4[i] - gy;
-      lx = (ca * dxg + sa * dyg) / k;                  // inverse rotation + scale
-      ly = (-sa * dxg + ca * dyg) / k;
-      if (lx < minx) { minx = lx; } if (lx > maxx) { maxx = lx; }
-      if (ly < miny) { miny = ly; } if (ly > maxy) { maxy = ly; }
-    }
-    var sx = Math.floor(minx + iw / 2) - 1, sy = Math.floor(miny + ih / 2) - 1;
-    var ex = Math.ceil(maxx + iw / 2) + 1, ey = Math.ceil(maxy + ih / 2) + 1;
-    if (sx < 0) { sx = 0; } if (sy < 0) { sy = 0; }
-    if (ex > iw) { ex = iw; } if (ey > ih) { ey = ih; }
-    var sw = ex - sx, sh = ey - sy;
-    if (sw <= 0 || sh <= 0) { return; }                // nothing visible
-    // Composed local-centered -> device: M . (translate(gx,gy).rotate.scale(k)).
-    var m = vp.m;
-    var Ca = m.a * (k * ca) + m.c * (k * sa);
-    var Cc = m.a * (-k * sa) + m.c * (k * ca);
-    var Cb = m.b * (k * ca) + m.d * (k * sa);
-    var Cd = m.b * (-k * sa) + m.d * (k * ca);
-    var Ce = m.a * gx + m.c * gy + m.e;
-    var Cf = m.b * gx + m.d * gy + m.f;
     ctx.save();
-    ctx.setTransform(Ca, Cb, Cc, Cd, Ce, Cf);
-    ctx.drawImage(img, sx, sy, sw, sh, sx - iw / 2, sy - ih / 2, sw, sh);
+    ctx.translate(gx, gy);
+    if (angle) { ctx.rotate(angle); }
+    ctx.scale(k, k);
+    ctx.drawImage(img, -iw / 2, -ih / 2);
     ctx.restore();
   }
 

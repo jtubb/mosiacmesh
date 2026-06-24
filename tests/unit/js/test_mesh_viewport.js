@@ -42,11 +42,12 @@ test('mmMeshViewport: degenerate quad -> null', () => {
   assert.equal(g.mmMeshViewport(DEG, 1000, 800, 200, 160), null);
 });
 
-// Recording ctx capturing transform + drawImage (incl. the 9-arg source-subrect form).
+// Recording ctx. `sets` counts setTransform (the iPad-1 slow path we must avoid);
+// `last` captures the drawImage arg list (3-arg ambient blit vs 9-arg subrect).
 function recCtx() {
-  return { imgs: 0, rots: 0, last: null,
+  return { imgs: 0, rots: 0, sets: 0, last: null,
     save(){}, restore(){}, translate(){}, rotate(){ this.rots++; }, scale(){},
-    setTransform(){},
+    setTransform(){ this.sets++; },
     drawImage() { this.imgs++; this.last = Array.prototype.slice.call(arguments); } };
 }
 function vpStub(rect) {   // identity-scale affine; AABB intersect against rect
@@ -65,28 +66,29 @@ test('mmStampSprite: culls a sprite fully outside the viewport', () => {
   assert.equal(c.imgs, 0);                       // culled, nothing drawn
 });
 
-test('mmStampSprite: small sprite fully inside -> draws the full source', () => {
+test('mmStampSprite: sprite inside the viewport draws via the ambient fast path', () => {
   const c = recCtx();
   g.mmStampSprite(c, vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 100, 100, 40, 0);
-  assert.equal(c.imgs, 1);
-  // 9-arg form: img, sx, sy, sw, sh, dx, dy, dw, dh — full source means sw==sh==512
-  assert.equal(c.last[3], 512);                  // sw
-  assert.equal(c.last[4], 512);                  // sh
+  assert.equal(c.imgs, 1);                       // drawn (not culled)
+  assert.equal(c.sets, 0);                        // NO setTransform — stays on the accelerated path
+  assert.equal(c.last.length, 3);                 // 3-arg drawImage(img,dx,dy), NOT the 9-arg subrect form
 });
 
-test('mmStampSprite: giant spanning beyond the viewport -> source sub-rect is bounded', () => {
+test('mmStampSprite: an on-screen giant also uses the fast path (no setTransform, no subrect)', () => {
   const c = recCtx();
-  // wall-center giant 1000 global px tall; this screen sees only [0,200]x[0,200]
-  g.mmStampSprite(c, vpStub({ x: 0, y: 0, w: 200, h: 200 }), sprite, 500, 500, 1000, 0);
+  // wall-center giant 1000 global px tall; this screen contains the center.
+  g.mmStampSprite(c, vpStub({ x: 0, y: 0, w: 1200, h: 1200 }), sprite, 500, 500, 1000, 1.2);
   assert.equal(c.imgs, 1);
-  assert.ok(c.last[3] < 512);                    // sw < full width: only the visible slice
-  assert.ok(c.last[3] > 0);
+  assert.equal(c.sets, 0);                        // never resets the transform
+  assert.equal(c.last.length, 3);                 // plain blit
+  assert.equal(c.rots, 1);                        // rotated once for its angle
 });
 
-test('mmStampSprite: null viewport -> legacy ambient draw, no rotate when angle 0', () => {
+test('mmStampSprite: null viewport -> ambient draw, no rotate when angle 0', () => {
   const c = recCtx();
   g.mmStampSprite(c, null, sprite, 100, 100, 40, 0);
   assert.equal(c.imgs, 1);
+  assert.equal(c.sets, 0);
   assert.equal(c.rots, 0);                       // angle 0 -> no ctx.rotate (atlas-bucket case)
   const c2 = recCtx();
   g.mmStampSprite(c2, null, sprite, 100, 100, 40, 1.2);
