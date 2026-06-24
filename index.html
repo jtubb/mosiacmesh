@@ -309,6 +309,11 @@
 				(knobs ? '  knobs:' + knobs : '');
 		}, 400);
 
+		// Perf heartbeat: while playing, stream the fps/scatter payload to the
+		// server log once a second so frame rate is readable remotely (continuous
+		// samples, not just at item boundaries). Only under ?tdbg.
+		setInterval(function () { if (playback.active) { dbg('hb'); } }, 1000);
+
 		// Catch EVERY uncaught error on the device (not just the one wrapped in
 		// runScriptLoop's draw try/catch). Routes to the server -v log as a
 		// CLIENTLOG 'jserror' line. ES5 / iOS 5 safe (5-arg window.onerror).
@@ -444,7 +449,14 @@
 			phMedAbs: (function () { var s = phaseStats(); return s ? Math.round(s.medAbs) : null; })(),
 			synced: (typeof ProgrammableTimer !== 'undefined') ? ProgrammableTimer.isSynced() : null,
 			settled: clockSettled(),
-			cready: clockReady()
+			cready: clockReady(),
+			// Scatter perf telemetry (?tdbg): animation-loop fps + last scatter draw
+			// stats + active tuning knobs, so frame rate is readable from the server
+			// log remotely (no need to eyeball the device HUD).
+			fps: (window._mmFpsEma > 0) ? Math.round(1000 / window._mmFpsEma) : null,
+			frameMs: (window._mmFpsEma > 0) ? Math.round(window._mmFpsEma) : null,
+			sc: window._mmScatterStat || null,
+			sknobs: window._mmSdbg || null
 		};
 		if (extra) { for (var k in extra) { if (extra.hasOwnProperty(k)) { payload[k] = extra[k]; } } }
 		sendMsg("CLIENTLOG", payload);
