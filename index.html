@@ -228,6 +228,7 @@
 		if ((m = /[?&]scount=(\d+)/.exec(h))) { sd.count = parseInt(m[1], 10); }
 		if (/[?&]sgiant=0/.test(h)) { sd.nogiant = true; }
 		if (/[?&]snocull=1/.test(h)) { sd.nocull = true; }
+		if ((m = /[?&]sgscale=([\d.]+)/.exec(h))) { sd.gscale = parseFloat(m[1]); }
 		window._mmSdbg = sd;
 	})();
 	if (/tdbg/.test(location.href)) {
@@ -302,6 +303,7 @@
 			var ema = window._mmFpsEma, fps = (ema && ema > 0) ? Math.round(1000 / ema) : '-';
 			var s = window._mmScatterStat, sd = window._mmSdbg || {};
 			var knobs = (sd.count ? ' count=' + sd.count : '') +
+				(sd.gscale != null ? ' gscale=' + sd.gscale : '') +
 				(sd.nogiant ? ' NOGIANT' : '') + (sd.nocull ? ' NOCULL' : '');
 			el3.textContent = 'fps=' + fps + ' frameMs=' + (ema ? Math.round(ema) : '-') +
 				(s ? ('  scatter drawn=' + s.drawn + ' culled=' + s.culled +

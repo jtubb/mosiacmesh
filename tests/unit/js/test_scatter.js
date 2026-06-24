@@ -145,6 +145,30 @@ test('mmDrawScatter: culls copies outside this screen when a viewport is given',
   });
 });
 
+test('mmDrawScatter: giant size scales with giantScale (param, default 0.6, knob)', () => {
+  const im = { width: 100, height: 120 };
+  function giantSize(params, sd) {
+    const calls = [];
+    const orig = g.mmStampSprite;
+    g.mmStampSprite = function (ctx, vp, img, gx, gy, globalSize, angle) { calls.push(globalSize); return true; };
+    if (sd) { g._mmSdbg = sd; }
+    try {
+      g.mmDrawScatter(recCtx(), params, 'cover', 0.6, 1000, 800, null, 'wall', 7, im, '#000');
+    } finally {
+      g.mmStampSprite = orig;
+      if (sd) { delete g._mmSdbg; }
+    }
+    return calls[calls.length - 1];           // last stamp == giant
+  }
+  const base = giantSize({ count: 5, giantScale: 0.6 });
+  const half = giantSize({ count: 5, giantScale: 0.3 });
+  assert.ok(Math.abs(half / base - 0.5) < 1e-6);   // linear in giantScale
+  const dflt = giantSize({ count: 5 });             // missing giantScale -> 0.6, NOT old 1.43
+  assert.ok(Math.abs(dflt - base) < 1e-6);
+  const knob = giantSize({ count: 5, giantScale: 0.6 }, { gscale: 0.3 });
+  assert.ok(Math.abs(knob - half) < 1e-6);          // ?sgscale overrides the param
+});
+
 test('mmDrawScatter: full-wall viewport draws more than a half-wall view + keeps the giant', () => {
   withFakeDocument(() => {
     // A full-wall viewport's globalRect is the wall bbox itself, so copies that
