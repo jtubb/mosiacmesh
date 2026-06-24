@@ -489,10 +489,12 @@
       if (_dbg) { if (_ok) { _drawn++; } else { _culled++; } }
     }
     // giant center. giantScale = peak height as a fraction of the region height
-    // (?tdbg: ?sgscale=N overrides it live; ?sgiant=0 drops it). Default 0.6;
-    // legacy items with no giantScale fall back to 0.6 (not the old 1.43).
+    // (?tdbg: ?sgscale=N overrides it live; ?sgiant=0 drops it). Default 0.2 —
+    // on-wall tuning showed >~0.2 lets the centered giant blanket off-center
+    // screens (still ~16fps); <=0.2 confines it to the center, holding ~30fps.
+    // legacy items with no giantScale fall back to 0.2 (not the old 1.43).
     var gs = (sd.gscale != null) ? sd.gscale
-           : ((params && params.giantScale != null) ? params.giantScale : 0.6);
+           : ((params && params.giantScale != null) ? params.giantScale : 0.2);
     var gh = reg.h * gs * c;
     if (gh > 2 && !sd.nogiant) {
       _gdrew = mmStampSprite(ctx, vp, img, cx, cy, gh, mmScatterGiantAngle(phase, p));

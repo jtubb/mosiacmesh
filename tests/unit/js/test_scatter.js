@@ -145,7 +145,7 @@ test('mmDrawScatter: culls copies outside this screen when a viewport is given',
   });
 });
 
-test('mmDrawScatter: giant size scales with giantScale (param, default 0.6, knob)', () => {
+test('mmDrawScatter: giant size scales with giantScale (param, default 0.2, knob)', () => {
   const im = { width: 100, height: 120 };
   function giantSize(params, sd) {
     const calls = [];
@@ -163,8 +163,9 @@ test('mmDrawScatter: giant size scales with giantScale (param, default 0.6, knob
   const base = giantSize({ count: 5, giantScale: 0.6 });
   const half = giantSize({ count: 5, giantScale: 0.3 });
   assert.ok(Math.abs(half / base - 0.5) < 1e-6);   // linear in giantScale
-  const dflt = giantSize({ count: 5 });             // missing giantScale -> 0.6, NOT old 1.43
-  assert.ok(Math.abs(dflt - base) < 1e-6);
+  const dflt = giantSize({ count: 5 });             // missing giantScale -> default 0.2 (not 0.6, not old 1.43)
+  const ref02 = giantSize({ count: 5, giantScale: 0.2 });
+  assert.ok(Math.abs(dflt - ref02) < 1e-6);
   const knob = giantSize({ count: 5, giantScale: 0.6 }, { gscale: 0.3 });
   assert.ok(Math.abs(knob - half) < 1e-6);          // ?sgscale overrides the param
 });

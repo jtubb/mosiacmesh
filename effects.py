@@ -215,7 +215,7 @@ class ScatterEffect(Effect):
               ParamSpec("fillMs", "number", 2500, minimum=0),
               ParamSpec("drainMs", "number", 2500, minimum=0),
               ParamSpec("audioFade", "boolean", True),
-              ParamSpec("giantScale", "number", 0.6, minimum=0, maximum=2)]
+              ParamSpec("giantScale", "number", 0.2, minimum=0, maximum=2)]
 
     def video_filters(self, role, params, ctx):
         dur = params.get("fillMs") if role == "end" else params.get("drainMs")
