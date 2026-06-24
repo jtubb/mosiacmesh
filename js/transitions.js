@@ -451,7 +451,9 @@
 
   // Draw the scatter cover: backing disc (clean coverage) + erupting sprite copies + giant center.
   // drawImage/arc only; no clip/composite. No-op stamps until img is decoded.
-  function mmDrawScatter(ctx, params, phase, p, GW, GH, quad, scope, seed, img, bg) {
+  function mmDrawScatter(ctx, params, phase, p, GW, GH, quad, scope, seed, img, bg, canvasW, canvasH) {
+    var vp = (quad && typeof mmMeshViewport === 'function')
+      ? mmMeshViewport(quad, GW, GH, canvasW, canvasH) : null;
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
     var maxR = Math.sqrt((reg.w / 2) * (reg.w / 2) + (reg.h / 2) * (reg.h / 2));
@@ -464,7 +466,7 @@
     if (!img || !img.width) { return; }                 // sprite not decoded yet -> disc only
     var count = (params && params.count) || 40;
     var dist = mmScatterDist(phase, p) * maxR;
-    var parts = mmScatterParticles(seed >>> 0, count), i, pt, d, sz, sc, ang, x, y, bi, spr, dd;
+    var parts = mmScatterParticles(seed >>> 0, count), i, pt, d, sz, ang, x, y, bi, spr;
     var baseH = reg.h * 0.12;
     // Bake the pre-rotated/downscaled atlas once per image (iPad-1 fast path);
     // null on platforms without a canvas API -> per-stamp rotate fallback below.
@@ -474,25 +476,19 @@
       pt = parts[i]; d = dist * pt.sp; sz = baseH * (0.55 + 0.5 * c);
       ang = pt.rot0 + p * pt.rps * 6;
       x = cx + Math.cos(pt.ang) * d; y = cy + Math.sin(pt.ang) * d;
-      if (atlas) {                                      // cheap blit of nearest pre-rotated bucket
+      if (atlas) {                                      // pre-rotated bucket: rotation baked, stamp upright
         bi = Math.round(ang / (6.283185307 / atlas.buckets));
         bi = ((bi % atlas.buckets) + atlas.buckets) % atlas.buckets;
-        spr = atlas.canvases[bi]; dd = atlas.dim * (sz / atlas.sh);
-        ctx.drawImage(spr, x - dd / 2, y - dd / 2, dd, dd);
-      } else {                                          // fallback: per-stamp rotate of the source
-        sc = sz / img.height;
-        ctx.save();
-        ctx.translate(x, y); ctx.rotate(ang); ctx.scale(sc, sc);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-        ctx.restore();
+        spr = atlas.canvases[bi];
+        mmStampSprite(ctx, vp, spr, x, y, atlas.dim * (sz / atlas.sh), 0);
+      } else {                                          // fallback: rotate the full source per stamp
+        mmStampSprite(ctx, vp, img, x, y, sz, ang);
       }
     }
     // giant center
     var gh = reg.h * 1.43 * c;
     if (gh > 2) {
-      var gsc = gh / img.height;
-      ctx.save(); ctx.translate(cx, cy); ctx.rotate(mmScatterGiantAngle(phase, p)); ctx.scale(gsc, gsc);
-      ctx.drawImage(img, -img.width / 2, -img.height / 2); ctx.restore();
+      mmStampSprite(ctx, vp, img, cx, cy, gh, mmScatterGiantAngle(phase, p));
     }
   }
 

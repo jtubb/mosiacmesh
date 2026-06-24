@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 await import('../../../js/transitions.js');
+await import('../../../js/animations.js');       // mmMeshTransform
+await import('../../../js/mesh-viewport.js');     // mmMeshViewport + mmStampSprite
 const g = globalThis;
 
 test('mmScatterPhase: out=cover, in=reveal', () => {
@@ -69,7 +71,7 @@ test('mmTransitionState: scatter end=cover, start=reveal (mask family)', () => {
 
 function recCtx() {
   return { rects: [], imgs: 0, arcs: 0, fills: 0, rots: 0, fillStyle: '#000',
-    save(){}, restore(){}, translate(){}, rotate(){ this.rots++; }, scale(){},
+    save(){}, restore(){}, translate(){}, rotate(){ this.rots++; }, scale(){}, setTransform(){},
     beginPath(){}, arc(){ this.arcs++; }, fill(){ this.fills++; },
     fillRect(x,y,w,h){ this.rects.push({x,y,w,h}); },
     drawImage(){ this.imgs++; } };
@@ -129,5 +131,35 @@ test('mmDrawScatter: atlas path blits copies without per-copy rotate', () => {
     assert.equal(c.imgs, 41);                            // 40 atlas blits + giant
     assert.equal(c.rots, 1);                             // ONLY the giant rotates; copies are plain blits
     assert.ok(im._mmAtlas && im._mmAtlas.canvases.length === 24);
+  });
+});
+test('mmDrawScatter: culls copies outside this screen when a viewport is given', () => {
+  withFakeDocument(() => {
+    const c = recCtx();
+    const im = { width: 100, height: 120 };
+    // Left-half quad: this screen sees only the left 50% of a 1000x800 wall.
+    const LEFT = [[0, 0], [0.5, 0], [0.5, 1], [0, 1]];
+    g.mmDrawScatter(c, { count: 40, scope: 'wall' }, 'cover', 0.6, 1000, 800, LEFT, 'wall', 7, im, '#140d06', 200, 160);
+    assert.ok(c.imgs < 41, 'some wall-spanning copies should be culled off this screen');
+    assert.ok(c.imgs > 0, 'copies overlapping this screen still draw');
+  });
+});
+
+test('mmDrawScatter: full-wall viewport draws more than a half-wall view + keeps the giant', () => {
+  withFakeDocument(() => {
+    // A full-wall viewport's globalRect is the wall bbox itself, so copies that
+    // scatter PAST the wall edge are still (correctly) culled. The regression
+    // guarantee is directional: a wider view culls fewer copies than a partial
+    // one, and the centered giant is always visible.
+    const im = { width: 100, height: 120 };
+    const FULL = [[0, 0], [1, 0], [1, 1], [0, 1]];
+    const HALF = [[0, 0], [0.5, 0], [0.5, 1], [0, 1]];
+    const full = recCtx();
+    g.mmDrawScatter(full, { count: 40, scope: 'wall' }, 'cover', 0.6, 1000, 800, FULL, 'wall', 7, im, '#140d06', 1000, 800);
+    const half = recCtx();
+    g.mmDrawScatter(half, { count: 40, scope: 'wall' }, 'cover', 0.6, 1000, 800, HALF, 'wall', 7, im, '#140d06', 200, 160);
+    assert.ok(full.imgs > half.imgs, 'a full-wall view culls fewer copies than a half-wall view');
+    assert.ok(full.imgs <= 41, 'never more than 40 copies + giant');
+    assert.ok(full.imgs >= 1, 'the centered giant is always within the full wall');
   });
 });

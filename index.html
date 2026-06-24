@@ -22,6 +22,7 @@
   <script src="/js/mosiacmesh.js"></script>
   <script src="/js/animations.js"></script>
   <script src="/js/transitions.js"></script>
+  <script src="/js/mesh-viewport.js"></script>
   <script>
     var blink = true;
     // Tracks whether we have already told the server "my
@@ -674,7 +675,7 @@
 									mmDrawScatter(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
 										playback.seed | 0, mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)),
-										it.backgroundColor || '#000000');
+										it.backgroundColor || '#000000', canvas.width, canvas.height);
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
@@ -1075,7 +1076,7 @@
 						mmDrawScatter(cmx, st.effect.params, st.effect.phase, st.effect.front,
 							GWm, GHm, quad, st.effect.scope, playback.seed | 0,
 							mmSprite(mmScatterSpriteUrl(st.effect.params && st.effect.params.sprite)),
-							item.backgroundColor || '#000000');
+							item.backgroundColor || '#000000', cvm.width, cvm.height);
 					} else {
 						mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
 							GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');
