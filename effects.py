@@ -203,3 +203,21 @@ class BeerFillEffect(Effect):
         p = dict(params)
         p["duration"] = dur
         return ([], _afade(role, p, ctx))
+
+
+@register
+class ScatterEffect(Effect):
+    name = "scatter"
+    label = "Scatter"
+    params = [ParamSpec("sprite", "string", "hop"),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("count", "number", 40, minimum=1, maximum=120),
+              ParamSpec("fillMs", "number", 2500, minimum=0),
+              ParamSpec("drainMs", "number", 2500, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        dur = params.get("fillMs") if role == "end" else params.get("drainMs")
+        p = dict(params)
+        p["duration"] = dur
+        return ([], _afade(role, p, ctx))
