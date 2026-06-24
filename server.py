@@ -673,6 +673,25 @@ async def _reconcile_ipad_cache(client):
             n = getattr(item, "seg_n", None)
             if h is not None and n is not None:
                 in_use.add(f"{h}_{n}")
+        # Preserve segs for ALL READY-rendered playlists of this group, not only
+        # the one currently on-screen. The auto-render model renders every
+        # renderable playlist and pushes it to devices ahead of play; scoping
+        # in_use to just display.renderedToken made this ~5s janitor delete every
+        # freshly-pushed cache for an off-screen playlist (cache propagation stuck
+        # at 0%). in_use spans each READY render's token x its playlist's SEGMENT
+        # item indices ("READY" == render.RENDER_READY's wire value).
+        for _pl_name, _entry in (getattr(display, "renders", {}) or {}).items():
+            if not isinstance(_entry, dict) or _entry.get("state") != "READY":
+                continue
+            _rtok = _entry.get("token")
+            if not _rtok:
+                continue
+            _pl = settings.playlists.get(_pl_name)
+            for _i, _it in enumerate(getattr(_pl, "items", None) or []):
+                _pm = _it.get("playmode") if isinstance(_it, dict) else getattr(_it, "playmode", None)
+                _pm_name = _pm.name if hasattr(_pm, "name") else (_pm if isinstance(_pm, str) else None)
+                if _pm_name == "SEGMENT":
+                    in_use.add("%s_%d" % (_rtok, _i))
     stale = set(client.cachedSegments) - in_use
     if not stale:
         return

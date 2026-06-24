@@ -269,7 +269,37 @@ def test_reconcile_preserves_cached_segment_when_token_matches():
         _run(server._reconcile_ipad_cache(c))
     assert c.cachedSegments == {"9a27f533acb6_1"}, \
         f"cachedSegments was wrongly pruned: {c.cachedSegments}"
-    fake.assert_not_called()
+
+
+def test_reconcile_preserves_segments_for_all_ready_renders():
+    """Cache-propagation regression: a playlist rendered+pushed for the group but
+    NOT currently on-screen must keep its cached segs. in_use spans ALL READY
+    renders (display.renders), not only the applied playlist — else the ~5s
+    janitor deletes every freshly-pushed cache for an off-screen playlist
+    (propagation stuck at 0%). A genuine orphan (no READY render) is still swept."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"; c.displayID = "G1"
+    c.cachedSegments = {"vid_0", "vid_1", "orphan_5"}
+    server.settings.clients["ipad1"] = c
+    d = server.Display(); d.displayID = "G1"; d.renderedToken = "plasmatok"
+    plasma = server.MediaElement(); plasma.playmode = server.PlayMode.SCRIPT; plasma.file = "plasma"
+    d.mediaElements = [plasma]                      # applied playlist: no SEGMENT items
+    d.renders = {"Video Demo": {"state": "READY", "token": "vid"}}
+    server.settings.displays["G1"] = d
+    pl = server.Playlist(); pl.name = "Video Demo"
+    pl.items = [{"file": "a.mp4", "playmode": "SEGMENT"},
+                {"file": "b.mp4", "playmode": "SEGMENT"}]
+    server.settings.playlists["Video Demo"] = pl
+
+    fake_proc = MagicMock(); fake_proc.returncode = 0
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+    async def fake_subproc(*a, **k): return fake_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_subproc):
+        _run(server._reconcile_ipad_cache(c))
+    assert c.cachedSegments == {"vid_0", "vid_1"}, \
+        f"READY-render segs wrongly pruned (or orphan kept): {c.cachedSegments}"
 
 
 def test_reconcile_evicts_when_token_changes():
