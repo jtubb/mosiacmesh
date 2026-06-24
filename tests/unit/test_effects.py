@@ -150,6 +150,8 @@ def test_scatter_params():
     assert by["count"]["min"] == 1 and by["count"]["max"] == 120
     assert by["fillMs"]["default"] == 2500 and by["drainMs"]["default"] == 2500
     assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
+    assert by["giantScale"]["type"] == "number" and by["giantScale"]["default"] == 0.6
+    assert by["giantScale"]["min"] == 0 and by["giantScale"]["max"] == 2
 
 
 def test_scatter_audio_uses_fillMs_on_end_drainMs_on_start():
