@@ -389,6 +389,26 @@
     }
   }
 
+  function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+  function mmScatterPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmScatterDuration(params, role) {
+    var ms = +(role === 'out' ? (params && params.fillMs) : (params && params.drainMs));
+    return ms > 0 ? ms : 2500;
+  }
+  function mmScatterCover(phase, p) { return _clamp01(phase === 'cover' ? p : 1 - p); }
+  function mmScatterDist(phase, p) {
+    var c = _clamp01(p);
+    return phase === 'cover' ? Math.pow(c, 0.72) : (1 + c * 1.4);
+  }
+  function mmScatterGiantAngle(phase, p) {
+    var c = _clamp01(p);
+    return (phase === 'cover' ? c : 1 + c) * 6.283185307;
+  }
+  function mmScatterSpriteUrl(sprite) {
+    if (!sprite) { sprite = 'hop'; }
+    return (String(sprite).charAt(0) === '/') ? sprite : ('/media/server/images/' + sprite + '.png');
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -410,4 +430,10 @@
   root.mmBeerBubbles = mmBeerBubbles;
   root.mmFoamBubbles = mmFoamBubbles;
   root.mmDrawBeer = mmDrawBeer;
+  root.mmScatterPhase = mmScatterPhase;
+  root.mmScatterDuration = mmScatterDuration;
+  root.mmScatterCover = mmScatterCover;
+  root.mmScatterDist = mmScatterDist;
+  root.mmScatterGiantAngle = mmScatterGiantAngle;
+  root.mmScatterSpriteUrl = mmScatterSpriteUrl;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
