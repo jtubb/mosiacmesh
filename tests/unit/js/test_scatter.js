@@ -68,14 +68,26 @@ test('mmTransitionState: scatter end=cover, start=reveal (mask family)', () => {
 });
 
 function recCtx() {
-  return { rects: [], imgs: 0, arcs: 0, fills: 0, fillStyle: '#000',
-    save(){}, restore(){}, translate(){}, rotate(){}, scale(){},
+  return { rects: [], imgs: 0, arcs: 0, fills: 0, rots: 0, fillStyle: '#000',
+    save(){}, restore(){}, translate(){}, rotate(){ this.rots++; }, scale(){},
     beginPath(){}, arc(){ this.arcs++; }, fill(){ this.fills++; },
     fillRect(x,y,w,h){ this.rects.push({x,y,w,h}); },
     drawImage(){ this.imgs++; } };
 }
 const fakeImg = { width: 100, height: 120 };          // "loaded"
 const noImg = { width: 0, height: 0 };                 // not yet decoded
+
+// Install a minimal canvas-producing document so mmBuildSpriteAtlas can bake.
+function withFakeDocument(fn) {
+  const prev = globalThis.document;
+  globalThis.document = { createElement() {
+    const cx = { drawImage(){}, translate(){}, rotate(){}, scale(){} };
+    return { width: 0, height: 0, getContext() { return cx; } };
+  } };
+  try { return fn(); } finally {
+    if (prev === undefined) delete globalThis.document; else globalThis.document = prev;
+  }
+}
 
 test('mmDrawScatter: disc only when sprite not loaded', () => {
   const c = recCtx();
@@ -92,4 +104,30 @@ test('mmDrawScatter: cover=0 draws nothing visible', () => {
   const c = recCtx();
   g.mmDrawScatter(c, { count: 40 }, 'reveal', 1, 300, 200, null, 'wall', 7, fakeImg, '#140d06');  // c=0
   assert.equal(c.arcs, 0);          // no disc at c=0
+});
+test('mmDrawScatter: fallback path rotates per copy when no canvas API', () => {
+  const c = recCtx();
+  const im = { width: 100, height: 120 };               // fresh img (own _mmAtlas)
+  g.mmDrawScatter(c, { count: 40 }, 'cover', 0.6, 300, 200, null, 'wall', 7, im, '#140d06');
+  assert.equal(c.imgs, 41);                              // 40 copies + giant
+  assert.equal(c.rots, 41);                              // every copy + giant rotates the main ctx
+  assert.equal(im._mmAtlas, null);                       // atlas unavailable -> cached null, no rebuild
+});
+test('mmBuildSpriteAtlas: null without canvas API, N pre-rotated canvases with it', () => {
+  assert.equal(g.mmBuildSpriteAtlas(fakeImg, 96, 24), null);   // node default: no document
+  withFakeDocument(() => {
+    const atlas = g.mmBuildSpriteAtlas(fakeImg, 96, 24);
+    assert.equal(atlas.canvases.length, 24);
+    assert.equal(atlas.dim, Math.ceil(96 * 1.42));
+  });
+});
+test('mmDrawScatter: atlas path blits copies without per-copy rotate', () => {
+  withFakeDocument(() => {
+    const c = recCtx();
+    const im = { width: 100, height: 120 };             // fresh img -> bakes atlas
+    g.mmDrawScatter(c, { count: 40 }, 'cover', 0.6, 300, 200, null, 'wall', 7, im, '#140d06');
+    assert.equal(c.imgs, 41);                            // 40 atlas blits + giant
+    assert.equal(c.rots, 1);                             // ONLY the giant rotates; copies are plain blits
+    assert.ok(im._mmAtlas && im._mmAtlas.canvases.length === 24);
+  });
 });

@@ -427,6 +427,28 @@
     return (String(sprite).charAt(0) === '/') ? sprite : ('/media/server/images/' + sprite + '.png');
   }
 
+  // Pre-bake a sprite into `buckets` pre-rotated, downscaled canvases. On the
+  // iPad-1, drawImage is the cheap path but per-frame rotate + resample-from-a-
+  // large-source is not — so we do the rotate + downscale ONCE here and stamp
+  // plain (translate+scale) copies forever after. Returns null where there is no
+  // canvas API (node tests), and mmDrawScatter falls back to per-stamp rotate.
+  function mmBuildSpriteAtlas(img, base, buckets) {
+    if (typeof document === 'undefined' || !document.createElement) { return null; }
+    if (!img || !img.width || !img.height) { return null; }
+    var aspect = img.width / img.height, sw, sh;
+    if (aspect >= 1) { sw = base; sh = base / aspect; } else { sh = base; sw = base * aspect; }
+    var dim = Math.ceil(base * 1.42);          // square big enough to hold any rotation, no corner clip
+    var canvases = [], i, cv, cx;
+    for (i = 0; i < buckets; i++) {
+      cv = document.createElement('canvas'); cv.width = dim; cv.height = dim;
+      cx = cv.getContext('2d');
+      cx.translate(dim / 2, dim / 2); cx.rotate(i * 6.283185307 / buckets);
+      cx.drawImage(img, -sw / 2, -sh / 2, sw, sh);
+      canvases.push(cv);
+    }
+    return { canvases: canvases, dim: dim, sh: sh, buckets: buckets };
+  }
+
   // Draw the scatter cover: backing disc (clean coverage) + erupting sprite copies + giant center.
   // drawImage/arc only; no clip/composite. No-op stamps until img is decoded.
   function mmDrawScatter(ctx, params, phase, p, GW, GH, quad, scope, seed, img, bg) {
@@ -442,15 +464,28 @@
     if (!img || !img.width) { return; }                 // sprite not decoded yet -> disc only
     var count = (params && params.count) || 40;
     var dist = mmScatterDist(phase, p) * maxR;
-    var parts = mmScatterParticles(seed >>> 0, count), i, pt, d, sz, sc;
+    var parts = mmScatterParticles(seed >>> 0, count), i, pt, d, sz, sc, ang, x, y, bi, spr, dd;
     var baseH = reg.h * 0.12;
+    // Bake the pre-rotated/downscaled atlas once per image (iPad-1 fast path);
+    // null on platforms without a canvas API -> per-stamp rotate fallback below.
+    if (img._mmAtlas === undefined) { img._mmAtlas = mmBuildSpriteAtlas(img, 96, 24); }
+    var atlas = img._mmAtlas;
     for (i = 0; i < parts.length; i++) {
-      pt = parts[i]; d = dist * pt.sp; sz = baseH * (0.55 + 0.5 * c); sc = sz / img.height;
-      ctx.save();
-      ctx.translate(cx + Math.cos(pt.ang) * d, cy + Math.sin(pt.ang) * d);
-      ctx.rotate(pt.rot0 + p * pt.rps * 6); ctx.scale(sc, sc);
-      ctx.drawImage(img, -img.width / 2, -img.height / 2);
-      ctx.restore();
+      pt = parts[i]; d = dist * pt.sp; sz = baseH * (0.55 + 0.5 * c);
+      ang = pt.rot0 + p * pt.rps * 6;
+      x = cx + Math.cos(pt.ang) * d; y = cy + Math.sin(pt.ang) * d;
+      if (atlas) {                                      // cheap blit of nearest pre-rotated bucket
+        bi = Math.round(ang / (6.283185307 / atlas.buckets));
+        bi = ((bi % atlas.buckets) + atlas.buckets) % atlas.buckets;
+        spr = atlas.canvases[bi]; dd = atlas.dim * (sz / atlas.sh);
+        ctx.drawImage(spr, x - dd / 2, y - dd / 2, dd, dd);
+      } else {                                          // fallback: per-stamp rotate of the source
+        sc = sz / img.height;
+        ctx.save();
+        ctx.translate(x, y); ctx.rotate(ang); ctx.scale(sc, sc);
+        ctx.drawImage(img, -img.width / 2, -img.height / 2);
+        ctx.restore();
+      }
     }
     // giant center
     var gh = reg.h * 1.43 * c;
@@ -482,6 +517,7 @@
   root.mmBeerBubbles = mmBeerBubbles;
   root.mmFoamBubbles = mmFoamBubbles;
   root.mmDrawBeer = mmDrawBeer;
+  root.mmBuildSpriteAtlas = mmBuildSpriteAtlas;
   root.mmScatterParticles = mmScatterParticles;
   root.mmScatterPhase = mmScatterPhase;
   root.mmScatterDuration = mmScatterDuration;
