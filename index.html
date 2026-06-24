@@ -229,6 +229,7 @@
 		if ((m = /[?&]scount=(\d+)/.exec(h))) { sd.count = parseInt(m[1], 10); }
 		if (/[?&]sgiant=0/.test(h)) { sd.nogiant = true; }
 		if (/[?&]snocull=1/.test(h)) { sd.nocull = true; }
+		if (/[?&]sdisc=0/.test(h)) { sd.nodisc = true; }
 		// require >=1 digit, at most one dot -> never NaN (a malformed value would
 		// silently hide the giant via the gh>2 guard, confusing on-wall tuning).
 		if ((m = /[?&]sgscale=([0-9]*\.?[0-9]+)/.exec(h))) { sd.gscale = parseFloat(m[1]); }
@@ -307,7 +308,8 @@
 			var s = window._mmScatterStat, sd = window._mmSdbg || {};
 			var knobs = (sd.count ? ' count=' + sd.count : '') +
 				(sd.gscale != null ? ' gscale=' + sd.gscale : '') +
-				(sd.nogiant ? ' NOGIANT' : '') + (sd.nocull ? ' NOCULL' : '');
+				(sd.nogiant ? ' NOGIANT' : '') + (sd.nodisc ? ' NODISC' : '') +
+				(sd.nocull ? ' NOCULL' : '');
 			el3.textContent = 'fps=' + fps + ' frameMs=' + (ema ? Math.round(ema) : '-') +
 				(s ? ('  scatter drawn=' + s.drawn + ' culled=' + s.culled +
 					'/' + s.total + ' giant=' + (s.giant ? 1 : 0)) : '  scatter:-') +

@@ -133,6 +133,15 @@ test('mmDrawScatter: atlas path blits copies without per-copy rotate', () => {
     assert.ok(im._mmAtlas && im._mmAtlas.canvases.length === 24);
   });
 });
+test('mmDrawScatter: ?sdisc=0 (nodisc) skips the backing disc, still stamps sprites', () => {
+  const c = recCtx();
+  g._mmSdbg = { nodisc: true };
+  try {
+    g.mmDrawScatter(c, { count: 40 }, 'cover', 0.6, 300, 200, null, 'wall', 7, fakeImg, '#140d06');
+  } finally { delete g._mmSdbg; }
+  assert.equal(c.arcs, 0);          // backing disc suppressed
+  assert.equal(c.imgs, 41);         // copies + giant still drawn
+});
 test('mmDrawScatter: culls copies outside this screen when a viewport is given', () => {
   withFakeDocument(() => {
     const c = recCtx();

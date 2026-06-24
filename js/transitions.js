@@ -459,8 +459,10 @@
     var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
     var maxR = Math.sqrt((reg.w / 2) * (reg.w / 2) + (reg.h / 2) * (reg.h / 2));
     var c = mmScatterCover(phase, p);
-    // backing disc (item bg) — guarantees a clean, gap-free cover
-    if (c * maxR >= 0.5) {
+    // backing disc (item bg) — guarantees a clean, gap-free cover. At scope:wall
+    // its radius is the wall half-diagonal (a huge per-frame arc+fill); ?tdbg
+    // ?sdisc=0 drops it to A/B its cost (NOTE: without it the cover can show gaps).
+    if (!sd.nodisc && c * maxR >= 0.5) {
       ctx.fillStyle = bg || '#000000';
       ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, 6.283185307); ctx.fill();
     }
