@@ -25,6 +25,34 @@ __all__ = [
 ]
 
 
+# (path, mtime) -> bool cache for PNG alpha detection (cheap header read)
+_png_alpha_cache = {}
+
+
+def _png_has_alpha(path):
+    """True iff `path` is a PNG whose IHDR color type carries alpha (4=gray+alpha,
+    6=RGBA). Reads only the 8-byte signature + IHDR (color type at byte 25) — no
+    pixel decode. Cached by (path, mtime). Non-PNG / missing -> False."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return False
+    key = (path, mtime)
+    if key in _png_alpha_cache:
+        return _png_alpha_cache[key]
+    result = False
+    try:
+        with open(path, "rb") as f:
+            head = f.read(26)
+        if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 26:
+            color_type = head[25]
+            result = color_type in (4, 6)
+    except OSError:
+        result = False
+    _png_alpha_cache[key] = result
+    return result
+
+
 # Allowed `kind` subdirs under media/server/. Used by api_media_delete
 # to compute the on-disk path AND to reject anything else (e.g. a
 # request that tried to traverse into a per-client `media/<key>/...`
@@ -74,7 +102,8 @@ def _playlist_refs_for_media(url):
 
 async def api_media(request):
     """List the shared media library under media/server/{images,videos}, plus
-    per-video durations (seconds) so the playlist editor can offer 'full length'."""
+    per-video durations (seconds) so the playlist editor can offer 'full length',
+    and a transparent flag for each image (True if PNG with alpha channel)."""
     import server
 
     def _list(sub):
@@ -84,6 +113,7 @@ async def api_media(request):
         return ["/media/server/" + sub + "/" + f
                 for f in sorted(os.listdir(d))
                 if os.path.isfile(os.path.join(d, f))]
+    images = _list("images")
     videos = _list("videos")
     durations = {}
     for url in videos:
@@ -91,8 +121,12 @@ async def api_media(request):
         d = await server.get_video_duration(disk)
         if d is not None:
             durations[url] = round(d, 1)
-    body = json.dumps({"images": _list("images"), "videos": videos,
-                       "videoDurations": durations})
+    transparent = {}
+    for url in images:
+        disk = os.path.join("media", "server", "images", os.path.basename(url))
+        transparent[url] = _png_has_alpha(disk)
+    body = json.dumps({"images": images, "videos": videos,
+                       "videoDurations": durations, "transparent": transparent})
     return web.Response(text=body, content_type="application/json")
 
 

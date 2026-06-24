@@ -7,6 +7,8 @@ calls server.upload_handler that resolves through the re-import).
 """
 import json
 import os
+import struct
+import zlib
 import tempfile
 import pytest
 from aiohttp.test_utils import make_mocked_request
@@ -29,6 +31,49 @@ finally:
 
 from mosaicmesh.api.media import api_media, api_media_delete, upload_handler
 from mosaicmesh.state import Settings, Playlist
+
+
+def _png(path, color_type):
+    """Minimal 1x1 PNG with the given IHDR color type (6=RGBA, 2=RGB)."""
+    sig = b"\x89PNG\r\n\x1a\n"
+    ihdr = struct.pack(">IIBBBBB", 1, 1, 8, color_type, 0, 0, 0)
+    def chunk(typ, data):
+        return struct.pack(">I", len(data)) + typ + data + struct.pack(">I", zlib.crc32(typ + data) & 0xffffffff)
+    with open(path, "wb") as f:
+        f.write(sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(b"\x00\x00\x00\x00\x00")) + chunk(b"IEND", b""))
+
+
+def test_png_has_alpha_rgba_true(tmp_path):
+    """_png_has_alpha returns True for PNG with RGBA color type (6)."""
+    from mosaicmesh.api import media
+    p = tmp_path / "a.png"
+    _png(str(p), 6)  # RGBA
+    assert media._png_has_alpha(str(p)) is True
+
+
+def test_png_has_alpha_rgb_false(tmp_path):
+    """_png_has_alpha returns False for PNG with RGB color type (2, no alpha)."""
+    from mosaicmesh.api import media
+    p = tmp_path / "b.png"
+    _png(str(p), 2)  # RGB (no alpha)
+    assert media._png_has_alpha(str(p)) is False
+
+
+def test_png_has_alpha_grayscale_alpha_true(tmp_path):
+    """_png_has_alpha returns True for PNG with grayscale+alpha color type (4)."""
+    from mosaicmesh.api import media
+    p = tmp_path / "c.png"
+    _png(str(p), 4)  # Grayscale + alpha
+    assert media._png_has_alpha(str(p)) is True
+
+
+def test_png_has_alpha_missing_or_nonpng_false(tmp_path):
+    """_png_has_alpha returns False for missing files or non-PNG data."""
+    from mosaicmesh.api import media
+    assert media._png_has_alpha(str(tmp_path / "nope.png")) is False
+    j = tmp_path / "c.jpg"
+    j.write_bytes(b"\xff\xd8\xff\xe0not a png")
+    assert media._png_has_alpha(str(j)) is False
 
 
 def test_media_handlers_importable():
@@ -231,5 +276,43 @@ class TestApiMediaDelete:
             req.json = AsyncMock(side_effect=ValueError("nope"))
             resp = await api_media_delete(req)
             assert resp.status == 400
+        finally:
+            _restore_settings(prev)
+
+
+# ---- PR-17: /api/media transparent flag ----
+
+class TestApiMediaTransparent:
+
+    @pytest.mark.asyncio
+    async def test_api_media_includes_transparent_flag(self, tmp_path, monkeypatch):
+        """GET /api/media includes "transparent" map with per-image alpha detection."""
+        monkeypatch.chdir(tmp_path)
+        imgs = tmp_path / "media" / "server" / "images"
+        imgs.mkdir(parents=True)
+        (tmp_path / "media" / "server" / "videos").mkdir(parents=True)
+
+        # Create transparent PNG (RGBA, type 6)
+        _png(str(imgs / "hop.png"), 6)
+        # Create opaque PNG (RGB, type 2)
+        _png(str(imgs / "flat.png"), 2)
+        # Create non-PNG image
+        (imgs / "logo.jpg").write_bytes(b"\xff\xd8\xff\xe0not-png")
+
+        fresh, prev = _fresh_settings()
+        try:
+            resp = await api_media(make_mocked_request('GET', '/api/media'))
+            data = json.loads(resp.text)
+
+            # Check that transparent flag is present and correct
+            assert "transparent" in data
+            assert data["transparent"]["/media/server/images/hop.png"] is True
+            assert data["transparent"]["/media/server/images/flat.png"] is False
+            assert data["transparent"]["/media/server/images/logo.jpg"] is False
+
+            # Verify images list is still present
+            assert "/media/server/images/hop.png" in data["images"]
+            assert "/media/server/images/flat.png" in data["images"]
+            assert "/media/server/images/logo.jpg" in data["images"]
         finally:
             _restore_settings(prev)
