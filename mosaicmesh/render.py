@@ -251,6 +251,11 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
     vf = persp + ",scale=" + str(out_w) + ":" + str(out_h)
     for f in (extra_video_filters or []):
         vf += "," + f
+    # Square pixels: scale inherits the SOURCE's display aspect (a 16:9 source
+    # leaves SAR != 1:1), which makes the iPad DISPLAY the out_w x out_h frame at
+    # the source DAR (16:9) -> letterbox. Force SAR 1:1 so it displays at its
+    # storage AR and fills the calibrated screen. (setsar last = final output AR.)
+    vf += ",setsar=1"
     cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
     cmd += _video_encoder_args()
     cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
@@ -282,6 +287,7 @@ def build_ffmpeg_individual_cmd(src_path, out_path, src_points, out_w, out_h,
     vf = pad + "," + persp + ",scale=" + str(out_w) + ":" + str(out_h)
     for f in (extra_video_filters or []):
         vf += "," + f
+    vf += ",setsar=1"   # square pixels (see build_ffmpeg_perspective_cmd)
     cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
     cmd += _video_encoder_args()
     cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
@@ -304,6 +310,7 @@ def build_ffmpeg_transcode_cmd(src_path, out_path, out_w, out_h,
           "pad=" + str(out_w) + ":" + str(out_h) + ":(ow-iw)/2:(oh-ih)/2:color=0x000000")
     for f in (extra_video_filters or []):
         vf += "," + f
+    vf += ",setsar=1"   # square pixels (see build_ffmpeg_perspective_cmd)
     cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
     cmd += _video_encoder_args()
     cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
@@ -377,7 +384,10 @@ def render_token(media_elements, display_id):
     # v6: encoder default reverted libx264 (NVENC SPS rejected by iPad-1).
     # v7: output dims reverted to calibrated device res (was canvas/viewport,
     #     which letterboxed); forces re-encode of stale canvas-sized assets.
-    encode_ver = "grid025-cbl-v7"
+    # v8: setsar=1 on the warp/transcode output — scale inherited the source's
+    #     16:9 display aspect (SAR!=1), so the iPad DISPLAYED the portrait frame
+    #     letterboxed to 16:9. Forces re-encode with square pixels.
+    encode_ver = "grid025-cbl-v8"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 

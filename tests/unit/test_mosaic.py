@@ -439,6 +439,9 @@ class TestFfmpegHelpers:
         # ffmpeg perspective order is TL,TR,BL,BR -> x2,y2 must be the BL corner (10,220)
         assert vf.startswith("perspective=10:20:110:20:10:220:110:220:sense=source")
         assert "scale=800:600" in vf
+        # Square pixels: without setsar the scale inherits a 16:9 source's display
+        # aspect -> the iPad shows the portrait frame letterboxed to 16:9.
+        assert vf.endswith("setsar=1")
         assert "libx264" in cmd and "baseline" in cmd and "yuv420p" in cmd
         assert "-c:a" in cmd and "aac" in cmd
         assert "-an" not in cmd  # audio is kept
@@ -802,7 +805,8 @@ class TestBuilderExtraFilters:
                                                   extra_video_filters=["fade=t=in:st=0:d=0.6"],
                                                   extra_audio_filters=["afade=t=in:st=0:d=0.6"])
         vf = cmd[cmd.index("-vf") + 1]
-        assert vf.endswith(",fade=t=in:st=0:d=0.6")
+        assert ",fade=t=in:st=0:d=0.6," in vf          # extra video filter present
+        assert vf.endswith("setsar=1")                  # square-pixels filter is last
         assert "scale=80:60" in vf
         assert cmd[cmd.index("-af") + 1] == "afade=t=in:st=0:d=0.6"
 
@@ -810,7 +814,7 @@ class TestBuilderExtraFilters:
         pts = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]
         cmd = server.build_ffmpeg_perspective_cmd("in.mp4", "out.mp4", pts, 80, 60)
         assert "-af" not in cmd
-        assert cmd[cmd.index("-vf") + 1].endswith("scale=80:60")
+        assert cmd[cmd.index("-vf") + 1].endswith("scale=80:60,setsar=1")
 
     def test_individual_appends_filters(self):
         pts = [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0]]
@@ -819,7 +823,8 @@ class TestBuilderExtraFilters:
                                                 extra_video_filters=["fade=t=out:st=4.4:d=0.6"],
                                                 extra_audio_filters=[])
         vf = cmd[cmd.index("-vf") + 1]
-        assert vf.endswith(",fade=t=out:st=4.4:d=0.6")
+        assert ",fade=t=out:st=4.4:d=0.6," in vf        # extra video filter present
+        assert vf.endswith("setsar=1")                  # square-pixels filter is last
         assert "-af" not in cmd   # empty audio list adds no -af
 
 
