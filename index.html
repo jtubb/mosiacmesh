@@ -234,6 +234,10 @@
 		// silently hide the giant via the gh>2 guard, confusing on-wall tuning).
 		if ((m = /[?&]sgscale=([0-9]*\.?[0-9]+)/.exec(h))) { sd.gscale = parseFloat(m[1]); }
 		window._mmSdbg = sd;
+		// keg-roll live knob: ?kgfill=N sets the keg size as a multiple of the
+		// perpendicular dim (>1 overhangs to cover the straight cover edge). Same
+		// >=1-digit/at-most-one-dot guard so a malformed value never yields NaN.
+		if ((m = /[?&]kgfill=([0-9]*\.?[0-9]+)/.exec(h))) { window._mmKegFill = parseFloat(m[1]); }
 	})();
 	if (/tdbg/.test(location.href)) {
 		window._mmDbg = true;   // also stream debug to the server log (CLIENTLOG)

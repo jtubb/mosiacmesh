@@ -601,7 +601,13 @@
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     var dir = (params && params.direction) || 'right';
     var horiz = (dir === 'left' || dir === 'right');
-    var kegD = horiz ? reg.h : reg.w;             // giant roller: diameter = perpendicular dim
+    // Giant roller sized OVER the perpendicular dim: the cover's leading edge is a
+    // straight full-height line but the keg is round (and the PNG has transparent
+    // padding), so a keg exactly = the perpendicular dim leaves the edge peeking past
+    // the curve near the top/bottom. kfill > 1 overhangs so the opaque body spans the
+    // whole edge through the bulk of the roll. ?kgfill=N tunes it live (no redeploy).
+    var kfill = (root._mmKegFill != null) ? root._mmKegFill : 1.3;
+    var kegD = (horiz ? reg.h : reg.w) * kfill;
     var rect = mmKegCoverRect(prog, dir, phase, reg);
     if (rect) { ctx.fillStyle = bg || '#000000'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h); }
     if (!img || !img.width) { return; }            // sprite not decoded -> cover only (plain wipe)
