@@ -26,3 +26,21 @@ test('mmCoasterColor: known tones + default', () => {
   assert.equal(g.mmCoasterColor('slate'), '#5a5e63');
   assert.equal(g.mmCoasterColor('nope'), g.mmCoasterColor('kraft'));   // unknown -> kraft
 });
+
+test('mmTransitionState: coasterflip = transform family, front=p (raw, both roles)', () => {
+  const S = g.mmTransitionState;
+  // end window [5300,6000], ed=700; offset 5650 -> p=(6000-5650)/700=0.5
+  const end = { name: 'coasterflip', params: { axis: 'horizontal', duration: 700 } };
+  let st = S(null, end, 5650, 6000, null, null);
+  assert.equal(st.role, 'out');
+  assert.equal(st.effect.name, 'coasterflip');
+  assert.equal(st.effect.family, 'transform');
+  assert.ok(Math.abs(st.effect.front - 0.5) < 1e-9);    // raw p, NOT inverted
+  assert.equal(st.effect.scope, 'wall');                // default
+  // start window [0,700], sd=700; offset 350 -> p=0.5
+  const start = { name: 'coasterflip', params: { duration: 700 } };
+  st = S(start, null, 350, 6000, null, null);
+  assert.equal(st.role, 'in');
+  assert.equal(st.effect.family, 'transform');
+  assert.ok(Math.abs(st.effect.front - 0.5) < 1e-9);
+});

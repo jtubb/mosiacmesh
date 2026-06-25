@@ -154,7 +154,7 @@
                effect: { name: 'frostcreep', family: 'mask', front: frcov,
                          scope: frsc, params: eff.params || {}, phase: frph } };
     }
-    if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
+    if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'coasterflip' || eff.name === 'iris' || eff.name === 'dissolve') {
       var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
       var esc = (eff.params && eff.params.scope) || 'wall';
       return { role: role, opacity: 1, wipe: null,
