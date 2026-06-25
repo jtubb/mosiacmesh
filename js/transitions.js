@@ -785,6 +785,54 @@
     mmStampSprite(ctx, vp, img, pos.cx, pos.cy, kegD, ang);   // globalSize (height) = kegD
   }
 
+  var _FROST = {
+    frost: { core: '244,250,255', spark: '255,255,255' },
+    blue:  { core: '208,230,247', spark: '236,247,255' },
+    clear: { core: '224,239,250', spark: '255,255,255' }
+  };
+  function mmFrostPalette(tint) { return _FROST[tint] || _FROST.frost; }
+
+  // Draw frost: soft growing blotches for cells whose seeded threshold the coverage
+  // front has crossed, + a consolidation fill near full cover so the outgoing item is
+  // fully hidden at the handoff. arc/fillRect only; no clip/composite. Drawn in global
+  // coords under the mesh affine (in-canvas) or overlay matrix -> wall-coherent. The
+  // field is memoized on root._mmFrostCache (seed,blocks). ?frostblocks=N tunes density.
+  function mmDrawFrost(ctx, params, phase, cover, GW, GH, quad, scope, seed) {
+    var cov = cover < 0 ? 0 : (cover > 1 ? 1 : cover);
+    if (cov <= 0) { return; }
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var fdbg = root._mmFrostDbg || {};
+    var blocks = (fdbg.blocks > 0) ? fdbg.blocks : 18;
+    var sk = seed >>> 0, cache = root._mmFrostCache;
+    if (!cache || cache.seed !== sk || cache.blocks !== blocks) {
+      cache = { seed: sk, blocks: blocks, field: mmFrostField(blocks, sk) };
+      root._mmFrostCache = cache;
+    }
+    var field = cache.field, pal = mmFrostPalette(params && params.tint);
+    var cw = reg.w / blocks, ch = reg.h / blocks, cell = (cw < ch ? cw : ch);
+    var r, c, idx, fb, cx, cy, rad;
+    for (r = 0; r < blocks; r++) {
+      for (c = 0; c < blocks; c++) {
+        idx = r * blocks + c;
+        fb = mmFrostBlotch(field[idx], cov, 0.25);
+        if (!fb.on) { continue; }
+        cx = reg.x + (c + 0.5) * cw; cy = reg.y + (r + 0.5) * ch;
+        rad = cell * (0.6 + 0.7 * fb.t);
+        ctx.fillStyle = 'rgba(' + pal.core + ',' + (0.85 * fb.t) + ')';
+        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 6.2832); ctx.fill();
+        if (fb.t > 0.7) {                          // sparkle glint on settled frost
+          ctx.fillStyle = 'rgba(' + pal.spark + ',0.9)';
+          ctx.beginPath(); ctx.arc(cx, cy, cell * 0.12, 0, 6.2832); ctx.fill();
+        }
+      }
+    }
+    if (cov >= 0.88) {                              // consolidation -> opaque by cov=1
+      var a = (cov - 0.88) / 0.12; if (a > 1) { a = 1; }
+      ctx.fillStyle = 'rgba(' + pal.core + ',' + a + ')';
+      ctx.fillRect(reg.x, reg.y, reg.w, reg.h);
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -824,6 +872,8 @@
   root.mmFrostPhase = mmFrostPhase;
   root.mmFrostField = mmFrostField;
   root.mmFrostBlotch = mmFrostBlotch;
+  root.mmFrostPalette = mmFrostPalette;
+  root.mmDrawFrost = mmDrawFrost;
   root.mmOpaqueBox = mmOpaqueBox;
   root.mmKegFitFactor = mmKegFitFactor;
   root.mmSpriteFit = mmSpriteFit;

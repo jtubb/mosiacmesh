@@ -60,3 +60,32 @@ test('mmTransitionState: frostcreep end=cover (rises), start=reveal (mask family
   assert.ok(Math.abs(st.effect.front - 0.75) < 1e-9);
   assert.equal(st.effect.scope, 'wall');     // default
 });
+
+function recCtxFrost() {
+  return { rects: [], arcs: 0, fillStyle: '#000',
+    beginPath() {}, arc() { this.arcs++; }, fill() {},
+    fillRect(x, y, w, h) { this.rects.push({ x: x, y: y, w: w, h: h }); } };
+}
+
+test('mmFrostPalette: known tints + default', () => {
+  assert.ok(g.mmFrostPalette('frost').core);
+  assert.ok(g.mmFrostPalette('blue').core);
+  assert.equal(g.mmFrostPalette('nope').core, g.mmFrostPalette('frost').core);   // unknown -> frost
+});
+
+test('mmDrawFrost: nothing at cover 0', () => {
+  const c = recCtxFrost();
+  g.mmDrawFrost(c, { tint: 'frost' }, 'cover', 0, 300, 200, null, 'wall', 5);
+  assert.equal(c.arcs, 0);
+  assert.equal(c.rects.length, 0);
+});
+
+test('mmDrawFrost: blotches mid-cover, consolidation fill near full', () => {
+  let c = recCtxFrost();
+  g.mmDrawFrost(c, { tint: 'frost' }, 'cover', 0.5, 300, 200, null, 'wall', 5);
+  assert.ok(c.arcs > 0, 'blotches drawn mid-cover');
+  c = recCtxFrost();
+  g.mmDrawFrost(c, { tint: 'frost' }, 'cover', 1, 300, 200, null, 'wall', 5);
+  assert.ok(c.rects.some(r => r.x === 0 && r.y === 0 && r.w === 300 && r.h === 200),
+            'full-region consolidation fill present at cover 1');
+});
