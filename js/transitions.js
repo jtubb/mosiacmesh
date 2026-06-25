@@ -433,7 +433,10 @@
   }
   function mmScatterSpriteUrl(sprite) {
     if (!sprite) { sprite = 'hop'; }
-    return (String(sprite).charAt(0) === '/') ? sprite : ('/media/server/images/' + sprite + '.png');
+    sprite = String(sprite);
+    if (sprite.charAt(0) === '/') { return sprite; }              // explicit path, used as-is
+    if (/\.png$/i.test(sprite)) { return '/media/server/images/' + sprite; }   // name already has .png
+    return '/media/server/images/' + sprite + '.png';             // bare name -> append .png
   }
 
   // --- Keg roll (mask family): a giant keg sprite rolls across as the moving
@@ -441,22 +444,35 @@
   // re-derived here, the wipe's CODE is untouched. ---
   function mmKegPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
 
+  // The keg center's offset along the travel axis within region coords, range
+  // -kegD/2 .. S+kegD/2 (so the keg starts/ends fully off the entry/exit edge).
+  // The cover edge is just this clamped to [0,S], so the cover edge and the keg
+  // center COINCIDE whenever the keg is on-screen (no lead/lag), and the cover
+  // simply waits at the boundary while the keg rolls in/out off-screen. Shared by
+  // mmKegCoverRect + mmKegPos so they can never drift apart. Pure.
+  function _kegAxisOffset(f, plus, S, kegD) {
+    var d = -kegD / 2 + f * (S + kegD);            // + direction: -kegD/2 -> S+kegD/2
+    return plus ? d : (S - d);                     // - direction mirrors
+  }
+
   // Directional cover rect in global px (or null when nothing is covered). prog =
-  // keg local phase progress 0->1. 'cover' fills BEHIND the keg (where it has been;
-  // grows 0->full); 'reveal' fills AHEAD of the keg (where it hasn't reached; shrinks
-  // full->0). direction = keg travel direction; the rect always spans the full
-  // perpendicular dimension. reg = {x,y,w,h} region (wall = full GWxGH, screen = bbox).
-  function mmKegCoverRect(prog, direction, phase, reg) {
+  // keg local phase progress 0->1. The cover edge = the keg-center axis clamped to
+  // [0,S], so the edge tracks the keg exactly while on-screen. 'cover' fills BEHIND
+  // the keg (where it has been; grows 0->full); 'reveal' fills AHEAD (where it hasn't
+  // reached; shrinks full->0). direction = keg travel direction; the rect spans the
+  // full perpendicular dimension. reg = {x,y,w,h}; kegD = keg diameter in global px.
+  function mmKegCoverRect(prog, direction, phase, reg, kegD) {
     var f = prog < 0 ? 0 : (prog > 1 ? 1 : prog);
     var horiz = (direction === 'left' || direction === 'right');
     var plus = (direction === 'right' || direction === 'down');   // travels toward the hi edge
     var S = horiz ? reg.w : reg.h;
-    var lead = plus ? f * S : (1 - f) * S;        // keg leading-edge offset within [0..S]
+    var axis = _kegAxisOffset(f, plus, S, kegD || 0);
+    var edge = axis < 0 ? 0 : (axis > S ? S : axis);              // cover boundary, clamped to region
     var lo, hi;
     if (phase === 'cover') {
-      if (plus) { lo = 0; hi = lead; } else { lo = lead; hi = S; }
+      if (plus) { lo = 0; hi = edge; } else { lo = edge; hi = S; }
     } else {                                       // reveal: the not-yet-reached side
-      if (plus) { lo = lead; hi = S; } else { lo = 0; hi = lead; }
+      if (plus) { lo = edge; hi = S; } else { lo = 0; hi = edge; }
     }
     var len = hi - lo;
     if (len <= 1e-9) { return null; }
@@ -464,17 +480,17 @@
     return { x: reg.x, y: reg.y + lo, w: reg.w, h: len };
   }
 
-  // Keg center (global px) + distance traveled. The keg travels from fully off the
-  // start edge to fully off the far edge across (S + kegD), so it is never parked
-  // half-on at an end. kegD = keg diameter in global px. Returns {cx, cy, dist>=0}.
+  // Keg center (global px) + distance traveled. The center rides the same axis the
+  // cover edge clamps from, so it sits exactly on the cover edge while on-screen and
+  // is fully off the entry/exit edge at the ends (clean fully-covered handoff). kegD =
+  // keg diameter in global px. dist = axis travel (for rotation). Returns {cx,cy,dist>=0}.
   function mmKegPos(prog, direction, reg, kegD) {
     var f = prog < 0 ? 0 : (prog > 1 ? 1 : prog);
     var horiz = (direction === 'left' || direction === 'right');
     var plus = (direction === 'right' || direction === 'down');
     var S = horiz ? reg.w : reg.h;
-    var path = S + kegD;
-    var dist = f * path;
-    var axis = plus ? (-kegD / 2 + dist) : (S + kegD / 2 - dist);   // center offset within region axis
+    var axis = _kegAxisOffset(f, plus, S, kegD);
+    var dist = f * (S + kegD);                     // monotonic travel -> physical roll angle
     if (horiz) { return { cx: reg.x + axis, cy: reg.y + reg.h / 2, dist: dist }; }
     return { cx: reg.x + reg.w / 2, cy: reg.y + axis, dist: dist };
   }
@@ -608,7 +624,7 @@
     // whole edge through the bulk of the roll. ?kgfill=N tunes it live (no redeploy).
     var kfill = (root._mmKegFill != null) ? root._mmKegFill : 1.3;
     var kegD = (horiz ? reg.h : reg.w) * kfill;
-    var rect = mmKegCoverRect(prog, dir, phase, reg);
+    var rect = mmKegCoverRect(prog, dir, phase, reg, kegD);   // same kegD -> edge tracks the keg
     if (rect) { ctx.fillStyle = bg || '#000000'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h); }
     if (!img || !img.width) { return; }            // sprite not decoded -> cover only (plain wipe)
     var pos = mmKegPos(prog, dir, reg, kegD);

@@ -12,34 +12,47 @@ test('mmKegPhase: out=cover, in=reveal', () => {
 });
 
 test('mmKegCoverRect: cover grows from start edge in travel direction', () => {
-  assert.equal(g.mmKegCoverRect(0, 'right', 'cover', REG), null);      // nothing covered yet
-  let r = g.mmKegCoverRect(0.5, 'right', 'cover', REG);
-  assert.deepEqual(r, { x: 0, y: 0, w: 150, h: 200 });                 // left half covered
-  r = g.mmKegCoverRect(1, 'right', 'cover', REG);
+  assert.equal(g.mmKegCoverRect(0, 'right', 'cover', REG, 200), null);      // nothing covered yet
+  let r = g.mmKegCoverRect(0.5, 'right', 'cover', REG, 200);
+  assert.deepEqual(r, { x: 0, y: 0, w: 150, h: 200 });                 // left half covered (axis@0.5 == 0.5S)
+  r = g.mmKegCoverRect(1, 'right', 'cover', REG, 200);
   assert.deepEqual(r, { x: 0, y: 0, w: 300, h: 200 });                 // fully covered
 });
 
 test('mmKegCoverRect: reveal shrinks the ahead-of-keg region to nothing', () => {
-  let r = g.mmKegCoverRect(0, 'right', 'reveal', REG);
+  let r = g.mmKegCoverRect(0, 'right', 'reveal', REG, 200);
   assert.deepEqual(r, { x: 0, y: 0, w: 300, h: 200 });                 // fully covered at start
-  r = g.mmKegCoverRect(0.5, 'right', 'reveal', REG);
+  r = g.mmKegCoverRect(0.5, 'right', 'reveal', REG, 200);
   assert.deepEqual(r, { x: 150, y: 0, w: 150, h: 200 });               // right half still covered
-  assert.equal(g.mmKegCoverRect(1, 'right', 'reveal', REG), null);     // fully revealed
+  assert.equal(g.mmKegCoverRect(1, 'right', 'reveal', REG, 200), null);     // fully revealed
+});
+
+test('mmKegCoverRect: cover edge clamps to the keg axis (waits while keg rolls in)', () => {
+  // kegD=200, S=300 -> axis(f) = -100 + 500f, edge = clamp(axis,0,300).
+  // f=0.2 -> axis=0 -> edge=0 -> still NO cover (keg only just reached the edge);
+  // the OLD linear edge (prog*S=60) would have covered a 60px strip. Falsifiable.
+  assert.equal(g.mmKegCoverRect(0.2, 'right', 'cover', REG, 200), null);
+  // f=0.4 -> axis=100 -> 100px covered (vs old 0.4*300=120) -> edge tracks the keg.
+  assert.deepEqual(g.mmKegCoverRect(0.4, 'right', 'cover', REG, 200), { x: 0, y: 0, w: 100, h: 200 });
+  // the cover edge equals the keg center while on-screen (no lead/lag):
+  const edgeX = g.mmKegCoverRect(0.4, 'right', 'cover', REG, 200).w;   // = covered width = edge
+  const kegCx = g.mmKegPos(0.4, 'right', REG, 200).cx;                 // keg center x
+  assert.ok(Math.abs(edgeX - kegCx) < 1e-9);
 });
 
 test('mmKegCoverRect: left anchors at the far (right) edge for cover', () => {
-  const r = g.mmKegCoverRect(0.5, 'left', 'cover', REG);
+  const r = g.mmKegCoverRect(0.5, 'left', 'cover', REG, 200);
   assert.deepEqual(r, { x: 150, y: 0, w: 150, h: 200 });
 });
 
 test('mmKegCoverRect: down covers the vertical axis, full width', () => {
-  const r = g.mmKegCoverRect(0.5, 'down', 'cover', REG);
+  const r = g.mmKegCoverRect(0.5, 'down', 'cover', REG, 200);
   assert.deepEqual(r, { x: 0, y: 0, w: 300, h: 100 });
 });
 
 test('mmKegCoverRect: honors region offset', () => {
   const reg = { x: 10, y: 20, w: 300, h: 200 };
-  const r = g.mmKegCoverRect(0.5, 'right', 'cover', reg);
+  const r = g.mmKegCoverRect(0.5, 'right', 'cover', reg, 200);
   assert.deepEqual(r, { x: 10, y: 20, w: 150, h: 200 });
 });
 

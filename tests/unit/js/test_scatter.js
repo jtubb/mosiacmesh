@@ -37,6 +37,9 @@ test('mmScatterGiantAngle: full turn by cover end, keeps turning on reveal', () 
 test('mmScatterSpriteUrl: name vs path', () => {
   assert.equal(g.mmScatterSpriteUrl('hop'), '/media/server/images/hop.png');
   assert.equal(g.mmScatterSpriteUrl('/media/server/images/x.png'), '/media/server/images/x.png');
+  // forgiving: a name that already ends in .png must NOT get a second .png appended
+  assert.equal(g.mmScatterSpriteUrl('keg.png'), '/media/server/images/keg.png');
+  assert.equal(g.mmScatterSpriteUrl('Wooden_Keg.PNG'), '/media/server/images/Wooden_Keg.PNG');   // case-insensitive
 });
 test('mmScatterParticles: deterministic per seed, ranges, count', () => {
   const a = g.mmScatterParticles(9, 40), b = g.mmScatterParticles(9, 40), c = g.mmScatterParticles(10, 40);
