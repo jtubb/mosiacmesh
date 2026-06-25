@@ -154,7 +154,15 @@
                effect: { name: 'frostcreep', family: 'mask', front: frcov,
                          scope: frsc, params: eff.params || {}, phase: frph } };
     }
-    if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'coasterflip' || eff.name === 'iris' || eff.name === 'dissolve') {
+    if (eff.name === 'coasterflip') {
+      var cesc = (eff.params && eff.params.scope) || 'wall';
+      // transform family + raw front p; carries `phase` so the apply can sequence the
+      // round-in / tumble (cover) vs tumble / un-round (reveal).
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'coasterflip', family: 'transform', front: p, scope: cesc,
+                         params: eff.params || {}, phase: mmCoasterPhase(role) } };
+    }
+    if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
       var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
       var esc = (eff.params && eff.params.scope) || 'wall';
       return { role: role, opacity: 1, wipe: null,
@@ -181,6 +189,57 @@
 
   var _COASTER = { kraft: '#b9935f', cork: '#c8a06a', slate: '#5a5e63' };
   function mmCoasterColor(name) { return _COASTER[name] || _COASTER.kraft; }
+
+  function mmCoasterPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+
+  // Tumbling-coaster sequencing (transform family). front = raw progress; phase 'cover'
+  // (fold A out) or 'reveal' (open B in). flips = number of half-turns; roundFrac = the
+  // fraction of the phase spent rounding-in (cover) / un-rounding-out (reveal). Returns:
+  //   scale    = |cos theta|, the fold openness (1 flat .. 0 edge-on)
+  //   round    = corner-round fraction (0 square .. 1 full coaster)
+  //   showFront= cos theta >= 0 (front face -> content; else back face -> sprite)
+  //   wobble   = small in-plane rotation (rad) oscillating with the spin
+  // COVER rounds-in FIRST then tumbles open->edge; REVEAL tumbles edge->open then un-rounds.
+  // Both end/start edge-on at front=0, so the A->B handoff is continuous. Pure.
+  function mmCoasterTumble(front, phase, flips, roundFrac) {
+    var o = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var N = flips > 0 ? flips : 5;
+    var rf = (roundFrac > 0 && roundFrac < 1) ? roundFrac : 0.25;
+    var lp = (phase === 'reveal') ? o : (1 - o);     // local phase progress 0->1
+    var round, tp;
+    if (phase === 'reveal') {
+      if (lp <= 1 - rf) { round = 1; tp = 1 - lp / (1 - rf); }   // tumble edge->open
+      else { round = (1 - lp) / rf; tp = 0; }                    // then un-round
+    } else {
+      if (lp <= rf) { round = lp / rf; tp = 0; }                 // round-in first
+      else { round = 1; tp = (lp - rf) / (1 - rf); }             // then tumble open->edge
+    }
+    if (round < 0) { round = 0; } else if (round > 1) { round = 1; }
+    if (tp < 0) { tp = 0; } else if (tp > 1) { tp = 1; }
+    var theta = tp * (N - 0.5) * Math.PI;
+    var ct = Math.cos(theta);
+    return { scale: ct < 0 ? -ct : ct, round: round, showFront: ct >= 0, wobble: Math.sin(theta) * 0.1, theta: theta };
+  }
+
+  // Round the region's corners by filling the 4 corner cutouts (square corner minus the
+  // inscribed quarter-circle) with the background color -> the rectangle reads as a coaster.
+  // radius clamped to half the smaller side. No clip; arc/lineTo/fill only. Drawn under
+  // whatever transform the caller set, so it folds with the coaster.
+  function mmDrawCoasterCorners(ctx, reg, radius, bg) {
+    var r = radius, hw = reg.w / 2, hh = reg.h / 2;
+    if (r <= 0) { return; }
+    if (r > hw) { r = hw; } if (r > hh) { r = hh; }
+    var x0 = reg.x, y0 = reg.y, x1 = reg.x + reg.w, y1 = reg.y + reg.h, P = Math.PI;
+    ctx.fillStyle = bg;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x0 + r, y0);          // TL
+    ctx.arc(x0 + r, y0 + r, r, -P / 2, P, true); ctx.lineTo(x0, y0); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x1, y0); ctx.lineTo(x1, y0 + r);          // TR
+    ctx.arc(x1 - r, y0 + r, r, 0, -P / 2, true); ctx.lineTo(x1, y0); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x1 - r, y1);          // BR
+    ctx.arc(x1 - r, y1 - r, r, P / 2, 0, true); ctx.lineTo(x1, y1); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x0, y1); ctx.lineTo(x0, y1 - r);          // BL
+    ctx.arc(x0 + r, y1 - r, r, P, P / 2, true); ctx.lineTo(x0, y1); ctx.closePath(); ctx.fill();
+  }
 
   // Circle (global px) for an Iris reveal. Center = wall center (wall) or panel bbox
   // center (screen); radius ramps 0 -> half the region diagonal (so front 1 fully
@@ -917,6 +976,9 @@
   root.mmZoomFactor = mmZoomFactor;
   root.mmFlipFactor = mmFlipFactor;
   root.mmCoasterColor = mmCoasterColor;
+  root.mmCoasterPhase = mmCoasterPhase;
+  root.mmCoasterTumble = mmCoasterTumble;
+  root.mmDrawCoasterCorners = mmDrawCoasterCorners;
   root.mmIrisCircle = mmIrisCircle;
   root.mmIrisMaskRects = mmIrisMaskRects;
   root.mmDissolveOrder = mmDissolveOrder;

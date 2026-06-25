@@ -227,8 +227,10 @@ def test_coasterflip_params():
     by = {p["key"]: p for p in e["params"]}
     assert by["axis"]["choices"] == ["horizontal", "vertical"] and by["axis"]["default"] == "horizontal"
     assert by["coaster"]["choices"] == ["kraft", "cork", "slate"] and by["coaster"]["default"] == "kraft"
+    assert by["sprite"]["type"] == "string" and by["sprite"]["default"] == "coaster"
+    assert by["flips"]["type"] == "number" and by["flips"]["default"] == 5
     assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
-    assert by["duration"]["type"] == "number" and by["duration"]["default"] == 700
+    assert by["duration"]["type"] == "number" and by["duration"]["default"] == 1800
     assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
 
 

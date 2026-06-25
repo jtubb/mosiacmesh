@@ -258,8 +258,10 @@ class CoasterFlipEffect(Effect):
     # (startEffect), never both.
     params = [ParamSpec("axis", "choice", "horizontal", choices=["horizontal", "vertical"]),
               ParamSpec("coaster", "choice", "kraft", choices=["kraft", "cork", "slate"]),
+              ParamSpec("sprite", "string", "coaster"),   # back-face PNG (any transparent PNG; "" = blank back)
+              ParamSpec("flips", "number", 5, minimum=1, maximum=12),   # half-turns in the tumble
               ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
-              ParamSpec("duration", "number", 700, minimum=0),
+              ParamSpec("duration", "number", 1800, minimum=0),
               ParamSpec("audioFade", "boolean", True)]
 
     def video_filters(self, role, params, ctx):

@@ -969,11 +969,13 @@ class TestEffectRenderHook:
     def test_token_unchanged_by_coasterflip_visual_param_change(self, mock_settings):
         me = self._token_setup(mock_settings)
         me.startEffect = {"name": "coasterflip", "params": {"axis": "horizontal", "coaster": "kraft",
-                                                            "scope": "wall", "duration": 700, "audioFade": True}}
+                                                            "sprite": "coaster", "flips": 5,
+                                                            "scope": "wall", "duration": 1800, "audioFade": True}}
         t1 = server.compute_render_token("Default")
-        # Change only visual params (axis, coaster, scope); audioFade and duration unchanged.
+        # Change only visual params (axis, coaster, sprite, flips, scope); audioFade + duration unchanged.
         me.startEffect = {"name": "coasterflip", "params": {"axis": "vertical", "coaster": "slate",
-                                                            "scope": "screen", "duration": 700, "audioFade": True}}
+                                                            "sprite": "hop", "flips": 3,
+                                                            "scope": "screen", "duration": 1800, "audioFade": True}}
         t2 = server.compute_render_token("Default")
         assert t1 == t2, "coasterflip visual-only param changes should not invalidate the render token"
 

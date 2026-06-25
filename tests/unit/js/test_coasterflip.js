@@ -44,3 +44,46 @@ test('mmTransitionState: coasterflip = transform family, front=p (raw, both role
   assert.equal(st.effect.family, 'transform');
   assert.ok(Math.abs(st.effect.front - 0.5) < 1e-9);
 });
+
+// --- coasterflip v2: tumbling two-faced coaster ---
+await import('../../../js/mesh-viewport.js');   // (mmStampSprite, for any draw glue)
+
+test('mmCoasterPhase: out=cover, in=reveal', () => {
+  assert.equal(g.mmCoasterPhase('out'), 'cover');
+  assert.equal(g.mmCoasterPhase('in'), 'reveal');
+});
+
+test('mmCoasterTumble cover: round-in first, then tumble to edge-on', () => {
+  const T = (f) => g.mmCoasterTumble(f, 'cover', 5, 0.25);
+  // front=1 (phase start): lp=0 -> round 0, flat (scale 1), front face
+  let s = T(1); assert.ok(C(s.round, 0) && C(s.scale, 1) && s.showFront);
+  // lp=rf=0.25 -> front=0.75: rounded (round 1) but not yet spinning (scale 1)
+  s = T(0.75); assert.ok(C(s.round, 1) && C(s.scale, 1));
+  // front=0 (phase end): lp=1 -> full round, edge-on (scale 0)
+  s = T(0); assert.ok(C(s.round, 1) && Math.abs(s.scale) < 1e-9);
+});
+
+test('mmCoasterTumble: 5 flips show the back (cos<0) somewhere mid-tumble', () => {
+  // sweep cover front 1->0 and confirm showFront flips multiple times (front/back/...)
+  let flips = 0, prev = null;
+  for (let i = 0; i <= 200; i++) {
+    const s = g.mmCoasterTumble(1 - i / 200, 'cover', 5, 0.25);
+    if (prev !== null && s.showFront !== prev) flips++;
+    prev = s.showFront;
+  }
+  assert.ok(flips >= 4, 'face alternates several times over the tumble: ' + flips);
+});
+
+test('mmCoasterTumble reveal: edge-on at start (continuous handoff), open at end', () => {
+  const R = (f) => g.mmCoasterTumble(f, 'reveal', 5, 0.25);
+  let s = R(0); assert.ok(Math.abs(s.scale) < 1e-9 && C(s.round, 1));   // edge-on, rounded (matches cover end)
+  s = R(1); assert.ok(C(s.scale, 1) && C(s.round, 0) && s.showFront);   // full open rectangle
+});
+
+test('mmDrawCoasterCorners: fills 4 corners when r>0, nothing when r<=0', () => {
+  const reg = { x: 0, y: 0, w: 300, h: 200 };
+  let n = 0;
+  const c = { fillStyle: '', beginPath(){}, moveTo(){}, lineTo(){}, arc(){}, closePath(){}, fill(){ n++; } };
+  g.mmDrawCoasterCorners(c, reg, 40, '#000'); assert.equal(n, 4);     // 4 corner cutouts
+  n = 0; g.mmDrawCoasterCorners(c, reg, 0, '#000'); assert.equal(n, 0); // no rounding
+});

@@ -707,6 +707,7 @@
 							? mmTransitionState(it.startEffect || null, it.endEffect || null,
 								pos.offsetMs, it.duration || 0, null, it.meshQuad || null)
 							: null;
+						var _cfT = null, _cfImg = null;
 						if (stc && stc.effect && stc.effect.family === 'transform') {
 							if (stc.effect.name === 'slide' && typeof mmSlideOffset === 'function') {
 								var _so = mmSlideOffset(stc.effect.front, (stc.effect.params && stc.effect.params.direction) || 'left',
@@ -720,15 +721,27 @@
 								var _zcx = it.meshGlobal[0] / 2, _zcy = it.meshGlobal[1] / 2;
 								ctx.translate(_zcx, _zcy); ctx.scale(_zf.s, _zf.s); ctx.translate(-_zcx, -_zcy);
 								ctx.globalAlpha = _zf.alpha;
-							} else if (stc.effect.name === 'coasterflip' && typeof mmFlipFactor === 'function') {
-								var _ff = mmFlipFactor(stc.effect.front, (stc.effect.params && stc.effect.params.axis) || 'horizontal');
-								var _fcx = it.meshGlobal[0] / 2, _fcy = it.meshGlobal[1] / 2;
-								ctx.translate(_fcx, _fcy); ctx.scale(_ff.sx, _ff.sy); ctx.translate(-_fcx, -_fcy);
-								ctx.globalAlpha = _ff.alpha;
+							} else if (stc.effect.name === 'coasterflip' && typeof mmCoasterTumble === 'function') {
+								_cfT = mmCoasterTumble(stc.effect.front, stc.effect.phase, (stc.effect.params && stc.effect.params.flips) || 5, 0.25);
+								_cfImg = mmSprite(mmScatterSpriteUrl((stc.effect.params && stc.effect.params.sprite) || 'coaster'));
+								var _cax = (stc.effect.params && stc.effect.params.axis) || 'horizontal';
+								var _ccx = it.meshGlobal[0] / 2, _ccy = it.meshGlobal[1] / 2, _coff = it.meshGlobal[0] * 0.05;
+								ctx.translate(_ccx + _coff, _ccy);
+								if (_cfT.wobble) { ctx.rotate(_cfT.wobble); }
+								if (_cax === 'vertical') { ctx.scale(1, _cfT.scale); } else { ctx.scale(_cfT.scale, 1); }
+								ctx.translate(-(_ccx + _coff), -_ccy);
+								ctx.globalAlpha = 0.4 + 0.6 * _cfT.scale;
 							}
 						}
-						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed, meshGridObj); }
-						catch (e1) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e1 && e1.message) || e1) }); } }
+						if (_cfT && !_cfT.showFront) {
+							ctx.fillStyle = it.backgroundColor || '#0a0a0a'; ctx.fillRect(0, 0, it.meshGlobal[0], it.meshGlobal[1]);
+							if (_cfImg && _cfImg.width && typeof mmStampSprite === 'function') {
+								mmStampSprite(ctx, null, _cfImg, it.meshGlobal[0] / 2, it.meshGlobal[1] / 2, Math.min(it.meshGlobal[0], it.meshGlobal[1]) * 0.92, 0);
+							}
+						} else {
+							try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed, meshGridObj); }
+							catch (e1) { if (!frame._err) { frame._err = true; dbg('script-err', { nm: name, msg: '' + ((e1 && e1.message) || e1) }); } }
+						}
 						// In-frame wipe cover: drawn under the SAME transform as the content and in the
 						// SAME RAF, so the leading edge is frame-locked to the animation (no second
 						// canvas/RAF -> no inter-loop jitter, one fewer full-screen composite). Fade is
@@ -772,11 +785,15 @@
 										(playback.seed | 0), it.backgroundColor || '#000000');
 								}
 							}
-							if (stc.effect && stc.effect.name === 'coasterflip' && typeof mmFlipFactor === 'function') {
-								var _cf = mmFlipFactor(stc.effect.front, (stc.effect.params && stc.effect.params.axis) || 'horizontal');
-								if (_cf.edge > 0.01) {
-									ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);   // drop the flip scale -> pure mesh affine
-									ctx.globalAlpha = _cf.edge;
+							if (stc.effect && stc.effect.name === 'coasterflip' && _cfT) {
+								if (_cfT.round > 0.001 && typeof mmDrawCoasterCorners === 'function') {
+									var _crad = Math.min(it.meshGlobal[0], it.meshGlobal[1]) * 0.22 * _cfT.round;
+									mmDrawCoasterCorners(ctx, { x: 0, y: 0, w: it.meshGlobal[0], h: it.meshGlobal[1] }, _crad, it.backgroundColor || '#0a0a0a');
+								}
+								var _cedge = 1 - _cfT.scale;
+								if (_cedge > 0.02) {
+									ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);   // drop the fold -> pure mesh affine for the edge sliver
+									ctx.globalAlpha = _cedge;
 									ctx.fillStyle = mmCoasterColor(stc.effect.params && stc.effect.params.coaster);
 									var _cgw = it.meshGlobal[0], _cgh = it.meshGlobal[1];
 									if ((stc.effect.params && stc.effect.params.axis) === 'vertical') {
