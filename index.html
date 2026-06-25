@@ -720,6 +720,11 @@
 								var _zcx = it.meshGlobal[0] / 2, _zcy = it.meshGlobal[1] / 2;
 								ctx.translate(_zcx, _zcy); ctx.scale(_zf.s, _zf.s); ctx.translate(-_zcx, -_zcy);
 								ctx.globalAlpha = _zf.alpha;
+							} else if (stc.effect.name === 'coasterflip' && typeof mmFlipFactor === 'function') {
+								var _ff = mmFlipFactor(stc.effect.front, (stc.effect.params && stc.effect.params.axis) || 'horizontal');
+								var _fcx = it.meshGlobal[0] / 2, _fcy = it.meshGlobal[1] / 2;
+								ctx.translate(_fcx, _fcy); ctx.scale(_ff.sx, _ff.sy); ctx.translate(-_fcx, -_fcy);
+								ctx.globalAlpha = _ff.alpha;
 							}
 						}
 						try { animations[name](ctx, pos.offsetMs, it.meshGlobal[0], it.meshGlobal[1], GoTime.now(), itemSeed, meshGridObj); }
@@ -765,6 +770,21 @@
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
 										(playback.seed | 0), it.backgroundColor || '#000000');
+								}
+							}
+							if (stc.effect && stc.effect.name === 'coasterflip' && typeof mmFlipFactor === 'function') {
+								var _cf = mmFlipFactor(stc.effect.front, (stc.effect.params && stc.effect.params.axis) || 'horizontal');
+								if (_cf.edge > 0.01) {
+									ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);   // drop the flip scale -> pure mesh affine
+									ctx.globalAlpha = _cf.edge;
+									ctx.fillStyle = mmCoasterColor(stc.effect.params && stc.effect.params.coaster);
+									var _cgw = it.meshGlobal[0], _cgh = it.meshGlobal[1];
+									if ((stc.effect.params && stc.effect.params.axis) === 'vertical') {
+										var _cbt = _cgh * 0.012; ctx.fillRect(0, _cgh / 2 - _cbt / 2, _cgw, _cbt);
+									} else {
+										var _cbw = _cgw * 0.012; ctx.fillRect(_cgw / 2 - _cbw / 2, 0, _cbw, _cgh);
+									}
+									ctx.globalAlpha = 1;
 								}
 							}
 						}
@@ -1190,6 +1210,10 @@
 				var so2 = mmSlideOffset(st.effect.front, (st.effect.params && st.effect.params.direction) || 'left', 100, 100);
 				var t2 = 'translate(' + so2.dx + '%,' + so2.dy + '%)';
 				el.style.webkitTransform = t2; el.style.transform = t2; el.style.opacity = '1';
+			} else if (st.effect.name === 'coasterflip' && typeof mmFlipFactor === 'function') {
+				var ff2 = mmFlipFactor(st.effect.front, (st.effect.params && st.effect.params.axis) || 'horizontal');
+				var t4 = 'scaleX(' + ff2.sx + ') scaleY(' + ff2.sy + ')';
+				el.style.webkitTransform = t4; el.style.transform = t4; el.style.opacity = '' + ff2.alpha;
 			} else if (typeof mmZoomFactor === 'function') {
 				var zf2 = mmZoomFactor(st.effect.front, (st.effect.params && st.effect.params.scale));
 				var t3 = 'scale(' + zf2.s + ')';
