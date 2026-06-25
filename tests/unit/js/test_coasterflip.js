@@ -87,3 +87,12 @@ test('mmDrawCoasterCorners: fills 4 corners when r>0, nothing when r<=0', () => 
   g.mmDrawCoasterCorners(c, reg, 40, '#000'); assert.equal(n, 4);     // 4 corner cutouts
   n = 0; g.mmDrawCoasterCorners(c, reg, 0, '#000'); assert.equal(n, 0); // no rounding
 });
+
+test('mmDrawCoasterDisc: masks outside a centered circle when round>0; nothing at round 0', () => {
+  const reg = { x: 0, y: 0, w: 600, h: 200 };
+  let fills = 0;
+  const c = { fillStyle: '', beginPath(){}, moveTo(){}, lineTo(){}, arc(){}, closePath(){}, fill(){ fills++; }, fillRect(){ fills++; } };
+  g.mmDrawCoasterDisc(c, reg, 0, '#000'); assert.equal(fills, 0);      // no mask
+  fills = 0; g.mmDrawCoasterDisc(c, reg, 1, '#000');
+  assert.ok(fills > 0, 'wide region at full round -> side strips + corner cutouts drawn');
+});

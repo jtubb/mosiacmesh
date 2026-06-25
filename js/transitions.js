@@ -241,6 +241,29 @@
     ctx.arc(x0 + r, y1 - r, r, P, P / 2, true); ctx.lineTo(x0, y1); ctx.closePath(); ctx.fill();
   }
 
+  // Mask the region down to a CENTERED CIRCLE (a round coaster) by filling everything
+  // outside the circle with the background color -> the content rounds into a disc, not a
+  // rounded rectangle. `round` 0 = no mask (huge circle), 1 = full coaster disc. No clip:
+  // 4 outer strips (region beyond the circle bbox) + the bbox corners rounded by R (which
+  // turns the bbox square into the circle). Drawn under the caller's transform (folds with it).
+  function mmDrawCoasterDisc(ctx, reg, round, bg) {
+    var rd = round < 0 ? 0 : (round > 1 ? 1 : round);
+    if (rd <= 0) { return; }
+    var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
+    var halfDiag = Math.sqrt(reg.w * reg.w + reg.h * reg.h) / 2;   // circle that covers the whole region
+    var discR = (reg.w < reg.h ? reg.w : reg.h) * 0.48;            // target coaster radius
+    var R = halfDiag + (discR - halfDiag) * rd;                    // lerp huge -> disc
+    var x0 = reg.x, y0 = reg.y, x1 = reg.x + reg.w, y1 = reg.y + reg.h;
+    var bx0 = cx - R, by0 = cy - R, bx1 = cx + R, by1 = cy + R;
+    ctx.fillStyle = bg;
+    if (by0 > y0) { ctx.fillRect(x0, y0, reg.w, by0 - y0); }       // top strip
+    if (by1 < y1) { ctx.fillRect(x0, by1, reg.w, y1 - by1); }      // bottom strip
+    var ty = by0 > y0 ? by0 : y0, byb = by1 < y1 ? by1 : y1;
+    if (bx0 > x0) { ctx.fillRect(x0, ty, bx0 - x0, byb - ty); }    // left strip
+    if (bx1 < x1) { ctx.fillRect(bx1, ty, x1 - bx1, byb - ty); }   // right strip
+    mmDrawCoasterCorners(ctx, { x: bx0, y: by0, w: 2 * R, h: 2 * R }, R, bg);  // round bbox -> circle
+  }
+
   // Circle (global px) for an Iris reveal. Center = wall center (wall) or panel bbox
   // center (screen); radius ramps 0 -> half the region diagonal (so front 1 fully
   // covers the region's farthest corner). Pure.
@@ -979,6 +1002,7 @@
   root.mmCoasterPhase = mmCoasterPhase;
   root.mmCoasterTumble = mmCoasterTumble;
   root.mmDrawCoasterCorners = mmDrawCoasterCorners;
+  root.mmDrawCoasterDisc = mmDrawCoasterDisc;
   root.mmIrisCircle = mmIrisCircle;
   root.mmIrisMaskRects = mmIrisMaskRects;
   root.mmDissolveOrder = mmDissolveOrder;

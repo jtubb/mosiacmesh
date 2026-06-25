@@ -785,24 +785,8 @@
 										(playback.seed | 0), it.backgroundColor || '#000000');
 								}
 							}
-							if (stc.effect && stc.effect.name === 'coasterflip' && _cfT) {
-								if (_cfT.round > 0.001 && typeof mmDrawCoasterCorners === 'function') {
-									var _crad = Math.min(it.meshGlobal[0], it.meshGlobal[1]) * 0.22 * _cfT.round;
-									mmDrawCoasterCorners(ctx, { x: 0, y: 0, w: it.meshGlobal[0], h: it.meshGlobal[1] }, _crad, it.backgroundColor || '#0a0a0a');
-								}
-								var _cedge = 1 - _cfT.scale;
-								if (_cedge > 0.02) {
-									ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);   // drop the fold -> pure mesh affine for the edge sliver
-									ctx.globalAlpha = _cedge;
-									ctx.fillStyle = mmCoasterColor(stc.effect.params && stc.effect.params.coaster);
-									var _cgw = it.meshGlobal[0], _cgh = it.meshGlobal[1];
-									if ((stc.effect.params && stc.effect.params.axis) === 'vertical') {
-										var _cbt = _cgh * 0.012; ctx.fillRect(0, _cgh / 2 - _cbt / 2, _cgw, _cbt);
-									} else {
-										var _cbw = _cgw * 0.012; ctx.fillRect(_cgw / 2 - _cbw / 2, 0, _cbw, _cgh);
-									}
-									ctx.globalAlpha = 1;
-								}
+							if (stc.effect && stc.effect.name === 'coasterflip' && _cfT && typeof mmDrawCoasterDisc === 'function') {
+								mmDrawCoasterDisc(ctx, { x: 0, y: 0, w: it.meshGlobal[0], h: it.meshGlobal[1] }, _cfT.round, it.backgroundColor || '#0a0a0a');
 							}
 						}
 						ctx.restore();
