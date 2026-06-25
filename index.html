@@ -788,14 +788,23 @@
 							if (stc.effect && stc.effect.name === 'coasterflip' && _cfT) {
 								ctx.globalAlpha = 1;   // mask must be OPAQUE (content drawn dimmed -> no bleed outside the disc)
 								if (typeof mmDrawCoasterDisc === 'function') { mmDrawCoasterDisc(ctx, { x: 0, y: 0, w: it.meshGlobal[0], h: it.meshGlobal[1] }, _cfT.round, it.backgroundColor || '#0a0a0a'); }
-								if (_cfT.scale < 0.2) {   // coaster THICKNESS: thin cardboard edge band (disc-height) only near edge-on
+								if (_cfT.scale < 0.2) {   // coaster THICKNESS: rounded cork edge band, ONLY near edge-on, on the fold axis
+									var _cax2 = (stc.effect.params && stc.effect.params.axis) || 'horizontal';
+									var _cm = Math.min(it.meshGlobal[0], it.meshGlobal[1]), _dD = _cm * 0.9, _cth = _cm * 0.025, _r = _cth / 2, _hh = _dD / 2 - _r;
+									var _pvx = (_cax2 === 'vertical') ? (it.meshGlobal[0] / 2) : (it.meshGlobal[0] / 2 + it.meshGlobal[0] * 0.05);
 									ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+									ctx.translate(_pvx, it.meshGlobal[1] / 2); if (_cfT.wobble) { ctx.rotate(_cfT.wobble); }
 									ctx.globalAlpha = (0.2 - _cfT.scale) / 0.2;
 									ctx.fillStyle = mmCoasterColor(stc.effect.params && stc.effect.params.coaster);
-									var _cm = Math.min(it.meshGlobal[0], it.meshGlobal[1]), _dD = _cm * 0.96, _cth = _cm * 0.016;
-									var _ecx = it.meshGlobal[0] / 2, _ecy = it.meshGlobal[1] / 2;
-									if ((stc.effect.params && stc.effect.params.axis) === 'vertical') { ctx.fillRect(_ecx - _dD / 2, _ecy - _cth / 2, _dD, _cth); }
-									else { ctx.fillRect(_ecx - _cth / 2, _ecy - _dD / 2, _cth, _dD); }
+									if (_cax2 === 'vertical') {
+										ctx.fillRect(-_hh, -_r, 2 * _hh, _cth);
+										ctx.beginPath(); ctx.arc(-_hh, 0, _r, 0, 6.2832); ctx.fill();
+										ctx.beginPath(); ctx.arc(_hh, 0, _r, 0, 6.2832); ctx.fill();
+									} else {
+										ctx.fillRect(-_r, -_hh, _cth, 2 * _hh);
+										ctx.beginPath(); ctx.arc(0, -_hh, _r, 0, 6.2832); ctx.fill();
+										ctx.beginPath(); ctx.arc(0, _hh, _r, 0, 6.2832); ctx.fill();
+									}
 									ctx.globalAlpha = 1;
 								}
 							}
