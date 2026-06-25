@@ -785,8 +785,19 @@
 										(playback.seed | 0), it.backgroundColor || '#000000');
 								}
 							}
-							if (stc.effect && stc.effect.name === 'coasterflip' && _cfT && typeof mmDrawCoasterDisc === 'function') {
-								mmDrawCoasterDisc(ctx, { x: 0, y: 0, w: it.meshGlobal[0], h: it.meshGlobal[1] }, _cfT.round, it.backgroundColor || '#0a0a0a');
+							if (stc.effect && stc.effect.name === 'coasterflip' && _cfT) {
+								ctx.globalAlpha = 1;   // mask must be OPAQUE (content drawn dimmed -> no bleed outside the disc)
+								if (typeof mmDrawCoasterDisc === 'function') { mmDrawCoasterDisc(ctx, { x: 0, y: 0, w: it.meshGlobal[0], h: it.meshGlobal[1] }, _cfT.round, it.backgroundColor || '#0a0a0a'); }
+								if (_cfT.scale < 0.2) {   // coaster THICKNESS: thin cardboard edge band (disc-height) only near edge-on
+									ctx.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+									ctx.globalAlpha = (0.2 - _cfT.scale) / 0.2;
+									ctx.fillStyle = mmCoasterColor(stc.effect.params && stc.effect.params.coaster);
+									var _cm = Math.min(it.meshGlobal[0], it.meshGlobal[1]), _dD = _cm * 0.96, _cth = _cm * 0.016;
+									var _ecx = it.meshGlobal[0] / 2, _ecy = it.meshGlobal[1] / 2;
+									if ((stc.effect.params && stc.effect.params.axis) === 'vertical') { ctx.fillRect(_ecx - _dD / 2, _ecy - _cth / 2, _dD, _cth); }
+									else { ctx.fillRect(_ecx - _cth / 2, _ecy - _dD / 2, _cth, _dD); }
+									ctx.globalAlpha = 1;
+								}
 							}
 						}
 						ctx.restore();
