@@ -548,6 +548,49 @@
     return sign * dist / kegRadius;
   }
 
+  // --- Frost creep (mask family): a spatially-correlated seeded noise field thresholded
+  // by a rising coverage front; soft growing blotches. Pure. ---
+  function mmFrostPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+
+  // blocks*blocks thresholds in [0, 0.98), precomputed: seeded per-cell randoms ->
+  // 2 box-blur passes (4-neighbour avg, edge-clamped) for spatial correlation (frost
+  // PATCHES, not speckle) -> renormalize to [0, 0.98) (strictly < 1 so every cell frosts
+  // before cover hits 1; the consolidation fill then guarantees full opacity). Pure.
+  function mmFrostField(blocks, seed) {
+    var n = blocks * blocks, rnd = _mmLcg(seed >>> 0), raw = [], i, pass, out, r, c, idx, sum, cnt;
+    for (i = 0; i < n; i++) { raw.push(rnd()); }
+    for (pass = 0; pass < 2; pass++) {
+      out = [];
+      for (r = 0; r < blocks; r++) {
+        for (c = 0; c < blocks; c++) {
+          idx = r * blocks + c; sum = raw[idx]; cnt = 1;
+          if (c > 0)          { sum += raw[idx - 1]; cnt++; }
+          if (c < blocks - 1) { sum += raw[idx + 1]; cnt++; }
+          if (r > 0)          { sum += raw[idx - blocks]; cnt++; }
+          if (r < blocks - 1) { sum += raw[idx + blocks]; cnt++; }
+          out.push(sum / cnt);
+        }
+      }
+      raw = out;
+    }
+    var mn = raw[0], mx = raw[0];
+    for (i = 1; i < n; i++) { if (raw[i] < mn) { mn = raw[i]; } if (raw[i] > mx) { mx = raw[i]; } }
+    var span = mx - mn;
+    if (span < 1e-9) { for (i = 0; i < n; i++) { raw[i] = 0; } return raw; }
+    for (i = 0; i < n; i++) { raw[i] = ((raw[i] - mn) / span) * 0.98; }
+    return raw;
+  }
+
+  // Per-cell frost growth from the rising coverage front. on once cover reaches the
+  // cell's threshold; t ramps 0->1 over the `grow` window after crossing. Pure.
+  function mmFrostBlotch(fieldVal, cover, grow) {
+    if (cover < fieldVal) { return { on: false, t: 0 }; }
+    var g = grow > 0 ? grow : 0.25;
+    var t = (cover - fieldVal) / g;
+    if (t < 0) { t = 0; } else if (t > 1) { t = 1; }
+    return { on: true, t: t };
+  }
+
   // Opaque bounding box of an RGBA buffer, as fractions of (w,h). data[i*4+3] is
   // alpha; pixels with alpha > 8 count as opaque. Returns {fracW, fracH} or null
   // (no opaque pixel). Pure — the canvas/getImageData glue lives in mmSpriteFit.
@@ -769,6 +812,9 @@
   root.mmKegCoverRect = mmKegCoverRect;
   root.mmKegPos = mmKegPos;
   root.mmKegAngle = mmKegAngle;
+  root.mmFrostPhase = mmFrostPhase;
+  root.mmFrostField = mmFrostField;
+  root.mmFrostBlotch = mmFrostBlotch;
   root.mmOpaqueBox = mmOpaqueBox;
   root.mmKegFitFactor = mmKegFitFactor;
   root.mmSpriteFit = mmSpriteFit;
