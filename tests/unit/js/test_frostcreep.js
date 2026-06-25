@@ -38,3 +38,25 @@ test('mmFrostBlotch: off below threshold, grows 0->1 above (clamped)', () => {
   b = g.mmFrostBlotch(0.5, 0.625, 0.25); assert.ok(Math.abs(b.t - 0.5) < 1e-9);   // halfway through grow
   b = g.mmFrostBlotch(0.5, 0.95, 0.25);  assert.ok(b.on && Math.abs(b.t - 1) < 1e-9);  // clamped
 });
+
+test('mmTransitionState: frostcreep end=cover (rises), start=reveal (mask family)', () => {
+  const S = g.mmTransitionState;
+  const end = { name: 'frostcreep', params: { duration: 2000, scope: 'wall' } };
+  // end window [4000,6000]; offset 4500 -> p=(6000-4500)/2000=0.75 -> flp=1-p=0.25 -> cover=0.25
+  let st = S(null, end, 4500, 6000, null, null);
+  assert.equal(st.role, 'out');
+  assert.equal(st.effect.name, 'frostcreep');
+  assert.equal(st.effect.family, 'mask');
+  assert.equal(st.effect.phase, 'cover');
+  assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);
+  assert.equal(st.effect.scope, 'wall');
+  // later in the window -> MORE frost (rises): offset 5500 -> p=0.25 -> flp=0.75 -> cover=0.75
+  st = S(null, end, 5500, 6000, null, null);
+  assert.ok(Math.abs(st.effect.front - 0.75) < 1e-9);
+  // start role (reveal): offset 500 -> p=0.25 -> flp=0.25 -> cover=1-0.25=0.75
+  const start = { name: 'frostcreep', params: { duration: 2000 } };
+  st = S(start, null, 500, 6000, null, null);
+  assert.equal(st.effect.phase, 'reveal');
+  assert.ok(Math.abs(st.effect.front - 0.75) < 1e-9);
+  assert.equal(st.effect.scope, 'wall');     // default
+});

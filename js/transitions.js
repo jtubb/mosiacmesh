@@ -145,6 +145,15 @@
                effect: { name: 'kegroll', family: 'mask', front: kglp,
                          scope: kgsc, params: eff.params || {}, phase: mmKegPhase(role) } };
     }
+    if (eff.name === 'frostcreep') {
+      var frsc = (eff.params && eff.params.scope) || 'wall';
+      var frlp = (role === 'out') ? (1 - p) : p;       // LOCAL phase progress 0->1
+      var frph = mmFrostPhase(role);
+      var frcov = (frph === 'cover') ? frlp : (1 - frlp);   // coverage front: cover rises, reveal falls
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'frostcreep', family: 'mask', front: frcov,
+                         scope: frsc, params: eff.params || {}, phase: frph } };
+    }
     if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
       var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
       var esc = (eff.params && eff.params.scope) || 'wall';
