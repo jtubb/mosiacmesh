@@ -64,3 +64,21 @@ test('mmKegAngle: physical roll = dist/radius, sign per direction', () => {
   let prev = -1;
   for (let i = 0; i <= 10; i++) { const a = g.mmKegAngle(i * 50, 100, 'right'); assert.ok(a >= prev - 1e-9); prev = a; }
 });
+
+test('mmTransitionState: kegroll end=cover, start=reveal (mask family)', () => {
+  const S = g.mmTransitionState;
+  const end = { name: 'kegroll', params: { duration: 2000, scope: 'wall', direction: 'right' } };
+  // offset 4500 of 6000, ed=2000 -> raw p=(6000-4500)/2000=0.75 -> front=1-0.75=0.25
+  let st = S(null, end, 4500, 6000, null, null);
+  assert.equal(st.role, 'out');
+  assert.equal(st.effect.name, 'kegroll');
+  assert.equal(st.effect.family, 'mask');
+  assert.equal(st.effect.phase, 'cover');
+  assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);     // local progress, not raw p
+  assert.equal(st.effect.scope, 'wall');
+  const start = { name: 'kegroll', params: { duration: 2000 } };
+  st = S(start, null, 500, 6000, null, null);             // in-window: raw p=0.25, front=0.25
+  assert.equal(st.effect.phase, 'reveal');
+  assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);
+  assert.equal(st.effect.scope, 'wall');                  // default when param omitted
+});

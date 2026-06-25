@@ -132,6 +132,15 @@
                effect: { name: 'scatter', family: 'mask', front: slp,
                          scope: ssc, params: eff.params || {}, phase: mmScatterPhase(role) } };
     }
+    if (eff.name === 'kegroll') {
+      var kgsc = (eff.params && eff.params.scope) || 'wall';
+      // front = LOCAL phase progress 0->1 (like scatter): `p` counts DOWN on the
+      // 'out' window (1->0), so invert there; 'in' already counts up.
+      var kglp = (role === 'out') ? (1 - p) : p;
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'kegroll', family: 'mask', front: kglp,
+                         scope: kgsc, params: eff.params || {}, phase: mmKegPhase(role) } };
+    }
     if (eff.name === 'slide' || eff.name === 'zoom' || eff.name === 'iris' || eff.name === 'dissolve') {
       var fam = (eff.name === 'iris' || eff.name === 'dissolve') ? 'mask' : 'transform';
       var esc = (eff.params && eff.params.scope) || 'wall';
