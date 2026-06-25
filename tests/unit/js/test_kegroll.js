@@ -82,3 +82,35 @@ test('mmTransitionState: kegroll end=cover, start=reveal (mask family)', () => {
   assert.ok(Math.abs(st.effect.front - 0.25) < 1e-9);
   assert.equal(st.effect.scope, 'wall');                  // default when param omitted
 });
+
+function recCtxKeg() {
+  return { rects: [], imgs: 0, fillStyle: '#000',
+    save(){}, restore(){}, translate(){}, rotate(){}, scale(){}, setTransform(){},
+    beginPath(){}, arc(){}, fill(){},
+    fillRect(x, y, w, h){ this.rects.push({ x, y, w, h }); },
+    drawImage(){ this.imgs++; } };
+}
+const kegImg = { width: 120, height: 120 };   // "loaded"
+const kegNoImg = { width: 0, height: 0 };      // not decoded yet
+
+test('mmDrawKegRoll: cover only (no stamp) when sprite not decoded', () => {
+  const c = recCtxKeg();
+  g.mmDrawKegRoll(c, { direction: 'right' }, 'cover', 0.5, 300, 200, null, 'wall', kegNoImg, '#3a241a');
+  assert.equal(c.imgs, 0);            // no keg stamp
+  assert.equal(c.rects.length, 1);    // cover rect drawn
+  assert.deepEqual(c.rects[0], { x: 0, y: 0, w: 150, h: 200 });
+});
+
+test('mmDrawKegRoll: draws cover + keg stamp when loaded', () => {
+  const c = recCtxKeg();
+  g.mmDrawKegRoll(c, { direction: 'right' }, 'cover', 0.5, 300, 200, null, 'wall', kegImg, '#3a241a');
+  assert.equal(c.rects.length, 1);    // cover
+  assert.equal(c.imgs, 1);            // keg stamped (no viewport -> never culled)
+});
+
+test('mmDrawKegRoll: no cover rect at cover-phase start, still stamps keg', () => {
+  const c = recCtxKeg();
+  g.mmDrawKegRoll(c, { direction: 'right' }, 'cover', 0, 300, 200, null, 'wall', kegImg, '#3a241a');
+  assert.equal(c.rects.length, 0);    // nothing covered at prog 0
+  assert.equal(c.imgs, 1);            // keg present (rolling in from off-edge)
+});

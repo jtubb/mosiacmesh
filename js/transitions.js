@@ -590,6 +590,26 @@
     if (_dbg) { root._mmScatterStat = { drawn: _drawn, culled: _culled, total: count, giant: !!_gdrew }; }
   }
 
+  // Draw the keg-roll cover: a directional cover rect (item bg) + the giant rolling
+  // keg sprite at the boundary. fillRect + (culled) drawImage only; no clip/composite.
+  // Cover-only (graceful plain wipe) until the keg PNG decodes. Mirrors mmDrawScatter
+  // (minus the seed arg). ctx is already under the mesh affine (in-canvas) or the
+  // overlay matrix, so everything is drawn in GLOBAL coords -> wall-coherent.
+  function mmDrawKegRoll(ctx, params, phase, prog, GW, GH, quad, scope, img, bg, canvasW, canvasH) {
+    var vp = (quad && typeof mmMeshViewport === 'function')
+      ? mmMeshViewport(quad, GW, GH, canvasW, canvasH) : null;
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var dir = (params && params.direction) || 'right';
+    var horiz = (dir === 'left' || dir === 'right');
+    var kegD = horiz ? reg.h : reg.w;             // giant roller: diameter = perpendicular dim
+    var rect = mmKegCoverRect(prog, dir, phase, reg);
+    if (rect) { ctx.fillStyle = bg || '#000000'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h); }
+    if (!img || !img.width) { return; }            // sprite not decoded -> cover only (plain wipe)
+    var pos = mmKegPos(prog, dir, reg, kegD);
+    var ang = mmKegAngle(pos.dist, kegD / 2, dir);
+    mmStampSprite(ctx, vp, img, pos.cx, pos.cy, kegD, ang);   // globalSize (height) = kegD
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -621,6 +641,7 @@
   root.mmScatterSpriteUrl = mmScatterSpriteUrl;
   root.mmScatterDiscCase = mmScatterDiscCase;
   root.mmDrawScatter = mmDrawScatter;
+  root.mmDrawKegRoll = mmDrawKegRoll;
   root.mmKegPhase = mmKegPhase;
   root.mmKegCoverRect = mmKegCoverRect;
   root.mmKegPos = mmKegPos;
