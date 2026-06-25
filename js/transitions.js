@@ -370,62 +370,74 @@
     if (lv <= 0) { return; }
     var pal = mmBeerPalette(params && params.beerType);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
-    var beerH = lv * reg.h, bottom = reg.y + reg.h, surfaceY = bottom - beerH;
-    var ts = t * 0.001;   // ms -> s-ish for wave/bubble motion
+    var bottom = reg.y + reg.h, ts = t * 0.001;   // ms -> s-ish for wave/bubble motion
 
-    // beer body (vertical gradient)
-    var g = ctx.createLinearGradient(0, surfaceY, 0, bottom);
-    g.addColorStop(0, pal.beerTop); g.addColorStop(1, pal.beerBot);
-    ctx.fillStyle = g; ctx.fillRect(reg.x, surfaceY, reg.w, beerH);
-
-    // rising carbonation bubbles inside the beer (seeded; identical across screens for
-    // a wall). Radii are REGION-RELATIVE: the beer is drawn in large global mesh px, so
-    // an absolute 1-3px radius would warp to a sub-pixel speck on each screen (invisible).
-    var bubs = mmBeerBubbles(seed >>> 0, pal.bubbleDensity), i, by;
-    var bubBase = reg.h * 0.0045;          // beer-bubble size unit (r 1..3.4 -> ~0.45-1.5% of wall height)
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    for (i = 0; i < bubs.length; i++) {
-      by = bottom - (((bubs[i].phase + ts * bubs[i].spd * 0.35) % 1) * beerH);
-      if (by < surfaceY + bubBase * 2) { continue; }
-      ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r * bubBase, 0, 6.2832); ctx.fill();
-    }
-
-    // foam head with a wavy top edge (one polyline path). Vertical gradient from a
-    // bright crest (foamTop) down to a shadowed base (foamBot) gives the head depth.
-    var fh = reg.h * pal.headH, topBase = surfaceY - fh;
-    var amp = fh * 0.4 < 2.5 ? 2.5 : fh * 0.4, steps = 60, s, sx;
-    var fg = ctx.createLinearGradient(0, topBase - amp, 0, surfaceY);
-    fg.addColorStop(0, pal.foamTop || pal.foam);
-    fg.addColorStop(1, pal.foamBot || pal.foam);
-    ctx.fillStyle = fg;
-    ctx.beginPath(); ctx.moveTo(reg.x, surfaceY + 2); ctx.lineTo(reg.x, topBase);
-    for (s = 0; s <= steps; s++) {
-      sx = s / steps;
-      ctx.lineTo(reg.x + sx * reg.w, mmFoamWaveY(sx, ts, amp, topBase));
-    }
-    ctx.lineTo(reg.x + reg.w, surfaceY + 2); ctx.closePath(); ctx.fill();
-    // soft shadow band where foam meets beer -> separates the layers for depth
-    ctx.fillStyle = 'rgba(90,55,15,0.20)';
-    ctx.fillRect(reg.x, surfaceY - fh * 0.12, reg.w, fh * 0.12);
-
-    // scattered foam bubbles (radii relative to the foam-band height)
-    var fbs = mmFoamBubbles(seed >>> 0, pal.foamBubbles), k, f, fbubBase = fh * 0.07;
-    for (k = 0; k < fbs.length; k++) {
-      f = fbs[k];
-      ctx.fillStyle = 'rgba(255,255,255,' + f.a + ')';
-      ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r * fbubBase, 0, 6.2832); ctx.fill();
-    }
-
-    // pour stream from the region top (fill phase only) -> reaches the BEER SURFACE
-    // (through the foam) so it never cuts off above the foam. Drawn last (on top), with
-    // a foam splash where it lands.
+    // FILL has a pour LEAD-IN: for the first POUR_FRAC of the phase the stream falls
+    // from the top to the bottom and the beer hasn't started rising; after that the
+    // beer rises 0->1. DRAIN uses lv directly as the remaining level (no lead-in, no
+    // pour). streamTipY = where the stream's leading edge currently is.
+    var POUR_FRAC = 0.20, bodyLv = lv, streamTipY = bottom;
     if (phase === 'fill') {
-      var pw = reg.w * 0.10, px = reg.x + reg.w / 2, ph = surfaceY - reg.y;
+      if (lv < POUR_FRAC) { bodyLv = 0; streamTipY = reg.y + (lv / POUR_FRAC) * reg.h; }
+      else { bodyLv = (lv - POUR_FRAC) / (1 - POUR_FRAC); }
+    }
+    var beerH = bodyLv * reg.h, surfaceY = bottom - beerH;
+    var fh = reg.h * pal.headH, topBase = surfaceY - fh;
+    if (phase === 'fill' && lv >= POUR_FRAC) { streamTipY = surfaceY; }
+
+    // pour stream (fill only) -> drawn BEFORE the foam so the foam overlays where the
+    // stream enters (the splash sits BEHIND the foam, not awkwardly on top). The stream
+    // falls from the top to its tip: descending during the lead-in, then the beer surface.
+    if (phase === 'fill') {
+      var pw = reg.w * 0.10, px = reg.x + reg.w / 2, ph = streamTipY - reg.y;
       if (ph < 0) { ph = 0; }
       ctx.fillStyle = pal.beerTop; ctx.fillRect(px - pw / 2, reg.y, pw, ph);
       ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(px - pw * 0.18, reg.y, pw * 0.36, ph);
-      ctx.fillStyle = pal.foamTop || pal.foam;
-      ctx.beginPath(); ctx.arc(px, surfaceY, pw * 0.7, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = pal.foamTop || pal.foam;   // splash/leading droplet (hidden by foam once filling)
+      ctx.beginPath(); ctx.arc(px, streamTipY, pw * 0.7, 0, 6.2832); ctx.fill();
+    }
+
+    if (bodyLv > 0) {
+      // beer body (vertical gradient)
+      var g = ctx.createLinearGradient(0, surfaceY, 0, bottom);
+      g.addColorStop(0, pal.beerTop); g.addColorStop(1, pal.beerBot);
+      ctx.fillStyle = g; ctx.fillRect(reg.x, surfaceY, reg.w, beerH);
+
+      // rising carbonation bubbles (seeded -> identical across screens for a wall). Radii
+      // are REGION-RELATIVE: an absolute 1-3px radius would warp to a sub-pixel speck.
+      var bubs = mmBeerBubbles(seed >>> 0, pal.bubbleDensity), i, by;
+      var bubBase = reg.h * 0.0045;          // beer-bubble size unit (r 1..3.4 -> ~0.45-1.5% of wall height)
+      ctx.fillStyle = 'rgba(255,255,255,0.6)';
+      for (i = 0; i < bubs.length; i++) {
+        by = bottom - (((bubs[i].phase + ts * bubs[i].spd * 0.35) % 1) * beerH);
+        if (by < surfaceY + bubBase * 2) { continue; }
+        ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r * bubBase, 0, 6.2832); ctx.fill();
+      }
+
+      // foam head, wavy top, foamTop->foamBot gradient for depth. Drawn OVER the pour
+      // stream so the stream visibly enters the foam.
+      var amp = fh * 0.4 < 2.5 ? 2.5 : fh * 0.4, steps = 60, s, sx;
+      var fg = ctx.createLinearGradient(0, topBase - amp, 0, surfaceY);
+      fg.addColorStop(0, pal.foamTop || pal.foam);
+      fg.addColorStop(1, pal.foamBot || pal.foam);
+      ctx.fillStyle = fg;
+      ctx.beginPath(); ctx.moveTo(reg.x, surfaceY + 2); ctx.lineTo(reg.x, topBase);
+      for (s = 0; s <= steps; s++) {
+        sx = s / steps;
+        ctx.lineTo(reg.x + sx * reg.w, mmFoamWaveY(sx, ts, amp, topBase));
+      }
+      ctx.lineTo(reg.x + reg.w, surfaceY + 2); ctx.closePath(); ctx.fill();
+      // soft shadow band where foam meets beer -> separates the layers for depth
+      ctx.fillStyle = 'rgba(90,55,15,0.20)';
+      ctx.fillRect(reg.x, surfaceY - fh * 0.12, reg.w, fh * 0.12);
+
+      // scattered foam bubbles (radii relative to the foam-band height)
+      var fbs = mmFoamBubbles(seed >>> 0, pal.foamBubbles), k, f, fbubBase = fh * 0.07;
+      for (k = 0; k < fbs.length; k++) {
+        f = fbs[k];
+        ctx.fillStyle = 'rgba(255,255,255,' + f.a + ')';
+        ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r * fbubBase, 0, 6.2832); ctx.fill();
+      }
     }
   }
 

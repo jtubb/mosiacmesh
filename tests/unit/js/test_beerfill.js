@@ -127,15 +127,27 @@ test('mmDrawBeer: level 0 draws nothing', () => {
   assert.equal(c.rects.length, 0);
 });
 
-test('mmDrawBeer: fill draws beer body covering bottom level fraction + pour', () => {
+test('mmDrawBeer: fill past the 20% pour lead-in draws beer body + pour + bubbles', () => {
   const c = recCtx();
-  Beer(c, { beerType: 'pale' }, 'fill', 0.5, 0, 300, 200, null, 'wall', 1);
-  // beer body: a rect whose top is at y=100 (half of 200), height ~100
+  Beer(c, { beerType: 'pale' }, 'fill', 0.6, 0, 300, 200, null, 'wall', 1);
+  // pour lead-in is the first 20%: beer-body fraction = (0.6-0.2)/0.8 = 0.5
+  // -> body top at y=100 (half of 200), height ~100
   const body = c.rects.find(r => Math.abs(r.y - 100) < 1 && Math.abs(r.h - 100) < 1 && r.w === 300);
   assert.ok(body, 'beer body rect present');
   // pour stream present in fill phase: a narrow rect starting at region top (y=0)
   assert.ok(c.rects.some(r => r.y === 0 && r.w < 300 * 0.5), 'pour stream present');
   assert.ok(c.arcs > 0, 'bubbles drawn');
+});
+
+test('mmDrawBeer: fill lead-in pours top-down with no beer body yet', () => {
+  const c = recCtx();
+  Beer(c, { beerType: 'pale' }, 'fill', 0.1, 0, 300, 200, null, 'wall', 1);   // 0.1 < 0.2 lead-in
+  // beer hasn't started rising -> no full-width beer-body / foam-shadow rect
+  assert.ok(!c.rects.some(r => r.w === 300), 'no beer body during the pour lead-in');
+  // the pour stream is descending from the top; tip ~ (0.1/0.2)=0.5 down -> height ~100 of 200
+  const stream = c.rects.find(r => r.y === 0 && r.w < 300 * 0.5);
+  assert.ok(stream, 'descending pour stream present');
+  assert.ok(Math.abs(stream.h - 100) < 2, 'stream tip about halfway down');
 });
 
 test('mmDrawBeer: drain phase draws no pour stream', () => {
