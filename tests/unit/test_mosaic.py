@@ -944,6 +944,17 @@ class TestEffectRenderHook:
         t2 = server.compute_render_token("Default")
         assert t1 == t2, "visual-only param changes should not invalidate the render token"
 
+    def test_token_unchanged_by_kegroll_visual_param_change(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "kegroll", "params": {"sprite": "keg", "direction": "right",
+                                                        "scope": "wall", "duration": 2000, "audioFade": True}}
+        t1 = server.compute_render_token("Default")
+        # Change only visual params (sprite and direction); audioFade and duration remain unchanged.
+        me.startEffect = {"name": "kegroll", "params": {"sprite": "bottlecap", "direction": "left",
+                                                        "scope": "wall", "duration": 2000, "audioFade": True}}
+        t2 = server.compute_render_token("Default")
+        assert t1 == t2, "kegroll visual-only param changes should not invalidate the render token"
+
     def test_token_changes_when_audioFade_toggled(self, mock_settings):
         me = self._token_setup(mock_settings)
         me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": True}}
