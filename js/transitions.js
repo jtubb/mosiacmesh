@@ -503,6 +503,37 @@
     return sign * dist / kegRadius;
   }
 
+  // Opaque bounding box of an RGBA buffer, as fractions of (w,h). data[i*4+3] is
+  // alpha; pixels with alpha > 8 count as opaque. Returns {fracW, fracH} or null
+  // (no opaque pixel). Pure — the canvas/getImageData glue lives in mmSpriteFit.
+  function mmOpaqueBox(data, w, h) {
+    var minx = w, miny = h, maxx = -1, maxy = -1, x, y, a;
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        a = data[(y * w + x) * 4 + 3];
+        if (a > 8) {
+          if (x < minx) { minx = x; }
+          if (x > maxx) { maxx = x; }
+          if (y < miny) { miny = y; }
+          if (y > maxy) { maxy = y; }
+        }
+      }
+    }
+    if (maxx < 0) { return null; }                 // fully transparent
+    return { fracW: (maxx - minx + 1) / w, fracH: (maxy - miny + 1) / h };
+  }
+
+  // kegD/P multiplier so the SMALLEST opaque dimension lands on the mesh perp dim P.
+  // mmStampSprite scales uniformly by globalSize/ih, so after stamping the opaque
+  // height is fracH*kegD and width is fracW*iw*kegD/ih; setting their min to P gives
+  // kegD = P / min(fracH, fracW*iw/ih). Null/degenerate box -> 1 (full-bleed). Pure.
+  function mmKegFitFactor(box, iw, ih) {
+    if (!box || !(ih > 0) || !(iw > 0)) { return 1; }
+    var wTerm = box.fracW * iw / ih, hTerm = box.fracH;
+    var m = wTerm < hTerm ? wTerm : hTerm;
+    return (m > 1e-6) ? (1 / m) : 1;
+  }
+
   // Pre-bake a sprite into `buckets` pre-rotated, downscaled canvases. On the
   // iPad-1, drawImage is the cheap path but per-frame rotate + resample-from-a-
   // large-source is not — so we do the rotate + downscale ONCE here and stamp
@@ -668,4 +699,6 @@
   root.mmKegCoverRect = mmKegCoverRect;
   root.mmKegPos = mmKegPos;
   root.mmKegAngle = mmKegAngle;
+  root.mmOpaqueBox = mmOpaqueBox;
+  root.mmKegFitFactor = mmKegFitFactor;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

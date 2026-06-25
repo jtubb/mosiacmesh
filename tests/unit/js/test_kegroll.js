@@ -127,3 +127,44 @@ test('mmDrawKegRoll: no cover rect at cover-phase start, still stamps keg', () =
   assert.equal(c.rects.length, 0);    // nothing covered at prog 0
   assert.equal(c.imgs, 1);            // keg present (rolling in from off-edge)
 });
+
+// --- auto-fill: opaque bbox + fit factor (pure) ---
+// Build RGBA bytes for a w x h image with an opaque rect [x0,x1) x [y0,y1).
+function rgbaWithBox(w, h, x0, y0, x1, y1) {
+  const d = new Uint8ClampedArray(w * h * 4);   // all transparent (alpha 0)
+  for (let y = y0; y < y1; y++) {
+    for (let x = x0; x < x1; x++) {
+      d[(y * w + x) * 4 + 3] = 255;             // opaque alpha
+    }
+  }
+  return d;
+}
+
+test('mmOpaqueBox: tight fractions of the opaque region', () => {
+  // 10x10 image, opaque 4x6 block at (2,1)..(6,7) -> fracW=4/10, fracH=6/10
+  const d = rgbaWithBox(10, 10, 2, 1, 6, 7);
+  const b = g.mmOpaqueBox(d, 10, 10);
+  assert.ok(Math.abs(b.fracW - 0.4) < 1e-9);
+  assert.ok(Math.abs(b.fracH - 0.6) < 1e-9);
+});
+
+test('mmOpaqueBox: ignores sub-threshold alpha, null when fully transparent', () => {
+  const d = new Uint8ClampedArray(4 * 4 * 4);
+  d[3] = 8;                                       // exactly threshold -> NOT counted (> 8)
+  assert.equal(g.mmOpaqueBox(d, 4, 4), null);
+  d[3] = 9;                                       // just over -> a 1x1 box at (0,0)
+  const b = g.mmOpaqueBox(d, 4, 4);
+  assert.ok(Math.abs(b.fracW - 0.25) < 1e-9 && Math.abs(b.fracH - 0.25) < 1e-9);
+});
+
+test('mmKegFitFactor: smallest opaque dim scales to P', () => {
+  // square sprite (iw=ih), opaque 0.5 x 0.8 -> min(0.8, 0.5) = 0.5 -> F = 2
+  assert.ok(Math.abs(g.mmKegFitFactor({ fracW: 0.5, fracH: 0.8 }, 100, 100) - 2) < 1e-9);
+  // full-bleed square -> min(1,1)=1 -> F=1
+  assert.ok(Math.abs(g.mmKegFitFactor({ fracW: 1, fracH: 1 }, 100, 100) - 1) < 1e-9);
+  // wide sprite iw=200 ih=100, opaque fracW=0.5 fracH=1 -> width term=0.5*200/100=1.0,
+  //   min(1.0, 1.0)=1.0 -> F=1
+  assert.ok(Math.abs(g.mmKegFitFactor({ fracW: 0.5, fracH: 1 }, 200, 100) - 1) < 1e-9);
+  // null/degenerate -> 1
+  assert.equal(g.mmKegFitFactor(null, 100, 100), 1);
+});
