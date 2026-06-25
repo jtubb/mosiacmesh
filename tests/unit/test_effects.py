@@ -11,7 +11,8 @@ def test_get_effect_unknown_returns_none():
 
 def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
-    assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve", "beerfill", "scatter"}
+    assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve",
+                     "beerfill", "scatter", "kegroll"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -161,3 +162,30 @@ def test_scatter_audio_uses_fillMs_on_end_drainMs_on_start():
     assert v == [] and a == ["afade=t=in:st=0:d=2"]
     v2, a2 = sc.video_filters("end", sc.resolve({"fillMs": 1500, "audioFade": True}), ctx)
     assert v2 == [] and a2 == ["afade=t=out:st=4.5:d=1.5"]
+
+
+def test_catalog_includes_kegroll():
+    names = {e["name"] for e in effects.effect_catalog()}
+    assert "kegroll" in names
+
+
+def test_kegroll_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "kegroll")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["sprite"]["type"] == "string" and by["sprite"]["default"] == "keg"
+    assert by["direction"]["choices"] == ["left", "right", "up", "down"]
+    assert by["direction"]["default"] == "right"
+    assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
+    assert by["duration"]["type"] == "number" and by["duration"]["default"] == 2000
+    assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
+
+
+def test_kegroll_audio_single_duration_role_aware():
+    kr = effects.get_effect("kegroll")
+    ctx = {"duration_ms": 6000}
+    v, a = kr.video_filters("start", kr.resolve({"duration": 2000, "audioFade": True}), ctx)
+    assert v == [] and a == ["afade=t=in:st=0:d=2"]
+    v2, a2 = kr.video_filters("end", kr.resolve({"duration": 2000, "audioFade": True}), ctx)
+    assert v2 == [] and a2 == ["afade=t=out:st=4:d=2"]
+    v3, a3 = kr.video_filters("end", kr.resolve({"duration": 2000, "audioFade": False}), ctx)
+    assert v3 == [] and a3 == []

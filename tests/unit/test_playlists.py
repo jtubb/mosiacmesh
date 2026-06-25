@@ -337,6 +337,7 @@ class TestEffectsApi:
         resp = await server.api_effects(make_mocked_request('GET', '/api/effects'))
         data = json.loads(resp.text)
         names = {e["name"] for e in data["effects"]}
-        assert {"fade", "wipe", "slide", "zoom", "iris", "dissolve", "beerfill", "scatter"} == names
+        assert {"fade", "wipe", "slide", "zoom", "iris", "dissolve",
+                "beerfill", "scatter", "kegroll"} == names
         fade = next(e for e in data["effects"] if e["name"] == "fade")
         assert fade["params"][0]["key"] == "duration"

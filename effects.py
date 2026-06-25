@@ -222,3 +222,17 @@ class ScatterEffect(Effect):
         p = dict(params)
         p["duration"] = dur
         return ([], _afade(role, p, ctx))
+
+
+@register
+class KegRollEffect(Effect):
+    name = "kegroll"
+    label = "Keg Roll"
+    params = [ParamSpec("sprite", "string", "keg"),
+              ParamSpec("direction", "choice", "right", choices=["left", "right", "up", "down"]),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 2000, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))     # visual roll is client-side
