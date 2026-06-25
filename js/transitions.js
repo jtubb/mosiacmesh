@@ -534,6 +534,29 @@
     return (m > 1e-6) ? (1 / m) : 1;
   }
 
+  // Measure a sprite's opaque-content fit factor ONCE (memoized on img._mmKegFit).
+  // Downsamples to <=64px on an offscreen canvas, reads alpha via getImageData, and
+  // computes mmKegFitFactor. Returns null when measurement isn't possible (no canvas
+  // API, undecoded image, or a security/getImageData error) so callers fall back.
+  function mmSpriteFit(img) {
+    if (!img || !img.width || !img.height) { return null; }
+    if (img._mmKegFit != null) { return img._mmKegFit; }
+    if (typeof document === 'undefined' || !document.createElement) { return null; }
+    var iw = img.width, ih = img.height;
+    var s = 64 / (iw > ih ? iw : ih); if (s > 1) { s = 1; }
+    var sw = Math.max(1, Math.round(iw * s)), sh = Math.max(1, Math.round(ih * s));
+    try {
+      var cv = document.createElement('canvas'); cv.width = sw; cv.height = sh;
+      var cx = cv.getContext('2d');
+      cx.drawImage(img, 0, 0, sw, sh);
+      var id = cx.getImageData(0, 0, sw, sh);
+      var box = mmOpaqueBox(id.data, sw, sh);
+      var f = mmKegFitFactor(box, iw, ih);
+      img._mmKegFit = f;
+      return f;
+    } catch (e) { return null; }                   // tainted canvas / no data -> fall back
+  }
+
   // Pre-bake a sprite into `buckets` pre-rotated, downscaled canvases. On the
   // iPad-1, drawImage is the cheap path but per-frame rotate + resample-from-a-
   // large-source is not — so we do the rotate + downscale ONCE here and stamp
@@ -648,13 +671,13 @@
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     var dir = (params && params.direction) || 'right';
     var horiz = (dir === 'left' || dir === 'right');
-    // Giant roller sized OVER the perpendicular dim: the cover's leading edge is a
-    // straight full-height line but the keg is round (and the PNG has transparent
-    // padding), so a keg exactly = the perpendicular dim leaves the edge peeking past
-    // the curve near the top/bottom. kfill > 1 overhangs so the opaque body spans the
-    // whole edge through the bulk of the roll. ?kgfill=N tunes it live (no redeploy).
-    var kfill = (root._mmKegFill != null) ? root._mmKegFill : 1.3;
-    var kegD = (horiz ? reg.h : reg.w) * kfill;
+    // Auto-fit: size the keg so its SMALLEST opaque dimension lands on the mesh perp
+    // dim (covers the straight cover edge for any sprite/padding). Falls back to 1.3
+    // until the sprite is measured/decoded. ?kgfill=N is an optional fine-tune mult.
+    var auto = (typeof mmSpriteFit === 'function') ? mmSpriteFit(img) : null;
+    var base = (auto != null) ? auto : 1.3;
+    var fudge = (root._mmKegFill != null) ? root._mmKegFill : 1.0;
+    var kegD = (horiz ? reg.h : reg.w) * base * fudge;
     var rect = mmKegCoverRect(prog, dir, phase, reg, kegD);   // same kegD -> edge tracks the keg
     if (rect) { ctx.fillStyle = bg || '#000000'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h); }
     if (!img || !img.width) { return; }            // sprite not decoded -> cover only (plain wipe)
@@ -701,4 +724,5 @@
   root.mmKegAngle = mmKegAngle;
   root.mmOpaqueBox = mmOpaqueBox;
   root.mmKegFitFactor = mmKegFitFactor;
+  root.mmSpriteFit = mmSpriteFit;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

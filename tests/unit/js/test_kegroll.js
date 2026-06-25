@@ -168,3 +168,49 @@ test('mmKegFitFactor: smallest opaque dim scales to P', () => {
   // null/degenerate -> 1
   assert.equal(g.mmKegFitFactor(null, 100, 100), 1);
 });
+
+// mmSpriteFit: measures opaque box on an offscreen canvas, memoizes, falls back.
+// Fake a document whose canvas getImageData returns a known opaque-center block.
+function withFakeDocFit(opaqueFrac, fn) {
+  const prev = globalThis.document;
+  globalThis.document = { createElement() {
+    return {
+      width: 0, height: 0,
+      getContext() {
+        return {
+          drawImage() {},
+          getImageData(x, y, w, h) {
+            // opaque centered block of size opaqueFrac in both axes
+            const d = new Uint8ClampedArray(w * h * 4);
+            const bx = Math.round(w * (1 - opaqueFrac) / 2), ex = w - bx;
+            const by = Math.round(h * (1 - opaqueFrac) / 2), ey = h - by;
+            for (let yy = by; yy < ey; yy++) for (let xx = bx; xx < ex; xx++) d[(yy * w + xx) * 4 + 3] = 255;
+            return { data: d, width: w, height: h };
+          }
+        };
+      }
+    };
+  } };
+  try { return fn(); } finally {
+    if (prev === undefined) delete globalThis.document; else globalThis.document = prev;
+  }
+}
+
+test('mmSpriteFit: square sprite, opaque half -> factor ~2, memoized', () => {
+  withFakeDocFit(0.5, () => {
+    const img = { width: 100, height: 100 };
+    const f = g.mmSpriteFit(img);
+    assert.ok(Math.abs(f - 2) < 0.1);             // min opaque ~0.5 -> ~2x
+    assert.ok(Math.abs(img._mmKegFit - f) < 1e-9); // memoized on the image
+  });
+});
+
+test('mmSpriteFit: null when no canvas API (node fallback path)', () => {
+  const prev = globalThis.document; delete globalThis.document;
+  try { assert.equal(g.mmSpriteFit({ width: 100, height: 100 }), null); }
+  finally { if (prev !== undefined) globalThis.document = prev; }
+});
+
+test('mmSpriteFit: null for an undecoded image (width 0)', () => {
+  withFakeDocFit(0.5, () => { assert.equal(g.mmSpriteFit({ width: 0, height: 0 }), null); });
+});
