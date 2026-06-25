@@ -75,6 +75,21 @@ test('mmTransitionState: beerfill end-role = fill phase, level rises', () => {
   assert.equal(st.effect.scope, 'wall');
 });
 
+test('mmTransitionState: beerfill fill level RISES bottom-up over the window', () => {
+  // The midpoint test above can't see direction (1-p == p at 0.5). Check non-midpoint
+  // offsets: as the item nears its end (offset grows toward duration), the fill level
+  // must INCREASE 0->1 (beer rises). The pre-fix code fed raw p (1->0 on the out role),
+  // so it fell 1->0 here (beer receded top->bottom). Falsifiable against that bug.
+  const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000, scope: 'wall' } };
+  // window = [4000, 6000]. early (offset 4500): p=0.75 -> level 1-0.75 = 0.25
+  const early = State(null, end, 4500, 6000, null, null);
+  // late (offset 5500): p=0.25 -> level 1-0.25 = 0.75
+  const late = State(null, end, 5500, 6000, null, null);
+  assert.ok(Math.abs(early.effect.front - 0.25) < 1e-9);   // near-empty early in the fill
+  assert.ok(Math.abs(late.effect.front - 0.75) < 1e-9);    // near-full late in the fill
+  assert.ok(late.effect.front > early.effect.front);       // rises, not falls
+});
+
 test('mmTransitionState: beerfill start-role = drain phase, level falls', () => {
   const start = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000 } };
   // offset 500 -> p=0.25 into drain -> level 1-0.25 = 0.75

@@ -119,8 +119,12 @@
     if (eff.name === 'beerfill') {
       var bsc = (eff.params && eff.params.scope) || 'wall';
       var phase = mmBeerPhase(role === 'out' ? 'out' : 'in');
+      // front = LOCAL phase progress 0->1 (like scatter): `p` counts DOWN on the 'out'
+      // window (1->0), so invert there. Without this the fill level fell 1->0 and the
+      // beer receded top->bottom instead of rising bottom->top.
+      var blp = (role === 'out') ? (1 - p) : p;
       return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'beerfill', family: 'mask', front: mmBeerLevel(phase, p),
+               effect: { name: 'beerfill', family: 'mask', front: mmBeerLevel(phase, blp),
                          scope: bsc, params: eff.params || {}, phase: phase } };
     }
     if (eff.name === 'scatter') {
