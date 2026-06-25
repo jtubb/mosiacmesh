@@ -957,12 +957,12 @@ class TestEffectRenderHook:
 
     def test_token_unchanged_by_frostcreep_visual_param_change(self, mock_settings):
         me = self._token_setup(mock_settings)
-        me.startEffect = {"name": "frostcreep", "params": {"tint": "frost", "scope": "wall",
-                                                           "duration": 2200, "audioFade": True}}
+        me.startEffect = {"name": "frostcreep", "params": {"tint": "frost", "sprite": "frostymug",
+                                                           "scope": "wall", "duration": 2200, "audioFade": True}}
         t1 = server.compute_render_token("Default")
-        # Change only visual params (tint and scope); audioFade and duration remain unchanged.
-        me.startEffect = {"name": "frostcreep", "params": {"tint": "blue", "scope": "screen",
-                                                           "duration": 2200, "audioFade": True}}
+        # Change only visual params (tint, sprite, scope); audioFade and duration unchanged.
+        me.startEffect = {"name": "frostcreep", "params": {"tint": "blue", "sprite": "hop",
+                                                           "scope": "screen", "duration": 2200, "audioFade": True}}
         t2 = server.compute_render_token("Default")
         assert t1 == t2, "frostcreep visual-only param changes should not invalidate the render token"
 

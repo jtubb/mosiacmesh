@@ -759,7 +759,8 @@
 										it.backgroundColor || '#000000', canvas.width, canvas.height);
 								} else if (stc.effect.name === 'frostcreep' && typeof mmDrawFrost === 'function') {
 									mmDrawFrost(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
-										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope, playback.seed | 0);
+										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope, playback.seed | 0,
+										mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)));
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
@@ -1168,7 +1169,8 @@
 							item.backgroundColor || '#000000', cvm.width, cvm.height);
 					} else if (st.effect.name === 'frostcreep' && typeof mmDrawFrost === 'function') {
 						mmDrawFrost(cmx, st.effect.params, st.effect.phase, st.effect.front,
-							GWm, GHm, quad, st.effect.scope, playback.seed | 0);
+							GWm, GHm, quad, st.effect.scope, playback.seed | 0,
+								mmSprite(mmScatterSpriteUrl(st.effect.params && st.effect.params.sprite)));
 					} else {
 						mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
 							GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');

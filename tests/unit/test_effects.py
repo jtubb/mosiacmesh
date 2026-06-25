@@ -200,6 +200,7 @@ def test_frostcreep_params():
     e = next(e for e in effects.effect_catalog() if e["name"] == "frostcreep")
     by = {p["key"]: p for p in e["params"]}
     assert by["tint"]["choices"] == ["frost", "blue", "clear"] and by["tint"]["default"] == "frost"
+    assert by["sprite"]["type"] == "string" and by["sprite"]["default"] == "frostymug"
     assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
     assert by["duration"]["type"] == "number" and by["duration"]["default"] == 2200
     assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True

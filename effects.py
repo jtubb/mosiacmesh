@@ -241,6 +241,7 @@ class FrostCreepEffect(Effect):
     # Single `duration`: a frostcreep instance only covers (endEffect) or reveals
     # (startEffect), never both.
     params = [ParamSpec("tint", "choice", "frost", choices=["frost", "blue", "clear"]),
+              ParamSpec("sprite", "string", "frostymug"),   # mug that drops in / rises out (any transparent PNG; "" = pure frost)
               ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
               ParamSpec("duration", "number", 2200, minimum=0),
               ParamSpec("audioFade", "boolean", True)]

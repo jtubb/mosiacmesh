@@ -809,16 +809,43 @@
     return pts;
   }
 
+  // Mug-drop sequencing for frostcreep. Splits the phase so the sprite drops in / rises
+  // out and the frost is sequenced around it. Returns {fc, mp}: fc = frost coverage front
+  // (feeds the field), mp = mug position 0 (off above the top) .. 1 (at center). COVER:
+  // mug drops over the first `mugFrac`, then holds center while frost builds. REVEAL:
+  // frost recedes first, then the mug rises out over the last `mugFrac`. Pure.
+  function mmFrostSeq(phase, cover, mugFrac) {
+    var c = cover < 0 ? 0 : (cover > 1 ? 1 : cover);
+    var mf = (mugFrac > 0 && mugFrac < 1) ? mugFrac : 0.3;
+    var lp = (phase === 'cover') ? c : (1 - c);     // local phase progress 0->1
+    var fc, mp;
+    if (phase === 'cover') {
+      mp = lp / mf; if (mp > 1) { mp = 1; }                 // drop in, then hold at center
+      fc = (lp <= mf) ? 0 : (lp - mf) / (1 - mf);           // frost AFTER the mug lands
+    } else {
+      fc = 1 - lp / (1 - mf); if (fc < 0) { fc = 0; }       // frost recedes first
+      mp = 1 - (lp - (1 - mf)) / mf;                         // then the mug rises out
+      if (mp > 1) { mp = 1; } else if (mp < 0) { mp = 0; }
+    }
+    if (fc < 0) { fc = 0; } else if (fc > 1) { fc = 1; }
+    return { fc: fc, mp: mp };
+  }
+
   // Draw frost: a jagged ice crystal per frozen cell (grows with the coverage front),
-  // + a consolidation fill near full cover so the outgoing item is fully hidden at the
-  // handoff. moveTo/lineTo/fill + fillRect only; no clip/composite. Drawn in global
-  // coords under the mesh affine (in-canvas) or overlay matrix -> wall-coherent. The
-  // field + per-cell crystal shapes are memoized on root._mmFrostCache (seed,blocks);
-  // crystal trig is precomputed there, so per frame is just scale + lineTo.
-  function mmDrawFrost(ctx, params, phase, cover, GW, GH, quad, scope, seed) {
+  // + an optional mug sprite that drops in (cover) / rises out (reveal) with the frost
+  // sequenced around it, + a consolidation fill near full cover so the outgoing item is
+  // fully hidden at the handoff. moveTo/lineTo/fill + drawImage + fillRect; no clip/
+  // composite. Global coords under the mesh affine -> wall-coherent. Field + per-cell
+  // crystal shapes memoized on root._mmFrostCache (seed,blocks); crystal trig precomputed.
+  // img: optional decoded mug sprite (null -> pure frost, no lead-in).
+  function mmDrawFrost(ctx, params, phase, cover, GW, GH, quad, scope, seed, img) {
     var cov = cover < 0 ? 0 : (cover > 1 ? 1 : cover);
-    if (cov <= 0) { return; }
     var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var hasMug = !!(img && img.width && img.height);
+    var seq = hasMug ? mmFrostSeq(phase, cov, 0.30) : null;
+    var fc = seq ? seq.fc : cov;                    // frost coverage front (sequenced if a mug exists)
+    var mp = seq ? seq.mp : 0;                       // mug position 0 (off top) .. 1 (center)
+    if (fc <= 0 && mp <= 0) { return; }
     var fdbg = root._mmFrostDbg || {};
     var blocks = (fdbg.blocks > 0) ? fdbg.blocks : 18;
     var sk = seed >>> 0, cache = root._mmFrostCache;
@@ -831,27 +858,39 @@
     var field = cache.field, crystals = cache.crystals, pal = mmFrostPalette(params && params.tint);
     var cw = reg.w / blocks, ch = reg.h / blocks, cell = (cw < ch ? cw : ch);
     var r, c, idx, fb, cx, cy, rad, pts, pj;
-    for (r = 0; r < blocks; r++) {
-      for (c = 0; c < blocks; c++) {
-        idx = r * blocks + c;
-        fb = mmFrostBlotch(field[idx], cov, 0.25);
-        if (!fb.on) { continue; }
-        cx = reg.x + (c + 0.5) * cw; cy = reg.y + (r + 0.5) * ch;
-        rad = cell * (0.7 + 0.8 * fb.t);            // crystal slightly overscans the cell -> jagged overlap
-        pts = crystals[idx];
-        ctx.fillStyle = 'rgba(' + pal.core + ',' + (0.85 * fb.t) + ')';
-        ctx.beginPath();
-        ctx.moveTo(cx + pts[0].ux * rad, cy + pts[0].uy * rad);
-        for (pj = 1; pj < pts.length; pj++) { ctx.lineTo(cx + pts[pj].ux * rad, cy + pts[pj].uy * rad); }
-        ctx.closePath(); ctx.fill();
-        if (fb.t > 0.7) {                           // sparkle glint on settled frost
-          ctx.fillStyle = 'rgba(' + pal.spark + ',0.9)';
-          ctx.beginPath(); ctx.arc(cx, cy, cell * 0.1, 0, 6.2832); ctx.fill();
+    if (fc > 0) {
+      for (r = 0; r < blocks; r++) {
+        for (c = 0; c < blocks; c++) {
+          idx = r * blocks + c;
+          fb = mmFrostBlotch(field[idx], fc, 0.25);
+          if (!fb.on) { continue; }
+          cx = reg.x + (c + 0.5) * cw; cy = reg.y + (r + 0.5) * ch;
+          rad = cell * (0.7 + 0.8 * fb.t);            // crystal slightly overscans the cell -> jagged overlap
+          pts = crystals[idx];
+          ctx.fillStyle = 'rgba(' + pal.core + ',' + (0.85 * fb.t) + ')';
+          ctx.beginPath();
+          ctx.moveTo(cx + pts[0].ux * rad, cy + pts[0].uy * rad);
+          for (pj = 1; pj < pts.length; pj++) { ctx.lineTo(cx + pts[pj].ux * rad, cy + pts[pj].uy * rad); }
+          ctx.closePath(); ctx.fill();
+          if (fb.t > 0.7) {                           // sparkle glint on settled frost
+            ctx.fillStyle = 'rgba(' + pal.spark + ',0.9)';
+            ctx.beginPath(); ctx.arc(cx, cy, cell * 0.1, 0, 6.2832); ctx.fill();
+          }
         }
       }
     }
-    if (cov >= 0.88) {                              // consolidation -> opaque by cov=1
-      var a = (cov - 0.88) / 0.12; if (a > 1) { a = 1; }
+    // mug: drops in / rises out, centered, sized so its OPAQUE content is 50% of the
+    // region height (mmSpriteFit auto-fit, same as keg roll). Over the frost, under the
+    // consolidation fill (so it ices over at full cover). Ease-out on the drop/rise.
+    if (hasMug && mp > 0 && typeof mmStampSprite === 'function') {
+      var fit = (typeof mmSpriteFit === 'function') ? mmSpriteFit(img) : null;
+      var mugH = reg.h * 0.5 * (fit != null ? fit : 1);
+      var e = 1 - (1 - mp) * (1 - mp);                // ease-out
+      var topY = reg.y - mugH, ctrY = reg.y + reg.h / 2;
+      mmStampSprite(ctx, null, img, reg.x + reg.w / 2, topY + (ctrY - topY) * e, mugH, 0);
+    }
+    if (fc >= 0.88) {                               // consolidation -> opaque by fc=1
+      var a = (fc - 0.88) / 0.12; if (a > 1) { a = 1; }
       ctx.fillStyle = 'rgba(' + pal.core + ',' + a + ')';
       ctx.fillRect(reg.x, reg.y, reg.w, reg.h);
     }
@@ -898,6 +937,7 @@
   root.mmFrostBlotch = mmFrostBlotch;
   root.mmFrostPalette = mmFrostPalette;
   root.mmCrystalUnit = mmCrystalUnit;
+  root.mmFrostSeq = mmFrostSeq;
   root.mmDrawFrost = mmDrawFrost;
   root.mmOpaqueBox = mmOpaqueBox;
   root.mmKegFitFactor = mmKegFitFactor;

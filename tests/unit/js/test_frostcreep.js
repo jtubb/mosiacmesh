@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert';
 await import('../../../js/transitions.js');
+await import('../../../js/mesh-viewport.js');     // mmStampSprite (mug draw)
 const g = globalThis;
+
+const C = (a, b) => Math.abs(a - b) < 1e-9;
 
 test('mmFrostPhase: out=cover, in=reveal', () => {
   assert.equal(g.mmFrostPhase('out'), 'cover');
@@ -62,11 +65,29 @@ test('mmTransitionState: frostcreep end=cover (rises), start=reveal (mask family
 });
 
 function recCtxFrost() {
-  return { rects: [], arcs: 0, lines: 0, fillStyle: '#000',
+  return { rects: [], arcs: 0, lines: 0, imgs: 0, fillStyle: '#000',
     beginPath() {}, arc() { this.arcs++; }, fill() {},
     moveTo() {}, lineTo() { this.lines++; }, closePath() {},
+    save() {}, restore() {}, translate() {}, rotate() {}, scale() {},
+    drawImage() { this.imgs++; },
     fillRect(x, y, w, h) { this.rects.push({ x: x, y: y, w: w, h: h }); } };
 }
+
+test('mmFrostSeq cover: mug drops first (mp 0->1), frost starts only after it lands', () => {
+  // mugFrac 0.3. lp == cover on the cover phase.
+  let s = g.mmFrostSeq('cover', 0.0, 0.3); assert.ok(C(s.mp, 0) && C(s.fc, 0));   // off top, no frost
+  s = g.mmFrostSeq('cover', 0.15, 0.3); assert.ok(C(s.mp, 0.5) && C(s.fc, 0));    // dropping, still no frost
+  s = g.mmFrostSeq('cover', 0.3, 0.3);  assert.ok(C(s.mp, 1) && C(s.fc, 0));      // landed, frost about to start
+  s = g.mmFrostSeq('cover', 0.65, 0.3); assert.ok(C(s.mp, 1) && C(s.fc, 0.5));    // centered, frost half
+  s = g.mmFrostSeq('cover', 1.0, 0.3);  assert.ok(C(s.mp, 1) && C(s.fc, 1));      // full
+});
+
+test('mmFrostSeq reveal: frost recedes first, then mug rises out (reverse)', () => {
+  // reveal: lp == 1-cover. cover counts 1->0 over the phase.
+  let s = g.mmFrostSeq('reveal', 1.0, 0.3); assert.ok(C(s.fc, 1) && C(s.mp, 1));  // start: full frost, mug center
+  s = g.mmFrostSeq('reveal', 0.3, 0.3);  assert.ok(C(s.fc, 0) && C(s.mp, 1));     // frost gone, mug still center
+  s = g.mmFrostSeq('reveal', 0.0, 0.3);  assert.ok(C(s.fc, 0) && C(s.mp, 0));     // mug exited top
+});
 
 test('mmCrystalUnit: deterministic, 2*spikes points, jagged (outer>inner), within unit', () => {
   const a = g.mmCrystalUnit(7, 7), b = g.mmCrystalUnit(7, 7), c = g.mmCrystalUnit(8, 7);
@@ -106,4 +127,26 @@ test('mmDrawFrost: jagged crystals mid-cover, consolidation fill near full', () 
   g.mmDrawFrost(c, { tint: 'frost' }, 'cover', 1, 300, 200, null, 'wall', 5);
   assert.ok(c.rects.some(r => r.x === 0 && r.y === 0 && r.w === 300 && r.h === 200),
             'full-region consolidation fill present at cover 1');
+});
+
+const mugImg = { width: 120, height: 120 };   // "decoded" mug sprite
+
+test('mmDrawFrost: mug drops in BEFORE frost (cover lead-in)', () => {
+  // cover=0.15 with mugFrac 0.3 -> mp=0.5 (dropping), fc=0 -> mug only, no crystals yet
+  const c = recCtxFrost();
+  g.mmDrawFrost(c, { tint: 'frost', sprite: 'frostymug' }, 'cover', 0.15, 300, 200, null, 'wall', 5, mugImg);
+  assert.equal(c.imgs, 1, 'mug drawn during the drop');
+  assert.equal(c.lines, 0, 'no frost crystals before the mug lands');
+});
+
+test('mmDrawFrost: mug + frost once landed; no mug arg -> pure frost', () => {
+  let c = recCtxFrost();
+  g.mmDrawFrost(c, { tint: 'frost', sprite: 'frostymug' }, 'cover', 0.65, 300, 200, null, 'wall', 5, mugImg);
+  assert.equal(c.imgs, 1, 'mug at center');
+  assert.ok(c.lines > 0, 'frost crystals building');
+  // backward compatible: omitting img -> pure frost (no mug), frost keyed to cover directly
+  c = recCtxFrost();
+  g.mmDrawFrost(c, { tint: 'frost' }, 'cover', 0.5, 300, 200, null, 'wall', 5);
+  assert.equal(c.imgs, 0, 'no mug when no sprite');
+  assert.ok(c.lines > 0, 'frost still drawn');
 });
