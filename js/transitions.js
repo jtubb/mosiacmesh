@@ -673,10 +673,12 @@
     var horiz = (dir === 'left' || dir === 'right');
     // Auto-fit: size the keg so its SMALLEST opaque dimension lands on the mesh perp
     // dim (covers the straight cover edge for any sprite/padding). Falls back to 1.3
-    // until the sprite is measured/decoded. ?kgfill=N is an optional fine-tune mult.
+    // until the sprite is measured/decoded. `fudge` is a margin ON TOP of the fit —
+    // default 1.1 (10% larger than the measured fit) for a little overhang; ?kgfill=N
+    // overrides it for live fine-tuning.
     var auto = (typeof mmSpriteFit === 'function') ? mmSpriteFit(img) : null;
     var base = (auto != null) ? auto : 1.3;
-    var fudge = (root._mmKegFill != null) ? root._mmKegFill : 1.0;
+    var fudge = (root._mmKegFill != null) ? root._mmKegFill : 1.1;
     var kegD = (horiz ? reg.h : reg.w) * base * fudge;
     var rect = mmKegCoverRect(prog, dir, phase, reg, kegD);   // same kegD -> edge tracks the keg
     if (rect) { ctx.fillStyle = bg || '#000000'; ctx.fillRect(rect.x, rect.y, rect.w, rect.h); }
