@@ -785,18 +785,36 @@
     mmStampSprite(ctx, vp, img, pos.cx, pos.cy, kegD, ang);   // globalSize (height) = kegD
   }
 
+  // Icy-blue palettes (frost reads bluer than white so it doesn't look like cloud).
   var _FROST = {
-    frost: { core: '244,250,255', spark: '255,255,255' },
-    blue:  { core: '208,230,247', spark: '236,247,255' },
-    clear: { core: '224,239,250', spark: '255,255,255' }
+    frost: { core: '196,224,250', spark: '236,247,255' },
+    blue:  { core: '150,198,244', spark: '214,236,255' },
+    clear: { core: '210,230,248', spark: '255,255,255' }
   };
   function mmFrostPalette(tint) { return _FROST[tint] || _FROST.frost; }
 
-  // Draw frost: soft growing blotches for cells whose seeded threshold the coverage
-  // front has crossed, + a consolidation fill near full cover so the outgoing item is
-  // fully hidden at the handoff. arc/fillRect only; no clip/composite. Drawn in global
+  // Unit jagged-crystal outline: 2*spikes points alternating OUTER (0.78..1.0) and
+  // INNER (0.34..0.50) magnitude around a seeded rotation, as unit offsets {ux,uy}
+  // (multiply by a radius to place). Seeded -> deterministic per cell -> wall-coherent.
+  // The trig runs ONCE per cell (precomputed into the cache), never per frame. Pure.
+  function mmCrystalUnit(seed, spikes) {
+    if (!(spikes > 2)) { spikes = 7; }
+    var rnd = _mmLcg(seed >>> 0), pts = [], i, rot = rnd() * 6.283185307;
+    var step = 6.283185307 / (spikes * 2), ang, mag;
+    for (i = 0; i < spikes * 2; i++) {
+      ang = rot + i * step;
+      mag = (i % 2 === 0) ? (0.78 + rnd() * 0.22) : (0.34 + rnd() * 0.16);
+      pts.push({ ux: Math.cos(ang) * mag, uy: Math.sin(ang) * mag });
+    }
+    return pts;
+  }
+
+  // Draw frost: a jagged ice crystal per frozen cell (grows with the coverage front),
+  // + a consolidation fill near full cover so the outgoing item is fully hidden at the
+  // handoff. moveTo/lineTo/fill + fillRect only; no clip/composite. Drawn in global
   // coords under the mesh affine (in-canvas) or overlay matrix -> wall-coherent. The
-  // field is memoized on root._mmFrostCache (seed,blocks). ?frostblocks=N tunes density.
+  // field + per-cell crystal shapes are memoized on root._mmFrostCache (seed,blocks);
+  // crystal trig is precomputed there, so per frame is just scale + lineTo.
   function mmDrawFrost(ctx, params, phase, cover, GW, GH, quad, scope, seed) {
     var cov = cover < 0 ? 0 : (cover > 1 ? 1 : cover);
     if (cov <= 0) { return; }
@@ -805,24 +823,30 @@
     var blocks = (fdbg.blocks > 0) ? fdbg.blocks : 18;
     var sk = seed >>> 0, cache = root._mmFrostCache;
     if (!cache || cache.seed !== sk || cache.blocks !== blocks) {
-      cache = { seed: sk, blocks: blocks, field: mmFrostField(blocks, sk) };
+      var nn = blocks * blocks, fld = mmFrostField(blocks, sk), cr = [], ci;
+      for (ci = 0; ci < nn; ci++) { cr.push(mmCrystalUnit((sk ^ (ci * 374761393)) >>> 0, 7)); }
+      cache = { seed: sk, blocks: blocks, field: fld, crystals: cr };
       root._mmFrostCache = cache;
     }
-    var field = cache.field, pal = mmFrostPalette(params && params.tint);
+    var field = cache.field, crystals = cache.crystals, pal = mmFrostPalette(params && params.tint);
     var cw = reg.w / blocks, ch = reg.h / blocks, cell = (cw < ch ? cw : ch);
-    var r, c, idx, fb, cx, cy, rad;
+    var r, c, idx, fb, cx, cy, rad, pts, pj;
     for (r = 0; r < blocks; r++) {
       for (c = 0; c < blocks; c++) {
         idx = r * blocks + c;
         fb = mmFrostBlotch(field[idx], cov, 0.25);
         if (!fb.on) { continue; }
         cx = reg.x + (c + 0.5) * cw; cy = reg.y + (r + 0.5) * ch;
-        rad = cell * (0.6 + 0.7 * fb.t);
+        rad = cell * (0.7 + 0.8 * fb.t);            // crystal slightly overscans the cell -> jagged overlap
+        pts = crystals[idx];
         ctx.fillStyle = 'rgba(' + pal.core + ',' + (0.85 * fb.t) + ')';
-        ctx.beginPath(); ctx.arc(cx, cy, rad, 0, 6.2832); ctx.fill();
-        if (fb.t > 0.7) {                          // sparkle glint on settled frost
+        ctx.beginPath();
+        ctx.moveTo(cx + pts[0].ux * rad, cy + pts[0].uy * rad);
+        for (pj = 1; pj < pts.length; pj++) { ctx.lineTo(cx + pts[pj].ux * rad, cy + pts[pj].uy * rad); }
+        ctx.closePath(); ctx.fill();
+        if (fb.t > 0.7) {                           // sparkle glint on settled frost
           ctx.fillStyle = 'rgba(' + pal.spark + ',0.9)';
-          ctx.beginPath(); ctx.arc(cx, cy, cell * 0.12, 0, 6.2832); ctx.fill();
+          ctx.beginPath(); ctx.arc(cx, cy, cell * 0.1, 0, 6.2832); ctx.fill();
         }
       }
     }
@@ -873,6 +897,7 @@
   root.mmFrostField = mmFrostField;
   root.mmFrostBlotch = mmFrostBlotch;
   root.mmFrostPalette = mmFrostPalette;
+  root.mmCrystalUnit = mmCrystalUnit;
   root.mmDrawFrost = mmDrawFrost;
   root.mmOpaqueBox = mmOpaqueBox;
   root.mmKegFitFactor = mmKegFitFactor;
