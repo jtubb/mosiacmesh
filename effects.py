@@ -232,3 +232,18 @@ class KegRollEffect(Effect):
 
     def video_filters(self, role, params, ctx):
         return ([], _afade(role, params, ctx))     # visual roll is client-side
+
+
+@register
+class FrostCreepEffect(Effect):
+    name = "frostcreep"
+    label = "Frost Creep"
+    # Single `duration`: a frostcreep instance only covers (endEffect) or reveals
+    # (startEffect), never both.
+    params = [ParamSpec("tint", "choice", "frost", choices=["frost", "blue", "clear"]),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 2200, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))     # visual is client-side; single duration

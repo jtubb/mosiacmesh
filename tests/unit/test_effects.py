@@ -12,7 +12,7 @@ def test_get_effect_unknown_returns_none():
 def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
     assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve",
-                     "beerfill", "scatter", "kegroll"}
+                     "beerfill", "scatter", "kegroll", "frostcreep"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -188,4 +188,29 @@ def test_kegroll_audio_single_duration_role_aware():
     v2, a2 = kr.video_filters("end", kr.resolve({"duration": 2000, "audioFade": True}), ctx)
     assert v2 == [] and a2 == ["afade=t=out:st=4:d=2"]
     v3, a3 = kr.video_filters("end", kr.resolve({"duration": 2000, "audioFade": False}), ctx)
+    assert v3 == [] and a3 == []
+
+
+def test_catalog_includes_frostcreep():
+    names = {e["name"] for e in effects.effect_catalog()}
+    assert "frostcreep" in names
+
+
+def test_frostcreep_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "frostcreep")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["tint"]["choices"] == ["frost", "blue", "clear"] and by["tint"]["default"] == "frost"
+    assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
+    assert by["duration"]["type"] == "number" and by["duration"]["default"] == 2200
+    assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
+
+
+def test_frostcreep_audio_single_duration():
+    fc = effects.get_effect("frostcreep")
+    ctx = {"duration_ms": 6000}
+    v, a = fc.video_filters("start", fc.resolve({"duration": 2000, "audioFade": True}), ctx)
+    assert v == [] and a == ["afade=t=in:st=0:d=2"]
+    v2, a2 = fc.video_filters("end", fc.resolve({"duration": 2000, "audioFade": True}), ctx)
+    assert v2 == [] and a2 == ["afade=t=out:st=4:d=2"]
+    v3, a3 = fc.video_filters("end", fc.resolve({"audioFade": False}), ctx)
     assert v3 == [] and a3 == []
