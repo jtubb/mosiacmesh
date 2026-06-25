@@ -966,6 +966,17 @@ class TestEffectRenderHook:
         t2 = server.compute_render_token("Default")
         assert t1 == t2, "frostcreep visual-only param changes should not invalidate the render token"
 
+    def test_token_unchanged_by_coasterflip_visual_param_change(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "coasterflip", "params": {"axis": "horizontal", "coaster": "kraft",
+                                                            "scope": "wall", "duration": 700, "audioFade": True}}
+        t1 = server.compute_render_token("Default")
+        # Change only visual params (axis, coaster, scope); audioFade and duration unchanged.
+        me.startEffect = {"name": "coasterflip", "params": {"axis": "vertical", "coaster": "slate",
+                                                            "scope": "screen", "duration": 700, "audioFade": True}}
+        t2 = server.compute_render_token("Default")
+        assert t1 == t2, "coasterflip visual-only param changes should not invalidate the render token"
+
     def test_token_changes_when_audioFade_toggled(self, mock_settings):
         me = self._token_setup(mock_settings)
         me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": True}}

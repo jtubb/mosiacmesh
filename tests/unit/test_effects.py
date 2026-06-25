@@ -12,7 +12,7 @@ def test_get_effect_unknown_returns_none():
 def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
     assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve",
-                     "beerfill", "scatter", "kegroll", "frostcreep"}
+                     "beerfill", "scatter", "kegroll", "frostcreep", "coasterflip"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -214,4 +214,30 @@ def test_frostcreep_audio_single_duration():
     v2, a2 = fc.video_filters("end", fc.resolve({"duration": 2000, "audioFade": True}), ctx)
     assert v2 == [] and a2 == ["afade=t=out:st=4:d=2"]
     v3, a3 = fc.video_filters("end", fc.resolve({"audioFade": False}), ctx)
+    assert v3 == [] and a3 == []
+
+
+def test_catalog_includes_coasterflip():
+    names = {e["name"] for e in effects.effect_catalog()}
+    assert "coasterflip" in names
+
+
+def test_coasterflip_params():
+    e = next(e for e in effects.effect_catalog() if e["name"] == "coasterflip")
+    by = {p["key"]: p for p in e["params"]}
+    assert by["axis"]["choices"] == ["horizontal", "vertical"] and by["axis"]["default"] == "horizontal"
+    assert by["coaster"]["choices"] == ["kraft", "cork", "slate"] and by["coaster"]["default"] == "kraft"
+    assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
+    assert by["duration"]["type"] == "number" and by["duration"]["default"] == 700
+    assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
+
+
+def test_coasterflip_audio_single_duration():
+    cf = effects.get_effect("coasterflip")
+    ctx = {"duration_ms": 6000}
+    v, a = cf.video_filters("start", cf.resolve({"duration": 700, "audioFade": True}), ctx)
+    assert v == [] and a == ["afade=t=in:st=0:d=0.7"]
+    v2, a2 = cf.video_filters("end", cf.resolve({"duration": 700, "audioFade": True}), ctx)
+    assert v2 == [] and a2 == ["afade=t=out:st=5.3:d=0.7"]
+    v3, a3 = cf.video_filters("end", cf.resolve({"audioFade": False}), ctx)
     assert v3 == [] and a3 == []

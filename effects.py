@@ -248,3 +248,19 @@ class FrostCreepEffect(Effect):
 
     def video_filters(self, role, params, ctx):
         return ([], _afade(role, params, ctx))     # visual is client-side; single duration
+
+
+@register
+class CoasterFlipEffect(Effect):
+    name = "coasterflip"
+    label = "Coaster Flip"
+    # Single `duration`: a coasterflip instance only folds (endEffect) or opens
+    # (startEffect), never both.
+    params = [ParamSpec("axis", "choice", "horizontal", choices=["horizontal", "vertical"]),
+              ParamSpec("coaster", "choice", "kraft", choices=["kraft", "cork", "slate"]),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 700, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))     # visual is client-side; single duration
