@@ -170,6 +170,18 @@
     return { s: scale + (1 - scale) * f, alpha: f };
   }
 
+  // Coaster flip (transform family). front = flip openness (1 open .. 0 edge-on). sx/sy
+  // scale the chosen axis only; alpha dims the content toward edge-on; edge is the
+  // cardboard edge-sliver opacity (strongest at edge-on). Pure.
+  function mmFlipFactor(front, axis) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var vert = (axis === 'vertical');
+    return { sx: vert ? 1 : f, sy: vert ? f : 1, alpha: 0.35 + 0.65 * f, edge: 1 - f };
+  }
+
+  var _COASTER = { kraft: '#b9935f', cork: '#c8a06a', slate: '#5a5e63' };
+  function mmCoasterColor(name) { return _COASTER[name] || _COASTER.kraft; }
+
   // Circle (global px) for an Iris reveal. Center = wall center (wall) or panel bbox
   // center (screen); radius ramps 0 -> half the region diagonal (so front 1 fully
   // covers the region's farthest corner). Pure.
@@ -903,6 +915,8 @@
   root._mmWallReveal = _wallReveal;
   root.mmSlideOffset = mmSlideOffset;
   root.mmZoomFactor = mmZoomFactor;
+  root.mmFlipFactor = mmFlipFactor;
+  root.mmCoasterColor = mmCoasterColor;
   root.mmIrisCircle = mmIrisCircle;
   root.mmIrisMaskRects = mmIrisMaskRects;
   root.mmDissolveOrder = mmDissolveOrder;
