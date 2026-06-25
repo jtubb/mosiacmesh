@@ -120,19 +120,19 @@ def test_beerfill_params():
     by = {p["key"]: p for p in e["params"]}
     assert by["beerType"]["choices"] == ["pale", "amber", "stout"] and by["beerType"]["default"] == "pale"
     assert by["scope"]["choices"] == ["screen", "wall"] and by["scope"]["default"] == "wall"
-    assert by["fillMs"]["type"] == "number" and by["fillMs"]["default"] == 2500
-    assert by["drainMs"]["type"] == "number" and by["drainMs"]["default"] == 2500
+    assert by["duration"]["type"] == "number" and by["duration"]["default"] == 2500
     assert by["audioFade"]["type"] == "boolean" and by["audioFade"]["default"] is True
+    assert "fillMs" not in by and "drainMs" not in by   # consolidated to a single duration
 
 
-def test_beerfill_audio_uses_fillMs_on_end_drainMs_on_start():
+def test_beerfill_audio_uses_single_duration():
     bf = effects.get_effect("beerfill")
     ctx = {"duration_ms": 6000}
-    # start role (drain) -> fade in over drainMs
-    v, a = bf.video_filters("start", bf.resolve({"drainMs": 2000, "audioFade": True}), ctx)
+    # start role -> fade in over duration
+    v, a = bf.video_filters("start", bf.resolve({"duration": 2000, "audioFade": True}), ctx)
     assert v == [] and a == ["afade=t=in:st=0:d=2"]
-    # end role (fill) -> fade out over fillMs, ending at clip end
-    v2, a2 = bf.video_filters("end", bf.resolve({"fillMs": 1500, "audioFade": True}), ctx)
+    # end role -> fade out over duration, ending at clip end
+    v2, a2 = bf.video_filters("end", bf.resolve({"duration": 1500, "audioFade": True}), ctx)
     assert v2 == [] and a2 == ["afade=t=out:st=4.5:d=1.5"]
 
 

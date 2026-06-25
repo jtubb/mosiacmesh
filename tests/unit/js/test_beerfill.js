@@ -18,7 +18,10 @@ test('mmBeerPhase: out=fill, in=drain', () => {
   assert.equal(Phase('in'), 'drain');
 });
 
-test('mmBeerDuration: fillMs on out, drainMs on in, default 2500', () => {
+test('mmBeerDuration: single duration, legacy fillMs/drainMs fallback, default 2500', () => {
+  assert.equal(Dur({ duration: 1800 }, 'out'), 1800);   // new schema: one duration
+  assert.equal(Dur({ duration: 1800 }, 'in'), 1800);
+  // back-compat: pre-consolidation items only have fillMs/drainMs
   assert.equal(Dur({ fillMs: 1500, drainMs: 3000 }, 'out'), 1500);
   assert.equal(Dur({ fillMs: 1500, drainMs: 3000 }, 'in'), 3000);
   assert.equal(Dur({}, 'out'), 2500);
@@ -64,7 +67,7 @@ test('mmFoamBubbles: deterministic, distinct stream from beer bubbles', () => {
 const State = globalThis.mmTransitionState;
 
 test('mmTransitionState: beerfill end-role = fill phase, level rises', () => {
-  const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000, scope: 'wall' } };
+  const end = { name: 'beerfill', params: { duration: 2000, scope: 'wall' } };
   // duration 6000, offset 5000 -> 1000ms into the 2000ms fill (out), progress p=0.5 -> level 0.5
   const st = State(null, end, 5000, 6000, null, null);
   assert.equal(st.role, 'out');
@@ -80,7 +83,7 @@ test('mmTransitionState: beerfill fill level RISES bottom-up over the window', (
   // offsets: as the item nears its end (offset grows toward duration), the fill level
   // must INCREASE 0->1 (beer rises). The pre-fix code fed raw p (1->0 on the out role),
   // so it fell 1->0 here (beer receded top->bottom). Falsifiable against that bug.
-  const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000, scope: 'wall' } };
+  const end = { name: 'beerfill', params: { duration: 2000, scope: 'wall' } };
   // window = [4000, 6000]. early (offset 4500): p=0.75 -> level 1-0.75 = 0.25
   const early = State(null, end, 4500, 6000, null, null);
   // late (offset 5500): p=0.25 -> level 1-0.25 = 0.75
@@ -91,7 +94,7 @@ test('mmTransitionState: beerfill fill level RISES bottom-up over the window', (
 });
 
 test('mmTransitionState: beerfill start-role = drain phase, level falls', () => {
-  const start = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000 } };
+  const start = { name: 'beerfill', params: { duration: 2000 } };
   // offset 500 -> p=0.25 into drain -> level 1-0.25 = 0.75
   const st = State(start, null, 500, 6000, null, null);
   assert.equal(st.role, 'in');
@@ -101,7 +104,7 @@ test('mmTransitionState: beerfill start-role = drain phase, level falls', () => 
 });
 
 test('mmTransitionState: beerfill inactive mid-item', () => {
-  const end = { name: 'beerfill', params: { fillMs: 2000, drainMs: 2000 } };
+  const end = { name: 'beerfill', params: { duration: 2000 } };
   assert.equal(State(null, end, 1000, 6000, null, null).role, 'none');  // 1000 < 6000-2000
 });
 

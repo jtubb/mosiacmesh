@@ -6,7 +6,7 @@ HOST = "127.0.0.1:3000"
 def bf():
     return {"name": "beerfill",
             "params": {"beerType": "pale", "scope": "wall",
-                       "fillMs": 2500, "drainMs": 2500, "audioFade": True}}
+                       "duration": 2500, "audioFade": True}}
 
 ITEMS = [
     {"id": "beer-a", "file": "plasma", "playmode": "SCRIPT", "scriptSpan": "mesh",

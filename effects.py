@@ -190,19 +190,15 @@ class DissolveEffect(Effect):
 class BeerFillEffect(Effect):
     name = "beerfill"
     label = "Beer Fill"
+    # Single `duration`: a beerfill instance only ever runs ONE phase (fill when used
+    # as an endEffect, drain when used as a startEffect), so one length suffices.
     params = [ParamSpec("beerType", "choice", "pale", choices=["pale", "amber", "stout"]),
               ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
-              ParamSpec("fillMs", "number", 2500, minimum=0),
-              ParamSpec("drainMs", "number", 2500, minimum=0),
+              ParamSpec("duration", "number", 2500, minimum=0),
               ParamSpec("audioFade", "boolean", True)]
 
     def video_filters(self, role, params, ctx):
-        # Visual is client-side. Audio fade length follows the active phase:
-        # fill (end role) uses fillMs, drain (start role) uses drainMs.
-        dur = params.get("fillMs") if role == "end" else params.get("drainMs")
-        p = dict(params)
-        p["duration"] = dur
-        return ([], _afade(role, p, ctx))
+        return ([], _afade(role, params, ctx))     # visual is client-side; single duration
 
 
 @register

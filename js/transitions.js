@@ -327,8 +327,11 @@
   function mmBeerPalette(beerType) { return _BEER[beerType] || _BEER.pale; }
   function mmBeerPhase(role) { return role === 'out' ? 'fill' : 'drain'; }
   function mmBeerDuration(params, role) {
-    var ms = role === 'out' ? (params && params.fillMs) : (params && params.drainMs);
-    ms = +ms;
+    // single `duration` (current schema); fall back to legacy fillMs/drainMs so
+    // beerfill items saved before the consolidation still animate. role kept for the
+    // legacy path (out -> fillMs, in -> drainMs).
+    var ms = +(params && params.duration);
+    if (!(ms > 0)) { ms = +(role === 'out' ? (params && params.fillMs) : (params && params.drainMs)); }
     return (ms > 0) ? ms : 2500;
   }
   function mmBeerLevel(phase, p) {
