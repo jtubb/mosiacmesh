@@ -238,6 +238,8 @@
 		// perpendicular dim (>1 overhangs to cover the straight cover edge). Same
 		// >=1-digit/at-most-one-dot guard so a malformed value never yields NaN.
 		if ((m = /[?&]kgfill=([0-9]*\.?[0-9]+)/.exec(h))) { window._mmKegFill = parseFloat(m[1]); }
+		// frost-creep live knob: ?frostblocks=N sets the noise-grid density (cost lever).
+		if ((m = /[?&]frostblocks=(\d+)/.exec(h))) { window._mmFrostDbg = { blocks: parseInt(m[1], 10) }; }
 	})();
 	if (/tdbg/.test(location.href)) {
 		window._mmDbg = true;   // also stream debug to the server log (CLIENTLOG)
@@ -755,6 +757,9 @@
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
 										mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)),
 										it.backgroundColor || '#000000', canvas.width, canvas.height);
+								} else if (stc.effect.name === 'frostcreep' && typeof mmDrawFrost === 'function') {
+									mmDrawFrost(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
+										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope, playback.seed | 0);
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
@@ -1161,6 +1166,9 @@
 							GWm, GHm, quad, st.effect.scope,
 							mmSprite(mmScatterSpriteUrl(st.effect.params && st.effect.params.sprite)),
 							item.backgroundColor || '#000000', cvm.width, cvm.height);
+					} else if (st.effect.name === 'frostcreep' && typeof mmDrawFrost === 'function') {
+						mmDrawFrost(cmx, st.effect.params, st.effect.phase, st.effect.front,
+							GWm, GHm, quad, st.effect.scope, playback.seed | 0);
 					} else {
 						mmDrawMaskOverlay(cmx, st.effect.name, st.effect.params, st.effect.front,
 							GWm, GHm, quad, st.effect.scope, playback.seed | 0, item.backgroundColor || '#000000');
