@@ -393,8 +393,20 @@
       if (ph < 0) { ph = 0; }
       ctx.fillStyle = pal.beerTop; ctx.fillRect(px - pw / 2, reg.y, pw, ph);
       ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(px - pw * 0.18, reg.y, pw * 0.36, ph);
-      ctx.fillStyle = pal.foamTop || pal.foam;   // splash/leading droplet (hidden by foam once filling)
-      ctx.beginPath(); ctx.arc(px, streamTipY, pw * 0.7, 0, 6.2832); ctx.fill();
+      // frothy tip: a soft foam head at the leading edge + a seeded cluster of little
+      // bubbles (wall-coherent) so the stream tip reads as froth, not a flat disc.
+      var tipR = pw * 0.7;
+      ctx.fillStyle = pal.foamTop || pal.foam;
+      ctx.beginPath(); ctx.arc(px, streamTipY, tipR, 0, 6.2832); ctx.fill();
+      var tipB = mmFoamBubbles((seed >>> 0) ^ 0x5bd1e995, 16), tj, tb;
+      for (tj = 0; tj < tipB.length; tj++) {
+        tb = tipB[tj];
+        ctx.fillStyle = 'rgba(255,255,255,' + (0.45 + tb.a * 0.5) + ')';
+        ctx.beginPath();
+        ctx.arc(px + (tb.x - 0.5) * tipR * 2.4, streamTipY + (tb.yf - 0.5) * tipR * 2.4,
+                tb.r * (pw * 0.18), 0, 6.2832);
+        ctx.fill();
+      }
     }
 
     if (bodyLv > 0) {
