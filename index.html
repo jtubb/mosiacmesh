@@ -746,6 +746,11 @@
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
 										playback.seed | 0, mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)),
 										it.backgroundColor || '#000000', canvas.width, canvas.height);
+								} else if (stc.effect.name === 'kegroll' && typeof mmDrawKegRoll === 'function') {
+									mmDrawKegRoll(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
+										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
+										mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)),
+										it.backgroundColor || '#000000', canvas.width, canvas.height);
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
@@ -1145,6 +1150,11 @@
 					} else if (st.effect.name === 'scatter' && typeof mmDrawScatter === 'function') {
 						mmDrawScatter(cmx, st.effect.params, st.effect.phase, st.effect.front,
 							GWm, GHm, quad, st.effect.scope, playback.seed | 0,
+							mmSprite(mmScatterSpriteUrl(st.effect.params && st.effect.params.sprite)),
+							item.backgroundColor || '#000000', cvm.width, cvm.height);
+					} else if (st.effect.name === 'kegroll' && typeof mmDrawKegRoll === 'function') {
+						mmDrawKegRoll(cmx, st.effect.params, st.effect.phase, st.effect.front,
+							GWm, GHm, quad, st.effect.scope,
 							mmSprite(mmScatterSpriteUrl(st.effect.params && st.effect.params.sprite)),
 							item.backgroundColor || '#000000', cvm.width, cvm.height);
 					} else {
