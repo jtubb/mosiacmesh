@@ -320,9 +320,9 @@
   }
 
   var _BEER = {
-    pale:  { beerTop: '#F6C744', beerBot: '#E0A21A', foam: '#FFF8E7', headH: 0.11, bubbleDensity: 34, foamBubbles: 30 },
-    amber: { beerTop: '#C9791C', beerBot: '#8A4A0E', foam: '#F3E0C0', headH: 0.14, bubbleDensity: 22, foamBubbles: 26 },
-    stout: { beerTop: '#3A241A', beerBot: '#160C07', foam: '#E8C9A0', headH: 0.20, bubbleDensity: 12, foamBubbles: 34 }
+    pale:  { beerTop: '#F6C744', beerBot: '#E0A21A', foam: '#FFF8E7', foamTop: '#FFFFFF', foamBot: '#E7CE92', headH: 0.11, bubbleDensity: 72, foamBubbles: 56 },
+    amber: { beerTop: '#C9791C', beerBot: '#8A4A0E', foam: '#F3E0C0', foamTop: '#FBF1DE', foamBot: '#D2AB78', headH: 0.14, bubbleDensity: 52, foamBubbles: 48 },
+    stout: { beerTop: '#3A241A', beerBot: '#160C07', foam: '#E8C9A0', foamTop: '#F4E5CC', foamBot: '#BE9460', headH: 0.20, bubbleDensity: 34, foamBubbles: 70 }
   };
   function mmBeerPalette(beerType) { return _BEER[beerType] || _BEER.pale; }
   function mmBeerPhase(role) { return role === 'out' ? 'fill' : 'drain'; }
@@ -375,40 +375,54 @@
     g.addColorStop(0, pal.beerTop); g.addColorStop(1, pal.beerBot);
     ctx.fillStyle = g; ctx.fillRect(reg.x, surfaceY, reg.w, beerH);
 
-    // rising bubbles inside the beer (seeded; identical across screens for a wall)
+    // rising carbonation bubbles inside the beer (seeded; identical across screens for
+    // a wall). Radii are REGION-RELATIVE: the beer is drawn in large global mesh px, so
+    // an absolute 1-3px radius would warp to a sub-pixel speck on each screen (invisible).
     var bubs = mmBeerBubbles(seed >>> 0, pal.bubbleDensity), i, by;
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    var bubBase = reg.h * 0.0045;          // beer-bubble size unit (r 1..3.4 -> ~0.45-1.5% of wall height)
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
     for (i = 0; i < bubs.length; i++) {
       by = bottom - (((bubs[i].phase + ts * bubs[i].spd * 0.35) % 1) * beerH);
-      if (by < surfaceY + 4) { continue; }
-      ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r, 0, 6.2832); ctx.fill();
+      if (by < surfaceY + bubBase * 2) { continue; }
+      ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r * bubBase, 0, 6.2832); ctx.fill();
     }
 
-    // foam head with a wavy top edge (one polyline path)
+    // foam head with a wavy top edge (one polyline path). Vertical gradient from a
+    // bright crest (foamTop) down to a shadowed base (foamBot) gives the head depth.
     var fh = reg.h * pal.headH, topBase = surfaceY - fh;
     var amp = fh * 0.4 < 2.5 ? 2.5 : fh * 0.4, steps = 60, s, sx;
-    ctx.fillStyle = pal.foam;
+    var fg = ctx.createLinearGradient(0, topBase - amp, 0, surfaceY);
+    fg.addColorStop(0, pal.foamTop || pal.foam);
+    fg.addColorStop(1, pal.foamBot || pal.foam);
+    ctx.fillStyle = fg;
     ctx.beginPath(); ctx.moveTo(reg.x, surfaceY + 2); ctx.lineTo(reg.x, topBase);
     for (s = 0; s <= steps; s++) {
       sx = s / steps;
       ctx.lineTo(reg.x + sx * reg.w, mmFoamWaveY(sx, ts, amp, topBase));
     }
     ctx.lineTo(reg.x + reg.w, surfaceY + 2); ctx.closePath(); ctx.fill();
+    // soft shadow band where foam meets beer -> separates the layers for depth
+    ctx.fillStyle = 'rgba(90,55,15,0.20)';
+    ctx.fillRect(reg.x, surfaceY - fh * 0.12, reg.w, fh * 0.12);
 
-    // scattered foam bubbles
-    var fbs = mmFoamBubbles(seed >>> 0, pal.foamBubbles), k, f;
+    // scattered foam bubbles (radii relative to the foam-band height)
+    var fbs = mmFoamBubbles(seed >>> 0, pal.foamBubbles), k, f, fbubBase = fh * 0.07;
     for (k = 0; k < fbs.length; k++) {
       f = fbs[k];
       ctx.fillStyle = 'rgba(255,255,255,' + f.a + ')';
-      ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r * fbubBase, 0, 6.2832); ctx.fill();
     }
 
-    // pour stream from the region top (fill phase only)
+    // pour stream from the region top (fill phase only) -> reaches the BEER SURFACE
+    // (through the foam) so it never cuts off above the foam. Drawn last (on top), with
+    // a foam splash where it lands.
     if (phase === 'fill') {
-      var pw = reg.w * 0.10, px = reg.x + reg.w / 2, ph = topBase - reg.y;
+      var pw = reg.w * 0.10, px = reg.x + reg.w / 2, ph = surfaceY - reg.y;
       if (ph < 0) { ph = 0; }
       ctx.fillStyle = pal.beerTop; ctx.fillRect(px - pw / 2, reg.y, pw, ph);
       ctx.fillStyle = 'rgba(255,255,255,0.18)'; ctx.fillRect(px - pw * 0.18, reg.y, pw * 0.36, ph);
+      ctx.fillStyle = pal.foamTop || pal.foam;
+      ctx.beginPath(); ctx.arc(px, surfaceY, pw * 0.7, 0, 6.2832); ctx.fill();
     }
   }
 
