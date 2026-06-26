@@ -556,6 +556,28 @@
     }
   }
 
+  // --- Wheat part (mask family): a center-seam wheat curtain. Pure geometry +
+  // role->openness mapping; the draw glue (mmDrawWheat) consumes these. ---
+  var _WHEAT_MAX_LEAN = 0.5;                  // outward stalk lean at full-open (~29 deg)
+
+  // Role -> openness (0 closed/full-wheat .. 1 open/content-visible). Mirrors
+  // mmScatterCover/mmBeerLevel: front is LOCAL phase progress rising 0->1 for both
+  // roles; reveal passes it through, cover inverts it.
+  function mmWheatOpenness(phase, front) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    return phase === 'reveal' ? f : (1 - f);
+  }
+
+  // Parting geometry at a given openness. Single vertical seam at wall center cx.
+  // The two wheat walls' inner edges sit at cx-g / cx+g; each has slid outward by g
+  // and its stalks lean by `lean` toward their outer edge.
+  function mmWheatPartGeom(openness, GW, GH) {
+    var o = openness < 0 ? 0 : (openness > 1 ? 1 : openness);
+    var cx = GW / 2, g = o * cx;
+    return { cx: cx, g: g, leftEdge: cx - g, rightEdge: cx + g,
+             slide: g, lean: o * _WHEAT_MAX_LEAN };
+  }
+
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
   function mmScatterParticles(seed, count) {
     var rnd = _mmLcg(seed >>> 0), arr = [], i;
@@ -1042,4 +1064,6 @@
   root.mmOpaqueBox = mmOpaqueBox;
   root.mmKegFitFactor = mmKegFitFactor;
   root.mmSpriteFit = mmSpriteFit;
+  root.mmWheatOpenness = mmWheatOpenness;
+  root.mmWheatPartGeom = mmWheatPartGeom;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
