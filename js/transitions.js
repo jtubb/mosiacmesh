@@ -1128,7 +1128,7 @@
 
     // stalks: rooted at the bottom of each wall, leaning toward the outer edge,
     // sliding outward with the wall, swaying with `now`.
-    var field = mmWheatField(seed, (params && params.density) || 70, reg.w, reg.h);
+    var field = mmWheatField(seed, (params && params.density) || 30, reg.w, reg.h);
     var stalkW = reg.h * 0.012, ts = (now || 0) * 0.001, i, s, baseX, leanDir, ang;
     var headRpx, hY;
     for (i = 0; i < field.length; i++) {
