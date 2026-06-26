@@ -1051,11 +1051,32 @@
     }
   }
 
+  // Tile a texture across [x0,x1] at height [top, top+h], scaled so the texture is `h`
+  // tall (one vertical tile) and repeated horizontally, anchored to GLOBAL x=0 so every
+  // screen aligns and the seam stays continuous. Partial edge tiles are clipped via the
+  // drawImage source-subrect (no ctx.clip). img must be loaded (width>0).
+  function _tileWheatRect(ctx, img, x0, x1, top, h, tileW) {
+    if (x1 <= x0 || tileW <= 0) { return; }
+    var iw = img.width, ih = img.height;
+    var tx = Math.floor(x0 / tileW) * tileW, dL, dR, dw, sx, sw;
+    while (tx < x1) {
+      dL = tx < x0 ? x0 : tx;
+      dR = (tx + tileW) > x1 ? x1 : (tx + tileW);
+      dw = dR - dL;
+      if (dw > 0) {
+        sx = ((dL - tx) / tileW) * iw;
+        sw = (dw / tileW) * iw;
+        ctx.drawImage(img, sx, 0, sw, ih, dL, top, dw, h);
+      }
+      tx += tileW;
+    }
+  }
+
   // Draw the wheat curtain covering the two outer walls; the center gap (content)
-  // grows as openness rises. Opaque straw backdrop rects guarantee the cover;
-  // leaning, swaying procedural stalks sit on top. Global coords (warped by the
-  // mesh affine like the other mask draws). ctx primitives only -- no clip.
-  function mmDrawWheat(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
+  // grows as openness rises. A dense wheat TEXTURE (over an opaque straw gradient base)
+  // fills each wall; leaning, swaying procedural ear-stalks sit on top for parting-edge
+  // depth. Global coords (warped by the mesh affine). ctx primitives only -- no clip.
+  function mmDrawWheat(ctx, params, phase, front, GW, GH, quad, scope, seed, now, sprite) {
     ctx.globalAlpha = 1;
     var o = mmWheatOpenness(phase, front, (params && params.hold));
     var geom = mmWheatPartGeom(o, GW, GH);
@@ -1072,6 +1093,14 @@
     ctx.fillStyle = grL;
     if (leftEdge > reg.x) { ctx.fillRect(reg.x, top, leftEdge - reg.x, reg.h); }
     if (rightEdge < reg.x + reg.w) { ctx.fillRect(rightEdge, top, (reg.x + reg.w) - rightEdge, reg.h); }
+
+    // dense wheat TEXTURE over the gradient base (scaled to wall height, tiled across each
+    // wall, clipped to the wall edges). The gradient stays as the fallback if not loaded.
+    if (sprite && sprite.width) {
+      var tW = reg.h * (sprite.width / sprite.height);
+      if (leftEdge > reg.x) { _tileWheatRect(ctx, sprite, reg.x, leftEdge, top, reg.h, tW); }
+      if (rightEdge < reg.x + reg.w) { _tileWheatRect(ctx, sprite, rightEdge, reg.x + reg.w, top, reg.h, tW); }
+    }
 
     // Screen-bounds cull (wall scope): the field is GLOBAL, so without this every screen
     // redraws ALL stalks (most off-screen). Skip stalks whose base + lean/ear horizontal

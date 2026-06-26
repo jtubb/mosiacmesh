@@ -107,7 +107,7 @@ test('mmTransitionState: wheatpart is a mask effect with phase + rising local fr
 });
 
 function stubCtx() {
-  const calls = { fillRect: 0, save: 0, restore: 0, beginPath: 0, fill: 0, arc: 0, gradients: 0 };
+  const calls = { fillRect: 0, save: 0, restore: 0, beginPath: 0, fill: 0, arc: 0, gradients: 0, drawImage: 0 };
   return {
     calls,
     fillStyle: '#000', globalAlpha: 1,
@@ -116,6 +116,7 @@ function stubCtx() {
     beginPath() { calls.beginPath++; }, moveTo() {}, lineTo() {}, quadraticCurveTo() {},
     arc() { calls.arc++; }, closePath() {},
     fill() { calls.fill++; }, stroke() {}, fillRect() { calls.fillRect++; },
+    drawImage() { calls.drawImage++; },
     createLinearGradient() { calls.gradients++; return { addColorStop() {} }; }
   };
 }
@@ -137,6 +138,19 @@ test('mmDrawWheat: never throws on degenerate inputs', () => {
   const c = stubCtx();
   assert.doesNotThrow(() => g.mmDrawWheat(c, {}, 'cover', 0.5, 800, 200, null, 'wall', 0, 123));
   assert.doesNotThrow(() => g.mmDrawWheat(c, { density: 0 }, 'reveal', 0.5, 800, 200, null, 'wall', 0, 0));
+});
+
+test('mmDrawWheat: a loaded sprite tiles the backdrop (drawImage); no sprite -> none', () => {
+  const img = { width: 768, height: 768 };
+  const withTex = stubCtx();
+  // closed (openness 0): both walls full -> the texture tiles across both
+  g.mmDrawWheat(withTex, { tint: 'golden', density: 20 }, 'cover', 1, 800, 200, null, 'wall', 1, 0, img);
+  assert.ok(withTex.calls.drawImage >= 2, 'wheat texture tiled across the two walls');
+  const noTex = stubCtx();
+  g.mmDrawWheat(noTex, { tint: 'golden', density: 20 }, 'cover', 1, 800, 200, null, 'wall', 1, 0);
+  assert.equal(noTex.calls.drawImage, 0, 'no sprite -> no drawImage, gradient fallback only');
+  // an unloaded image (width 0) must be skipped, not throw
+  assert.doesNotThrow(() => g.mmDrawWheat(stubCtx(), {}, 'cover', 1, 800, 200, null, 'wall', 1, 0, { width: 0, height: 0 }));
 });
 
 test('mmDrawWheat: screen scope with quad executes without error and draws backdrop + stalks', () => {

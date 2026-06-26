@@ -275,6 +275,7 @@ class WheatPartEffect(Effect):
     # Single `duration`: a wheatpart instance only covers (endEffect) or reveals
     # (startEffect), never both.
     params = [ParamSpec("tint", "choice", "golden", choices=["golden", "amber", "pale"]),
+              ParamSpec("sprite", "string", "wheatfield"),   # dense wheat backdrop texture (any tileable PNG; "" = gradient only)
               ParamSpec("density", "number", 70, minimum=10, maximum=200),
               ParamSpec("hold", "number", 0.2, minimum=0, maximum=0.5),
               ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),

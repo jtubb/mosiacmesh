@@ -252,6 +252,7 @@ def test_wheatpart_in_catalog_with_defaults():
     params = {p["key"]: p for p in cat["wheatpart"]["params"]}
     assert params["tint"]["default"] == "golden"
     assert params["tint"]["choices"] == ["golden", "amber", "pale"]
+    assert params["sprite"]["default"] == "wheatfield"
     assert params["density"]["default"] == 70
     assert params["density"]["min"] == 10 and params["density"]["max"] == 200
     assert params["hold"]["default"] == 0.2
