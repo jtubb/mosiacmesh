@@ -779,6 +779,10 @@
 									mmDrawFrost(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope, playback.seed | 0,
 										mmSprite(mmScatterSpriteUrl(stc.effect.params && stc.effect.params.sprite)));
+								} else if (stc.effect.name === 'wheatpart' && typeof mmDrawWheat === 'function') {
+									mmDrawWheat(ctx, stc.effect.params, stc.effect.phase, stc.effect.front,
+										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
+										playback.seed | 0, GoTime.now());
 								} else if (typeof mmDrawMaskInCanvas === 'function') {
 									mmDrawMaskInCanvas(ctx, stc.effect.name, stc.effect.params, stc.effect.front,
 										it.meshGlobal[0], it.meshGlobal[1], it.meshQuad, stc.effect.scope,
