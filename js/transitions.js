@@ -1050,6 +1050,7 @@
   // leaning, swaying procedural stalks sit on top. Global coords (warped by the
   // mesh affine like the other mask draws). ctx primitives only -- no clip.
   function mmDrawWheat(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
+    ctx.globalAlpha = 1;
     var o = mmWheatOpenness(phase, front);
     var geom = mmWheatPartGeom(o, GW, GH);
     var pal = mmWheatColor(params && params.tint);
@@ -1070,12 +1071,12 @@
     // sliding outward with the wall, swaying with `now`.
     var field = mmWheatField(seed, (params && params.density) || 70, reg.w, reg.h);
     var stalkW = reg.h * 0.012, ts = (now || 0) * 0.001, i, s, baseX, leanDir, ang;
-    var headRpx, tipX, tipY, hY;
+    var headRpx, hY;
     for (i = 0; i < field.length; i++) {
       s = field[i];
       // s.bx is in [0,reg.w); map to region x, then slide outward with its wall
-      if (s.side === 'left') { baseX = reg.x + s.bx - geom.slide; leanDir = -1; }
-      else { baseX = reg.x + s.bx + geom.slide; leanDir = 1; }
+      if (s.side === 'left') { baseX = reg.x + s.bx - g; leanDir = -1; }
+      else { baseX = reg.x + s.bx + g; leanDir = 1; }
       // cull stalks whose base has slid off its visible wall
       if (s.side === 'left' && (baseX < reg.x || baseX > leftEdge)) { continue; }
       if (s.side === 'right' && (baseX > reg.x + reg.w || baseX < rightEdge)) { continue; }

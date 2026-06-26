@@ -123,3 +123,12 @@ test('mmDrawWheat: never throws on degenerate inputs', () => {
   assert.doesNotThrow(() => g.mmDrawWheat(c, {}, 'cover', 0.5, 800, 200, null, 'wall', 0, 123));
   assert.doesNotThrow(() => g.mmDrawWheat(c, { density: 0 }, 'reveal', 0.5, 800, 200, null, 'wall', 0, 0));
 });
+
+test('mmDrawWheat: screen scope with quad executes without error and draws backdrop + stalks', () => {
+  // screen scope at mid-openness with a typical quad. Should draw backdrop (fillRect) and stalks (save/restore).
+  const quad = [[0.25, 0.5], [0.75, 0.5], [0.75, 1.0], [0.25, 1.0]];
+  const ctx = stubCtx();
+  assert.doesNotThrow(() => g.mmDrawWheat(ctx, { tint: 'golden', density: 50 }, 'cover', 0.5, 800, 200, quad, 'screen', 42, 500));
+  assert.ok(ctx.calls.fillRect >= 1, 'backdrop present in screen scope');
+  assert.ok(ctx.calls.restore === ctx.calls.save && ctx.calls.save >= 1, 'balanced save/restore for stalks');
+});
