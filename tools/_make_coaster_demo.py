@@ -1,18 +1,19 @@
 """Create a 'Coaster Flip Demo' playlist: two plasma mesh items handing off via the
-coasterflip transition (axis=horizontal, kraft). Run with the server up."""
+coasterflip v2 tumbling coaster (axis=horizontal, kraft, coaster back-face PNG,
+5 flips). Run with the server up."""
 import asyncio, json, aiohttp
 HOST = "127.0.0.1:3000"
 
 def cf():
     return {"name": "coasterflip",
-            "params": {"axis": "horizontal", "coaster": "kraft", "scope": "wall",
-                       "duration": 700, "audioFade": True}}
+            "params": {"axis": "horizontal", "coaster": "kraft", "sprite": "coaster",
+                       "flips": 5, "scope": "wall", "duration": 1800, "audioFade": True}}
 
 ITEMS = [
     {"id": "cf-a", "file": "plasma", "playmode": "SCRIPT", "scriptSpan": "mesh",
-     "duration": 8, "backgroundColor": "#0a0a0a", "startEffect": None, "endEffect": cf()},
+     "duration": 12, "backgroundColor": "#0a0a0a", "startEffect": None, "endEffect": cf()},
     {"id": "cf-b", "file": "plasma", "playmode": "SCRIPT", "scriptSpan": "mesh",
-     "duration": 8, "backgroundColor": "#0a0a0a", "startEffect": cf(), "endEffect": None},
+     "duration": 12, "backgroundColor": "#0a0a0a", "startEffect": cf(), "endEffect": None},
 ]
 
 async def main():

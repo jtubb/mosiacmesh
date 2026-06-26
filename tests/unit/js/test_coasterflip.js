@@ -96,3 +96,15 @@ test('mmDrawCoasterDisc: masks outside a centered circle when round>0; nothing a
   fills = 0; g.mmDrawCoasterDisc(c, reg, 1, '#000');
   assert.ok(fills > 0, 'wide region at full round -> side strips + corner cutouts drawn');
 });
+
+test('mmCoasterTumble: scale = |cos θ| stays >= 0 and wobble = sin θ * 0.1 across the sweep', () => {
+  let maxW = 0;
+  for (let i = 0; i <= 40; i++) {
+    const o = i / 40;
+    const t = g.mmCoasterTumble(o, 'cover', 5, 0.25);
+    assert.ok(t.scale >= 0 && t.scale <= 1.0000001, `scale in [0,1] at ${o} (got ${t.scale})`);
+    assert.ok(C(t.wobble, Math.sin(t.theta) * 0.1), `wobble = sinθ*0.1 at ${o}`);
+    if (Math.abs(t.wobble) > maxW) { maxW = Math.abs(t.wobble); }
+  }
+  assert.ok(maxW > 0.05, 'wobble actually swings (peaks near 0.1 at edge-on)');
+});
