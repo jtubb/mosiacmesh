@@ -578,6 +578,28 @@
              slide: g, lean: o * _WHEAT_MAX_LEAN };
   }
 
+  var _WHEAT = {
+    golden: { backdrop: '#b8901f', base: '#8a6a14', stalk: '#d9b23a', head: '#f0d169' },
+    amber:  { backdrop: '#9c6f1a', base: '#6f4d10', stalk: '#c8912e', head: '#e6b85a' },
+    pale:   { backdrop: '#d8c478', base: '#b6a256', stalk: '#e8dca0', head: '#f7efc8' }
+  };
+  function mmWheatColor(tint) { return _WHEAT[tint] || _WHEAT.golden; }
+
+  // Deterministic stalk field across the whole wall (seeded -> identical on every
+  // screen, like mmScatterParticles/mmBeerBubbles). h/headR are FRACTIONS so the
+  // draw scales them to GH and they never warp to sub-pixel specks.
+  function mmWheatField(seed, density, GW, GH) {
+    var n = density > 0 ? (density | 0) : 1;
+    var rnd = _mmLcg(seed >>> 0), arr = [], i, bx;
+    var cx = GW / 2;
+    for (i = 0; i < n; i++) {
+      bx = rnd() * GW;
+      arr.push({ bx: bx, h: 0.6 + rnd() * 0.4, sway: rnd() * 6.283185307,
+                 headR: 0.006 + rnd() * 0.006, side: bx < cx ? 'left' : 'right' });
+    }
+    return arr;
+  }
+
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
   function mmScatterParticles(seed, count) {
     var rnd = _mmLcg(seed >>> 0), arr = [], i;
@@ -1066,4 +1088,6 @@
   root.mmSpriteFit = mmSpriteFit;
   root.mmWheatOpenness = mmWheatOpenness;
   root.mmWheatPartGeom = mmWheatPartGeom;
+  root.mmWheatField = mmWheatField;
+  root.mmWheatColor = mmWheatColor;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
