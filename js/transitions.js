@@ -1045,6 +1045,65 @@
     }
   }
 
+  // Draw the wheat curtain covering the two outer walls; the center gap (content)
+  // grows as openness rises. Opaque straw backdrop rects guarantee the cover;
+  // leaning, swaying procedural stalks sit on top. Global coords (warped by the
+  // mesh affine like the other mask draws). ctx primitives only -- no clip.
+  function mmDrawWheat(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
+    var o = mmWheatOpenness(phase, front);
+    var geom = mmWheatPartGeom(o, GW, GH);
+    var pal = mmWheatColor(params && params.tint);
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    // In 'screen' scope the seam is the region center; in 'wall' it's GW/2. Recompute
+    // the local edges within the region span.
+    var cx = reg.x + reg.w / 2, g = o * (reg.w / 2);
+    var leftEdge = cx - g, rightEdge = cx + g, top = reg.y, bot = reg.y + reg.h;
+
+    // backdrop walls (opaque) -- left [reg.x, leftEdge], right [rightEdge, reg.x+reg.w]
+    var grL = ctx.createLinearGradient(0, top, 0, bot);
+    grL.addColorStop(0, pal.base); grL.addColorStop(1, pal.backdrop);
+    ctx.fillStyle = grL;
+    if (leftEdge > reg.x) { ctx.fillRect(reg.x, top, leftEdge - reg.x, reg.h); }
+    if (rightEdge < reg.x + reg.w) { ctx.fillRect(rightEdge, top, (reg.x + reg.w) - rightEdge, reg.h); }
+
+    // stalks: rooted at the bottom of each wall, leaning toward the outer edge,
+    // sliding outward with the wall, swaying with `now`.
+    var field = mmWheatField(seed, (params && params.density) || 70, reg.w, reg.h);
+    var stalkW = reg.h * 0.012, ts = (now || 0) * 0.001, i, s, baseX, leanDir, ang;
+    var headRpx, tipX, tipY, hY;
+    for (i = 0; i < field.length; i++) {
+      s = field[i];
+      // s.bx is in [0,reg.w); map to region x, then slide outward with its wall
+      if (s.side === 'left') { baseX = reg.x + s.bx - geom.slide; leanDir = -1; }
+      else { baseX = reg.x + s.bx + geom.slide; leanDir = 1; }
+      // cull stalks whose base has slid off its visible wall
+      if (s.side === 'left' && (baseX < reg.x || baseX > leftEdge)) { continue; }
+      if (s.side === 'right' && (baseX > reg.x + reg.w || baseX < rightEdge)) { continue; }
+      ang = leanDir * geom.lean + Math.sin(ts * 1.6 + s.sway) * 0.05;   // lean + gentle sway
+      hY = s.h * reg.h;                                                 // stalk height (px)
+      ctx.save();
+      ctx.translate(baseX, bot);
+      ctx.rotate(ang);
+      // tapered stalk: a thin triangle base->tip
+      ctx.fillStyle = pal.stalk;
+      ctx.beginPath();
+      ctx.moveTo(-stalkW / 2, 0);
+      ctx.lineTo(stalkW / 2, 0);
+      ctx.lineTo(0, -hY);
+      ctx.closePath();
+      ctx.fill();
+      // grain head: an ellipse at the tip (arc + scale, no ctx.ellipse dependency)
+      headRpx = s.headR * reg.h;
+      ctx.fillStyle = pal.head;
+      ctx.save();
+      ctx.translate(0, -hY);
+      ctx.scale(0.6, 1.6);                       // squash into a wheat-head oval
+      ctx.beginPath(); ctx.arc(0, 0, headRpx, 0, 6.283185307); ctx.fill();
+      ctx.restore();
+      ctx.restore();
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -1102,4 +1161,5 @@
   root.mmWheatField = mmWheatField;
   root.mmWheatColor = mmWheatColor;
   root.mmWheatPhase = mmWheatPhase;
+  root.mmDrawWheat = mmDrawWheat;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

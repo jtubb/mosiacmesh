@@ -90,3 +90,36 @@ test('mmTransitionState: wheatpart is a mask effect with phase + rising local fr
   assert.equal(s.effect.phase, 'reveal');                  // in role
   assert.ok(s.effect.front >= 0 && s.effect.front <= 1);
 });
+
+function stubCtx() {
+  const calls = { fillRect: 0, save: 0, restore: 0, beginPath: 0, fill: 0, arc: 0, gradients: 0 };
+  return {
+    calls,
+    fillStyle: '#000', globalAlpha: 1,
+    save() { calls.save++; }, restore() { calls.restore++; },
+    translate() {}, rotate() {}, scale() {},
+    beginPath() { calls.beginPath++; }, moveTo() {}, lineTo() {}, quadraticCurveTo() {},
+    arc() { calls.arc++; }, closePath() {},
+    fill() { calls.fill++; }, stroke() {}, fillRect() { calls.fillRect++; },
+    createLinearGradient() { calls.gradients++; return { addColorStop() {} }; }
+  };
+}
+
+test('mmDrawWheat: closed (openness 0) fills backdrops; open (openness 1) draws ~nothing', () => {
+  // cover phase, front=1 -> openness 0 (fully closed): two backdrop rects expected.
+  const closed = stubCtx();
+  g.mmDrawWheat(closed, { tint: 'golden', density: 40 }, 'cover', 1, 800, 200, null, 'wall', 7, 0);
+  assert.ok(closed.calls.fillRect >= 2, 'closed wheat fills the two backdrop walls');
+  assert.ok(closed.calls.save >= 1 && closed.calls.restore === closed.calls.save, 'balanced save/restore');
+
+  // reveal phase, front=1 -> openness 1 (fully open): walls cleared, ~no backdrop.
+  const open = stubCtx();
+  g.mmDrawWheat(open, { tint: 'golden', density: 40 }, 'reveal', 1, 800, 200, null, 'wall', 7, 0);
+  assert.ok(open.calls.fillRect <= closed.calls.fillRect, 'open wheat fills less/none vs closed');
+});
+
+test('mmDrawWheat: never throws on degenerate inputs', () => {
+  const c = stubCtx();
+  assert.doesNotThrow(() => g.mmDrawWheat(c, {}, 'cover', 0.5, 800, 200, null, 'wall', 0, 123));
+  assert.doesNotThrow(() => g.mmDrawWheat(c, { density: 0 }, 'reveal', 0.5, 800, 200, null, 'wall', 0, 0));
+});
