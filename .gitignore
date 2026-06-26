@@ -51,3 +51,6 @@ tools/bench_variations.py
 # test fixture image used ad-hoc by calibrate scripts; large + binary
 tests/calibrationimage.jpg
 graphify-out/
+
+# Timestamped settings backups (data-safety net)
+settings_backups/

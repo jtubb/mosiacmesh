@@ -173,6 +173,22 @@ def sample_discovery_data():
 
 
 @pytest.fixture(autouse=True)
+def isolate_settings_file(tmp_path, monkeypatch):
+    """Redirect ALL settings persistence to a per-test temp file so no test can ever
+    write the repo's live settings.dat (which the production server reads from the same
+    relative path). This is the root-cause fix for the 2026-06-26 clobber: several
+    REST/render tests called the real save against an empty mock Settings, and the
+    relative "settings.dat" path resolved to the cwd, so running the suite from the
+    repo root silently wiped the operator's live groups/playlists/calibration.
+
+    save_settings_incremental() reads persistence.SETTINGS_PATH at call time, so this
+    patch redirects every save path regardless of how a handler imported saveSettings."""
+    import mosaicmesh.persistence as persistence
+    monkeypatch.setattr(persistence, "SETTINGS_PATH", tmp_path / "settings.dat")
+    yield
+
+
+@pytest.fixture(autouse=True)
 def reset_global_state():
     """Reset global state before each test"""
     server = get_server_module()
@@ -181,9 +197,9 @@ def reset_global_state():
     server.file_cache.clear()
     server.cache_stats['hits'] = 0
     server.cache_stats['misses'] = 0
-    
+
     yield
-    
+
     # Cleanup after test
     server.close_file_pool()
 
