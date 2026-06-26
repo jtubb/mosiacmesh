@@ -25,25 +25,42 @@ HEAD = (90, 205, 232)       # lighter grain ~ #e8cd5a
 HEAD_D = (60, 170, 205)     # grain shade
 
 
+def grain(cx, cy, hw, hh, fan):
+    """One wheat grain: an upward teardrop (rounded base, pointed tip), tip fanned by `fan`."""
+    tx = cx + fan
+    pts = np.array([
+        [tx, cy - hh],
+        [cx + hw, cy - hh * 0.15],
+        [cx + hw, cy + hh * 0.35],
+        [cx + hw * 0.6, cy + hh * 0.85],
+        [cx, cy + hh],
+        [cx - hw * 0.6, cy + hh * 0.85],
+        [cx - hw, cy + hh * 0.35],
+        [cx - hw, cy - hh * 0.15],
+    ], np.int32)
+    cv2.fillConvexPoly(img, pts, HEAD, cv2.LINE_AA)
+    cv2.polylines(img, [pts], True, HEAD_D, 1, cv2.LINE_AA)
+
+
 def stalk(cx, base_y, h, lean, sw):
-    """Draw one upright golden stalk with a grain-head cluster at the tip."""
+    """Draw one upright golden stalk with a clustered teardrop-grain ear at the tip."""
     tip = (int(cx + lean), int(base_y - h))
     cv2.line(img, (int(cx), int(base_y)), tip, STALK, sw, cv2.LINE_AA)
-    # grain ear: paired kernels up the top ~40%
-    ear = int(h * 0.4)
-    rows = 5
+    # grain ear: a cluster of paired upward teardrops up the top ~45%, fanning outward
+    ear = h * 0.45
+    rows = 6
     for k in range(rows):
         f = k / float(rows - 1)
-        ky = int(tip[1] + ear * f)
-        kx = int(cx + lean * (1.0 - f))
+        ky = tip[1] + ear * f
+        kx = cx + lean * (1.0 - f)
         tap = 1.0 - f * 0.5
-        rx = max(1, int(2.6 * tap))
-        ry = max(2, int(4.4 * tap))
-        off = int(3.0 * tap) + sw
-        for sgn in (-1, 1):
-            cv2.ellipse(img, (kx + sgn * off, ky), (rx, ry), 0, 0, 360, HEAD, -1, cv2.LINE_AA)
-            cv2.ellipse(img, (kx + sgn * off, ky), (rx, ry), 0, 0, 360, HEAD_D, 1, cv2.LINE_AA)
-    cv2.ellipse(img, tip, (max(1, sw), 5), 0, 0, 360, HEAD, -1, cv2.LINE_AA)
+        hw = max(1.5, 2.4 * tap)
+        hh = max(2.5, 4.6 * tap)
+        off = 2.6 * tap + sw
+        fan = 1.8 * tap
+        grain(kx - off, ky, hw, hh, -fan)
+        grain(kx + off, ky, hw, hh, fan)
+    grain(tip[0], tip[1] - 2, max(1.5, 2.2), 5.0, 0)   # crowning tip grain
 
 
 # --- pack the field densely; wrap x so it tiles horizontally ---

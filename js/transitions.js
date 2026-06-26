@@ -1072,6 +1072,19 @@
     }
   }
 
+  // A single wheat grain: an upward teardrop (rounded base, pointed tip) centered at (x,y),
+  // half-width hw, half-height hh, tip nudged by tipDx for an outward fan. Adds one subpath
+  // to the CURRENT path (caller batches many grains then fills once). quadraticCurveTo is
+  // Safari-5.1 safe; no clip / cubic bezier.
+  function _grainTear(ctx, x, y, hw, hh, tipDx) {
+    var tx = x + tipDx, ty = y - hh;                                     // pointed tip (top)
+    ctx.moveTo(tx, ty);
+    ctx.quadraticCurveTo(x + hw, y - hh * 0.15, x + hw, y + hh * 0.30);  // tip -> right bulge
+    ctx.quadraticCurveTo(x + hw, y + hh, x, y + hh);                     // -> rounded bottom
+    ctx.quadraticCurveTo(x - hw, y + hh, x - hw, y + hh * 0.30);         // -> left
+    ctx.quadraticCurveTo(x - hw, y - hh * 0.15, tx, ty);                 // -> back to tip
+  }
+
   // Draw the wheat curtain covering the two outer walls; the center gap (content)
   // grows as openness rises. A dense wheat TEXTURE (over an opaque straw gradient base)
   // fills each wall; leaning, swaying procedural ear-stalks sit on top for parting-edge
@@ -1117,7 +1130,7 @@
     // sliding outward with the wall, swaying with `now`.
     var field = mmWheatField(seed, (params && params.density) || 70, reg.w, reg.h);
     var stalkW = reg.h * 0.012, ts = (now || 0) * 0.001, i, s, baseX, leanDir, ang;
-    var headRpx, hY, EL = 1.65;                  // EL = kernel elongation (grain aspect)
+    var headRpx, hY;
     for (i = 0; i < field.length; i++) {
       s = field[i];
       // s.bx is in [0,reg.w); map to region x, then slide outward with its wall
@@ -1141,28 +1154,26 @@
       ctx.lineTo(0, -hY);
       ctx.closePath();
       ctx.fill();
-      // grain EAR: paired kernels up the stalk top + awns. ALL kernels drawn as circles in
-      // ONE y-scaled path (-> elongated grains), so the whole ear is a single save/scale/
-      // fill instead of ~11 -- this is the per-stalk hot path on iPad-1.
-      headRpx = s.headR * reg.h;                 // per-stalk kernel size unit (seeded variety)
-      var earLen = hY * 0.42, rows = 5, kr, kf, ky, tap, krad, koff;
+      // grain EAR: a tight cluster of upward TEARDROP grains (rounded base, pointed tip)
+      // fanning slightly outward up the spike -> reads like a real wheat head. All grains
+      // in ONE path/fill (the per-stalk hot path on iPad-1).
+      headRpx = s.headR * reg.h;                 // per-stalk grain size unit (seeded variety)
+      var earLen = hY * 0.45, rows = 6, kr, kf, ky, tap, gw, gh, koff, fan;
       ctx.fillStyle = pal.head;
-      ctx.save();
-      ctx.scale(1, EL);                          // circles -> vertically-elongated grains
       ctx.beginPath();
       for (kr = 0; kr < rows; kr++) {
-        kf = kr / (rows - 1);                      // 0 at ear base, 1 at the tip
-        ky = (-hY + earLen * (1 - kf)) / EL;       // pre-divide by EL so it lands right post-scale
-        tap = 1 - kf * 0.55;                        // kernels shrink toward the tip
-        krad = headRpx * 1.15 * tap;                // kernel radius (x); *EL gives grain length
-        koff = (stalkW * 0.6 + headRpx * 0.7) * tap; // spread left/right of the stalk axis
-        ctx.moveTo(-koff + krad, ky); ctx.arc(-koff, ky, krad, 0, 6.283185307);
-        ctx.moveTo(koff + krad, ky); ctx.arc(koff, ky, krad, 0, 6.283185307);
+        kf = kr / (rows - 1);                       // 0 at ear base, 1 at the tip
+        ky = -hY + earLen * (1 - kf);               // ear base up to the tip
+        tap = 1 - kf * 0.5;                          // grains shrink toward the tip
+        gw = headRpx * 1.0 * tap;                    // grain half-width
+        gh = headRpx * 1.9 * tap;                    // grain half-height (tall teardrop)
+        koff = (stalkW * 0.5 + headRpx * 0.55) * tap; // pair spread off the axis
+        fan = headRpx * 0.5 * tap;                   // tips fan outward
+        _grainTear(ctx, -koff, ky, gw, gh, -fan);
+        _grainTear(ctx, koff, ky, gw, gh, fan);
       }
-      var trad = headRpx * 0.95, tky = -hY / EL; // crowning tip kernel
-      ctx.moveTo(trad, tky); ctx.arc(0, tky, trad, 0, 6.283185307);
+      _grainTear(ctx, 0, -hY - headRpx * 0.4, headRpx * 0.85, headRpx * 2.0, 0);  // crowning tip grain
       ctx.fill();
-      ctx.restore();
       // awns: fine bristles fanning up from the tip
       ctx.strokeStyle = pal.head; ctx.lineWidth = stalkW * 0.22;
       ctx.beginPath();
