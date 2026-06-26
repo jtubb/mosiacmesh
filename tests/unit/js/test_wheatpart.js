@@ -69,3 +69,24 @@ test('mmWheatColor: known tints return 4 keys; unknown -> golden', () => {
   assert.deepEqual(g.mmWheatColor('nope'), g.mmWheatColor('golden'));
   assert.deepEqual(g.mmWheatColor(undefined), g.mmWheatColor('golden'));
 });
+
+test('mmTransitionState: wheatpart is a mask effect with phase + rising local front', () => {
+  // endEffect on item A: an 'out' role. Use an offset late in an 8000ms item so the
+  // end window is active. duration 2000ms.
+  const endEff = { name: 'wheatpart', params: { duration: 2000, scope: 'wall' } };
+  // Sample two points inside the end window to confirm front rises 0->1 (local progress).
+  const near = g.mmTransitionState(null, endEff, 6200, 8000, null, null);  // just into window
+  const late = g.mmTransitionState(null, endEff, 7800, 8000, null, null);  // near end
+  assert.equal(near.effect.name, 'wheatpart');
+  assert.equal(near.effect.family, 'mask');
+  assert.equal(near.effect.phase, 'cover');                // out role
+  assert.ok(near.effect.front >= 0 && near.effect.front <= 1);
+  assert.ok(late.effect.front > near.effect.front, 'local front rises across the cover window');
+  assert.equal(near.wipe, null);
+
+  // startEffect on item B: an 'in' role.
+  const startEff = { name: 'wheatpart', params: { duration: 2000, scope: 'wall' } };
+  const s = g.mmTransitionState(startEff, null, 200, 8000, null, null);
+  assert.equal(s.effect.phase, 'reveal');                  // in role
+  assert.ok(s.effect.front >= 0 && s.effect.front <= 1);
+});

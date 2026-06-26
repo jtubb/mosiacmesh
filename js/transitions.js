@@ -154,6 +154,16 @@
                effect: { name: 'frostcreep', family: 'mask', front: frcov,
                          scope: frsc, params: eff.params || {}, phase: frph } };
     }
+    if (eff.name === 'wheatpart') {
+      var wpsc = (eff.params && eff.params.scope) || 'wall';
+      // front = LOCAL phase progress 0->1 (like scatter): `p` counts DOWN on the
+      // 'out' window (1->0), so invert there; 'in' already counts up. mmDrawWheat
+      // maps front->openness via phase (mmWheatOpenness).
+      var wplp = (role === 'out') ? (1 - p) : p;
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'wheatpart', family: 'mask', front: wplp,
+                         scope: wpsc, params: eff.params || {}, phase: mmWheatPhase(role) } };
+    }
     if (eff.name === 'coasterflip') {
       var cesc = (eff.params && eff.params.scope) || 'wall';
       // transform family + raw front p; carries `phase` so the apply can sequence the
@@ -599,6 +609,7 @@
     }
     return arr;
   }
+  function mmWheatPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
 
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
   function mmScatterParticles(seed, count) {
@@ -1090,4 +1101,5 @@
   root.mmWheatPartGeom = mmWheatPartGeom;
   root.mmWheatField = mmWheatField;
   root.mmWheatColor = mmWheatColor;
+  root.mmWheatPhase = mmWheatPhase;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
