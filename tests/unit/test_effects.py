@@ -254,6 +254,8 @@ def test_wheatpart_in_catalog_with_defaults():
     assert params["tint"]["choices"] == ["golden", "amber", "pale"]
     assert params["density"]["default"] == 70
     assert params["density"]["min"] == 10 and params["density"]["max"] == 200
+    assert params["hold"]["default"] == 0.2
+    assert params["hold"]["min"] == 0 and params["hold"]["max"] == 0.5
     assert params["scope"]["default"] == "wall"
     assert params["duration"]["default"] == 2200
     assert params["audioFade"]["default"] is True

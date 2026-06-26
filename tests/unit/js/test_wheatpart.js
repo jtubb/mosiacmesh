@@ -4,15 +4,30 @@ await import('../../../js/transitions.js');
 const g = globalThis;
 const C = (a, b) => Math.abs(a - b) < 1e-9;
 
-test('mmWheatOpenness: reveal passes through, cover inverts, clamps', () => {
+test('mmWheatOpenness: hold-then-ramp per role, default hold 0.2, clamps', () => {
+  // reveal: holds closed (0) for the first 20%, then opens linearly over the last 80%.
   assert.ok(C(g.mmWheatOpenness('reveal', 0), 0));
+  assert.ok(C(g.mmWheatOpenness('reveal', 0.1), 0));   // within the hold
+  assert.ok(C(g.mmWheatOpenness('reveal', 0.2), 0));   // hold edge
+  assert.ok(C(g.mmWheatOpenness('reveal', 0.6), 0.5)); // (0.6-0.2)/0.8
   assert.ok(C(g.mmWheatOpenness('reveal', 1), 1));
-  assert.ok(C(g.mmWheatOpenness('reveal', 0.3), 0.3));
-  assert.ok(C(g.mmWheatOpenness('cover', 0), 1));   // cover starts open
-  assert.ok(C(g.mmWheatOpenness('cover', 1), 0));   // cover ends closed
-  assert.ok(C(g.mmWheatOpenness('cover', 0.3), 0.7));
-  assert.ok(C(g.mmWheatOpenness('reveal', -1), 0)); // clamp
+  // cover: closes linearly over the first 80%, then holds closed (0) the last 20%.
+  assert.ok(C(g.mmWheatOpenness('cover', 0), 1));      // cover starts open
+  assert.ok(C(g.mmWheatOpenness('cover', 0.4), 0.5));  // 1 - 0.4/0.8
+  assert.ok(C(g.mmWheatOpenness('cover', 0.8), 0));    // hold edge
+  assert.ok(C(g.mmWheatOpenness('cover', 0.9), 0));    // within the hold
+  assert.ok(C(g.mmWheatOpenness('cover', 1), 0));
+  assert.ok(C(g.mmWheatOpenness('reveal', -1), 0));    // clamp
   assert.ok(C(g.mmWheatOpenness('reveal', 2), 1));
+});
+
+test('mmWheatOpenness: explicit hold fraction widens/narrows the dwell', () => {
+  // hold 0.4: reveal holds closed until front 0.4, opens over the last 0.6.
+  assert.ok(C(g.mmWheatOpenness('reveal', 0.4, 0.4), 0));
+  assert.ok(C(g.mmWheatOpenness('reveal', 0.7, 0.4), 0.5)); // (0.7-0.4)/0.6
+  // hold 0: pure passthrough (no dwell).
+  assert.ok(C(g.mmWheatOpenness('reveal', 0.3, 0), 0.3));
+  assert.ok(C(g.mmWheatOpenness('cover', 0.3, 0), 0.7));
 });
 
 test('mmWheatOpenness: both roles reach closed (0) at the handoff', () => {

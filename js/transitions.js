@@ -570,12 +570,18 @@
   // role->openness mapping; the draw glue (mmDrawWheat) consumes these. ---
   var _WHEAT_MAX_LEAN = 0.5;                  // outward stalk lean at full-open (~29 deg)
 
-  // Role -> openness (0 closed/full-wheat .. 1 open/content-visible). Mirrors
-  // mmScatterCover/mmBeerLevel: front is LOCAL phase progress rising 0->1 for both
-  // roles; reveal passes it through, cover inverts it.
-  function mmWheatOpenness(phase, front) {
+  // Role -> openness (0 closed/full-wheat .. 1 open/content-visible). front is LOCAL
+  // phase progress rising 0->1 for both roles. `hold` (default 0.2) is the fraction of
+  // the window the wheat DWELLS fully closed at the center seam: a cover closes over the
+  // first (1-hold) then holds closed; a reveal holds closed for the first `hold` then
+  // opens over the rest. So both roles dwell full-wheat across the A->B handoff.
+  function mmWheatOpenness(phase, front, hold) {
     var f = front < 0 ? 0 : (front > 1 ? 1 : front);
-    return phase === 'reveal' ? f : (1 - f);
+    var h = (hold >= 0 && hold < 1) ? hold : 0.2;
+    if (phase === 'reveal') {
+      return f <= h ? 0 : (f - h) / (1 - h);          // hold closed, then open 0->1
+    }
+    return f >= (1 - h) ? 0 : (1 - f / (1 - h));        // close 1->0, then hold closed
   }
 
   // Parting geometry at a given openness. Single vertical seam at wall center cx.
@@ -1051,7 +1057,7 @@
   // mesh affine like the other mask draws). ctx primitives only -- no clip.
   function mmDrawWheat(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
     ctx.globalAlpha = 1;
-    var o = mmWheatOpenness(phase, front);
+    var o = mmWheatOpenness(phase, front, (params && params.hold));
     var geom = mmWheatPartGeom(o, GW, GH);
     var pal = mmWheatColor(params && params.tint);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
