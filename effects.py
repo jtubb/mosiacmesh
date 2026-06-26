@@ -266,3 +266,19 @@ class CoasterFlipEffect(Effect):
 
     def video_filters(self, role, params, ctx):
         return ([], _afade(role, params, ctx))     # visual is client-side; single duration
+
+
+@register
+class WheatPartEffect(Effect):
+    name = "wheatpart"
+    label = "Wheat Part"
+    # Single `duration`: a wheatpart instance only covers (endEffect) or reveals
+    # (startEffect), never both.
+    params = [ParamSpec("tint", "choice", "golden", choices=["golden", "amber", "pale"]),
+              ParamSpec("density", "number", 70, minimum=10, maximum=200),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 2200, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))     # visual is client-side; single duration

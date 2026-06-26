@@ -12,7 +12,7 @@ def test_get_effect_unknown_returns_none():
 def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
     assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve",
-                     "beerfill", "scatter", "kegroll", "frostcreep", "coasterflip"}
+                     "beerfill", "scatter", "kegroll", "frostcreep", "coasterflip", "wheatpart"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -243,3 +243,37 @@ def test_coasterflip_audio_single_duration():
     assert v2 == [] and a2 == ["afade=t=out:st=5.3:d=0.7"]
     v3, a3 = cf.video_filters("end", cf.resolve({"audioFade": False}), ctx)
     assert v3 == [] and a3 == []
+
+
+def test_wheatpart_in_catalog_with_defaults():
+    import effects
+    cat = {e["name"]: e for e in effects.effect_catalog()}
+    assert "wheatpart" in cat
+    params = {p["key"]: p for p in cat["wheatpart"]["params"]}
+    assert params["tint"]["default"] == "golden"
+    assert params["tint"]["choices"] == ["golden", "amber", "pale"]
+    assert params["density"]["default"] == 70
+    assert params["density"]["min"] == 10 and params["density"]["max"] == 200
+    assert params["scope"]["default"] == "wall"
+    assert params["duration"]["default"] == 2200
+    assert params["audioFade"]["default"] is True
+
+
+def test_wheatpart_video_filters_audio_only_role_aware():
+    import effects
+    eff = effects.get_effect("wheatpart")
+    p = eff.resolve({"audioFade": True, "duration": 2000})
+    ctx = {"duration_ms": 8000}
+    vstart, astart = eff.video_filters("start", p, ctx)
+    vend, aend = eff.video_filters("end", p, ctx)
+    assert vstart == [] and vend == []                      # no baked video
+    assert astart == ["afade=t=in:st=0:d=2"]
+    assert aend == ["afade=t=out:st=6:d=2"]
+
+
+def test_wheatpart_audiofade_off_bakes_nothing():
+    import effects
+    eff = effects.get_effect("wheatpart")
+    p = eff.resolve({"audioFade": False, "duration": 2000})
+    assert eff.video_filters("start", p, {"duration_ms": 8000}) == ([], [])
+    assert eff.video_filters("end", p, {"duration_ms": 8000}) == ([], [])
