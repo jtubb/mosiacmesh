@@ -1093,14 +1093,28 @@
       ctx.lineTo(0, -hY);
       ctx.closePath();
       ctx.fill();
-      // grain head: an ellipse at the tip (arc + scale, no ctx.ellipse dependency)
-      headRpx = s.headR * reg.h;
+      // grain EAR: a spike of paired kernels up the top of the stalk + awns -> reads as wheat
+      headRpx = s.headR * reg.h;                 // per-stalk kernel size unit (seeded variety)
       ctx.fillStyle = pal.head;
-      ctx.save();
-      ctx.translate(0, -hY);
-      ctx.scale(0.6, 1.6);                       // squash into a wheat-head oval
-      ctx.beginPath(); ctx.arc(0, 0, headRpx, 0, 6.283185307); ctx.fill();
-      ctx.restore();
+      var earLen = hY * 0.42, rows = 5, kr, kf, ky, tap, kw, kh, koff;
+      for (kr = 0; kr < rows; kr++) {
+        kf = kr / (rows - 1);                      // 0 at ear base, 1 at the tip
+        ky = -hY + earLen * (1 - kf);              // base of ear (-hY+earLen) up to tip (-hY)
+        tap = 1 - kf * 0.55;                        // kernels shrink toward the tip
+        kw = headRpx * 1.15 * tap;                  // kernel x-radius
+        kh = headRpx * 1.9 * tap;                   // kernel y-radius (elongated grain)
+        koff = (stalkW * 0.6 + headRpx * 0.7) * tap; // spread left/right of the stalk axis
+        ctx.save(); ctx.translate(-koff, ky); ctx.scale(kw, kh); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.283185307); ctx.fill(); ctx.restore();
+        ctx.save(); ctx.translate(koff, ky); ctx.scale(kw, kh); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.283185307); ctx.fill(); ctx.restore();
+      }
+      ctx.save(); ctx.translate(0, -hY); ctx.scale(headRpx * 0.9, headRpx * 1.7); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.283185307); ctx.fill(); ctx.restore();
+      // awns: fine bristles fanning up from the tip
+      ctx.strokeStyle = pal.head; ctx.lineWidth = stalkW * 0.22;
+      ctx.beginPath();
+      ctx.moveTo(0, -hY); ctx.lineTo(-stalkW * 1.1, -hY - earLen * 0.5);
+      ctx.moveTo(0, -hY); ctx.lineTo(0, -hY - earLen * 0.62);
+      ctx.moveTo(0, -hY); ctx.lineTo(stalkW * 1.1, -hY - earLen * 0.5);
+      ctx.stroke();
       ctx.restore();
     }
   }
