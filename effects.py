@@ -276,10 +276,10 @@ class WheatPartEffect(Effect):
     # (startEffect), never both.
     params = [ParamSpec("tint", "choice", "golden", choices=["golden", "amber", "pale"]),
               ParamSpec("sprite", "string", "wheatfield"),   # dense wheat backdrop texture (any tileable PNG; "" = gradient only)
-              ParamSpec("density", "number", 70, minimum=10, maximum=200),
-              ParamSpec("hold", "number", 0.2, minimum=0, maximum=0.5),
+              ParamSpec("density", "number", 30, minimum=10, maximum=200),   # foreground ear-stalks (texture carries the field density)
+              ParamSpec("hold", "number", 0.5, minimum=0, maximum=0.5),      # dwell fully-closed for this fraction of the window
               ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
-              ParamSpec("duration", "number", 2200, minimum=0),
+              ParamSpec("duration", "number", 4000, minimum=0),
               ParamSpec("audioFade", "boolean", True)]
 
     def video_filters(self, role, params, ctx):

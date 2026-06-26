@@ -1,18 +1,19 @@
 """Create a 'Wheat Part Demo' playlist: two plasma mesh items handing off via the
-wheatpart transition (golden, density 70). Run with the server up."""
+wheatpart transition (golden wheat-texture backdrop + sparse foreground ear-stalks,
+50% center dwell). Run with the server up."""
 import asyncio, json, aiohttp
 HOST = "127.0.0.1:3000"
 
 def wp():
     return {"name": "wheatpart",
-            "params": {"tint": "golden", "density": 70, "scope": "wall",
-                       "duration": 2200, "audioFade": True}}
+            "params": {"tint": "golden", "sprite": "wheatfield", "density": 30,
+                       "hold": 0.5, "scope": "wall", "duration": 4000, "audioFade": True}}
 
 ITEMS = [
     {"id": "wp-a", "file": "plasma", "playmode": "SCRIPT", "scriptSpan": "mesh",
-     "duration": 10, "backgroundColor": "#0a0a0a", "startEffect": None, "endEffect": wp()},
+     "duration": 12, "backgroundColor": "#0a0a0a", "startEffect": None, "endEffect": wp()},
     {"id": "wp-b", "file": "plasma", "playmode": "SCRIPT", "scriptSpan": "mesh",
-     "duration": 10, "backgroundColor": "#0a0a0a", "startEffect": wp(), "endEffect": None},
+     "duration": 12, "backgroundColor": "#0a0a0a", "startEffect": wp(), "endEffect": None},
 ]
 
 async def main():
