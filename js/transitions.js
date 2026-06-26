@@ -1073,11 +1073,22 @@
     if (leftEdge > reg.x) { ctx.fillRect(reg.x, top, leftEdge - reg.x, reg.h); }
     if (rightEdge < reg.x + reg.w) { ctx.fillRect(rightEdge, top, (reg.x + reg.w) - rightEdge, reg.h); }
 
+    // Screen-bounds cull (wall scope): the field is GLOBAL, so without this every screen
+    // redraws ALL stalks (most off-screen). Skip stalks whose base + lean/ear horizontal
+    // reach can't land on THIS screen's quad. Biggest win during the dwell (lean->0 =>
+    // tight margin). quad is normalized global coords; null (uncalibrated) -> no cull.
+    var qLo = -1, qHi = 0, cullM = 0;
+    if (quad && quad.length >= 4) {
+      qLo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW;
+      qHi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW;
+      cullM = Math.abs(Math.sin(geom.lean)) * reg.h + reg.h * 0.05;   // lean reach + ear/stalk width
+    }
+
     // stalks: rooted at the bottom of each wall, leaning toward the outer edge,
     // sliding outward with the wall, swaying with `now`.
     var field = mmWheatField(seed, (params && params.density) || 70, reg.w, reg.h);
     var stalkW = reg.h * 0.012, ts = (now || 0) * 0.001, i, s, baseX, leanDir, ang;
-    var headRpx, hY;
+    var headRpx, hY, EL = 1.65;                  // EL = kernel elongation (grain aspect)
     for (i = 0; i < field.length; i++) {
       s = field[i];
       // s.bx is in [0,reg.w); map to region x, then slide outward with its wall
@@ -1086,6 +1097,8 @@
       // cull stalks whose base has slid off its visible wall
       if (s.side === 'left' && (baseX < reg.x || baseX > leftEdge)) { continue; }
       if (s.side === 'right' && (baseX > reg.x + reg.w || baseX < rightEdge)) { continue; }
+      // cull stalks that can't reach this screen (global field -> per-screen skip)
+      if (qLo >= 0 && (baseX < qLo - cullM || baseX > qHi + cullM)) { continue; }
       ang = leanDir * geom.lean + Math.sin(ts * 1.6 + s.sway) * 0.05;   // lean + gentle sway
       hY = s.h * reg.h;                                                 // stalk height (px)
       ctx.save();
@@ -1099,21 +1112,28 @@
       ctx.lineTo(0, -hY);
       ctx.closePath();
       ctx.fill();
-      // grain EAR: a spike of paired kernels up the top of the stalk + awns -> reads as wheat
+      // grain EAR: paired kernels up the stalk top + awns. ALL kernels drawn as circles in
+      // ONE y-scaled path (-> elongated grains), so the whole ear is a single save/scale/
+      // fill instead of ~11 -- this is the per-stalk hot path on iPad-1.
       headRpx = s.headR * reg.h;                 // per-stalk kernel size unit (seeded variety)
+      var earLen = hY * 0.42, rows = 5, kr, kf, ky, tap, krad, koff;
       ctx.fillStyle = pal.head;
-      var earLen = hY * 0.42, rows = 5, kr, kf, ky, tap, kw, kh, koff;
+      ctx.save();
+      ctx.scale(1, EL);                          // circles -> vertically-elongated grains
+      ctx.beginPath();
       for (kr = 0; kr < rows; kr++) {
         kf = kr / (rows - 1);                      // 0 at ear base, 1 at the tip
-        ky = -hY + earLen * (1 - kf);              // base of ear (-hY+earLen) up to tip (-hY)
+        ky = (-hY + earLen * (1 - kf)) / EL;       // pre-divide by EL so it lands right post-scale
         tap = 1 - kf * 0.55;                        // kernels shrink toward the tip
-        kw = headRpx * 1.15 * tap;                  // kernel x-radius
-        kh = headRpx * 1.9 * tap;                   // kernel y-radius (elongated grain)
+        krad = headRpx * 1.15 * tap;                // kernel radius (x); *EL gives grain length
         koff = (stalkW * 0.6 + headRpx * 0.7) * tap; // spread left/right of the stalk axis
-        ctx.save(); ctx.translate(-koff, ky); ctx.scale(kw, kh); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.283185307); ctx.fill(); ctx.restore();
-        ctx.save(); ctx.translate(koff, ky); ctx.scale(kw, kh); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.283185307); ctx.fill(); ctx.restore();
+        ctx.moveTo(-koff + krad, ky); ctx.arc(-koff, ky, krad, 0, 6.283185307);
+        ctx.moveTo(koff + krad, ky); ctx.arc(koff, ky, krad, 0, 6.283185307);
       }
-      ctx.save(); ctx.translate(0, -hY); ctx.scale(headRpx * 0.9, headRpx * 1.7); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 6.283185307); ctx.fill(); ctx.restore();
+      var trad = headRpx * 0.95, tky = -hY / EL; // crowning tip kernel
+      ctx.moveTo(trad, tky); ctx.arc(0, tky, trad, 0, 6.283185307);
+      ctx.fill();
+      ctx.restore();
       // awns: fine bristles fanning up from the tip
       ctx.strokeStyle = pal.head; ctx.lineWidth = stalkW * 0.22;
       ctx.beginPath();
