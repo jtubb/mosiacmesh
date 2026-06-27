@@ -617,6 +617,21 @@
   }
   function mmWheatPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
 
+  // --- Splash crown (mask family): a beer droplet impacts the wall center, a crown
+  // leaps, and an opaque beer disc blooms outward. Pure sequencing + geometry; the
+  // draw glue (mmDrawSplash) consumes these. ---
+  function mmSplashPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+
+  // Lead-in (drop falls) -> bloom (disc grows). cover plays forward, reveal time-reverses
+  // so both roles sit at full beer (bloom 1) at the A->B handoff. dropY 0=top..1=center.
+  function mmSplashSeq(phase, front, leadFrac) {
+    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var lf = (leadFrac > 0 && leadFrac < 1) ? leadFrac : 0.18;
+    var lp = (phase === 'cover') ? f : (1 - f);
+    if (lp < lf) { return { dropY: lp / lf, bloom: 0, impacted: false }; }
+    return { dropY: 1, bloom: (lp - lf) / (1 - lf), impacted: true };
+  }
+
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
   function mmScatterParticles(seed, count) {
     var rnd = _mmLcg(seed >>> 0), arr = [], i;
@@ -1243,4 +1258,6 @@
   root.mmWheatColor = mmWheatColor;
   root.mmWheatPhase = mmWheatPhase;
   root.mmDrawWheat = mmDrawWheat;
+  root.mmSplashPhase = mmSplashPhase;
+  root.mmSplashSeq = mmSplashSeq;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
