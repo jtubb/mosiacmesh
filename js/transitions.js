@@ -1233,6 +1233,68 @@
     }
   }
 
+  // Draw the splash crown: a beer droplet lead-in, then an OPAQUE beer disc blooming
+  // from the center with a crown of spikes + flung beads on the advancing edge. Global
+  // coords (warped by the mesh affine). ctx primitives only -- no clip.
+  function mmDrawSplash(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
+    var seq = mmSplashSeq(phase, front, 0.18);
+    var pal = mmBeerPalette(params && params.beerType);
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2, TWO = 6.283185307;
+
+    if (!seq.impacted) {
+      if (seq.dropY <= 0) { return; }
+      var dy = reg.y + seq.dropY * (cy - reg.y);          // top -> center
+      var dw = reg.h * 0.018, dh = reg.h * 0.045;
+      ctx.fillStyle = pal.beerTop;
+      ctx.globalAlpha = 0.35;                              // motion streak above the drop
+      ctx.fillRect(cx - dw * 0.25, reg.y, dw * 0.5, dy - reg.y);
+      ctx.globalAlpha = 1;
+      ctx.beginPath();                                     // beer teardrop (pointed top)
+      ctx.moveTo(cx, dy - dh);
+      ctx.quadraticCurveTo(cx + dw, dy - dh * 0.1, cx + dw, dy + dh * 0.2);
+      ctx.quadraticCurveTo(cx + dw, dy + dh, cx, dy + dh);
+      ctx.quadraticCurveTo(cx - dw, dy + dh, cx - dw, dy + dh * 0.2);
+      ctx.quadraticCurveTo(cx - dw, dy - dh * 0.1, cx, dy - dh);
+      ctx.fill();
+      return;
+    }
+
+    var R = mmSplashRadius(seq.bloom, reg.w, reg.h);
+    if (R <= 0) { return; }
+    var g = ctx.createLinearGradient(0, cy - R, 0, cy + R);  // beer disc body
+    g.addColorStop(0, pal.beerTop); g.addColorStop(1, pal.beerBot);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TWO); ctx.fill();
+
+    var spikes = mmCrownSpikes(seed, (params && params.crownCount) || 28);
+    var spikeMax = reg.h * 0.06, ts = (now || 0) * 0.001, i, s, sa, slen, tipx, tipy, sw, px, py, fb;
+    var qLo = -1, qHi = 0;
+    if (quad && quad.length >= 4) {
+      qLo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW - spikeMax * 3;
+      qHi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW + spikeMax * 3;
+    }
+    for (i = 0; i < spikes.length; i++) {
+      s = spikes[i]; sa = s.ang;
+      px = cx + R * Math.cos(sa); py = cy + R * Math.sin(sa);     // rim base
+      if (qLo >= 0 && (px < qLo || px > qHi)) { continue; }       // off this screen
+      slen = spikeMax * s.lenF * (0.6 + 0.4 * Math.sin(ts * 3 + s.phase));
+      tipx = cx + (R + slen) * Math.cos(sa); tipy = cy + (R + slen) * Math.sin(sa);
+      sw = reg.h * 0.012 * s.beadF;
+      ctx.fillStyle = pal.beerTop;                               // spike triangle
+      ctx.beginPath();
+      ctx.moveTo(px - (-Math.sin(sa)) * sw, py - (Math.cos(sa)) * sw);
+      ctx.lineTo(px + (-Math.sin(sa)) * sw, py + (Math.cos(sa)) * sw);
+      ctx.lineTo(tipx, tipy); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = pal.foamTop || pal.foam || pal.beerTop;    // foam-highlighted tip bead
+      ctx.beginPath(); ctx.arc(tipx, tipy, sw, 0, TWO); ctx.fill();
+      fb = R + slen + spikeMax * s.flyF * (0.5 + seq.bloom);     // flung bead ahead
+      ctx.globalAlpha = 0.6 * (1 - seq.bloom * 0.3);
+      ctx.beginPath(); ctx.arc(cx + fb * Math.cos(sa), cy + fb * Math.sin(sa), sw * 0.7, 0, TWO); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
   root.mmTransitionState = mmTransitionState;
   root.mmApplyTransition = mmApplyTransition;
   root.mmWipeSlide = mmWipeSlide;
@@ -1295,4 +1357,5 @@
   root.mmSplashSeq = mmSplashSeq;
   root.mmSplashRadius = mmSplashRadius;
   root.mmCrownSpikes = mmCrownSpikes;
+  root.mmDrawSplash = mmDrawSplash;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

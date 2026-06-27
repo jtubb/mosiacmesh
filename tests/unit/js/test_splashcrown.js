@@ -68,3 +68,34 @@ test('mmTransitionState: splashcrown is a mask effect with phase + rising local 
   const s = g.mmTransitionState(startEff, null, 200, 8000, null, null);
   assert.equal(s.effect.phase, 'reveal');
 });
+
+function stubCtx() {
+  const calls = { fillRect: 0, beginPath: 0, fill: 0, arc: 0, quad: 0, gradients: 0, moveTo: 0 };
+  return {
+    calls, fillStyle: '#000', strokeStyle: '#000', globalAlpha: 1, lineWidth: 1,
+    save() {}, restore() {}, translate() {}, rotate() {},
+    beginPath() { calls.beginPath++; }, moveTo() { calls.moveTo++; }, lineTo() {}, closePath() {},
+    quadraticCurveTo() { calls.quad++; }, arc() { calls.arc++; },
+    fill() { calls.fill++; }, stroke() {}, fillRect() { calls.fillRect++; },
+    createLinearGradient() { calls.gradients++; return { addColorStop() {} }; }
+  };
+}
+
+test('mmDrawSplash: lead-in draws droplet (no disc), bloom fills disc + crown', () => {
+  // cover, front mid lead-in (front 0.09, lead 0.18) -> droplet only, NO arc disc fill
+  const lead = stubCtx();
+  g.mmDrawSplash(lead, { beerType: 'pale', crownCount: 12 }, 'cover', 0.09, 800, 600, null, 'wall', 5, 0);
+  assert.ok(lead.calls.quad >= 4, 'lead-in draws the teardrop via quadraticCurveTo');
+
+  // cover, well into bloom -> opaque disc (arc+fill) + crown spikes (arcs)
+  const bloom = stubCtx();
+  g.mmDrawSplash(bloom, { beerType: 'pale', crownCount: 12 }, 'cover', 0.7, 800, 600, null, 'wall', 5, 0);
+  assert.ok(bloom.calls.arc >= 1, 'bloom fills the beer disc (arc)');
+  assert.ok(bloom.calls.fill > lead.calls.fill, 'bloom draws more than the lead-in droplet');
+});
+
+test('mmDrawSplash: never throws on degenerate inputs / screen scope', () => {
+  const quad = [[0.25, 0.5], [0.75, 0.5], [0.75, 1.0], [0.25, 1.0]];
+  assert.doesNotThrow(() => g.mmDrawSplash(stubCtx(), {}, 'reveal', 0.5, 800, 600, quad, 'screen', 0, 100));
+  assert.doesNotThrow(() => g.mmDrawSplash(stubCtx(), { crownCount: 0 }, 'cover', 1, 800, 600, null, 'wall', 0, 0));
+});
