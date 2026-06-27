@@ -1237,6 +1237,7 @@
   // from the center with a crown of spikes + flung beads on the advancing edge. Global
   // coords (warped by the mesh affine). ctx primitives only -- no clip.
   function mmDrawSplash(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
+    ctx.globalAlpha = 1;
     var seq = mmSplashSeq(phase, front, 0.18);
     var pal = mmBeerPalette(params && params.beerType);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
