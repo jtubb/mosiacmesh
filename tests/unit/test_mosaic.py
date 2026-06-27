@@ -990,6 +990,17 @@ class TestEffectRenderHook:
         t2 = server.compute_render_token("Default")
         assert t1 == t2, "wheatpart visual-only param changes should not invalidate the render token"
 
+    def test_token_unchanged_by_splashcrown_visual_param_change(self, mock_settings):
+        me = self._token_setup(mock_settings)
+        me.startEffect = {"name": "splashcrown", "params": {"beerType": "pale", "crownCount": 28, "scope": "wall",
+                                                            "duration": 2000, "audioFade": True}}
+        t1 = server.compute_render_token("Default")
+        # Change only visual params (beerType, crownCount); audioFade + duration unchanged.
+        me.startEffect = {"name": "splashcrown", "params": {"beerType": "stout", "crownCount": 60, "scope": "wall",
+                                                            "duration": 2000, "audioFade": True}}
+        t2 = server.compute_render_token("Default")
+        assert t1 == t2, "splashcrown visual-only param changes should not invalidate the render token"
+
     def test_token_changes_when_audioFade_toggled(self, mock_settings):
         me = self._token_setup(mock_settings)
         me.startEffect = {"name": "fade", "params": {"duration": 600, "audioFade": True}}

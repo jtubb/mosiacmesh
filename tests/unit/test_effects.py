@@ -12,7 +12,7 @@ def test_get_effect_unknown_returns_none():
 def test_catalog_has_all_effects():
     names = {e["name"] for e in effects.effect_catalog()}
     assert names == {"fade", "wipe", "slide", "zoom", "iris", "dissolve",
-                     "beerfill", "scatter", "kegroll", "frostcreep", "coasterflip", "wheatpart"}
+                     "beerfill", "scatter", "kegroll", "frostcreep", "coasterflip", "wheatpart", "splashcrown"}
 
 
 def test_fade_params_include_duration_and_audioFade_boolean():
@@ -277,6 +277,40 @@ def test_wheatpart_video_filters_audio_only_role_aware():
 def test_wheatpart_audiofade_off_bakes_nothing():
     import effects
     eff = effects.get_effect("wheatpart")
+    p = eff.resolve({"audioFade": False, "duration": 2000})
+    assert eff.video_filters("start", p, {"duration_ms": 8000}) == ([], [])
+    assert eff.video_filters("end", p, {"duration_ms": 8000}) == ([], [])
+
+
+def test_splashcrown_in_catalog_with_defaults():
+    import effects
+    cat = {e["name"]: e for e in effects.effect_catalog()}
+    assert "splashcrown" in cat
+    params = {p["key"]: p for p in cat["splashcrown"]["params"]}
+    assert params["beerType"]["default"] == "pale"
+    assert params["beerType"]["choices"] == ["pale", "amber", "stout"]
+    assert params["crownCount"]["default"] == 28
+    assert params["crownCount"]["min"] == 8 and params["crownCount"]["max"] == 60
+    assert params["scope"]["default"] == "wall"
+    assert params["duration"]["default"] == 2000
+    assert params["audioFade"]["default"] is True
+
+
+def test_splashcrown_video_filters_audio_only_role_aware():
+    import effects
+    eff = effects.get_effect("splashcrown")
+    p = eff.resolve({"audioFade": True, "duration": 2000})
+    ctx = {"duration_ms": 8000}
+    vstart, astart = eff.video_filters("start", p, ctx)
+    vend, aend = eff.video_filters("end", p, ctx)
+    assert vstart == [] and vend == []
+    assert astart == ["afade=t=in:st=0:d=2"]
+    assert aend == ["afade=t=out:st=6:d=2"]
+
+
+def test_splashcrown_audiofade_off_bakes_nothing():
+    import effects
+    eff = effects.get_effect("splashcrown")
     p = eff.resolve({"audioFade": False, "duration": 2000})
     assert eff.video_filters("start", p, {"duration_ms": 8000}) == ([], [])
     assert eff.video_filters("end", p, {"duration_ms": 8000}) == ([], [])

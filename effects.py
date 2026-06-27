@@ -284,3 +284,19 @@ class WheatPartEffect(Effect):
 
     def video_filters(self, role, params, ctx):
         return ([], _afade(role, params, ctx))     # visual is client-side; single duration
+
+
+@register
+class SplashCrownEffect(Effect):
+    name = "splashcrown"
+    label = "Splash Crown"
+    # Single `duration`: a splashcrown instance only covers (endEffect) or reveals
+    # (startEffect), never both.
+    params = [ParamSpec("beerType", "choice", "pale", choices=["pale", "amber", "stout"]),
+              ParamSpec("crownCount", "number", 28, minimum=8, maximum=60),
+              ParamSpec("scope", "choice", "wall", choices=["screen", "wall"]),
+              ParamSpec("duration", "number", 2000, minimum=0),
+              ParamSpec("audioFade", "boolean", True)]
+
+    def video_filters(self, role, params, ctx):
+        return ([], _afade(role, params, ctx))     # visual is client-side; single duration
