@@ -86,6 +86,7 @@ test('mmDrawSplash: lead-in draws droplet (no disc), bloom fills disc + crown', 
   const lead = stubCtx();
   g.mmDrawSplash(lead, { beerType: 'pale', crownCount: 12 }, 'cover', 0.09, 800, 600, null, 'wall', 5, 0);
   assert.ok(lead.calls.quad >= 4, 'lead-in draws the teardrop via quadraticCurveTo');
+  assert.equal(lead.calls.arc, 0, 'lead-in draws the droplet, not the beer disc');
 
   // cover, well into bloom -> opaque disc (arc+fill) + crown spikes (arcs)
   const bloom = stubCtx();

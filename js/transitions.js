@@ -1269,15 +1269,16 @@
 
     var spikes = mmCrownSpikes(seed, (params && params.crownCount) || 28);
     var spikeMax = reg.h * 0.06, ts = (now || 0) * 0.001, i, s, sa, slen, tipx, tipy, sw, px, py, fb;
-    var qLo = -1, qHi = 0;
+    var cullActive = false, qLo = 0, qHi = 0;
     if (quad && quad.length >= 4) {
+      cullActive = true;
       qLo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW - spikeMax * 3;
       qHi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW + spikeMax * 3;
     }
     for (i = 0; i < spikes.length; i++) {
       s = spikes[i]; sa = s.ang;
       px = cx + R * Math.cos(sa); py = cy + R * Math.sin(sa);     // rim base
-      if (qLo >= 0 && (px < qLo || px > qHi)) { continue; }       // off this screen
+      if (cullActive && (px < qLo || px > qHi)) { continue; }     // off this screen
       slen = spikeMax * s.lenF * (0.6 + 0.4 * Math.sin(ts * 3 + s.phase));
       tipx = cx + (R + slen) * Math.cos(sa); tipy = cy + (R + slen) * Math.sin(sa);
       sw = reg.h * 0.012 * s.beadF;
