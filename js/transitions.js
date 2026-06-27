@@ -1276,6 +1276,17 @@
       qLo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW - spikeMax * 3;
       qHi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW + spikeMax * 3;
     }
+    // concentric ripple rings spreading from the impact (foam outlines, fading outward)
+    var rk, rr, ra;
+    ctx.strokeStyle = pal.foamTop || pal.foam || pal.beerTop;
+    ctx.lineWidth = reg.h * 0.006;
+    for (rk = 0; rk < 4; rk++) {
+      rr = R * (0.45 + rk * 0.22);
+      ra = 0.45 * (1 - rk / 4) * (0.6 + 0.4 * Math.sin(ts * 4 - rk));
+      ctx.globalAlpha = ra < 0 ? 0 : ra;
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, TWO); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
     for (i = 0; i < spikes.length; i++) {
       s = spikes[i]; sa = s.ang;
       px = cx + R * Math.cos(sa); py = cy + R * Math.sin(sa);     // rim base
@@ -1294,6 +1305,20 @@
       ctx.globalAlpha = 0.6 * (1 - seq.bloom * 0.3);
       ctx.beginPath(); ctx.arc(cx + fb * Math.cos(sa), cy + fb * Math.sin(sa), sw * 0.7, 0, TWO); ctx.fill();
       ctx.globalAlpha = 1;
+    }
+    // central jet (Rayleigh): a beer column rises from the impact point, peaking just
+    // after impact then receding -- the secondary jet of a real splash. Tied to bloom.
+    var jb = seq.bloom / 0.6; if (jb > 1) { jb = 1; }
+    var jetF = Math.sin(jb * 3.14159265);
+    if (jetF > 0.001) {
+      var jetH = jetF * reg.h * 0.30, jw = reg.h * 0.022;
+      ctx.fillStyle = pal.foamTop || pal.beerTop;
+      ctx.beginPath();
+      ctx.moveTo(cx - jw, cy);
+      ctx.quadraticCurveTo(cx - jw * 0.3, cy - jetH * 0.6, cx, cy - jetH);   // up to the tip
+      ctx.quadraticCurveTo(cx + jw * 0.3, cy - jetH * 0.6, cx + jw, cy);     // back down
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy - jetH - jw * 0.5, jw * 0.7, 0, TWO); ctx.fill();  // pinch-off bead
     }
   }
 
