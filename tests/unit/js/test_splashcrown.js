@@ -52,3 +52,19 @@ test('mmCrownSpikes: deterministic, sized, in-bounds', () => {
     assert.ok(s.flyF >= 0.6 && s.flyF < 1.51);
   }
 });
+
+test('mmTransitionState: splashcrown is a mask effect with phase + rising local front', () => {
+  const endEff = { name: 'splashcrown', params: { scope: 'wall', duration: 2000 } };
+  const near = g.mmTransitionState(null, endEff, 6200, 8000, null, null);
+  const late = g.mmTransitionState(null, endEff, 7800, 8000, null, null);
+  assert.equal(near.effect.name, 'splashcrown');
+  assert.equal(near.effect.family, 'mask');
+  assert.equal(near.effect.phase, 'cover');
+  assert.ok(near.effect.front >= 0 && near.effect.front <= 1);
+  assert.ok(late.effect.front > near.effect.front, 'local front rises across the cover window');
+  assert.equal(near.wipe, null);
+
+  const startEff = { name: 'splashcrown', params: { scope: 'wall', duration: 2000 } };
+  const s = g.mmTransitionState(startEff, null, 200, 8000, null, null);
+  assert.equal(s.effect.phase, 'reveal');
+});

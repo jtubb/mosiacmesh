@@ -164,6 +164,15 @@
                effect: { name: 'wheatpart', family: 'mask', front: wplp,
                          scope: wpsc, params: eff.params || {}, phase: mmWheatPhase(role) } };
     }
+    if (eff.name === 'splashcrown') {
+      var spsc = (eff.params && eff.params.scope) || 'wall';
+      // front = LOCAL phase progress 0->1 (scatter convention): invert on the 'out'
+      // window; mmDrawSplash maps front->sequence via phase (mmSplashSeq).
+      var splp = (role === 'out') ? (1 - p) : p;
+      return { role: role, opacity: 1, wipe: null,
+               effect: { name: 'splashcrown', family: 'mask', front: splp,
+                         scope: spsc, params: eff.params || {}, phase: mmSplashPhase(role) } };
+    }
     if (eff.name === 'coasterflip') {
       var cesc = (eff.params && eff.params.scope) || 'wall';
       // transform family + raw front p; carries `phase` so the apply can sequence the
