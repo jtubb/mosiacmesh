@@ -632,6 +632,30 @@
     return { dropY: 1, bloom: (lp - lf) / (1 - lf), impacted: true };
   }
 
+  function mmSplashRadius(bloom, GW, GH) {
+    var b = bloom < 0 ? 0 : (bloom > 1 ? 1 : bloom);
+    return b * 0.5 * Math.sqrt(GW * GW + GH * GH);
+  }
+
+  // Deterministic crown: `count` spikes around the rim (seeded -> identical on every
+  // screen, like mmScatterParticles). Evenly spaced + per-spike jitter so the rim isn't
+  // a perfect ring. lenF/beadF/flyF/phase shape each spike + its flung bead.
+  function mmCrownSpikes(seed, count) {
+    var n = count > 0 ? (count | 0) : 1;
+    var rnd = _mmLcg(seed >>> 0), arr = [], i, base, step = 6.283185307 / n, ang;
+    for (i = 0; i < n; i++) {
+      base = i * step;
+      ang = base + (rnd() - 0.5) * step * 0.8;
+      if (ang < 0) { ang += 6.283185307; } else if (ang >= 6.283185307) { ang -= 6.283185307; }
+      arr.push({ ang: ang,
+                 lenF: 0.5 + rnd() * 0.5,
+                 beadF: 0.5 + rnd() * 0.6,
+                 flyF: 0.6 + rnd() * 0.9,
+                 phase: rnd() * 6.283185307 });
+    }
+    return arr;
+  }
+
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
   function mmScatterParticles(seed, count) {
     var rnd = _mmLcg(seed >>> 0), arr = [], i;
@@ -1260,4 +1284,6 @@
   root.mmDrawWheat = mmDrawWheat;
   root.mmSplashPhase = mmSplashPhase;
   root.mmSplashSeq = mmSplashSeq;
+  root.mmSplashRadius = mmSplashRadius;
+  root.mmCrownSpikes = mmCrownSpikes;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

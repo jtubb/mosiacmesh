@@ -32,3 +32,23 @@ test('mmSplashSeq: clamps and defaults leadFrac', () => {
   const b = g.mmSplashSeq('cover', -1, 0.18);
   assert.ok(!b.impacted && C(b.dropY, 0));
 });
+
+test('mmSplashRadius: 0 at bloom 0, half-diagonal at bloom 1, clamps', () => {
+  assert.ok(C(g.mmSplashRadius(0, 800, 600), 0));
+  assert.ok(C(g.mmSplashRadius(1, 800, 600), 0.5 * Math.sqrt(800 * 800 + 600 * 600)));
+  assert.ok(C(g.mmSplashRadius(2, 800, 600), 0.5 * Math.sqrt(800 * 800 + 600 * 600)));  // clamp
+});
+
+test('mmCrownSpikes: deterministic, sized, in-bounds', () => {
+  const a = g.mmCrownSpikes(123, 28);
+  const b = g.mmCrownSpikes(123, 28);
+  assert.equal(a.length, 28);
+  assert.deepEqual(a, b);
+  assert.notDeepEqual(a, g.mmCrownSpikes(999, 28));
+  for (const s of a) {
+    assert.ok(s.ang >= 0 && s.ang < 6.2832 + 1, 'ang ~ [0,2pi)');
+    assert.ok(s.lenF >= 0.5 && s.lenF < 1.0);
+    assert.ok(s.beadF >= 0.5 && s.beadF < 1.11);
+    assert.ok(s.flyF >= 0.6 && s.flyF < 1.51);
+  }
+});
