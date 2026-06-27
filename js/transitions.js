@@ -1238,7 +1238,7 @@
   // coords (warped by the mesh affine). ctx primitives only -- no clip.
   function mmDrawSplash(ctx, params, phase, front, GW, GH, quad, scope, seed, now) {
     ctx.globalAlpha = 1;
-    var seq = mmSplashSeq(phase, front, 0.18);
+    var seq = mmSplashSeq(phase, front, 0.32);   // longer drop fall-in before the impact
     var pal = mmBeerPalette(params && params.beerType);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2, TWO = 6.283185307;
@@ -1246,7 +1246,7 @@
     if (!seq.impacted) {
       if (seq.dropY <= 0) { return; }
       var dy = reg.y + seq.dropY * (cy - reg.y);          // top -> center
-      var dw = reg.h * 0.018, dh = reg.h * 0.045;
+      var dw = reg.h * 0.036, dh = reg.h * 0.095;   // larger droplet
       ctx.fillStyle = pal.beerTop;
       ctx.globalAlpha = 0.35;                              // motion streak above the drop
       ctx.fillRect(cx - dw * 0.25, reg.y, dw * 0.5, dy - reg.y);
