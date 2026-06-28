@@ -3,6 +3,7 @@
  * + DOM apply helpers. mmTransitionState is a pure function of the shared-clock
  * offset, so every panel computes the same state and transitions in lockstep. */
 (function (root) {
+  var _TWO_PI = 6.283185307;
   function _dur(eff, role) {
     if (!eff || !eff.params) { return 0; }
     if (eff.name === 'beerfill') { return mmBeerDuration(eff.params, role); }
@@ -26,7 +27,7 @@
     }
     if (b <= a) { return F >= b ? 1 : 0; }
     var r = (F - a) / (b - a);
-    return r < 0 ? 0 : (r > 1 ? 1 : r);
+    return _clamp01(r);
   }
 
   // Local cover-slide vector for a wipe given the panel's global quad. The cover
@@ -64,14 +65,9 @@
   // down/right reveal grows from the lo edge; up/left from the hi edge. Returns
   // {x,y,w,h} in global px, or null when fully revealed (no cover needed). Pure.
   function mmWipeCoverRect(scope, direction, front, GW, GH, quad) {
-    var loX = 0, hiX = GW, loY = 0, hiY = GH, i;
-    if (scope !== 'wall' && quad && quad.length >= 4) {
-      var xs = [], ys = [];
-      for (i = 0; i < quad.length; i++) { xs.push(quad[i][0]); ys.push(quad[i][1]); }
-      loX = Math.min.apply(null, xs) * GW; hiX = Math.max.apply(null, xs) * GW;
-      loY = Math.min.apply(null, ys) * GH; hiY = Math.max.apply(null, ys) * GH;
-    }
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var loX = reg.x, hiX = reg.x + reg.w, loY = reg.y, hiY = reg.y + reg.h;
+    var f = _clamp01(front);
     var x = loX, y = loY, w = hiX - loX, h = hiY - loY;
     if (direction === 'left' || direction === 'right') {
       var spanX = hiX - loX;
@@ -192,7 +188,7 @@
 
   // Scale + opacity for a Zoom. s ramps scale->1, alpha ramps 0->1 with front. Pure.
   function mmZoomFactor(front, scale) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var f = _clamp01(front);
     if (scale == null) { scale = 0.6; }
     return { s: scale + (1 - scale) * f, alpha: f };
   }
@@ -201,7 +197,7 @@
   // scale the chosen axis only; alpha dims the content toward edge-on; edge is the
   // cardboard edge-sliver opacity (strongest at edge-on). Pure.
   function mmFlipFactor(front, axis) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var f = _clamp01(front);
     var vert = (axis === 'vertical');
     return { sx: vert ? 1 : f, sy: vert ? f : 1, alpha: 0.35 + 0.65 * f, edge: 1 - f };
   }
@@ -209,7 +205,7 @@
   var _COASTER = { kraft: '#b9935f', cork: '#c8a06a', slate: '#5a5e63' };
   function mmCoasterColor(name) { return _COASTER[name] || _COASTER.kraft; }
 
-  function mmCoasterPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmCoasterPhase(role) { return _mmCoverRevealPhase(role); }
 
   // Tumbling-coaster sequencing (transform family). front = raw progress; phase 'cover'
   // (fold A out) or 'reveal' (open B in). flips = number of half-turns; roundFrac = the
@@ -221,7 +217,7 @@
   // COVER rounds-in FIRST then tumbles open->edge; REVEAL tumbles edge->open then un-rounds.
   // Both end/start edge-on at front=0, so the A->B handoff is continuous. Pure.
   function mmCoasterTumble(front, phase, flips, roundFrac) {
-    var o = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var o = _clamp01(front);
     var N = flips > 0 ? flips : 5;
     var rf = (roundFrac > 0 && roundFrac < 1) ? roundFrac : 0.25;
     var lp = (phase === 'reveal') ? o : (1 - o);     // local phase progress 0->1
@@ -266,7 +262,7 @@
   // 4 outer strips (region beyond the circle bbox) + the bbox corners rounded by R (which
   // turns the bbox square into the circle). Drawn under the caller's transform (folds with it).
   function mmDrawCoasterDisc(ctx, reg, round, bg) {
-    var rd = round < 0 ? 0 : (round > 1 ? 1 : round);
+    var rd = _clamp01(round);
     if (rd <= 0) { return; }
     var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
     var halfDiag = Math.sqrt(reg.w * reg.w + reg.h * reg.h) / 2;   // circle that covers the whole region
@@ -287,14 +283,9 @@
   // center (screen); radius ramps 0 -> half the region diagonal (so front 1 fully
   // covers the region's farthest corner). Pure.
   function mmIrisCircle(front, GW, GH, scope, quad) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
-    var loX = 0, loY = 0, hiX = GW, hiY = GH, i;
-    if (scope !== 'wall' && quad && quad.length >= 4) {
-      var xs = [], ys = [];
-      for (i = 0; i < quad.length; i++) { xs.push(quad[i][0]); ys.push(quad[i][1]); }
-      loX = Math.min.apply(null, xs) * GW; hiX = Math.max.apply(null, xs) * GW;
-      loY = Math.min.apply(null, ys) * GH; hiY = Math.max.apply(null, ys) * GH;
-    }
+    var f = _clamp01(front);
+    var reg = _mmMaskRegion(scope, quad, GW, GH);
+    var loX = reg.x, hiX = reg.x + reg.w, loY = reg.y, hiY = reg.y + reg.h;
     var hx = (hiX - loX) / 2, hy = (hiY - loY) / 2;
     return { cx: loX + hx, cy: loY + hy, r: f * Math.sqrt(hx * hx + hy * hy) };
   }
@@ -318,14 +309,14 @@
   }
   // Count of cells still covered at this front (cells revealed = floor(front*n)). Pure.
   function mmDissolveCovered(front, n) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var f = _clamp01(front);
     return n - Math.floor(f * n);
   }
 
   // Global-px offset for a Slide. 'direction' is the motion direction; content enters
   // from the opposite edge. front 0 -> one wall off; front 1 -> {0,0}. Pure.
   function mmSlideOffset(front, direction, GW, GH) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var f = _clamp01(front);
     var k = 1 - f, dx = 0, dy = 0;
     if (direction === 'left') { dx = k * GW; }
     else if (direction === 'right') { dx = -k * GW; }
@@ -351,7 +342,7 @@
       var sl = st.wipe.slide || { x: 0, y: 0 };
       var tx = sl.x * r * 100, ty = sl.y * r * 100;
       var t = 'translate(' + tx + '%,' + ty + '%)';
-      cover.style.webkitTransform = t; cover.style.transform = t;
+      mmSetTransform(cover, t);
       if (r >= 1) { cover.style.display = 'none'; }      // fully revealed
     } else {
       if (cover) { cover.style.display = 'none'; }
@@ -403,7 +394,7 @@
       ctx.beginPath();
       ctx.rect(reg.x, reg.y, reg.w, reg.h);
       var c = mmIrisCircle(front, GW, GH, scope, quad);
-      if (c.r > 0) { ctx.arc(c.cx, c.cy, c.r, 0, 6.2831853, true); }
+      if (c.r > 0) { ctx.arc(c.cx, c.cy, c.r, 0, _TWO_PI, true); }
       ctx.clip();
       ctx.fillStyle = bg; ctx.fillRect(reg.x, reg.y, reg.w, reg.h);
       ctx.restore();
@@ -458,7 +449,7 @@
   }
   function mmBeerLevel(phase, p) {
     var lv = phase === 'fill' ? p : (1 - p);
-    return lv < 0 ? 0 : (lv > 1 ? 1 : lv);
+    return _clamp01(lv);
   }
 
   function mmFoamWaveY(xFrac, t, amp, baseY) {
@@ -488,7 +479,7 @@
   // (mesh SCRIPT, drawn in global coords then warped) and on the overlay (media).
   // ctx primitives only: fillRect / arc+fill / polyline / linear gradient. No clip.
   function mmDrawBeer(ctx, params, phase, level, t, GW, GH, quad, scope, seed) {
-    var lv = level < 0 ? 0 : (level > 1 ? 1 : level);
+    var lv = _clamp01(level);
     if (lv <= 0) { return; }
     var pal = mmBeerPalette(params && params.beerType);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
@@ -519,14 +510,14 @@
       // bubbles (wall-coherent) so the stream tip reads as froth, not a flat disc.
       var tipR = pw * 0.7;
       ctx.fillStyle = pal.foamTop || pal.foam;
-      ctx.beginPath(); ctx.arc(px, streamTipY, tipR, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(px, streamTipY, tipR, 0, _TWO_PI); ctx.fill();
       var tipB = mmFoamBubbles((seed >>> 0) ^ 0x5bd1e995, 16), tj, tb;
       for (tj = 0; tj < tipB.length; tj++) {
         tb = tipB[tj];
         ctx.fillStyle = 'rgba(255,255,255,' + (0.45 + tb.a * 0.5) + ')';
         ctx.beginPath();
         ctx.arc(px + (tb.x - 0.5) * tipR * 2.4, streamTipY + (tb.yf - 0.5) * tipR * 2.4,
-                tb.r * (pw * 0.18), 0, 6.2832);
+                tb.r * (pw * 0.18), 0, _TWO_PI);
         ctx.fill();
       }
     }
@@ -545,7 +536,7 @@
       for (i = 0; i < bubs.length; i++) {
         by = bottom - (((bubs[i].phase + ts * bubs[i].spd * 0.35) % 1) * beerH);
         if (by < surfaceY + bubBase * 2) { continue; }
-        ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r * bubBase, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(reg.x + bubs[i].x * reg.w, by, bubs[i].r * bubBase, 0, _TWO_PI); ctx.fill();
       }
 
       // foam head, wavy top, foamTop->foamBot gradient for depth. Drawn OVER the pour
@@ -570,7 +561,7 @@
       for (k = 0; k < fbs.length; k++) {
         f = fbs[k];
         ctx.fillStyle = 'rgba(255,255,255,' + f.a + ')';
-        ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r * fbubBase, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(reg.x + f.x * reg.w, topBase + f.yf * fh, f.r * fbubBase, 0, _TWO_PI); ctx.fill();
       }
     }
   }
@@ -585,7 +576,7 @@
   // first (1-hold) then holds closed; a reveal holds closed for the first `hold` then
   // opens over the rest. So both roles dwell full-wheat across the A->B handoff.
   function mmWheatOpenness(phase, front, hold) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var f = _clamp01(front);
     var h = (hold >= 0 && hold < 1) ? hold : 0.2;
     if (phase === 'reveal') {
       return f <= h ? 0 : (f - h) / (1 - h);          // hold closed, then open 0->1
@@ -597,7 +588,7 @@
   // The two wheat walls' inner edges sit at cx-g / cx+g; each has slid outward by g
   // and its stalks lean by `lean` toward their outer edge.
   function mmWheatPartGeom(openness, GW, GH) {
-    var o = openness < 0 ? 0 : (openness > 1 ? 1 : openness);
+    var o = _clamp01(openness);
     var cx = GW / 2, g = o * cx;
     return { cx: cx, g: g, leftEdge: cx - g, rightEdge: cx + g,
              slide: g, lean: o * _WHEAT_MAX_LEAN };
@@ -619,22 +610,22 @@
     var cx = GW / 2;
     for (i = 0; i < n; i++) {
       bx = rnd() * GW;
-      arr.push({ bx: bx, h: 0.6 + rnd() * 0.4, sway: rnd() * 6.283185307,
+      arr.push({ bx: bx, h: 0.6 + rnd() * 0.4, sway: rnd() * _TWO_PI,
                  headR: 0.006 + rnd() * 0.006, side: bx < cx ? 'left' : 'right' });
     }
     return arr;
   }
-  function mmWheatPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmWheatPhase(role) { return _mmCoverRevealPhase(role); }
 
   // --- Splash crown (mask family): a beer droplet impacts the wall center, a crown
   // leaps, and an opaque beer disc blooms outward. Pure sequencing + geometry; the
   // draw glue (mmDrawSplash) consumes these. ---
-  function mmSplashPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmSplashPhase(role) { return _mmCoverRevealPhase(role); }
 
   // Lead-in (drop falls) -> bloom (disc grows). cover plays forward, reveal time-reverses
   // so both roles sit at full beer (bloom 1) at the A->B handoff. dropY 0=top..1=center.
   function mmSplashSeq(phase, front, leadFrac) {
-    var f = front < 0 ? 0 : (front > 1 ? 1 : front);
+    var f = _clamp01(front);
     var lf = (leadFrac > 0 && leadFrac < 1) ? leadFrac : 0.18;
     var lp = (phase === 'cover') ? f : (1 - f);
     if (lp < lf) { return { dropY: lp / lf, bloom: 0, impacted: false }; }
@@ -642,7 +633,7 @@
   }
 
   function mmSplashRadius(bloom, GW, GH) {
-    var b = bloom < 0 ? 0 : (bloom > 1 ? 1 : bloom);
+    var b = _clamp01(bloom);
     return b * 0.5 * Math.sqrt(GW * GW + GH * GH);
   }
 
@@ -651,30 +642,31 @@
   // a perfect ring. lenF/beadF/flyF/phase shape each spike + its flung bead.
   function mmCrownSpikes(seed, count) {
     var n = count > 0 ? (count | 0) : 1;
-    var rnd = _mmLcg(seed >>> 0), arr = [], i, base, step = 6.283185307 / n, ang;
+    var rnd = _mmLcg(seed >>> 0), arr = [], i, base, step = _TWO_PI / n, ang;
     for (i = 0; i < n; i++) {
       base = i * step;
       ang = base + (rnd() - 0.5) * step * 0.8;
-      if (ang < 0) { ang += 6.283185307; } else if (ang >= 6.283185307) { ang -= 6.283185307; }
+      if (ang < 0) { ang += _TWO_PI; } else if (ang >= _TWO_PI) { ang -= _TWO_PI; }
       arr.push({ ang: ang,
                  lenF: 0.5 + rnd() * 0.5,
                  beadF: 0.5 + rnd() * 0.6,
                  flyF: 0.6 + rnd() * 0.9,
-                 phase: rnd() * 6.283185307 });
+                 phase: rnd() * _TWO_PI });
     }
     return arr;
   }
 
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
+  function _mmCoverRevealPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
   function mmScatterParticles(seed, count) {
     var rnd = _mmLcg(seed >>> 0), arr = [], i;
     for (i = 0; i < count; i++) {
-      arr.push({ ang: rnd() * 6.283185307, sp: 0.6 + rnd() * 0.9,
-                 rot0: rnd() * 6.283185307, rps: (rnd() - 0.5) * 1.4 });
+      arr.push({ ang: rnd() * _TWO_PI, sp: 0.6 + rnd() * 0.9,
+                 rot0: rnd() * _TWO_PI, rps: (rnd() - 0.5) * 1.4 });
     }
     return arr;
   }
-  function mmScatterPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmScatterPhase(role) { return _mmCoverRevealPhase(role); }
   function mmScatterDuration(params, role) {
     var ms = +(role === 'out' ? (params && params.fillMs) : (params && params.drainMs));
     return ms > 0 ? ms : 2500;
@@ -686,7 +678,7 @@
   }
   function mmScatterGiantAngle(phase, p) {
     var c = _clamp01(p);
-    return (phase === 'cover' ? c : 1 + c) * 6.283185307;
+    return (phase === 'cover' ? c : 1 + c) * _TWO_PI;
   }
   function mmScatterSpriteUrl(sprite) {
     if (!sprite) { sprite = 'hop'; }
@@ -699,7 +691,7 @@
   // --- Keg roll (mask family): a giant keg sprite rolls across as the moving
   // boundary of a directional cover. Pure geometry; the wipe's reveal MATH is
   // re-derived here, the wipe's CODE is untouched. ---
-  function mmKegPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmKegPhase(role) { return _mmCoverRevealPhase(role); }
 
   // The keg center's offset along the travel axis within region coords, range
   // -kegD/2 .. S+kegD/2 (so the keg starts/ends fully off the entry/exit edge).
@@ -719,7 +711,7 @@
   // reached; shrinks full->0). direction = keg travel direction; the rect spans the
   // full perpendicular dimension. reg = {x,y,w,h}; kegD = keg diameter in global px.
   function mmKegCoverRect(prog, direction, phase, reg, kegD) {
-    var f = prog < 0 ? 0 : (prog > 1 ? 1 : prog);
+    var f = _clamp01(prog);
     var horiz = (direction === 'left' || direction === 'right');
     var plus = (direction === 'right' || direction === 'down');   // travels toward the hi edge
     var S = horiz ? reg.w : reg.h;
@@ -742,7 +734,7 @@
   // is fully off the entry/exit edge at the ends (clean fully-covered handoff). kegD =
   // keg diameter in global px. dist = axis travel (for rotation). Returns {cx,cy,dist>=0}.
   function mmKegPos(prog, direction, reg, kegD) {
-    var f = prog < 0 ? 0 : (prog > 1 ? 1 : prog);
+    var f = _clamp01(prog);
     var horiz = (direction === 'left' || direction === 'right');
     var plus = (direction === 'right' || direction === 'down');
     var S = horiz ? reg.w : reg.h;
@@ -762,7 +754,7 @@
 
   // --- Frost creep (mask family): a spatially-correlated seeded noise field thresholded
   // by a rising coverage front; soft growing blotches. Pure. ---
-  function mmFrostPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
+  function mmFrostPhase(role) { return _mmCoverRevealPhase(role); }
 
   // blocks*blocks thresholds in [0, 0.98), precomputed: seeded per-cell randoms ->
   // 2 box-blur passes (4-neighbour avg, edge-clamped) for spatial correlation (frost
@@ -872,7 +864,7 @@
     for (i = 0; i < buckets; i++) {
       cv = document.createElement('canvas'); cv.width = dim; cv.height = dim;
       cx = cv.getContext('2d');
-      cx.translate(dim / 2, dim / 2); cx.rotate(i * 6.283185307 / buckets);
+      cx.translate(dim / 2, dim / 2); cx.rotate(i * _TWO_PI / buckets);
       cx.drawImage(img, -sw / 2, -sh / 2, sw, sh);
       canvases.push(cv);
     }
@@ -918,7 +910,7 @@
       if (_dc === 'fill') {
         ctx.fillRect(vp.globalRect.x, vp.globalRect.y, vp.globalRect.w, vp.globalRect.h);
       } else if (_dc === 'arc') {
-        ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, 6.283185307); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx, cy, c * maxR, 0, _TWO_PI); ctx.fill();
       }
       // 'none' -> disc hasn't reached this screen -> draw nothing
     }
@@ -937,7 +929,7 @@
       ang = pt.rot0 + p * pt.rps * 6;
       x = cx + Math.cos(pt.ang) * d; y = cy + Math.sin(pt.ang) * d;
       if (atlas) {                                      // pre-rotated bucket: rotation baked, stamp upright
-        bi = Math.round(ang / (6.283185307 / atlas.buckets));
+        bi = Math.round(ang / (_TWO_PI / atlas.buckets));
         bi = ((bi % atlas.buckets) + atlas.buckets) % atlas.buckets;
         spr = atlas.canvases[bi];
         _ok = mmStampSprite(ctx, vp, spr, x, y, atlas.dim * (sz / atlas.sh), 0);
@@ -1002,8 +994,8 @@
   // The trig runs ONCE per cell (precomputed into the cache), never per frame. Pure.
   function mmCrystalUnit(seed, spikes) {
     if (!(spikes > 2)) { spikes = 7; }
-    var rnd = _mmLcg(seed >>> 0), pts = [], i, rot = rnd() * 6.283185307;
-    var step = 6.283185307 / (spikes * 2), ang, mag;
+    var rnd = _mmLcg(seed >>> 0), pts = [], i, rot = rnd() * _TWO_PI;
+    var step = _TWO_PI / (spikes * 2), ang, mag;
     for (i = 0; i < spikes * 2; i++) {
       ang = rot + i * step;
       mag = (i % 2 === 0) ? (0.78 + rnd() * 0.22) : (0.34 + rnd() * 0.16);
@@ -1018,7 +1010,7 @@
   // mug drops over the first `mugFrac`, then holds center while frost builds. REVEAL:
   // frost recedes first, then the mug rises out over the last `mugFrac`. Pure.
   function mmFrostSeq(phase, cover, mugFrac) {
-    var c = cover < 0 ? 0 : (cover > 1 ? 1 : cover);
+    var c = _clamp01(cover);
     var mf = (mugFrac > 0 && mugFrac < 1) ? mugFrac : 0.3;
     var lp = (phase === 'cover') ? c : (1 - c);     // local phase progress 0->1
     var fc, mp;
@@ -1042,7 +1034,7 @@
   // crystal shapes memoized on root._mmFrostCache (seed,blocks); crystal trig precomputed.
   // img: optional decoded mug sprite (null -> pure frost, no lead-in).
   function mmDrawFrost(ctx, params, phase, cover, GW, GH, quad, scope, seed, img) {
-    var cov = cover < 0 ? 0 : (cover > 1 ? 1 : cover);
+    var cov = _clamp01(cover);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
     var hasMug = !!(img && img.width && img.height);
     var seq = hasMug ? mmFrostSeq(phase, cov, 0.30) : null;
@@ -1077,7 +1069,7 @@
           ctx.closePath(); ctx.fill();
           if (fb.t > 0.7) {                           // sparkle glint on settled frost
             ctx.fillStyle = 'rgba(' + pal.spark + ',0.9)';
-            ctx.beginPath(); ctx.arc(cx, cy, cell * 0.1, 0, 6.2832); ctx.fill();
+            ctx.beginPath(); ctx.arc(cx, cy, cell * 0.1, 0, _TWO_PI); ctx.fill();
           }
         }
       }
@@ -1241,7 +1233,7 @@
     var seq = mmSplashSeq(phase, front, 0.32);   // longer drop fall-in before the impact
     var pal = mmBeerPalette(params && params.beerType);
     var reg = _mmMaskRegion(scope, quad, GW, GH);
-    var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2, TWO = 6.283185307;
+    var cx = reg.x + reg.w / 2, cy = reg.y + reg.h / 2;
 
     if (!seq.impacted) {
       if (seq.dropY <= 0) { return; }
@@ -1266,7 +1258,7 @@
     var g = ctx.createLinearGradient(0, cy - R, 0, cy + R);  // beer disc body
     g.addColorStop(0, pal.beerTop); g.addColorStop(1, pal.beerBot);
     ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(cx, cy, R, 0, TWO); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, R, 0, _TWO_PI); ctx.fill();
 
     var spikes = mmCrownSpikes(seed, (params && params.crownCount) || 28);
     var spikeMax = reg.h * 0.06, ts = (now || 0) * 0.001, i, s, sa, slen, tipx, tipy, sw, px, py, fb;
@@ -1284,7 +1276,7 @@
       rr = R * (0.45 + rk * 0.22);
       ra = 0.45 * (1 - rk / 4) * (0.6 + 0.4 * Math.sin(ts * 4 - rk));
       ctx.globalAlpha = ra < 0 ? 0 : ra;
-      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, TWO); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, rr, 0, _TWO_PI); ctx.stroke();
     }
     ctx.globalAlpha = 1;
     for (i = 0; i < spikes.length; i++) {
@@ -1300,10 +1292,10 @@
       ctx.lineTo(px + (-Math.sin(sa)) * sw, py + (Math.cos(sa)) * sw);
       ctx.lineTo(tipx, tipy); ctx.closePath(); ctx.fill();
       ctx.fillStyle = pal.foamTop || pal.foam || pal.beerTop;    // foam-highlighted tip bead
-      ctx.beginPath(); ctx.arc(tipx, tipy, sw, 0, TWO); ctx.fill();
+      ctx.beginPath(); ctx.arc(tipx, tipy, sw, 0, _TWO_PI); ctx.fill();
       fb = R + slen + spikeMax * s.flyF * (0.5 + seq.bloom);     // flung bead ahead
       ctx.globalAlpha = 0.6 * (1 - seq.bloom * 0.3);
-      ctx.beginPath(); ctx.arc(cx + fb * Math.cos(sa), cy + fb * Math.sin(sa), sw * 0.7, 0, TWO); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx + fb * Math.cos(sa), cy + fb * Math.sin(sa), sw * 0.7, 0, _TWO_PI); ctx.fill();
       ctx.globalAlpha = 1;
     }
     // central jet (Rayleigh): a beer column rises from the impact point, peaking just
@@ -1318,8 +1310,14 @@
       ctx.quadraticCurveTo(cx - jw * 0.3, cy - jetH * 0.6, cx, cy - jetH);   // up to the tip
       ctx.quadraticCurveTo(cx + jw * 0.3, cy - jetH * 0.6, cx + jw, cy);     // back down
       ctx.closePath(); ctx.fill();
-      ctx.beginPath(); ctx.arc(cx, cy - jetH - jw * 0.5, jw * 0.7, 0, TWO); ctx.fill();  // pinch-off bead
+      ctx.beginPath(); ctx.arc(cx, cy - jetH - jw * 0.5, jw * 0.7, 0, _TWO_PI); ctx.fill();  // pinch-off bead
     }
+  }
+
+  function mmSetTransform(el, t, opacity) {
+    el.style.webkitTransform = t;
+    el.style.transform = t;
+    if (opacity !== undefined) { el.style.opacity = opacity; }
   }
 
   root.mmTransitionState = mmTransitionState;
@@ -1385,4 +1383,5 @@
   root.mmSplashRadius = mmSplashRadius;
   root.mmCrownSpikes = mmCrownSpikes;
   root.mmDrawSplash = mmDrawSplash;
+  root.mmSetTransform = mmSetTransform;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

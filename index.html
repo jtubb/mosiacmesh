@@ -1239,15 +1239,15 @@
 			if (st.effect.name === 'slide' && typeof mmSlideOffset === 'function') {
 				var so2 = mmSlideOffset(st.effect.front, (st.effect.params && st.effect.params.direction) || 'left', 100, 100);
 				var t2 = 'translate(' + so2.dx + '%,' + so2.dy + '%)';
-				el.style.webkitTransform = t2; el.style.transform = t2; el.style.opacity = '1';
+				mmSetTransform(el, t2, '1');
 			} else if (st.effect.name === 'coasterflip' && typeof mmFlipFactor === 'function') {
 				var ff2 = mmFlipFactor(st.effect.front, (st.effect.params && st.effect.params.axis) || 'horizontal');
 				var t4 = 'scaleX(' + ff2.sx + ') scaleY(' + ff2.sy + ')';
-				el.style.webkitTransform = t4; el.style.transform = t4; el.style.opacity = '' + ff2.alpha;
+				mmSetTransform(el, t4, '' + ff2.alpha);
 			} else if (typeof mmZoomFactor === 'function') {
 				var zf2 = mmZoomFactor(st.effect.front, (st.effect.params && st.effect.params.scale));
 				var t3 = 'scale(' + zf2.s + ')';
-				el.style.webkitTransform = t3; el.style.transform = t3; el.style.opacity = '' + zf2.alpha;
+				mmSetTransform(el, t3, '' + zf2.alpha);
 			}
 			return;
 		}

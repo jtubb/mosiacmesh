@@ -9,6 +9,7 @@
  * need (e.g. a pure geometric one uses only ctx/tMs/w/h). Use MM_RNG(seed) for
  * randomness — never Math.random() (it would diverge per screen). */
 (function (root) {
+  var MM_TWO_PI = Math.PI * 2;
   // Seeded PRNG for coordinated randomness. xorshift32 — BITWISE ONLY
   // (^, <<, >>>), so output is bit-identical on Safari 5.1 / Node / modern V8.
   // imul() is absent on Safari 5.1 so we use bitwise shifts only; no multiply
@@ -231,7 +232,7 @@
         ctx.lineWidth = 2;
         ctx.beginPath();
         for (i = 0; i <= N; i++) {
-          var s = (i / N) * Math.PI * 2;
+          var s = (i / N) * MM_TWO_PI;
           var x = cx + ax * Math.sin(a * s + phi);
           var y = cy + ay * Math.sin(b * s);
           if (i === 0) { ctx.moveTo(x, y); } else { ctx.lineTo(x, y); }
@@ -257,7 +258,7 @@
           var dotR = 3 + 2 * Math.sin(tMs / 1500 + i * 0.02);
           ctx.fillStyle = 'hsl(' + ((i / N) * 360) + ', 80%, 60%)';
           ctx.beginPath();
-          ctx.arc(x, y, dotR, 0, Math.PI * 2);
+          ctx.arc(x, y, dotR, 0, MM_TWO_PI);
           ctx.fill();
         }
       }
@@ -310,7 +311,7 @@
           ctx.globalAlpha = alpha < 0 ? 0 : (alpha > 1 ? 1 : alpha);
           ctx.strokeStyle = 'hsl(' + (((tMs / 40) + k * 30) % 360) + ', 80%, 60%)';
           ctx.beginPath();
-          ctx.arc(cx, cy, R > 0.1 ? R : 0.1, 0, Math.PI * 2);
+          ctx.arc(cx, cy, R > 0.1 ? R : 0.1, 0, MM_TWO_PI);
           ctx.stroke();
         }
         ctx.globalAlpha = 1;
@@ -379,7 +380,7 @@
         for (i = 0; i < N; i++) {
           var xi = (i + 0.5) * w / N;
           var Ti = TB - i * TS;
-          var theta = AMAX * Math.sin(2 * Math.PI * tMs / Ti);
+          var theta = AMAX * Math.sin(MM_TWO_PI * tMs / Ti);
           var bx = xi + L * Math.sin(theta);
           var by = y0 + L * Math.cos(theta);
           ctx.strokeStyle = '#ffffff';
@@ -390,7 +391,7 @@
           ctx.stroke();
           ctx.fillStyle = 'hsl(' + ((i / N) * 360) + ', 80%, 60%)';
           ctx.beginPath();
-          ctx.arc(bx, by, 8, 0, Math.PI * 2);
+          ctx.arc(bx, by, 8, 0, MM_TWO_PI);
           ctx.fill();
         }
       }
@@ -432,7 +433,7 @@
         ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(cx, cy, R, 0, Math.PI * 2);
+        ctx.arc(cx, cy, R, 0, MM_TWO_PI);
         ctx.stroke();
         for (k = 0; k < 12; k++) {
           var a = k * Math.PI / 6 - Math.PI / 2;
@@ -567,7 +568,7 @@
         var rad = Math.min(w, h) * 0.05;
         ctx.fillStyle = isDay ? '#ffec70' : '#e8eef7';
         ctx.beginPath();
-        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.arc(cx, cy, rad, 0, MM_TWO_PI);
         ctx.fill();
       }
     },
@@ -643,7 +644,7 @@
         var SPEED = 3000, SPREAD = Math.min(w, h) * 0.04;
         var maxR = Math.sqrt(w * w + h * h);
         for (i = 0; i < N; i++) {
-          var ang = rng() * Math.PI * 2;
+          var ang = rng() * MM_TWO_PI;
           var phase = rng();
           var b = 0.4 + rng() * 0.6;
           var f = ((tMs / SPEED + phase) % 1 + 1) % 1;
@@ -692,7 +693,7 @@
             if (alpha < 0) { alpha = 0; }
             ctx.fillStyle = 'hsla(' + hue + ', 90%, 60%, ' + alpha.toFixed(3) + ')';
             for (j = 0; j < M; j++) {
-              var a = (j / M) * Math.PI * 2;
+              var a = (j / M) * MM_TWO_PI;
               var dx = Math.cos(a) * v * et;
               var dy = Math.sin(a) * v * et + 0.5 * G * et * et;
               ctx.fillRect(lx + dx - 1, py + dy - 1, 2, 2);
@@ -724,7 +725,7 @@
               ctx.beginPath(); ctx.arc(x + cell, y + cell, cell / 2, Math.PI, Math.PI * 1.5); ctx.stroke();
             } else {
               ctx.beginPath(); ctx.arc(x + cell, y, cell / 2, Math.PI / 2, Math.PI); ctx.stroke();
-              ctx.beginPath(); ctx.arc(x, y + cell, cell / 2, Math.PI * 1.5, Math.PI * 2); ctx.stroke();
+              ctx.beginPath(); ctx.arc(x, y + cell, cell / 2, Math.PI * 1.5, MM_TWO_PI); ctx.stroke();
             }
           }
         }
@@ -744,7 +745,7 @@
         var cx = w / 2, cy = h / 2;
         var rot = tMs / 9000;
         var ratio = (R - r) / r;
-        var thetaMax = Math.PI * 2 * 8;
+        var thetaMax = MM_TWO_PI * 8;
         var grow = (tMs / 6000) % 1;
         var tmax = thetaMax * (0.2 + 0.8 * grow);
         var cr = Math.cos(rot), sr = Math.sin(rot);
