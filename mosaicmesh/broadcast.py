@@ -73,18 +73,34 @@ def broadcast_to_client(client_id, response_dict):
     _deliver(client_id, jsonpickle.encode(response_dict), client)
 
 
+# Sentinel DEST used to encode a group message once and substitute each
+# client's DEST by string replace (T3.1). Null-byte-wrapped so it can't collide
+# with any real payload content or UDID.
+_DEST_SENTINEL = "\x00MM_DEST\x00"
+
+
 def broadcast_to_display_group(display_id, response_dict):
     """Send a per-client message to every client in a display group. Each
     iPad gets the message addressed to its own DEST (the contract the
     client-side filter expects). Targeted per-session in the steady state;
     falls back to broadcast for any iPad whose session is in the reconnect
-    gap."""
+    gap.
+
+    T3.1: the message is identical for every client except DEST, so encode it
+    ONCE with a sentinel DEST and substitute each client's DEST by string
+    replace — saving N-1 jsonpickle.encode calls on the (latency-sensitive)
+    PLAY/PREPARE/STOP fan-out. Both the sentinel and each replacement are
+    produced by jsonpickle.encode, so the JSON escaping is identical and the
+    substituted message is byte-for-byte what a per-client encode would emit."""
     import server
     import jsonpickle
     if server.socketmanager is None:
         return
+    response_dict["DEST"] = _DEST_SENTINEL
+    template = jsonpickle.encode(response_dict)
+    sentinel_json = jsonpickle.encode(_DEST_SENTINEL)
     for client_id, client in server.settings.clients.items():
         if client.displayID != display_id:
             continue
-        response_dict["DEST"] = client_id
-        _deliver(client_id, jsonpickle.encode(response_dict), client)
+        msg = template.replace(sentinel_json, jsonpickle.encode(client_id))
+        _deliver(client_id, msg, client)

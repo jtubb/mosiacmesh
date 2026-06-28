@@ -38,16 +38,16 @@ At 24 clients these costs are invisible; at 200 each one freezes the wall.
 
 ## Tier 3 — Medium (O(N)-per-event cleanups)
 
-| # | Problem | Location | Fix |
-|---|---|---|---|
-| T3.1 | `broadcast_to_display_group` re-encodes the dict N× | `broadcast.py:86–90` | Encode the payload once; substitute the `DEST` value (UUID string). |
-| T3.2 | `handle_client_disconnect` O(N) scan per disconnect | `dispatch.py:40–47` | `session_id → client_key` reverse index (extend `session_store`). |
-| T3.3 | Image warps inline (OpenCV) block the loop ~1–4 s/render | `render.py:692–714` | `run_in_executor` for the warp+`imwrite` loop. |
-| T3.4 | Static cache: FIFO cap 100 too small; prewarm misses `js/timeline/`; `getmtime` per hit | `cache.py` | Raise cap (size-based); recursive prewarm; cache mtime on an interval. |
-| T3.5 | `/api/discovery/stats` double client-scan + redundant seg-key calc | `discovery.py:253–311` | Memoize `_expected_seg_keys_for_display` per request; merge the two scans. |
-| T3.6 | `render_token` O(N) numpy alloc per gate check (called O(G×P) on save) | `render.py:360–392` | Cache token per `(display_id, item_sig)`; invalidate on calibration/client change. |
-| T3.7 | Startup blocking (`revalidate_renders_on_boot`, sweep) before serving; prewarm runs *after* `site.start()` | `server.py:2384–2421,2468` | Move `prewarm_static_cache` before `site.start()`; run boot revalidation/sweep in an executor. |
-| T3.8 | `/api/displays` `_serialize` does 3 redundant passes over clients | `displays.py:44–76` | Single-pass count of clients/online/calibrated. |
+| # | Problem | Status / Fix |
+|---|---|---|
+| T3.1 | `broadcast_to_display_group` re-encodes the dict N× | **DONE**: encode once with a sentinel `DEST`, substitute each client's `DEST` by string replace — saves N-1 `jsonpickle.encode` on the PLAY/PREPARE/STOP fan-out. Byte-equivalence to per-client encode is unit-asserted. |
+| T3.2 | `handle_client_disconnect` O(N) scan per disconnect | **DEFERRED**: disconnects are rare (network/human rate), so the O(N) scan is µs and not hot; a `session_id→client_key` reverse index adds a state-sync failure mode (index drifting from `client.clientID` → a client stuck "online") for no real win. The current scan is always correct. |
+| T3.3 | Image warps inline (OpenCV) block the loop ~1–4 s/render | **DEFERRED** (own effort): real value (loop block on image renders) but warrants its own focused change + validation, like the T1.2 render work. |
+| T3.4 | Static cache: FIFO cap too small; prewarm misses `js/timeline/` | **DONE**: prewarm now walks `js/` **recursively** (caches all ~49 `js/timeline/**` admin modules), and the FIFO cap is 100→200 (env `MM_FILECACHE_MAX_ENTRIES`) so served media can't evict the prewarmed static. (Left the per-hit `getmtime` as-is — it's the correctness mechanism; static files only change on deploy, which restarts.) |
+| T3.5 | `/api/discovery/stats` double client-scan | **DONE**: bucket clients by `displayID` once (O(N)) instead of rescanning the whole client dict per group (O(G×N)). |
+| T3.6 | `render_token` O(N) numpy alloc per gate check (O(G×P) on save) | **DEFERRED**: this is the render-identity hash; a cache whose key misses any input (items, bbox, per-client quads) returns a stale token → wrong render readiness / wrong assets on the wall. The numpy alloc is µs and the call is per-save, not per-frame — staleness risk ≫ the win. |
+| T3.7 | Prewarm runs *after* `site.start()` | **DONE**: `prewarm_static_cache()` moved **before** `site.start()` so the post-restart reconnect burst hits a warm cache. (Boot revalidation/sweep stay pre-serve; T2.4's listdir already cut their cost — executor-ifying them is a separate, lower-value step.) |
+| T3.8 | `/api/displays` `_serialize` does 3 passes over clients per group (O(G×N)) | **DONE**: `_index_clients_by_display()` scans clients once (O(N)); each group reads its bucket. Output-equivalent (unit-asserted). |
 
 ## Already well-bounded (do not touch)
 

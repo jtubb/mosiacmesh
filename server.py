@@ -2474,16 +2474,18 @@ if __name__ == '__main__':
                                     host=["0.0.0.0", "::"],
                                     port=args.Port or 3000,
                                     backlog=4096)
+                # Pre-warm the static-file cache BEFORE accepting connections
+                # (T3.7): the fleet-wide reconnect burst right after a restart
+                # otherwise races site.start() and the first fetch of each file
+                # blocks the loop on a cold disk read. Warm first, then serve.
+                prewarm_static_cache()
+
                 await site.start()
-                
+
                 logging.debug('Started webapp')
-                
+
                 # Set up socket manager
                 socketmanager = sockjs.get_manager(app=app,name='mosiacmesh')
-
-                # Pre-warm the static-file cache so a fleet-wide Start burst
-                # doesn't block the event loop on cold disk reads.
-                prewarm_static_cache()
                 
                 oneshot = True
                 save_counter = 0

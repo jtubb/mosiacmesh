@@ -265,6 +265,11 @@ async def api_discovery_stats(request):
     # stalled, idle}. Empty for groups without a renderedToken or
     # without renderable SEGMENT items -- the bar is meaningless
     # there and the admin UI uses absence to hide the widget.
+    # T3.5: bucket clients by displayID ONCE rather than rescanning the whole
+    # client dict for every display group (was O(G×N)).
+    _by_group = {}
+    for c in server.settings.clients.values():
+        _by_group.setdefault(getattr(c, "displayID", None), []).append(c)
     group_prop = {}
     for did, display in server.settings.displays.items():
         expected_keys = _expected_seg_keys_for_display(display)
@@ -272,9 +277,7 @@ async def api_discovery_stats(request):
             continue
         total_g = 0
         full = pushing = stalled = idle = 0
-        for k, c in server.settings.clients.items():
-            if getattr(c, "displayID", None) != did:
-                continue
+        for c in _by_group.get(did, ()):
             if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
                 continue
             total_g += 1

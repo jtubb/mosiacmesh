@@ -41,29 +41,43 @@ __all__ = [
 ]
 
 
-def _serialize(display_id, display):
-    """Display + its referrers -> dict. Reads server.settings.clients +
-    schedules to compute counts; cheap enough at admin scale (handful
-    of groups, handful of clients each)."""
+def _index_clients_by_display():
+    """Bucket every client by its displayID in ONE pass (T3.8), counting
+    clients/online/calibrated per group. api_displays_list used to rescan the
+    whole client dict 3× PER group — O(G×N). This scans once: O(N) total."""
     import server
-    clients = [k for k, c in server.settings.clients.items()
-               if getattr(c, "displayID", None) == display_id]
-    online = [k for k in clients
-              if getattr(server.settings.clients[k], "isOnline", False)]
-    schedules = [s for s in server.settings.schedules.values()
-                 if getattr(s, "displayID", None) == display_id]
-    # # of clients with a measured perimeter — i.e. screens this group can
-    # render mesh/per-screen content for. The admin's render-readiness badge
-    # uses this to scope its denominator to renderable groups.
-    calibrated = [k for k in clients
-                  if getattr(server.settings.clients[k], "measuredPerimeter", None) is not None]
+    idx = {}
+    for k, c in server.settings.clients.items():
+        did = getattr(c, "displayID", None)
+        e = idx.get(did)
+        if e is None:
+            e = idx[did] = {"clients": [], "online": 0, "calibrated": 0}
+        e["clients"].append(k)
+        if getattr(c, "isOnline", False):
+            e["online"] += 1
+        if getattr(c, "measuredPerimeter", None) is not None:
+            e["calibrated"] += 1
+    return idx
+
+
+def _serialize(display_id, display, client_index=None):
+    """Display + its referrers -> dict. `client_index` (from
+    _index_clients_by_display) lets the list handler share one client scan
+    across all groups; if omitted, a per-call index is built (single group)."""
+    import server
+    if client_index is None:
+        client_index = _index_clients_by_display()
+    info = client_index.get(display_id) or {"clients": [], "online": 0, "calibrated": 0}
+    schedules = sum(1 for s in server.settings.schedules.values()
+                    if getattr(s, "displayID", None) == display_id)
     return {
         "displayID": display_id,
-        "clients": clients,
-        "clientCount": len(clients),
-        "onlineCount": len(online),
-        "calibratedCount": len(calibrated),
-        "scheduleCount": len(schedules),
+        "clients": info["clients"],
+        "clientCount": len(info["clients"]),
+        "onlineCount": info["online"],
+        # calibratedCount = screens with a measured perimeter (renderable).
+        "calibratedCount": info["calibrated"],
+        "scheduleCount": schedules,
     }
 
 
@@ -72,7 +86,8 @@ async def api_displays_list(request):
     clients online (the whole point of PR-12). Order = insertion order
     of settings.displays, which is stable across saves."""
     import server
-    out = [_serialize(did, d) for did, d in server.settings.displays.items()]
+    idx = _index_clients_by_display()
+    out = [_serialize(did, d, idx) for did, d in server.settings.displays.items()]
     return web.json_response({"success": True, "displays": out})
 
 

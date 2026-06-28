@@ -10,6 +10,9 @@ import logging
 # File cache with modification time tracking
 file_cache = {}
 cache_stats = {'hits': 0, 'misses': 0}
+# FIFO entry cap (T3.4). Holds the ~60 prewarmed static files plus a media
+# working set without evicting the static. Env-overridable for big fleets.
+_CACHE_MAX_ENTRIES = int(os.environ.get("MM_FILECACHE_MAX_ENTRIES") or 200)
 
 # File handle pool for range requests
 file_handle_pool = {}
@@ -76,11 +79,14 @@ def prewarm_static_cache():
     for name in ('index.html', 'admin.html', 'discovery.html'):
         if os.path.isfile(name):
             static_files.append(name)
+    # Walk js/ RECURSIVELY (T3.4): the admin timeline lives under js/timeline/**
+    # (ES modules), which a flat os.listdir('js') missed — so the admin's many
+    # module fetches all hit cold disk reads on first load. os.walk caches the
+    # whole tree (mosiacmesh.js, GoTime.js, and every js/timeline module).
     if os.path.isdir('js'):
-        for f in os.listdir('js'):
-            full = os.path.join('js', f)
-            if os.path.isfile(full):
-                static_files.append(full)
+        for root, _dirs, files in os.walk('js'):
+            for f in files:
+                static_files.append(os.path.join(root, f))
     loaded = 0
     for f in static_files:
         if get_cached_file(f) is not None:
@@ -113,8 +119,11 @@ def get_cached_file(file_path):
         cache_stats['misses'] += 1
         file_cache[file_path] = {'content': data, 'mtime': mod_time}
 
-        # Limit cache size to prevent memory issues (simple FIFO)
-        if len(file_cache) > 100:
+        # Limit cache size to prevent memory issues (simple FIFO). T3.4: raised
+        # 100 -> 200 because the recursive prewarm now seeds ~60 static files
+        # (js/timeline/**); the old cap let served media evict the prewarmed
+        # static, reintroducing the cold-read blocking prewarm exists to avoid.
+        if len(file_cache) > _CACHE_MAX_ENTRIES:
             oldest_key = next(iter(file_cache))
             del file_cache[oldest_key]
 
