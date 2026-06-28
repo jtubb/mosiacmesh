@@ -78,6 +78,42 @@ def test_per_client_items_full_uses_shared_central_asset():
         server.settings = prev
 
 
+def test_per_client_items_full_cached_uses_localhost():
+    """FULL device-cache (seam 4): a cache-capable client with the shared FULL
+    asset cached (full_<token>_<i> in cachedSegments) serves it from
+    lighttpd-localhost; otherwise the central URL. Mirrors the SEGMENT rule."""
+    from mosaicmesh.state import Settings, Display, Client, MediaElement, PlayMode
+    prev = getattr(server, 'settings', None)
+    server.settings = Settings()
+    try:
+        d = Display(); d.boundingBox = [0, 0, 10, 10]; d.renderedToken = "tokF"; d.loop = False
+        server.settings.displays["G1"] = d
+        me = MediaElement(); me.id = 0; me.file = "/media/server/videos/big.mov"
+        me.playmode = PlayMode.FULL; me.duration = 5
+        d.mediaElements = [me]
+
+        # cache-capable client WITHOUT the FULL asset cached -> central URL
+        c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
+        c.cacheMode = "lighttpd-localhost"; c.cachedSegments = set()
+        server.settings.clients["c1"] = c
+        assert R._per_client_items(d, "c1", c)[0]["file"] == \
+            "/media/server/videos/full_tokF_0.mp4"
+
+        # mark the FULL asset cached -> localhost URL
+        c.cachedSegments = {"full_tokF_0"}
+        assert R._per_client_items(d, "c1", c)[0]["file"] == \
+            "http://127.0.0.1:8080/full_tokF_0.mp4"
+
+        # non-cache-capable client always central, even if the key is present
+        c2 = Client(); c2.displayID = "G1"; c2.cacheMode = "none"
+        c2.cachedSegments = {"full_tokF_0"}
+        server.settings.clients["c2"] = c2
+        assert R._per_client_items(d, "c2", c2)[0]["file"] == \
+            "/media/server/videos/full_tokF_0.mp4"
+    finally:
+        server.settings = prev
+
+
 import asyncio
 
 def test_encode_group_full_writes_shared_asset(tmp_path, monkeypatch):

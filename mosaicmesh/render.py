@@ -1358,12 +1358,21 @@ def _per_client_items(display, key, c):
     cached = getattr(c, "cachedSegments", set()) if cache_on else set()
     for i, me in enumerate(display.mediaElements):
         if me.playmode == PlayMode.FULL:
-            # Shared central device asset written by _encode_group (Task 4).
-            # All clients in the group share this one file — never raw, never
-            # per-client seg_/ind_ path.
+            # Shared central device asset written by _encode_group. All clients
+            # in the group share this one file — never raw, never per-client.
             ext = ".mp4" if isVideoItem(me.file) else ".png"
             sub = "videos" if ext == ".mp4" else "images"
-            f = "/media/server/" + sub + "/full_" + token + "_" + str(i) + ext
+            full_name = "full_" + token + "_" + str(i)
+            # FULL device-cache (mirror sync, seam 4): a cache-capable client that
+            # has the shared FULL VIDEO pushed locally serves it from
+            # lighttpd-localhost so the mirror doesn't compete for WiFi at PLAY
+            # (the FULL-desync cause). Images stay central (tiny). INERT until the
+            # push seam populates the "full_<token>_<i>" key in cachedSegments —
+            # see docs/superpowers/specs/2026-06-28-full-device-caching-design.md.
+            if ext == ".mp4" and cache_on and full_name in cached:
+                f = "http://127.0.0.1:8080/" + full_name + ".mp4"
+            else:
+                f = "/media/server/" + sub + "/" + full_name + ext
         elif _is_renderable(me) and c.measuredPerimeter is not None:
             prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
             ext = ".mp4" if isVideoItem(me.file) else ".png"
