@@ -237,12 +237,15 @@ def quad_to_source_points(bbox, screen_quad, src_w, src_h):
     return [[(float(px) - bx) / bw * src_w, (float(py) - by) / bh * src_h] for (px, py) in pts]
 
 
-def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
-                                 extra_video_filters=None, extra_audio_filters=None):
-    """ffmpeg arg list: perspective-warp the source quad to fill the frame, scale
-    to the screen resolution, encode iPad-compatible H.264 + AAC audio.
-    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR.
-    extra_video_filters append to -vf; extra_audio_filters add an -af when present."""
+def _perspective_scale_vf(src_points, out_w, out_h, extra_video_filters=None):
+    """The video-filter string for a SEGMENT warp: perspective-warp the source
+    quad to fill the frame, scale to the screen resolution, append any per-item
+    effect filters, then force square pixels. Shared by the per-process builder
+    (build_ffmpeg_perspective_cmd) and the single-decode fan-in builder
+    (build_ffmpeg_perspective_fanin_cmd) so BOTH emit a byte-identical filter
+    chain — the fan-in's per-screen output is then equivalent by construction.
+
+    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR."""
     tl, tr, br, bl = src_points
     def n(v):
         return str(int(round(v)))
@@ -256,14 +259,71 @@ def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
     # the source DAR (16:9) -> letterbox. Force SAR 1:1 so it displays at its
     # storage AR and fills the calibrated screen. (setsar last = final output AR.)
     vf += ",setsar=1"
-    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
-    cmd += _video_encoder_args()
-    cmd += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "128k"]
+    return vf
+
+
+def _segment_output_opts(out_path, extra_audio_filters=None):
+    """The per-output encode options (codec, baseline profile, audio, keyframe
+    grid, faststart) appended after the video filter + output path mapping.
+    Shared by the per-process and fan-in builders so each output is encoded
+    identically."""
+    opts = list(_video_encoder_args())
+    opts += ["-profile:v", "baseline", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "128k"]
     if extra_audio_filters:
-        cmd += ["-af", ",".join(extra_audio_filters)]
-    cmd += _keyframe_grid_args()
-    cmd += ["-movflags", "+faststart", out_path]
+        opts += ["-af", ",".join(extra_audio_filters)]
+    opts += _keyframe_grid_args()
+    opts += ["-movflags", "+faststart", out_path]
+    return opts
+
+
+def build_ffmpeg_perspective_cmd(src_path, out_path, src_points, out_w, out_h,
+                                 extra_video_filters=None, extra_audio_filters=None):
+    """ffmpeg arg list: perspective-warp the source quad to fill the frame, scale
+    to the screen resolution, encode iPad-compatible H.264 + AAC audio.
+    src_points is [TL, TR, BR, BL]; ffmpeg's perspective wants TL, TR, BL, BR.
+    extra_video_filters append to -vf; extra_audio_filters add an -af when present."""
+    vf = _perspective_scale_vf(src_points, out_w, out_h, extra_video_filters)
+    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path, "-vf", vf]
+    cmd += _segment_output_opts(out_path, extra_audio_filters)
+    return cmd
+
+
+def build_ffmpeg_perspective_fanin_cmd(src_path, branches):
+    """SEGMENT single-decode fan-in (T1.2): ONE ffmpeg decodes `src_path` once,
+    `split`s it into N branches, and each branch applies that screen's
+    perspective+scale via the SAME `_perspective_scale_vf` string the per-process
+    builder uses, then encodes to its own output with `_segment_output_opts`.
+    This removes N-1 redundant decodes of the same source.
+
+    `branches` is a list of dicts:
+        {out_path, src_points, out_w, out_h, evf?, eaf?}
+    Equivalence is by construction — each branch reuses the exact filter chain
+    and per-output encode options of the per-process path; only the decode is
+    shared. Caller batches branches (cap per process) so N libx264 encoders
+    don't oversubscribe the CPU."""
+    n = len(branches)
+    if n == 0:
+        raise ValueError("fan-in needs at least one branch")
+    if n == 1:
+        b = branches[0]
+        return build_ffmpeg_perspective_cmd(
+            src_path, b["out_path"], b["src_points"], b["out_w"], b["out_h"],
+            extra_video_filters=b.get("evf"), extra_audio_filters=b.get("eaf"))
+    # filter_complex: split the decoded source into N, warp each branch.
+    labels_in = "".join("[s%d]" % j for j in range(n))
+    parts = ["[0:v]split=%d%s" % (n, labels_in)]
+    for j, b in enumerate(branches):
+        vf = _perspective_scale_vf(b["src_points"], b["out_w"], b["out_h"], b.get("evf"))
+        parts.append("[s%d]%s[v%d]" % (j, vf, j))
+    fc = ";".join(parts)
+    cmd = ["ffmpeg", "-y"] + _video_input_args() + ["-i", src_path,
+                                                    "-filter_complex", fc]
+    for j, b in enumerate(branches):
+        # Map this branch's warped video + the source audio (optional), then the
+        # identical per-output encode options as the per-process path.
+        cmd += ["-map", "[v%d]" % j, "-map", "0:a?"]
+        cmd += _segment_output_opts(b["out_path"], b.get("eaf"))
     return cmd
 
 
@@ -612,6 +672,11 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
     seg_items = [(i, me) for i, me in enumerate(media_elements)
                  if _is_renderable(me)]
     clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    # T1.2 SEGMENT fan-in: opt-in (default OFF) until validated on the wall.
+    # _fanin_cap bounds branches per ffmpeg so N libx264 encoders in one process
+    # don't oversubscribe the CPU; one decode is shared per chunk.
+    _fanin_on = bool(os.environ.get("MM_RENDER_FANIN"))
+    _fanin_cap = max(1, int(os.environ.get("MM_RENDER_FANIN_CAP") or 8))
     # Pass 1: collect all video render commands. Pass 2: gather them.
     # This lets us see the total job count and parallelise everything
     # in a single batch (across items AND across clients).
@@ -652,6 +717,13 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
             if not dims:
                 raise RuntimeError("cannot read source video: " + str(me.file))
             sw, sh = dims
+            # SEGMENT single-decode fan-in (T1.2, flag-gated, default OFF): when
+            # MM_RENDER_FANIN is set, collect this item's per-screen SEGMENT warps
+            # into `seg_branches` and emit batched fan-in ffmpeg jobs after the
+            # client loop (one decode per batch) instead of one decode per screen.
+            # INDIVIDUAL keeps the per-process path. Equivalence is golden-tested
+            # (tests/unit/test_render_fanin.py: filtered frames bit-identical).
+            seg_branches = []
             for key, c in clients:
                 out_dir = os.path.join("media", key, "videos")
                 Path(out_dir).mkdir(parents=True, exist_ok=True)
@@ -680,14 +752,25 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
                                                       pad_w, pad_h, pad_x, pad_y,
                                                       getattr(me, "backgroundColor", "#000000"),
                                                       extra_video_filters=evf, extra_audio_filters=eaf)
+                    video_jobs.append((cmd, key + "/" + str(i)))
                 else:
                     pts = quad_to_source_points(display.boundingBox, c.measuredPerimeter, sw, sh)
                     out_path = os.path.join(out_dir, "seg_" + token + "_" + str(i) + ".mp4")
-                    cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
-                                                       out_w, out_h,
-                                                       extra_video_filters=evf, extra_audio_filters=eaf)
                     seg_push_targets.append((key, i))
-                video_jobs.append((cmd, key + "/" + str(i)))
+                    if _fanin_on:
+                        seg_branches.append({"out_path": out_path, "src_points": pts,
+                                             "out_w": out_w, "out_h": out_h,
+                                             "evf": evf, "eaf": eaf})
+                    else:
+                        cmd = build_ffmpeg_perspective_cmd(src_path, out_path, pts,
+                                                           out_w, out_h,
+                                                           extra_video_filters=evf, extra_audio_filters=eaf)
+                        video_jobs.append((cmd, key + "/" + str(i)))
+            # Emit batched fan-in jobs for this item (one decode per chunk).
+            for _b0 in range(0, len(seg_branches), _fanin_cap):
+                _chunk = seg_branches[_b0:_b0 + _fanin_cap]
+                _cmd = build_ffmpeg_perspective_fanin_cmd(src_path, _chunk)
+                video_jobs.append((_cmd, "seg-fanin/%d[%d:%d]" % (i, _b0, _b0 + len(_chunk))))
         else:
             img = cv.imread(src_path) if src_path else None
             if img is None:
