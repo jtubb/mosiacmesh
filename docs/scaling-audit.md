@@ -25,7 +25,7 @@ At 24 clients these costs are invisible; at 200 each one freezes the wall.
 | T1.3 | Reconnect-storm broadcasts: OPEN+REGISTER fire 3–4 all-sessions broadcasts each | `legacy.py`; `dispatch.py` | 200 iPads reconnect → ~120k socket writes in seconds; loop saturated | **DONE** (`f4c144a`): no admin-session concept needed. `JOIN`/`DEVICE_DISCOVERED` (OPEN) + `DISC` (CLOSE) had **zero consumers** — removed. `CLIENTS_CAME_ONLINE` now batched via `websocket/online_batch.py` (dedupe by clientKey, one `{devices:[…]}` broadcast ~0.5 s later; consumer already iterates the array). |
 | T1.4 | Unbounded parallel mDNS on boot | `server.py:1008` (`asyncio.gather` over all IPs; `_mdns_reverse` sleeps 1.5 s in executor) | `process()` blocked ~38 s on first boot (executor pool ~8, 200 tasks each sleeping) | `asyncio.Semaphore(20)` around the per-IP resolve. |
 | T1.5 | SSH pile-up — cache probe + `_reconcile_ipad_cache` with no cooldown/in-flight guard | `server.py:361` (probe), `server.py:2354,703–713` (reconcile, every 5 s) | hundreds of `ssh` subprocs stacking each tick; iPad sshd conn-limit → orphans | Per-client **in-flight guard** + 60 s reconcile backoff; **5-min cooldown** on `cacheProbedMs` before re-probing. |
-| T1.6 | Synchronous video range/large-file reads on the loop | `server.py:1210–1220` (`handle.seek`+`handle.read`) | 200 concurrent reads serialized → multi-second stalls during PLAY | `aiohttp.web.FileResponse` (native range + non-blocking sendfile), or `run_in_executor` for the read. |
+| T1.6 | Synchronous video range/large-file reads on the loop | `server.py` media_handler | 200 concurrent reads serialized → multi-second stalls during PLAY + whole 80MB segments buffered in RAM | **DONE pending on-wall sign-off** (`c513651`): videos / range requests / ≥10MB files now serve via `web.FileResponse` (non-blocking sendfile, no RAM buffer). Empirically header-for-header equal 206s to the old response; open-ended ranges read to EOF (iPad-1 quirk preserved). Tests rewritten to real HTTP round-trips. Residual: iPad-1 UIWebView reaction to the added ETag/Last-Modified needs a real video play before full trust. |
 
 ## Tier 2 — High (throughput drains)
 
@@ -62,7 +62,7 @@ At 24 clients these costs are invisible; at 200 each one freezes the wall.
 
 ## Recommended sequencing
 
-1. **Tier 1 safe wins first.** **Done:** T1.4 (mDNS `Semaphore(20)`) + T1.5 (SSH probe cooldown + reconcile guard) in `dec068b`; T1.1 (save coalescer) in `a899c8c`; T1.3 (drop dead broadcasts + batch `CLIENTS_CAME_ONLINE`) in `f4c144a`. **Remaining:** T1.6 (file-serving streaming — needs on-wall iPad-1 206 validation; a blind `FileResponse` swap risks the tuned `UIWebView` range behavior).
+1. **Tier 1 safe wins first.** **Done + deployed:** T1.4 (mDNS `Semaphore(20)`) + T1.5 (SSH probe cooldown + reconcile guard) in `dec068b`; T1.1 (save coalescer) in `a899c8c`; T1.3 (drop dead broadcasts + batch `CLIENTS_CAME_ONLINE`) in `f4c144a`. **Implemented, pending on-wall sign-off:** T1.6 (FileResponse streaming) in `c513651`. **Remaining:** T1.2.
 2. **T1.2 (render `filter_complex` fan-in)** — the biggest CPU win but the riskiest: the per-screen warped output must match the current per-process output. Build it behind a golden/visual gate (compare a frame hash of old vs new per screen) before switching the default.
 3. **Tier 2 / Tier 3** as follow-ups once Tier 1 is deployed and the fleet is larger.
 
