@@ -209,6 +209,32 @@ def test_push_segment_skips_clients_not_in_lighttpd_mode():
     fake_create.assert_not_called()
 
 
+def test_push_full_adds_full_key_and_pushes_shared_src():
+    """kind='full' pushes the ONE shared central asset (media/server/videos/
+    full_...) and records the prefixed 'full_<hash>_<n>' cache key — distinct
+    from SEGMENT's per-client src + bare key."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"
+    server.settings.clients["ipad1"] = c
+
+    fake_proc = MagicMock(); fake_proc.returncode = 0
+    fake_proc.communicate = AsyncMock(return_value=(b"", b""))
+    captured = {}
+
+    async def fake_cse(*args, **kwargs):
+        captured.setdefault("scp", args)   # first call is the scp
+        return fake_proc
+
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_cse):
+        _run(server._push_segment_to_cached_clients("ipad1", "f00d", 1, kind="full"))
+
+    assert "full_f00d_1" in server.settings.clients["ipad1"].cachedSegments
+    scp = [str(a) for a in captured["scp"]]
+    assert any("media/server/videos/full_f00d_1.mp4" in a for a in scp), scp  # shared src
+    assert any("MosaicMeshCache/full_f00d_1.mp4" in a for a in scp), scp     # full_ dst
+
+
 def test_reconcile_removes_orphan_hashes_from_cachedSegments():
     """A hash in cachedSegments that isn't referenced by any current
     playlist media element on this iPad's display group should be
@@ -269,6 +295,50 @@ def test_reconcile_preserves_cached_segment_when_token_matches():
         _run(server._reconcile_ipad_cache(c))
     assert c.cachedSegments == {"9a27f533acb6_1"}, \
         f"cachedSegments was wrongly pruned: {c.cachedSegments}"
+
+
+def test_reconcile_preserves_cached_full_asset():
+    """FULL device-cache (seam 5): a live full_<token>_<i> key for a current FULL
+    video item must NOT be reaped. Without seam 5 the SEGMENT-only in_use set
+    discarded every full_ key every ~5s, killing FULL caching."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"; c.displayID = "G"
+    c.cachedSegments = {"full_tok_1"}
+    server.settings.clients["ipad1"] = c
+    d = server.Display(); d.displayID = "G"; d.renderedToken = "tok"
+    script = server.MediaElement(); script.playmode = server.PlayMode.SCRIPT; script.file = "anim"
+    full = server.MediaElement(); full.playmode = server.PlayMode.FULL
+    full.file = "/media/server/videos/clip.mov"
+    d.mediaElements = [script, full]   # FULL at index 1 -> key full_tok_1
+    server.settings.displays["G"] = d
+    with patch("asyncio.create_subprocess_exec", AsyncMock()):
+        _run(server._reconcile_ipad_cache(c))
+    assert "full_tok_1" in c.cachedSegments, c.cachedSegments
+
+
+def test_reconcile_evicts_stale_full_with_correct_filename():
+    """A stale full_ key is reaped, and the rm targets the real 'full_*.mp4'
+    device file (not a malformed 'seg_full_*.mp4')."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "lighttpd-localhost"; c.displayID = "G"
+    c.cachedSegments = {"full_OLDTOK_0"}
+    server.settings.clients["ipad1"] = c
+    d = server.Display(); d.displayID = "G"; d.renderedToken = "NEWTOK"
+    full = server.MediaElement(); full.playmode = server.PlayMode.FULL
+    full.file = "/media/server/videos/clip.mov"
+    d.mediaElements = [full]   # expects full_NEWTOK_0; full_OLDTOK_0 is stale
+    server.settings.displays["G"] = d
+    captured = {}
+    fp = MagicMock(); fp.returncode = 0; fp.communicate = AsyncMock(return_value=(b"", b""))
+    async def fake_cse(*args, **kw):
+        captured.setdefault("rm", args); return fp
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_cse):
+        _run(server._reconcile_ipad_cache(c))
+    assert "full_OLDTOK_0" not in c.cachedSegments
+    rm = [str(a) for a in captured["rm"]]
+    assert any("MosaicMeshCache/full_OLDTOK_0.mp4" in a for a in rm), rm
 
 
 def test_reconcile_preserves_segments_for_all_ready_renders():

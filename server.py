@@ -381,10 +381,13 @@ def _maybe_fire_cache_probe(client_key, client):
     asyncio.ensure_future(_probe_cache_capability(client_key))
 
 
-async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
-    """Scp a freshly-rendered per-iPad mp4 to the iPad's lighttpd cache
-    directory. Called from the render pipeline's success path for each
-    Client with cacheMode == "lighttpd-localhost".
+async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n, kind="seg"):
+    """Scp a freshly-rendered mp4 to the iPad's lighttpd cache directory.
+    Called from the render pipeline's success path for each Client with
+    cacheMode == "lighttpd-localhost". `kind` selects SEGMENT (per-client warp,
+    default) or FULL (the one shared device asset) — see the FULL device-caching
+    spec (2026-06-28). Only src/dst-basename/cache-key differ; the stall/poll/
+    concurrency machinery is identical for both.
 
     Best-effort: a failed scp leaves the segment hash absent from
     Client.cachedSegments, which means _resolve_media_url will hand
@@ -401,9 +404,19 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     if not getattr(client, "ip", ""):
         logging.warning("cache-push %s: no IP, skipping", client_key)
         return
-    src = "media/%s/videos/seg_%s_%d.mp4" % (client_key, segment_hash, segment_n)
-    dst = ("%s@%s:/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
-           % (SSH_USER, client.ip, segment_hash, segment_n))
+    # src + dst basename + cache key differ by asset kind. SEGMENT is the
+    # per-client warp (media/<key>/videos/seg_...); FULL is the ONE shared device
+    # asset (media/server/videos/full_...) pushed identically to every cached
+    # client. The rest of this coroutine is kind-agnostic.
+    if kind == "full":
+        src = "media/server/videos/full_%s_%d.mp4" % (segment_hash, segment_n)
+        dst_name = "full_%s_%d.mp4" % (segment_hash, segment_n)
+        cache_key = "full_%s_%d" % (segment_hash, segment_n)
+    else:
+        src = "media/%s/videos/seg_%s_%d.mp4" % (client_key, segment_hash, segment_n)
+        dst_name = "seg_%s_%d.mp4" % (segment_hash, segment_n)
+        cache_key = "%s_%d" % (segment_hash, segment_n)
+    dst = "%s@%s:/var/mobile/Media/MosaicMeshCache/%s" % (SSH_USER, client.ip, dst_name)
     cmd = ["scp", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS + [src, dst]
     try:
         total_bytes = os.path.getsize(src)
@@ -424,12 +437,12 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
     # however slowly, runs to completion. Only a transfer that
     # genuinely stops moving bytes for _PUSH_STALL_WINDOW_S aborts.
     sem = _get_push_sem()
-    seg_key = "%s_%d" % (segment_hash, segment_n)
     async with sem:
         now_ms = int(time.time() * 1000)
         client.cachePushProgress = {
             "token": segment_hash,
             "n": segment_n,
+            "prefix": kind,   # poller builds the dst filename from this (seg/full)
             "bytesSent": 0,
             "totalBytes": total_bytes,
             "startedMs": now_ms,
@@ -467,9 +480,9 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
                 sent = client.cachePushProgress.get("bytesSent", 0) \
                     if client.cachePushProgress else 0
                 logging.warning(
-                    "cache-push %s seg_%s_%d: stalled (no progress for %ds, "
+                    "cache-push %s %s: stalled (no progress for %ds, "
                     "%d/%d bytes)",
-                    client_key, segment_hash, segment_n,
+                    client_key, cache_key,
                     _PUSH_STALL_WINDOW_S, sent, total_bytes)
                 if client.cachePushProgress is not None:
                     client.cachePushProgress["status"] = "stalled"
@@ -479,21 +492,21 @@ async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n):
             stall_task.cancel()
             _out, err = await communicate_task
             if proc.returncode == 0:
-                client.cachedSegments.add(seg_key)
+                client.cachedSegments.add(cache_key)
                 if client.cachePushProgress is not None:
                     client.cachePushProgress["bytesSent"] = total_bytes
                     client.cachePushProgress["status"] = "cached"
                     _broadcast_cache_progress(client_key, client)
-                logging.info("cache-push: %s seg_%s_%d -> %s",
-                             client_key, segment_hash, segment_n, client.ip)
+                logging.info("cache-push: %s %s -> %s",
+                             client_key, cache_key, client.ip)
             else:
                 tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
-                logging.warning("cache-push rc=%s for %s seg_%s_%d: %s",
+                logging.warning("cache-push rc=%s for %s %s: %s",
                                 proc.returncode, client_key,
-                                segment_hash, segment_n, " | ".join(tail))
+                                cache_key, " | ".join(tail))
         except Exception as e:  # noqa: BLE001
-            logging.warning("cache-push exception for %s seg_%s_%d: %s",
-                            client_key, segment_hash, segment_n, e)
+            logging.warning("cache-push exception for %s %s: %s",
+                            client_key, cache_key, e)
         finally:
             poller.cancel()
             try:
@@ -527,8 +540,9 @@ async def _poll_push_progress(client_key, client, stall_event, proc):
     prog = client.cachePushProgress
     if prog is None:
         return
-    seg_path = ("/var/mobile/Media/MosaicMeshCache/seg_%s_%d.mp4"
-                % (prog["token"], prog["n"]))
+    prefix = prog.get("prefix", "seg")
+    seg_path = ("/var/mobile/Media/MosaicMeshCache/%s_%s_%d.mp4"
+                % (prefix, prog["token"], prog["n"]))
     # The remote shell loop: print size (0 if file missing) every
     # _PUSH_POLL_INTERVAL_S seconds, forever. We rely on ssh process
     # cancellation (poller.cancel() in the push coroutine's finally
@@ -687,6 +701,8 @@ async def _reconcile_ipad_cache(client):
                 pm_name = pm.name if hasattr(pm, "name") else (pm if isinstance(pm, str) else None)
                 if pm_name == "SEGMENT":
                     in_use.add(f"{token}_{i}")
+                elif pm_name == "FULL":
+                    in_use.add(f"full_{token}_{i}")   # FULL device-cache key (seam 5)
         # Test-stub fallback: some unit tests pass items with explicit
         # seg_hash/seg_n attributes (the _It stub in test_media_cache.py).
         # Honour those when present so the existing test contract holds.
@@ -714,6 +730,8 @@ async def _reconcile_ipad_cache(client):
                 _pm_name = _pm.name if hasattr(_pm, "name") else (_pm if isinstance(_pm, str) else None)
                 if _pm_name == "SEGMENT":
                     in_use.add("%s_%d" % (_rtok, _i))
+                elif _pm_name == "FULL":
+                    in_use.add("full_%s_%d" % (_rtok, _i))   # seam 5
     stale = set(client.cachedSegments) - in_use
     if not stale:
         return
@@ -722,9 +740,12 @@ async def _reconcile_ipad_cache(client):
     # about it -- next reconciliation will retry the delete.
     for s in stale:
         client.cachedSegments.discard(s)
+        # FULL keys already carry the "full_" prefix (device file "<s>.mp4");
+        # SEGMENT keys are bare (device file "seg_<s>.mp4"). (seam 5)
+        _fname = (s + ".mp4") if s.startswith("full_") else ("seg_" + s + ".mp4")
         cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
                [f"{SSH_USER}@{client.ip}",
-                f"rm -f /var/mobile/Media/MosaicMeshCache/seg_{s}.mp4"])
+                f"rm -f /var/mobile/Media/MosaicMeshCache/{_fname}"])
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd, stdout=asyncio.subprocess.PIPE,

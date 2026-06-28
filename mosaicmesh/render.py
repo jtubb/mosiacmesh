@@ -696,6 +696,7 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
     # in a single batch (across items AND across clients).
     video_jobs = []        # list of (cmd, label)
     seg_push_targets = []  # list of (client_key, segment_n) for seg_ video jobs only
+    full_push_targets = []  # (client_key, n) for the shared FULL asset (seam 1)
     for i, me in seg_items:
         if me.playmode == PlayMode.FULL:
             # ONE shared device-decodable asset for the whole group.
@@ -712,6 +713,14 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
                 cmd = build_ffmpeg_transcode_cmd(src_path, out_path, tw, th,
                                                  extra_video_filters=evf, extra_audio_filters=eaf)
                 video_jobs.append((cmd, "server/full_" + str(i)))
+                # FULL device-cache (seam 1): push this ONE shared asset to every
+                # cache-eligible client so PLAY serves it from localhost instead of
+                # streaming centrally (the FULL-desync cause). FULL mirrors on every
+                # screen regardless of calibration -> target push-eligible clients
+                # directly, not the calibrated subset.
+                for _fk, _fc in _group_clients(display_id):
+                    if _client_is_push_eligible(_fc):
+                        full_push_targets.append((_fk, i))
             else:
                 img = cv.imread(src_path) if src_path else None
                 if img is None:
@@ -844,6 +853,13 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
             if _client_is_push_eligible(server.settings.clients.get(_push_key)):
                 asyncio.ensure_future(
                     server._push_segment_to_cached_clients(_push_key, token, _push_n))
+        # FULL device-cache (seam 1): push the shared full_ asset to each eligible
+        # client (already pre-filtered at collection; re-check guards a since-gone
+        # client). kind="full" routes to the shared central src in the push fn.
+        for _push_key, _push_n in full_push_targets:
+            if _client_is_push_eligible(server.settings.clients.get(_push_key)):
+                asyncio.ensure_future(
+                    server._push_segment_to_cached_clients(_push_key, token, _push_n, kind="full"))
 
 
 async def render_group_async(display_id):

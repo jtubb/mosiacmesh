@@ -123,9 +123,12 @@ def _expected_seg_keys_for_display(display):
     token = display.renderedToken
     keys = set()
     for i, me in enumerate(getattr(display, "mediaElements", []) or []):
-        if _is_renderable(me) and isVideoItem(me.file) \
-                and me.playmode == PlayMode.SEGMENT:
+        if not (_is_renderable(me) and isVideoItem(me.file)):
+            continue
+        if me.playmode == PlayMode.SEGMENT:
             keys.add("%s_%d" % (token, i))
+        elif me.playmode == PlayMode.FULL:
+            keys.add("full_%s_%d" % (token, i))   # FULL device-cache key (seam 5)
     return keys
 
 
