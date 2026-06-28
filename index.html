@@ -878,6 +878,15 @@
 		// ~-138ms.) err<0 => landed behind -> grow the lead.
 		if (playback.seekPending) {
 			playback.seekPending = false;
+			// SEEK-LANDING trace: tgt=where we asked (G), ct=where it settled,
+			// land=ct-tgt (keyframe snap/overshoot of the SEEK), clk=residual vs
+			// the shared clock (what desyncs the wall), settle=ms to land (buffering).
+			dbg("seekland", { tgt: Math.round(playback.seekTargetMs || 0),
+				ct: Math.round(v.currentTime * 1000),
+				land: Math.round(v.currentTime * 1000 - (playback.seekTargetMs || 0)),
+				clk: Math.round(errorMs),
+				settle: Math.round(GoTime.now() - (playback.seekIssuedAt || GoTime.now())),
+				lead: Math.round(playback.seekIssueLead || 0) });
 			playback.seekAheadMs -= errorMs * 0.9;
 			if (playback.seekAheadMs < 0) { playback.seekAheadMs = 0; }
 			if (playback.seekAheadMs > 1200) { playback.seekAheadMs = 1200; }
@@ -915,6 +924,12 @@
 				vv.playbackRate = 1;
 				playback.seekPending = true;             // tune the lead from the residual next tick
 				playback.lastSeekAt = GoTime.now();
+				// SEEK-LANDING instrumentation: remember WHERE we asked it to go
+				// (G), WHEN we issued it, and the lead, so the next settled tick
+				// reports target-vs-actual landing + settle latency.
+				playback.seekTargetMs = G;
+				playback.seekIssuedAt = playback.lastSeekAt;
+				playback.seekIssueLead = lead;
 			}, issueDelay);
 		} else {
 			var rate = 1 - errorMs / 2000;
