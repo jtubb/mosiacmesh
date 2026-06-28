@@ -171,6 +171,7 @@ _PROBE_TIMEOUT_S = 20           # overall ceiling per probe
 _PROBE_CONNECT_TIMEOUT_S = 10   # ssh ConnectTimeout
 _probe_sem = None
 _probe_inflight = set()         # client_keys with a probe currently running
+_reconcile_inflight = set()     # client IPs with a cache reconcile currently running
 
 
 def _get_probe_sem():
@@ -363,6 +364,14 @@ def _maybe_fire_cache_probe(client_key, client):
     No-op for ineligible devices, and safe to call from a synchronous context
     with no running event loop (returns without scheduling)."""
     if not _is_probe_eligible(client):
+        return
+    # Cooldown: skip if this device was probed within the last 5 min. The in-flight
+    # guard (_probe_inflight) already prevents concurrent duplicates, but without a
+    # cooldown a reconnect storm (200 iPads re-REGISTERing) re-queues a probe for every
+    # device that merely finished a probe seconds ago -> an SSH pile-up. cacheProbedMs
+    # is stamped on a successful probe.
+    _last = getattr(client, "cacheProbedMs", 0) or 0
+    if _last and (time.time() * 1000 - _last) < 300000:
         return
     try:
         asyncio.get_running_loop()
@@ -626,6 +635,18 @@ def _broadcast_cache_progress(client_key, client):
         # want a misbehaving consumer to spam logs at poll rate.
         logging.debug("CACHE_PROGRESS broadcast failed for %s: %s",
                       client_key, e)
+
+
+async def _run_reconcile_guarded(client, ip):
+    """In-flight guard around _reconcile_ipad_cache so process() (every ~5s) never
+    stacks a second reconcile for a device whose previous one (slow ssh rm) is still
+    running. Without this, a fleet with stale segments piles up SSH subprocesses faster
+    than the iPad sshd can serve them."""
+    _reconcile_inflight.add(ip)
+    try:
+        await _reconcile_ipad_cache(client)
+    finally:
+        _reconcile_inflight.discard(ip)
 
 
 async def _reconcile_ipad_cache(client):
@@ -1005,7 +1026,17 @@ async def resolve_client_hostnames(unicast_timeout=2.0, mdns_timeout=3.0):
     unique = {}
     for _, _, ip in targets:
         unique.setdefault(ip, "")
-    for ip, host in await asyncio.gather(*[_resolve(ip) for ip in unique]):
+    # Cap concurrent reverse-lookups: each mDNS fallback sleeps ~1.5s in an executor
+    # thread, and the default executor pool is small (~cpu+4). Without this bound, a
+    # 200-client first boot enqueues 200 executor tasks and this gather blocks process()
+    # for ceil(N/pool)*mdns_timeout seconds. Semaphore(20) keeps the burst bounded.
+    _resolve_sem = asyncio.Semaphore(20)
+
+    async def _resolve_capped(ip):
+        async with _resolve_sem:
+            return await _resolve(ip)
+
+    for ip, host in await asyncio.gather(*[_resolve_capped(ip) for ip in unique]):
         unique[ip] = host
 
     changed = False
@@ -2353,7 +2384,9 @@ async def process():
     # set difference per cached client.
     for _c in list(settings.clients.values()):
         if getattr(_c, "cacheMode", "none") == "lighttpd-localhost" and getattr(_c, "isOnline", False):
-            asyncio.ensure_future(_reconcile_ipad_cache(_c))
+            _rip = getattr(_c, "ip", "")
+            if _rip and _rip not in _reconcile_inflight:   # skip if a reconcile is still running
+                asyncio.ensure_future(_run_reconcile_guarded(_c, _rip))
 
     #response = {"DEST":"ALL","REQUEST": "TEST", "PAYLOAD": "NONE"}
     #socketmanager.broadcast(jsonpickle.encode(response))
