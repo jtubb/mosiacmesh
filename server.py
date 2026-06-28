@@ -1210,58 +1210,42 @@ async def media_handler(request):
         return response
     file_path = f"media/{client}/{subdir}/{fileName}"
     logging.debug(request.http_range)
-    
+
+    # Streaming vs cached split (T1.6). Videos, any range request, and large
+    # files are served through aiohttp's FileResponse instead of reading the
+    # bytes into memory on the event loop:
+    #   - FileResponse answers the Range header NATIVELY — 206 with
+    #     Content-Range + Accept-Ranges, and for an OPEN-ENDED range
+    #     ("bytes=N-") it returns every byte through EOF. That open-ended-to-EOF
+    #     guarantee is exactly what the iPad-1 UIWebView needs: a truncated 206
+    #     (fewer bytes than requested) makes it report MEDIA_ERR_SRC_NOT_SUPPORTED.
+    #     (Verified header-for-header equal to the old hand-built response.)
+    #   - It streams via non-blocking sendfile, so a fleet-wide PLAY burst no
+    #     longer (a) blocks the loop on a synchronous read of an up-to-~80MB
+    #     segment, nor (b) buffers that whole segment in RAM per request.
+    # Small static media (images, small misc files) keep the in-memory FIFO
+    # cache: tiny, frequently re-served, and never range-requested in practice.
+    _rng = request.http_range
+    _is_range = _rng.start is not None or _rng.stop is not None
+    _stream = bool(_vext) or subdir == "videos" or _is_range
+    if not _stream:
+        try:
+            _stream = os.path.getsize(file_path) >= 10 * 1024 * 1024  # 10MB threshold
+        except OSError:
+            _stream = False
+
+    if _stream:
+        # customHeaders here is just {'Content-Type': ...}; FileResponse adds
+        # Content-Range/Accept-Ranges/Content-Length itself.
+        return web.FileResponse(file_path, headers=customHeaders)
+
     try:
-        _rng = request.http_range
-        if _rng.start is not None or _rng.stop is not None:
-            # Honor BOTH bounded ("bytes=0-1023") and OPEN-ENDED ("bytes=512-")
-            # ranges. Browsers seek with open-ended ranges (stop=None); the old
-            # `if request.http_range.stop:` missed those and returned the whole
-            # file as 200 from byte 0 -> the client (Chrome) treats a seek as a
-            # full reload and restarts playback at 0. We must answer 206.
-            file_size = os.path.getsize(file_path)
-            start = _rng.start
-            stop = _rng.stop
-            if start is None:                      # suffix range "bytes=-N" (last N bytes)
-                start = max(0, file_size - (stop or 0))
-                stop = file_size
-            else:
-                if start < 0:
-                    start = 0
-                if stop is None or stop > file_size:
-                    stop = file_size               # open-ended -> read to EOF
-            # NB: no chunk cap. Returning fewer bytes than an open-ended range
-            # requested makes Chrome-for-iOS (UIWebView) treat the 206 as a
-            # truncated file -> MEDIA_ERR_SRC_NOT_SUPPORTED. Segments are a few MB
-            # to ~80MB (no all-intra), so reading to EOF is acceptable.
-            logging.debug(f'Range {start}-{stop-1}/{file_size}')
-            customHeaders['Accept-Ranges'] = 'bytes'
-            customHeaders['Content-Range'] = f'bytes {start}-{stop-1}/{file_size}'
-            customStatus = 206
-            # Use pooled file handle for better performance
-            handle = get_pooled_file_handle(file_path, 'rb')
-            handle.seek(start)
-            data = handle.read(stop - start)
-        else:
-            # For small files, use caching; for large video files, stream directly
-            if subdir == "images" or os.path.getsize(file_path) < 10 * 1024 * 1024:  # 10MB threshold
-                data = get_cached_file(file_path)
-            else:
-                handle = get_pooled_file_handle(file_path, 'rb')
-                handle.seek(0)
-                data = handle.read()
+        data = get_cached_file(file_path)
     except (OSError, IOError) as e:
         logging.error(f"Error reading file {file_path}: {e}")
         return web.Response(status=500, reason='Internal Server Error')
-            
-    response = web.Response(
-        status=customStatus,
-        reason='OK',
-        headers=customHeaders,
-        body = data
-    )
-    
-    return response
+
+    return web.Response(status=200, reason='OK', headers=customHeaders, body=data)
 
 async def javascript_handler(request):
     logging.debug("JAVASCRIPT_HANDLER")

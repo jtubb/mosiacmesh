@@ -4,7 +4,8 @@ Unit tests for API endpoints
 import pytest
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
-from aiohttp.test_utils import make_mocked_request
+from aiohttp.test_utils import make_mocked_request, TestServer, TestClient
+from aiohttp import web
 
 # Import server with patches to avoid argparse conflicts
 import sys
@@ -636,70 +637,85 @@ class TestCalibrate:
 
 
 class TestMediaRange:
-    """media_handler must answer byte-range requests with 206 — including the
-    OPEN-ENDED ranges browsers send when seeking video ("bytes=N-"). Regression:
-    those used to fall through to a 200 full-file-from-0, so Chrome treated a
-    seek as a reload and restarted playback at 0 (iOS Safari sends bounded
-    ranges, so it was unaffected — which masked the bug)."""
+    """media_handler streams video via aiohttp FileResponse (T1.6). It must
+    answer byte-range requests with 206 — including the OPEN-ENDED ranges
+    browsers send when seeking video ("bytes=N-"), which MUST return every byte
+    through EOF: a truncated 206 makes the iPad-1 UIWebView report
+    MEDIA_ERR_SRC_NOT_SUPPORTED. A no-range request must still 200 the full file.
+
+    These exercise the REAL FileResponse over an actual HTTP round-trip against a
+    real file on disk (stronger than mocking seek/read): the 206 status,
+    Content-Range, and body length are computed by FileResponse itself."""
 
     FILE_SIZE = 10000
 
-    def _request(self, range_header=None):
-        headers = {'Range': range_header} if range_header else {}
-        req = make_mocked_request('GET', '/media/c/videos/clip.mp4', headers=headers)
-        req._match_info = {'client': 'c', 'file': 'clip.mp4'}
-        return req
+    async def _client(self, tmp_path, monkeypatch):
+        """Lay out media/c/videos/clip.mp4 under a temp cwd and serve it through
+        the real media_handler route. media_handler resolves the file relative
+        to cwd, so chdir into the temp dir."""
+        mdir = tmp_path / "media" / "c" / "videos"
+        mdir.mkdir(parents=True)
+        (mdir / "clip.mp4").write_bytes(b"A" * self.FILE_SIZE)
+        monkeypatch.chdir(tmp_path)
+        app = web.Application()
+        app.router.add_get('/media/{client}/{sub}/{file}', server.media_handler)
+        cli = TestClient(TestServer(app))
+        await cli.start_server()
+        return cli
 
     @pytest.mark.asyncio
-    async def test_open_ended_range_returns_206(self):
-        """bytes=1000-  ->  206 covering 1000..EOF (the seek case that regressed)."""
-        handle = MagicMock()
-        handle.read.return_value = b'x' * (self.FILE_SIZE - 1000)
-        with patch('server.os.path.isfile', return_value=True), \
-             patch('server.os.path.getsize', return_value=self.FILE_SIZE), \
-             patch('server.get_pooled_file_handle', return_value=handle):
-            resp = await server.media_handler(self._request('bytes=1000-'))
-        assert resp.status == 206
-        assert resp.headers['Content-Range'] == f'bytes 1000-{self.FILE_SIZE - 1}/{self.FILE_SIZE}'
-        assert resp.headers['Accept-Ranges'] == 'bytes'
-        handle.seek.assert_called_once_with(1000)
-        handle.read.assert_called_once_with(self.FILE_SIZE - 1000)
+    async def test_open_ended_range_returns_206_to_eof(self, tmp_path, monkeypatch):
+        """bytes=1000-  ->  206 covering 1000..EOF with EVERY byte to EOF (the
+        iPad-1 seek case; a short read here would break video playback)."""
+        cli = await self._client(tmp_path, monkeypatch)
+        try:
+            r = await cli.get('/media/c/videos/clip.mp4', headers={'Range': 'bytes=1000-'})
+            body = await r.read()
+            assert r.status == 206
+            assert r.headers['Content-Range'] == f'bytes 1000-{self.FILE_SIZE - 1}/{self.FILE_SIZE}'
+            assert r.headers['Accept-Ranges'] == 'bytes'
+            assert len(body) == self.FILE_SIZE - 1000        # full bytes to EOF
+            assert r.headers['Content-Type'] == 'video/mp4'
+        finally:
+            await cli.close()
 
     @pytest.mark.asyncio
-    async def test_bounded_range_returns_206(self):
-        """bytes=0-1023  ->  206 for exactly that window (the always-worked case)."""
-        handle = MagicMock()
-        handle.read.return_value = b'x' * 1024
-        with patch('server.os.path.isfile', return_value=True), \
-             patch('server.os.path.getsize', return_value=self.FILE_SIZE), \
-             patch('server.get_pooled_file_handle', return_value=handle):
-            resp = await server.media_handler(self._request('bytes=0-1023'))
-        assert resp.status == 206
-        assert resp.headers['Content-Range'] == f'bytes 0-1023/{self.FILE_SIZE}'
-        handle.seek.assert_called_once_with(0)
-        handle.read.assert_called_once_with(1024)
+    async def test_bounded_range_returns_206(self, tmp_path, monkeypatch):
+        """bytes=0-1023  ->  206 for exactly that window."""
+        cli = await self._client(tmp_path, monkeypatch)
+        try:
+            r = await cli.get('/media/c/videos/clip.mp4', headers={'Range': 'bytes=0-1023'})
+            body = await r.read()
+            assert r.status == 206
+            assert r.headers['Content-Range'] == f'bytes 0-1023/{self.FILE_SIZE}'
+            assert len(body) == 1024
+        finally:
+            await cli.close()
 
     @pytest.mark.asyncio
-    async def test_no_range_returns_200_full(self):
-        """No Range header  ->  200 full file, no Content-Range."""
-        with patch('server.os.path.isfile', return_value=True), \
-             patch('server.os.path.getsize', return_value=self.FILE_SIZE), \
-             patch('server.get_cached_file', return_value=b'full'):
-            resp = await server.media_handler(self._request())
-        assert resp.status == 200
-        assert 'Content-Range' not in resp.headers
+    async def test_suffix_range_returns_last_n_bytes(self, tmp_path, monkeypatch):
+        """bytes=-512  ->  206 of the last 512 bytes (suffix range)."""
+        cli = await self._client(tmp_path, monkeypatch)
+        try:
+            r = await cli.get('/media/c/videos/clip.mp4', headers={'Range': 'bytes=-512'})
+            body = await r.read()
+            assert r.status == 206
+            assert r.headers['Content-Range'] == \
+                f'bytes {self.FILE_SIZE - 512}-{self.FILE_SIZE - 1}/{self.FILE_SIZE}'
+            assert len(body) == 512
+        finally:
+            await cli.close()
 
     @pytest.mark.asyncio
-    async def test_open_ended_range_reads_to_eof(self):
-        """Open-ended range returns through EOF (no chunk cap) -- a truncated 206
-        makes Chrome-for-iOS treat the file as unsupported."""
-        big = 20 * 1024 * 1024
-        handle = MagicMock()
-        handle.read.return_value = b'x' * (big - 1000)
-        with patch('server.os.path.isfile', return_value=True), \
-             patch('server.os.path.getsize', return_value=big), \
-             patch('server.get_pooled_file_handle', return_value=handle):
-            resp = await server.media_handler(self._request('bytes=1000-'))
-        assert resp.status == 206
-        assert resp.headers['Content-Range'] == f'bytes 1000-{big - 1}/{big}'
-        handle.read.assert_called_once_with(big - 1000)
+    async def test_no_range_returns_200_full(self, tmp_path, monkeypatch):
+        """No Range header  ->  200 full file, Accept-Ranges advertised, no Content-Range."""
+        cli = await self._client(tmp_path, monkeypatch)
+        try:
+            r = await cli.get('/media/c/videos/clip.mp4')
+            body = await r.read()
+            assert r.status == 200
+            assert len(body) == self.FILE_SIZE
+            assert r.headers['Accept-Ranges'] == 'bytes'
+            assert 'Content-Range' not in r.headers
+        finally:
+            await cli.close()
