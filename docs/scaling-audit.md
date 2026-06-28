@@ -29,12 +29,12 @@ At 24 clients these costs are invisible; at 200 each one freezes the wall.
 
 ## Tier 2 — High (throughput drains)
 
-| # | Problem | Location | Fix |
+| # | Problem | Location | Status / Fix |
 |---|---|---|---|
-| T2.1 | Cache-push fan-out: O(N×V) coroutines, serial SCP (~200 min at 200 screens) | `render.py:743`; `server.py:374–497` | Pre-filter `seg_push_targets` to **cached + online** clients before `ensure_future`; cap queued push tasks; skip offline. |
-| T2.2 | `DeviceDetector.parse()` inline per REGISTER | `legacy.py:226` | `run_in_executor` + cache result on the Client; skip re-detect when UA unchanged. |
-| T2.3 | `CACHE_PROGRESS` broadcast to all sessions at poll rate | `server.py:619` | Target admin sessions only. |
-| T2.4 | Boot revalidation `os.path.exists` storm — O(P×G×N) syscalls | `render.py:875–928` | One `os.listdir()` per client → set-membership check instead of per-file stat. |
+| T2.1 | Cache-push fan-out: O(N×V) coroutines, serial SCP (~200 min at 200 screens) | `render.py` push trigger; `server.py:384` | **DONE** (`_client_is_push_eligible`): pre-filter to cache-capable **+ online + has-IP** before `ensure_future`. An offline cache client's scp can't connect and holds a `_PUSH_CONCURRENCY` slot until the stall timeout — skipping it stops the push queue starving; reconcile re-pushes when it returns. |
+| T2.2 | `DeviceDetector.parse()` inline per REGISTER | `legacy.py` | **DONE**: skip the regex-heavy re-parse when the UA is unchanged from the last detection (cached on `client._detectedUA`) — the common reconnect case. A 200-iPad reconnect storm no longer runs 200 redundant parses inline on the loop. (Executor-offload rejected: `msg_response` is sync; the UA-skip removes the storm without it.) |
+| T2.3 | `CACHE_PROGRESS` broadcast to all sessions at poll rate | `server.py:607` | **DEFERRED (low value).** Poll cadence is already `_PUSH_POLL_INTERVAL_S` = **5 s**, so it's effectively throttled (one broadcast per active push per 5 s, bounded by push concurrency) — not a hot path. The only remaining waste is the 200 displays parsing a message they drop; eliminating that needs an admin-session concept (see T1.3 note) whose risk exceeds the benefit. Leave as-is. |
+| T2.4 | Boot revalidation `os.path.exists` storm — O(P×G×N) syscalls | `render.py` `_render_assets_exist` | **DONE**: list each client dir **once** (`os.listdir` → set) and membership-check, instead of an `os.path.exists` per (item × client). Helps boot revalidation AND every `is_playlist_ready` gate (PLAY/ASSIGN/schedule). |
 
 ## Tier 3 — Medium (O(N)-per-event cleanups)
 

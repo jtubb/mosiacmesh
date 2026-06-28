@@ -224,14 +224,23 @@ def msg_response(msg,session):
         client.synced = False
         client.connectionCount += 1
 
-        # Device detection and fingerprinting
-        device = DeviceDetector(client.userAgent or '').parse()
-        client.osName = device.os_name()
-        client.osVersion = device.os_version()
-        client.engine = server._engine_str(device.engine())
-        client.deviceBrand = device.device_brand()
-        client.deviceModel = device.device_model()
-        client.deviceType = server._device_type_str(device.device_type())
+        # Device detection and fingerprinting. T2.2: DeviceDetector.parse() is
+        # regex-heavy and runs INLINE on the event loop (msg_response is sync).
+        # Skip the re-parse when this client's UA is unchanged from the last
+        # detection — the overwhelmingly common reconnect case — so a 200-iPad
+        # reconnect storm doesn't run 200 redundant parses back-to-back. A
+        # genuinely new device (or a UA change) still parses once. Determinism:
+        # parse() is a pure function of the UA, so caching by UA is exact.
+        _ua = client.userAgent or ''
+        if _ua != getattr(client, "_detectedUA", None) or not getattr(client, "osName", ""):
+            device = DeviceDetector(_ua).parse()
+            client.osName = device.os_name()
+            client.osVersion = device.os_version()
+            client.engine = server._engine_str(device.engine())
+            client.deviceBrand = device.device_brand()
+            client.deviceModel = device.device_model()
+            client.deviceType = server._device_type_str(device.device_type())
+            client._detectedUA = _ua
 
         # Recover legacy iPads that present a Mac user-agent (e.g. Safari
         # "Request Desktop Website"). The iPad identity is absent from such a

@@ -646,6 +646,17 @@ async def _run_ffmpeg(cmd, label, semaphore):
                                " (" + str(proc.returncode) + ")")
 
 
+def _client_is_push_eligible(c):
+    """True iff a cache-push to this client is worth spawning (T2.1): the client
+    exists, is in lighttpd-localhost cacheMode, is online, and has an IP. Pure —
+    unit-tested. A push to an offline/incapable client is a no-op or a doomed
+    scp that would occupy a _PUSH_CONCURRENCY slot until the stall timeout."""
+    return bool(c is not None
+                and getattr(c, "cacheMode", "none") == "lighttpd-localhost"
+                and getattr(c, "isOnline", False)
+                and getattr(c, "ip", ""))
+
+
 async def _encode_group(media_elements, display_id, token, progress_cb=None):
     """Encode all SEGMENT/INDIVIDUAL items in `media_elements` for `display_id`'s
     calibrated screens, writing seg_<token>_<i>/ind_<token>_<i> assets. Pure
@@ -821,14 +832,18 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
         await asyncio.gather(*[_run_and_count(cmd, lbl) for cmd, lbl in video_jobs])
         logging.info("render: %d ffmpeg jobs done in %.1fs",
                      len(video_jobs), time.time() - t0)
-        # Cache-push: fire-and-forget scp of each seg_ file to its
-        # iPad's lighttpd cache dir. _push_segment_to_cached_clients
-        # is a no-op for clients not in lighttpd-localhost cacheMode,
-        # so it is safe to call unconditionally for every seg_ target.
+        # Cache-push: fire-and-forget scp of each seg_ file to its iPad's
+        # lighttpd cache dir. T2.1: pre-filter to clients that are actually
+        # cache-capable AND online before spawning. An OFFLINE cache client's
+        # scp can't connect and holds a _PUSH_CONCURRENCY slot until the stall
+        # timeout — at fleet scale that starves the push queue. Skipped clients
+        # get the segment from the central URL on next PLAY, and the periodic
+        # _reconcile_ipad_cache re-pushes once they're back online.
         # See docs/superpowers/specs/2026-06-03-media-cache-design.md
         for _push_key, _push_n in seg_push_targets:
-            asyncio.ensure_future(
-                server._push_segment_to_cached_clients(_push_key, token, _push_n))
+            if _client_is_push_eligible(server.settings.clients.get(_push_key)):
+                asyncio.ensure_future(
+                    server._push_segment_to_cached_clients(_push_key, token, _push_n))
 
 
 async def render_group_async(display_id):
@@ -962,7 +977,13 @@ def _group_is_calibrated(display_id):
 
 def _render_assets_exist(playlist_name, display_id, token):
     """True if every renderable item's per-client asset exists on disk for this
-    token. Conservative: a single missing file demotes the entry to STALE."""
+    token. Conservative: a single missing file demotes the entry to STALE.
+
+    T2.4: directory contents are listed ONCE per dir (cached in `_listed`) and
+    membership-checked, instead of an os.path.exists() syscall per (item x
+    client). At 200 clients this turns thousands of stat() calls into one
+    listdir() per client dir — both at boot (revalidate_renders_on_boot) and on
+    every is_playlist_ready gate (PLAY/ASSIGN/schedule)."""
     import server
     pl = server.settings.playlists.get(playlist_name)
     display = server.settings.displays.get(display_id)
@@ -970,12 +991,24 @@ def _render_assets_exist(playlist_name, display_id, token):
         return False
     elements = _build_media_elements(pl.items)
     clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
+    _listed = {}
+
+    def _has(dir_path, fname):
+        names = _listed.get(dir_path)
+        if names is None:
+            try:
+                names = set(os.listdir(dir_path))
+            except OSError:
+                names = set()       # missing dir -> nothing present
+            _listed[dir_path] = names
+        return fname in names
+
     for i, me in enumerate(elements):
         if me.playmode == PlayMode.FULL:
             ext = ".mp4" if isVideoItem(me.file) else ".png"
             sub = "videos" if ext == ".mp4" else "images"
-            path = os.path.join("media", "server", sub, "full_" + token + "_" + str(i) + ext)
-            if not os.path.exists(path):
+            if not _has(os.path.join("media", "server", sub),
+                        "full_" + token + "_" + str(i) + ext):
                 return False
             continue
         if not _is_renderable(me):
@@ -983,9 +1016,9 @@ def _render_assets_exist(playlist_name, display_id, token):
         ext = ".mp4" if isVideoItem(me.file) else ".png"
         prefix = "ind_" if me.playmode == PlayMode.INDIVIDUAL else "seg_"
         subdir = "videos" if ext == ".mp4" else "images"
+        fname = prefix + token + "_" + str(i) + ext
         for key, _c in clients:
-            path = os.path.join("media", key, subdir, prefix + token + "_" + str(i) + ext)
-            if not os.path.exists(path):
+            if not _has(os.path.join("media", key, subdir), fname):
                 return False
     return True
 
