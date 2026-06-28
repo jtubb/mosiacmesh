@@ -40,6 +40,7 @@ from mosaicmesh.persistence import (
     saveSettings,
     save_settings_incremental,
     cleanup_old_clients,
+    request_save,
 )
 from mosaicmesh.broadcast import (
     broadcast_to_client,
@@ -380,7 +381,9 @@ def msg_response(msg,session):
             if cw and ch:
                 client.canvasWidth = int(cw)
                 client.canvasHeight = int(ch)
-                save_settings_incremental()
+                # Coalesced: a fleet going fullscreen for calibration fires
+                # REPORT_CANVAS from N devices in a burst — one flush absorbs it.
+                request_save()
 
     elif(msg["REQUEST"] == "SETPLAYLIST"):
         payload = msg["PAYLOAD"]

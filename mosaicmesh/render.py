@@ -856,8 +856,10 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         entry.pop("eta", None)
     _broadcast_renders_changed(force=True)
     try:
-        from mosaicmesh.persistence import save_settings_incremental
-        save_settings_incremental()
+        # Coalesced: a calibrate-all completes P×G renders in a burst; one
+        # process()-cycle flush absorbs them instead of P×G inline encodes.
+        from mosaicmesh.persistence import request_save
+        request_save()
     except Exception:
         pass
 

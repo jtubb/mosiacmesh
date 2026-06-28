@@ -37,6 +37,7 @@ from mosaicmesh.state import (
 )
 from mosaicmesh.persistence import (
     save_settings_incremental, saveSettings, cleanup_old_clients,
+    request_save, flush_pending_save,
 )
 from mosaicmesh.cache import (
     get_pooled_file_handle, close_file_pool,
@@ -348,13 +349,13 @@ async def _probe_cache_capability(client_key):
             client.cacheMode = "lighttpd-localhost"
             logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
                          client_key)
-            saveSettings()
+            request_save()   # coalesced: a boot storm probes N devices at once
         elif not ok and client.cacheMode == "lighttpd-localhost":
             client.cacheMode = "none"
             client.cachedSegments = set()   # unreachable now; stop emitting dead localhost URLs
             logging.info("cache-probe: %s no longer cache-capable -> none (cleared cache)",
                          client_key)
-            saveSettings()
+            request_save()   # coalesced (see above)
     finally:
         _probe_inflight.discard(client_key)
 
@@ -2507,8 +2508,16 @@ if __name__ == '__main__':
                     while True:
                         await process()
                         await asyncio.sleep(5)
-                        
-                        # Periodic settings save every 10 cycles (50 seconds)
+
+                        # Coalesced churn flush: cache-probe / canvas-report /
+                        # render-status mark settings dirty via request_save()
+                        # instead of encoding inline. One encode per cycle (~5s)
+                        # absorbs a fleet-wide boot/calibration burst of N saves.
+                        flush_pending_save()
+
+                        # Periodic settings save every 10 cycles (50 seconds) —
+                        # backstop for any mutation that didn't request a save
+                        # (hash-skip makes it free when nothing changed).
                         save_counter += 1
                         if save_counter >= 10:
                             save_settings_incremental()

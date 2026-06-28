@@ -40,6 +40,45 @@ MAX_TIMESTAMPED_BACKUPS = 20
 # skip writes when the encoded payload hasn't changed since the last save.
 last_settings_hash = None
 
+# Coalesced-save flag. High-frequency CHURN paths (cache-probe, canvas-report,
+# render-status) set this via request_save() instead of encoding the whole
+# Settings inline. The process() loop calls flush_pending_save() every cycle,
+# so a fleet-wide burst (N devices probing/reporting at boot, or P×G renders
+# completing during a calibrate-all) collapses into ONE jsonpickle encode
+# instead of N back-to-back encodes that each freeze the event loop.
+#
+# Why NOT route operator REST mutations through this: a coalesced save defers
+# the write by up to one process() cycle (~5 s). For reconstructable churn
+# (a device re-reports its canvas, re-probes its cache, a render re-runs) a few
+# seconds of deferral is harmless. Operator data (playlist/schedule/profile/
+# group edits) keeps calling saveSettings() for immediate durability — losing
+# an operator edit to a crash in a deferral window is NOT acceptable, losing a
+# canvas-dim that the client will re-report on reconnect is.
+_save_requested = False
+
+
+def request_save():
+    """Mark settings dirty for a coalesced flush by the process() loop.
+
+    O(1) — sets a flag, never encodes. Use for high-frequency churn where a
+    few-second persist delay is harmless. For operator mutations that must be
+    durable immediately, call saveSettings() instead."""
+    global _save_requested
+    _save_requested = True
+
+
+def flush_pending_save():
+    """If request_save() was called since the last flush, persist now via the
+    same guarded primitive (empty-overwrite refusal, hash-skip, atomic write,
+    timestamped backups). Called once per process() cycle. Returns True iff a
+    flush was attempted (a request was pending), False if nothing was dirty."""
+    global _save_requested
+    if not _save_requested:
+        return False
+    _save_requested = False
+    save_settings_incremental()
+    return True
+
 
 def _settings_is_empty(s):
     """True iff a Settings holds NO data in any of its collections — i.e. a fresh,
