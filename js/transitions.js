@@ -113,61 +113,36 @@
                wipe: { reveal: reveal, direction: dir, slide: slide, front: p, scope: scope } };
     }
     if (eff.name === 'beerfill') {
-      var bsc = (eff.params && eff.params.scope) || 'wall';
-      var phase = mmBeerPhase(role === 'out' ? 'out' : 'in');
-      // front = LOCAL phase progress 0->1 (like scatter): `p` counts DOWN on the 'out'
-      // window (1->0), so invert there. Without this the fill level fell 1->0 and the
-      // beer receded top->bottom instead of rising bottom->top.
+      // front = beer LEVEL from LOCAL phase progress 0->1 ('out' window counts p DOWN
+      // so the beer rises bottom->top instead of receding).
+      var bph = mmBeerPhase(role === 'out' ? 'out' : 'in');
       var blp = (role === 'out') ? (1 - p) : p;
-      return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'beerfill', family: 'mask', front: mmBeerLevel(phase, blp),
-                         scope: bsc, params: eff.params || {}, phase: phase } };
+      return _maskEffect(eff, role, mmBeerLevel(bph, blp), bph);
     }
     if (eff.name === 'scatter') {
-      var ssc = (eff.params && eff.params.scope) || 'wall';
-      // front = LOCAL phase progress 0->1. mmTransitionState's `p` counts down on
-      // the 'out' window (1->0), so invert there; 'in' already counts up.
+      // front = LOCAL phase progress 0->1 ('out' window counts p DOWN; 'in' counts up).
       var slp = (role === 'out') ? (1 - p) : p;
-      return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'scatter', family: 'mask', front: slp,
-                         scope: ssc, params: eff.params || {}, phase: mmScatterPhase(role) } };
+      return _maskEffect(eff, role, slp, mmScatterPhase(role));
     }
     if (eff.name === 'kegroll') {
-      var kgsc = (eff.params && eff.params.scope) || 'wall';
-      // front = LOCAL phase progress 0->1 (like scatter): `p` counts DOWN on the
-      // 'out' window (1->0), so invert there; 'in' already counts up.
-      var kglp = (role === 'out') ? (1 - p) : p;
-      return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'kegroll', family: 'mask', front: kglp,
-                         scope: kgsc, params: eff.params || {}, phase: mmKegPhase(role) } };
+      var kglp = (role === 'out') ? (1 - p) : p;       // LOCAL phase progress 0->1
+      return _maskEffect(eff, role, kglp, mmKegPhase(role));
     }
     if (eff.name === 'frostcreep') {
-      var frsc = (eff.params && eff.params.scope) || 'wall';
       var frlp = (role === 'out') ? (1 - p) : p;       // LOCAL phase progress 0->1
       var frph = mmFrostPhase(role);
       var frcov = (frph === 'cover') ? frlp : (1 - frlp);   // coverage front: cover rises, reveal falls
-      return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'frostcreep', family: 'mask', front: frcov,
-                         scope: frsc, params: eff.params || {}, phase: frph } };
+      return _maskEffect(eff, role, frcov, frph);
     }
     if (eff.name === 'wheatpart') {
-      var wpsc = (eff.params && eff.params.scope) || 'wall';
-      // front = LOCAL phase progress 0->1 (like scatter): `p` counts DOWN on the
-      // 'out' window (1->0), so invert there; 'in' already counts up. mmDrawWheat
-      // maps front->openness via phase (mmWheatOpenness).
-      var wplp = (role === 'out') ? (1 - p) : p;
-      return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'wheatpart', family: 'mask', front: wplp,
-                         scope: wpsc, params: eff.params || {}, phase: mmWheatPhase(role) } };
+      // mmDrawWheat maps front->openness via phase (mmWheatOpenness).
+      var wplp = (role === 'out') ? (1 - p) : p;       // LOCAL phase progress 0->1
+      return _maskEffect(eff, role, wplp, mmWheatPhase(role));
     }
     if (eff.name === 'splashcrown') {
-      var spsc = (eff.params && eff.params.scope) || 'wall';
-      // front = LOCAL phase progress 0->1 (scatter convention): invert on the 'out'
-      // window; mmDrawSplash maps front->sequence via phase (mmSplashSeq).
-      var splp = (role === 'out') ? (1 - p) : p;
-      return { role: role, opacity: 1, wipe: null,
-               effect: { name: 'splashcrown', family: 'mask', front: splp,
-                         scope: spsc, params: eff.params || {}, phase: mmSplashPhase(role) } };
+      // mmDrawSplash maps front->sequence via phase (mmSplashSeq).
+      var splp = (role === 'out') ? (1 - p) : p;       // LOCAL phase progress 0->1
+      return _maskEffect(eff, role, splp, mmSplashPhase(role));
     }
     if (eff.name === 'coasterflip') {
       var cesc = (eff.params && eff.params.scope) || 'wall';
@@ -294,6 +269,33 @@
   function _mmLcg(seed) {
     var s = (seed >>> 0) || 1;
     return function () { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  }
+
+  // Build a deterministic seeded field: `n` items, each from buildFn(rnd) over one
+  // _mmLcg stream. Callers MUST call rnd() in a fixed order/count per item so output
+  // stays byte-identical (wall-coherence). Pure.
+  function _mmSeedField(seed, n, buildFn) {
+    var rnd = _mmLcg(seed >>> 0), arr = [], i;
+    for (i = 0; i < (n | 0); i++) { arr.push(buildFn(rnd)); }
+    return arr;
+  }
+
+  // Quad x-range in global px: min/max x of the 4 corners scaled by GW. Returns
+  // {lo, hi} or null when quad is absent/degenerate. Shared per-screen cull math. Pure.
+  function _mmQuadXRange(quad, GW) {
+    if (!quad || quad.length < 4) { return null; }
+    var lo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW;
+    var hi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW;
+    return { lo: lo, hi: hi };
+  }
+
+  // Build a mask-family effect result. `front` MUST be passed explicitly (callers may
+  // legitimately pass 0). Pure.
+  function _maskEffect(eff, role, front, phase) {
+    return { role: role, opacity: 1, wipe: null,
+             effect: { name: eff.name, family: 'mask', front: front,
+                       scope: (eff.params && eff.params.scope) || 'wall',
+                       params: eff.params || {}, phase: phase } };
   }
   // Seeded reveal order: a permutation of 0..n-1 (Fisher-Yates over _mmLcg). The SAME
   // seed (playback.seed) on every screen -> identical order -> wall-coherent dissolve.
@@ -459,19 +461,15 @@
   }
 
   function mmBeerBubbles(seed, count) {
-    var rnd = _mmLcg(seed >>> 0), arr = [], i;
-    for (i = 0; i < count; i++) {
-      arr.push({ x: rnd(), phase: rnd(), r: 1 + rnd() * 2.4, spd: 0.45 + rnd() * 0.8 });
-    }
-    return arr;
+    return _mmSeedField(seed >>> 0, count, function (rnd) {
+      return { x: rnd(), phase: rnd(), r: 1 + rnd() * 2.4, spd: 0.45 + rnd() * 0.8 };
+    });
   }
 
   function mmFoamBubbles(seed, count) {
-    var rnd = _mmLcg(((seed >>> 0) ^ 0x9e3779b9) >>> 0), arr = [], i;
-    for (i = 0; i < count; i++) {
-      arr.push({ x: rnd(), yf: rnd(), r: 1 + rnd() * 3.2, a: 0.22 + rnd() * 0.4 });
-    }
-    return arr;
+    return _mmSeedField(((seed >>> 0) ^ 0x9e3779b9) >>> 0, count, function (rnd) {
+      return { x: rnd(), yf: rnd(), r: 1 + rnd() * 3.2, a: 0.22 + rnd() * 0.4 };
+    });
   }
 
   // Draw opaque beer covering the bottom `level` fraction of the region.
@@ -606,14 +604,12 @@
   // draw scales them to GH and they never warp to sub-pixel specks.
   function mmWheatField(seed, density, GW, GH) {
     var n = density > 0 ? (density | 0) : 1;
-    var rnd = _mmLcg(seed >>> 0), arr = [], i, bx;
     var cx = GW / 2;
-    for (i = 0; i < n; i++) {
-      bx = rnd() * GW;
-      arr.push({ bx: bx, h: 0.6 + rnd() * 0.4, sway: rnd() * _TWO_PI,
-                 headR: 0.006 + rnd() * 0.006, side: bx < cx ? 'left' : 'right' });
-    }
-    return arr;
+    return _mmSeedField(seed >>> 0, n, function (rnd) {
+      var bx = rnd() * GW;
+      return { bx: bx, h: 0.6 + rnd() * 0.4, sway: rnd() * _TWO_PI,
+               headR: 0.006 + rnd() * 0.006, side: bx < cx ? 'left' : 'right' };
+    });
   }
   function mmWheatPhase(role) { return _mmCoverRevealPhase(role); }
 
@@ -642,29 +638,27 @@
   // a perfect ring. lenF/beadF/flyF/phase shape each spike + its flung bead.
   function mmCrownSpikes(seed, count) {
     var n = count > 0 ? (count | 0) : 1;
-    var rnd = _mmLcg(seed >>> 0), arr = [], i, base, step = _TWO_PI / n, ang;
-    for (i = 0; i < n; i++) {
-      base = i * step;
-      ang = base + (rnd() - 0.5) * step * 0.8;
+    var step = _TWO_PI / n, _i = 0;
+    return _mmSeedField(seed >>> 0, n, function (rnd) {
+      var base = _i * step;
+      var ang = base + (rnd() - 0.5) * step * 0.8;
       if (ang < 0) { ang += _TWO_PI; } else if (ang >= _TWO_PI) { ang -= _TWO_PI; }
-      arr.push({ ang: ang,
-                 lenF: 0.5 + rnd() * 0.5,
-                 beadF: 0.5 + rnd() * 0.6,
-                 flyF: 0.6 + rnd() * 0.9,
-                 phase: rnd() * _TWO_PI });
-    }
-    return arr;
+      _i++;
+      return { ang: ang,
+               lenF: 0.5 + rnd() * 0.5,
+               beadF: 0.5 + rnd() * 0.6,
+               flyF: 0.6 + rnd() * 0.9,
+               phase: rnd() * _TWO_PI };
+    });
   }
 
   function _clamp01(x) { return x < 0 ? 0 : (x > 1 ? 1 : x); }
   function _mmCoverRevealPhase(role) { return role === 'out' ? 'cover' : 'reveal'; }
   function mmScatterParticles(seed, count) {
-    var rnd = _mmLcg(seed >>> 0), arr = [], i;
-    for (i = 0; i < count; i++) {
-      arr.push({ ang: rnd() * _TWO_PI, sp: 0.6 + rnd() * 0.9,
-                 rot0: rnd() * _TWO_PI, rps: (rnd() - 0.5) * 1.4 });
-    }
-    return arr;
+    return _mmSeedField(seed >>> 0, count, function (rnd) {
+      return { ang: rnd() * _TWO_PI, sp: 0.6 + rnd() * 0.9,
+               rot0: rnd() * _TWO_PI, rps: (rnd() - 0.5) * 1.4 };
+    });
   }
   function mmScatterPhase(role) { return _mmCoverRevealPhase(role); }
   function mmScatterDuration(params, role) {
@@ -1159,12 +1153,8 @@
     // redraws ALL stalks (most off-screen). Skip stalks whose base + lean/ear horizontal
     // reach can't land on THIS screen's quad. Biggest win during the dwell (lean->0 =>
     // tight margin). quad is normalized global coords; null (uncalibrated) -> no cull.
-    var qLo = -1, qHi = 0, cullM = 0;
-    if (quad && quad.length >= 4) {
-      qLo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW;
-      qHi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW;
-      cullM = Math.abs(Math.sin(geom.lean)) * reg.h + reg.h * 0.05;   // lean reach + ear/stalk width
-    }
+    var xr = _mmQuadXRange(quad, GW), cullM = 0;
+    if (xr) { cullM = Math.abs(Math.sin(geom.lean)) * reg.h + reg.h * 0.05; }   // lean reach + ear/stalk width
 
     // stalks: rooted at the bottom of each wall, leaning toward the outer edge,
     // sliding outward with the wall, swaying with `now`.
@@ -1180,7 +1170,7 @@
       if (s.side === 'left' && (baseX < reg.x || baseX > leftEdge)) { continue; }
       if (s.side === 'right' && (baseX > reg.x + reg.w || baseX < rightEdge)) { continue; }
       // cull stalks that can't reach this screen (global field -> per-screen skip)
-      if (qLo >= 0 && (baseX < qLo - cullM || baseX > qHi + cullM)) { continue; }
+      if (xr && (baseX < xr.lo - cullM || baseX > xr.hi + cullM)) { continue; }
       ang = leanDir * geom.lean + Math.sin(ts * 1.6 + s.sway) * 0.05;   // lean + gentle sway
       hY = s.h * reg.h;                                                 // stalk height (px)
       ctx.save();
@@ -1262,12 +1252,7 @@
 
     var spikes = mmCrownSpikes(seed, (params && params.crownCount) || 28);
     var spikeMax = reg.h * 0.06, ts = (now || 0) * 0.001, i, s, sa, slen, tipx, tipy, sw, px, py, fb;
-    var cullActive = false, qLo = 0, qHi = 0;
-    if (quad && quad.length >= 4) {
-      cullActive = true;
-      qLo = Math.min(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW - spikeMax * 3;
-      qHi = Math.max(quad[0][0], quad[1][0], quad[2][0], quad[3][0]) * GW + spikeMax * 3;
-    }
+    var xr = _mmQuadXRange(quad, GW);   // per-screen cull range (margin applied at the gate)
     // concentric ripple rings spreading from the impact (foam outlines, fading outward)
     var rk, rr, ra;
     ctx.strokeStyle = pal.foamTop || pal.foam || pal.beerTop;
@@ -1282,7 +1267,7 @@
     for (i = 0; i < spikes.length; i++) {
       s = spikes[i]; sa = s.ang;
       px = cx + R * Math.cos(sa); py = cy + R * Math.sin(sa);     // rim base
-      if (cullActive && (px < qLo || px > qHi)) { continue; }     // off this screen
+      if (xr && (px < xr.lo - spikeMax * 3 || px > xr.hi + spikeMax * 3)) { continue; }   // off this screen
       slen = spikeMax * s.lenF * (0.6 + 0.4 * Math.sin(ts * 3 + s.phase));
       tipx = cx + (R + slen) * Math.cos(sa); tipy = cy + (R + slen) * Math.sin(sa);
       sw = reg.h * 0.012 * s.beadF;
