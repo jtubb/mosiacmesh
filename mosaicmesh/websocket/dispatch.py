@@ -58,21 +58,11 @@ async def ws_handler(manager, session, msg):
         # Remember the connecting request NOW (it's valid at OPEN); msg_response falls
         # back to it because session.request is None for xhr_send-delivered MESSAGEs.
         remember_request(session)
-        # Enhanced discovery notification with client info
-        client_info = {
-            "sessionId": session.id,
-            "ip": server._client_ip(session.request) if hasattr(session, 'request') else "unknown",
-            "userAgent": session.request.headers.get('User-Agent', '') if hasattr(session, 'request') else "",
-            "timestamp": time.time()
-        }
-        discovery_announcement = {
-            "REQUEST": "DEVICE_DISCOVERED",
-            "PAYLOAD": client_info
-        }
-        manager.broadcast(jsonpickle.encode(discovery_announcement))
-
-        # Also send traditional JOIN for backward compatibility
-        manager.broadcast(jsonpickle.encode({"REQUEST": "JOIN", "PAYLOAD":session.id}))
+        # NB: DEVICE_DISCOVERED and JOIN broadcasts were removed here (T1.3).
+        # Both fired on EVERY OPEN to ALL sessions, and NOTHING consumed them
+        # (no JS/Python listener) — pure reconnect-storm noise (2 × M socket
+        # writes per connect × N reconnecting clients). The admin roster
+        # updates from the REGISTER-driven CLIENTS_CAME_ONLINE batch instead.
 
         # Replay current renderStatus to the newly-connected session for any
         # display with a non-empty status. Without this, an admin who
@@ -95,7 +85,9 @@ async def ws_handler(manager, session, msg):
     elif msg.type == sockjs.MsgType.MESSAGE:
         session.send(msg_response(jsonpickle.decode(msg.data),session))
     elif msg.type == sockjs.MsgType.CLOSED:
-        # Enhanced disconnect notification
         forget_request(session.id)
         handle_client_disconnect(session.id)
-        manager.broadcast(jsonpickle.encode({"REQUEST": "DISC", "PAYLOAD":session.id}))
+        # NB: the DISC broadcast was removed here (T1.3) — like JOIN/
+        # DEVICE_DISCOVERED on OPEN, it fired to ALL sessions on every
+        # disconnect and had no consumer. The admin offline roster comes from
+        # process()'s CLIENTS_WENT_OFFLINE sweep, not per-session DISC.

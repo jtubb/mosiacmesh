@@ -46,6 +46,7 @@ from mosaicmesh.broadcast import (
     broadcast_to_client,
     broadcast_to_display_group,
 )
+from mosaicmesh.websocket.online_batch import queue_client_online
 from mosaicmesh.api.discovery import (
     auto_configure_client,
     get_discovered_devices,
@@ -279,19 +280,15 @@ def msg_response(msg,session):
         # broadcast the timeline's per-track online count stuck at its
         # last-hydrated value — an iPad reconnecting bumped client.isOnline
         # server-side but the admin saw nothing until a manual reload.
-        try:
-            server.socketmanager.broadcast(jsonpickle.encode({
-                "REQUEST": "CLIENTS_CAME_ONLINE",
-                "PAYLOAD": {"devices": [{
-                    "clientKey": msg["SRC"],
-                    "displayID": client.displayID,
-                    "isOnline": True,
-                    "friendlyName": client.friendlyName,
-                }]},
-            }))
-        except Exception:
-            # Don't fail the REGISTER over a broadcast hiccup.
-            pass
+        # Batched: a reconnect storm queues N devices into ONE broadcast a
+        # short debounce later (online_batch), instead of N broadcasts ×
+        # M sessions. Never raises into REGISTER.
+        queue_client_online({
+            "clientKey": msg["SRC"],
+            "displayID": client.displayID,
+            "isOnline": True,
+            "friendlyName": client.friendlyName,
+        })
 
         # Enhanced success response with configuration info
         response["PAYLOAD"] = {
