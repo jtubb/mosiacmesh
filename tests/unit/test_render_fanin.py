@@ -178,27 +178,29 @@ def _capture_jobs(monkeypatch):
     return cmds
 
 
-def test_encode_group_segment_per_process_when_flag_off(monkeypatch):
+def test_encode_group_segment_fanin_default_on(monkeypatch):
+    """Default (env unset) is fan-in ON: ONE shared decode for all screens."""
     me = _setup_seg_group(monkeypatch, 3)
     cmds = _capture_jobs(monkeypatch)
-    monkeypatch.delenv("MM_RENDER_FANIN", raising=False)
-    asyncio.run(r._encode_group([me], "G", "tok"))
-    assert len(cmds) == 3, "flag OFF: one ffmpeg per screen (3 decodes)"
-    assert all(c.count("-i") == 1 and "-vf" in c and "-filter_complex" not in c
-               for c in cmds)
-
-
-def test_encode_group_segment_fanin_when_flag_on(monkeypatch):
-    me = _setup_seg_group(monkeypatch, 3)
-    cmds = _capture_jobs(monkeypatch)
-    monkeypatch.setenv("MM_RENDER_FANIN", "1")
+    monkeypatch.delenv("MM_RENDER_FANIN", raising=False)       # default -> ON
     monkeypatch.delenv("MM_RENDER_FANIN_CAP", raising=False)   # default cap 8 >= 3
     asyncio.run(r._encode_group([me], "G", "tok"))
-    assert len(cmds) == 1, "flag ON: ONE fan-in ffmpeg (single shared decode)"
+    assert len(cmds) == 1, "default ON: ONE fan-in ffmpeg (single shared decode)"
     fc = cmds[0]
     assert fc.count("-i") == 1 and "-filter_complex" in fc
     assert "split=3" in fc[fc.index("-filter_complex") + 1]
     assert sum("seg_tok_0.mp4" in a for a in fc) == 3, "all 3 screen outputs present"
+
+
+def test_encode_group_segment_kill_switch_forces_per_process(monkeypatch):
+    """MM_RENDER_FANIN=0 is the kill-switch back to one ffmpeg per screen."""
+    me = _setup_seg_group(monkeypatch, 3)
+    cmds = _capture_jobs(monkeypatch)
+    monkeypatch.setenv("MM_RENDER_FANIN", "0")
+    asyncio.run(r._encode_group([me], "G", "tok"))
+    assert len(cmds) == 3, "kill-switch: one ffmpeg per screen (3 decodes)"
+    assert all(c.count("-i") == 1 and "-vf" in c and "-filter_complex" not in c
+               for c in cmds)
 
 
 def test_encode_group_segment_fanin_respects_cap(monkeypatch):

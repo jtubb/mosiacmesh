@@ -672,10 +672,13 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
     seg_items = [(i, me) for i, me in enumerate(media_elements)
                  if _is_renderable(me)]
     clients = [(k, c) for k, c in _group_clients(display_id) if c.measuredPerimeter is not None]
-    # T1.2 SEGMENT fan-in: opt-in (default OFF) until validated on the wall.
-    # _fanin_cap bounds branches per ffmpeg so N libx264 encoders in one process
-    # don't oversubscribe the CPU; one decode is shared per chunk.
-    _fanin_on = bool(os.environ.get("MM_RENDER_FANIN"))
+    # T1.2 SEGMENT fan-in: ON by default (validated 2026-06-28 on the 24-screen
+    # OEB wall — per-screen output bit-identical to the per-process path, ~23%
+    # faster). Kill-switch: set MM_RENDER_FANIN=0 (or off/false/no) to force the
+    # legacy per-screen path. _fanin_cap bounds branches per ffmpeg so N libx264
+    # encoders in one process don't oversubscribe the CPU; one decode per chunk.
+    _fanin_on = os.environ.get("MM_RENDER_FANIN", "1").strip().lower() \
+        not in ("0", "false", "off", "no")
     _fanin_cap = max(1, int(os.environ.get("MM_RENDER_FANIN_CAP") or 8))
     # Pass 1: collect all video render commands. Pass 2: gather them.
     # This lets us see the total job count and parallelise everything
