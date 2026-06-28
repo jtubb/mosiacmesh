@@ -420,6 +420,29 @@ var GoTime = (function f() {
                      offset: options._offset, target: options._lastSteerTarget };
         },
 
+		// DIAGNOSTIC (?tdbg): why is steering engaged or not? Distinguishes
+		// "samples not arriving" (recent==0 -> cadence too sparse) from "samples
+		// arriving but filtered" (recent>0, kept<minS -> precision gate too tight
+		// / RTT too high). Mirrors _robustTarget's window+gate math read-only.
+		steerDebug: function() {
+			var nowMs = getAccurateTimestamp() + options._offset;
+			var win = (options._steerWindowMs != null) ? options._steerWindowMs : 120000;
+			var floor = (options._steerPrecisionFloorMs != null) ? options._steerPrecisionFloorMs : 60;
+			var minS = (options._steerMinSamples != null) ? options._steerMinSamples : 3;
+			var s = options._steerSamples || [], i, recent = [];
+			for (i = 0; i < s.length; i++) { if (s[i].t >= nowMs - win) { recent.push(s[i]); } }
+			var best = null;
+			for (i = 0; i < recent.length; i++) { if (best === null || recent[i].precision < best) { best = recent[i].precision; } }
+			var gate = (best === null) ? null : Math.max(2 * best, floor);
+			var kept = 0;
+			if (gate !== null) { for (i = 0; i < recent.length; i++) { if (recent[i].precision <= gate) { kept++; } } }
+			return { n: s.length, recent: recent.length, kept: kept,
+			         best: (best === null ? null : Math.round(best)),
+			         gate: (gate === null ? null : Math.round(gate)), minS: minS, win: win,
+			         steering: !!options._steering, syncCount: options._syncCount,
+			         interval: options._syncInterval };
+		},
+
 		steerTick: function() { return _steerTick(); },
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget

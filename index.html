@@ -463,6 +463,9 @@
 			synced: (typeof ProgrammableTimer !== 'undefined') ? ProgrammableTimer.isSynced() : null,
 			settled: clockSettled(),
 			cready: clockReady(),
+			// DIAGNOSTIC (temporary): steering sample/gate state — is the drift
+			// steerer being fed (recent>0) and engaging (steering), or starved?
+			steer: (typeof GoTime.steerDebug === 'function') ? GoTime.steerDebug() : null,
 			// Scatter perf telemetry (?tdbg): animation-loop fps + last scatter draw
 			// stats + active tuning knobs, so frame rate is readable from the server
 			// log remotely (no need to eyeball the device HUD).
