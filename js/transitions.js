@@ -3,7 +3,7 @@
  * + DOM apply helpers. mmTransitionState is a pure function of the shared-clock
  * offset, so every panel computes the same state and transitions in lockstep. */
 (function (root) {
-  var _TWO_PI = 6.283185307;
+  var _TWO_PI = Math.PI * 2;   // canonical 2pi (shared form with animations.js MM_TWO_PI)
   function _dur(eff, role) {
     if (!eff || !eff.params) { return 0; }
     if (eff.name === 'beerfill') { return mmBeerDuration(eff.params, role); }

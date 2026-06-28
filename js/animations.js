@@ -352,8 +352,8 @@
         var T1 = 2500, T2 = 3300, T3 = 4100, T4 = 1900;
         var rng = MM_RNG(seed);
         var hueShift = rng() * 360;          // per-run colorway rotation
-        var ph1 = rng() * 6.283, ph2 = rng() * 6.283,
-            ph3 = rng() * 6.283, ph4 = rng() * 6.283;
+        var ph1 = rng() * MM_TWO_PI, ph2 = rng() * MM_TWO_PI,
+            ph3 = rng() * MM_TWO_PI, ph4 = rng() * MM_TWO_PI;
         var gx, gy, o = 0;
         for (gy = 0; gy < rows; gy++) {
           for (gx = 0; gx < cols; gx++) {
@@ -815,7 +815,7 @@
             var rho = Math.sqrt(du * du + dv * dv) + 1e-4;
             var ang = Math.atan2(dv, du);
             var depth = 0.35 / rho + t * 1.2;            // rush inward
-            var ring = 0.5 + 0.5 * Math.sin(depth * 6.2831);
+            var ring = 0.5 + 0.5 * Math.sin(depth * MM_TWO_PI);
             var seg = 0.5 + 0.5 * Math.sin(ang * 8 + depth * 2);
             var vign = rho * 3; if (vign > 1) { vign = 1; }
             var bright = ring * (0.4 + 0.6 * seg) * vign;
@@ -838,7 +838,7 @@
       smooth: true,
       shade: function (data, cols, rows, tMs, nowMs, seed) {
         var rng = MM_RNG(seed);
-        var ph = rng() * 6.283;
+        var ph = rng() * MM_TWO_PI;
         var t = tMs / 1000, o = 0, gx, gy;
         for (gy = 0; gy < rows; gy++) {
           for (gx = 0; gx < cols; gx++) {
