@@ -20,7 +20,7 @@ At 24 clients these costs are invisible; at 200 each one freezes the wall.
 
 | # | Problem | Location | Behavior at 200 | Fix |
 |---|---|---|---|---|
-| T1.1 | Whole-state `jsonpickle.encode` synchronous on the loop, every save | `persistence.py:77` (every mutating REST handler + the 50 s periodic save) | ~10–140 ms freeze of *all* clients on every drag/assign/save | `run_in_executor` for the encode+hash+write; debounce coalescing saves within ~500 ms. (Longer term: per-entity persistence.) |
+| T1.1 | Whole-state `jsonpickle.encode` synchronous on the loop. **Corrected:** REGISTER does *not* save per-event (relies on the 50 s periodic save), so the reconnect storm isn't the save bottleneck. The genuine N-scaling save storms are three CHURN paths that each fire ~once per device/render in a boot/calibrate-all burst: cache-probe (`server.py:347–357`), `REPORT_CANVAS` (`legacy.py:383`), render-complete (`render.py:860`). | as noted | each does a full ~100 ms encode (at 200) back-to-back → multi-second cumulative loop freeze during boot/calibration | **DONE** (`a899c8c`): dirty-flag coalescer — `request_save()` (O(1) flag) + `flush_pending_save()` once per `process()` cycle → one encode per window. Operator REST mutations stay synchronous (immediate durability). `run_in_executor` on the encode was rejected: it races a live-mutated `Settings` graph. |
 | T1.2 | Per-screen ffmpeg fan-out — O(N×V) processes per render | `render.py:618–735` (`_encode_group`) | 200 ffmpeg/render, ~500 s wall; calibrate-all over P playlists ≈ tens of minutes | One `filter_complex` decode → N perspective outputs in **one** ffmpeg (split → N `perspective`/`scale` chains). Golden/visual-gate the output. |
 | T1.3 | Reconnect-storm broadcasts: OPEN+REGISTER fire 3–4 all-sessions broadcasts each | `legacy.py:267,282`; `dispatch.py:72,75` | 200 iPads reconnect → ~320k socket writes in seconds; loop saturated 30–60 s | Gate `JOIN`/`DEVICE_DISCOVERED` to admin sessions (or drop `JOIN`); **batch** `CLIENTS_CAME_ONLINE` (buffer 500 ms → one broadcast). |
 | T1.4 | Unbounded parallel mDNS on boot | `server.py:1008` (`asyncio.gather` over all IPs; `_mdns_reverse` sleeps 1.5 s in executor) | `process()` blocked ~38 s on first boot (executor pool ~8, 200 tasks each sleeping) | `asyncio.Semaphore(20)` around the per-IP resolve. |
@@ -62,7 +62,7 @@ At 24 clients these costs are invisible; at 200 each one freezes the wall.
 
 ## Recommended sequencing
 
-1. **Tier 1 safe wins first** (T1.1, T1.3, T1.4, T1.5, T1.6) — executor-offloads, broadcast gating, the mDNS semaphore, and the SSH guards. High impact, low risk, unit-testable; each is a contained change.
+1. **Tier 1 safe wins first.** **Done so far:** T1.4 (mDNS `Semaphore(20)`), T1.5 (SSH probe cooldown + reconcile in-flight guard) in `dec068b`; T1.1 (save coalescer) in `a899c8c`. **Remaining, each needing per-item validation:** T1.3 (broadcast gating — needs an admin-session concept), T1.6 (file-serving streaming — needs on-wall iPad-1 206 validation; a blind `FileResponse` swap risks the tuned `UIWebView` range behavior).
 2. **T1.2 (render `filter_complex` fan-in)** — the biggest CPU win but the riskiest: the per-screen warped output must match the current per-process output. Build it behind a golden/visual gate (compare a frame hash of old vs new per screen) before switching the default.
 3. **Tier 2 / Tier 3** as follow-ups once Tier 1 is deployed and the fleet is larger.
 
