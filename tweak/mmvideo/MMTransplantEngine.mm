@@ -54,6 +54,7 @@ typedef void (*MMVoidFn)(void *);
     _item = [AVPlayerItem playerItemWithURL:u];
     _player = [AVPlayer playerWithPlayerItem:_item];
     _layer = [AVPlayerLayer playerLayerWithPlayer:_player];
+    _net = 2; _ready = 0;   // Loading / HaveNothing until AVPlayerItem.status advances
     [_item addObserver:self forKeyPath:@"status" options:0 context:(void *)1];
     [_item addObserver:self forKeyPath:@"duration" options:0 context:(void *)2];
     _observing = YES;
