@@ -24,4 +24,19 @@ static int mm_url_to_path(const char *url, char *out, size_t outlen){
     int n = snprintf(out, outlen, "file://%s%s", MM_CACHE_DIR, nbuf);
     return (n>0 && (size_t)n < outlen) ? 1 : 0;
 }
+static float mm_clamp_rate(float r, int canFast, int canSlow){
+    if(r==1.0f || r==0.0f) return r;
+    if(r>1.0f) return canFast ? r : 1.0f;
+    if(r>0.0f) return canSlow ? r : 1.0f;
+    return 0.0f; /* no reverse */
+}
+/* WebCore MediaPlayer enums (iOS5 WebKit534): NetworkState Empty=0 Idle=1 Loading=2
+   Loaded=3 FormatError=4 NetworkError=5 DecodeError=6; ReadyState HaveNothing=0
+   HaveMetadata=1 HaveCurrentData=2 HaveFutureData=3 HaveEnoughData=4. Confirm in
+   REFINDINGS (Phase 1) against the disassembly; these are the documented values. */
+static void mm_status_to_states(int avStatus, int *net, int *ready){
+    if(avStatus==2){ *net=6; *ready=0; return; }      /* failed -> DecodeError */
+    if(avStatus==1){ *net=3; *ready=4; return; }      /* ready  -> Loaded/HaveEnough */
+    *net=2; *ready=0;                                  /* unknown-> Loading/HaveNothing */
+}
 #endif
