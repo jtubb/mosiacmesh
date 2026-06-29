@@ -309,3 +309,19 @@ runtime wiring depends on the inline-vs-fullscreen branch:
   cache's per-image LC_SEGMENT `fileoff` is unreliable, so scan via the
   vm→file mappings).
 - Host Python 3.14 + capstone. Cache: 199 MB `dyld_v1   armv7`.
+
+---
+
+## Phase 1.2 — On-device runtime confirmation (2026-06-29, screen14, observe-only)
+
+Installed an observe-only tweak hooking `MediaPlayerPrivateiPhone::{load,play,seek,setRate}`; navigated MobileSafari to a cached `full_*.mp4` page; dumped `this+8`/`this+0xc` from inside the live process. Tweak removed after.
+
+**Confirmed:**
+- All four hook symbols resolve + hook at runtime (slid addrs this boot: `seek=0x37a50281`, `setRate=0x37a50185`, `play=0x37a505d5`, `load=0x3761e1a1`). `MSHookFunction` on the C++ mangled names works.
+- `this+8` and `this+0xc` are populated as the field map predicts (non-nil after `load`).
+
+**Surprise (refines Section 1 + Section 5):**
+- At **load time**, `this+8` = **`FPVMediaPlayerHelper`** (a fullscreen-player *setup helper*; responds to NONE of setCurrentTime:/setRate:/play/pause/view/layer/…). `this+0xc` = **`WebCoreMediaPlayerNotificationHelper`** (a WebKit→WebCore notification bridge), NOT `MPAVItem`.
+- This matches the static `setMediaPlayerProxy` note: `this+8` is REASSIGNED. The load-time occupant is the FPV fullscreen-player helper; the real playback controller (the `setCurrentTime:`/`setRate:` target inferred statically) is wired in only once playback actually begins — which the observe pass could NOT trigger (iOS-5 muted-autoplay needs a user gesture, so `play`/`seek` never fired).
+
+**Consequence for the design (no blocker):** the transplant hooks `MediaPlayerPrivateiPhone` and **replaces** the engine with our `AVPlayer` — it does NOT need to drive the original controller, so the original's class/selectors are not on the critical path. The two items still genuinely unconfirmed — (a) the playing-state controller class, (b) the native video VIEW/LAYER that hosts the picture (the Section-5 AVPlayerLayer slot-in target) — are naturally observed during **Phase 3** on first real playback (our transplant code runs then, with temporary logging), or via a gesture-driven playback observe (VNC autotap / a server PLAY) if we want them earlier. The "FPV fullscreen-player helper" finding also corroborates that the original path is the forced-fullscreen movie player our inline transplant supersedes.
