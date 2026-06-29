@@ -352,8 +352,8 @@ git commit -m "docs(mmvideo): confirm RE offsets/symbols on-device; revert obser
 - **RE-dependent:** the `observeValueForKeyPath:` handlers call the WebCore `MediaPlayer::*Changed` entry points (addresses from REFINDINGS) on the saved `webCoreMediaPlayer`, using `mm_status_to_states`.
 - **Test (on-device, gated):** a clip loads + plays via the engine in isolation (a temporary `%ctor` smoke that builds an engine on a known file and logs status transitions).
 
-### Task 2.2: State-callback bridge → WebCore
-- Wire each KVO/observer to the corresponding `MediaPlayer::*Changed` (REFINDINGS). Test: the `<video>` element's JS sees correct `readyState`/`duration`/`timeupdate` (observe via the existing `?tdbg`).
+### Task 2.2: State-callback bridge → WebCore  — FOLDED INTO 2.1 (DONE)
+- The KVO/time-observer → `MediaPlayer::{networkState,readyState,time}Changed` bridge ships inside `MMTransplantEngine` (Task 2.1). Its behavioral validation (WebCore JS sees correct `readyState`/`timeupdate`) requires the engine connected to a live `<video>`, so it runs as part of the Phase-3 on-device test.
 
 ---
 
