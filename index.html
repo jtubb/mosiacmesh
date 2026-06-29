@@ -184,6 +184,24 @@
 			// or a post-tap play), drop the overlay and mark the session active. On
 			// iPad 1 'playing' won't fire until the gesture, so the overlay persists.
 			v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+			// CLIENT-AUTHORITATIVE cache downgrade. If a LOCALHOST (cached) source
+			// fails to load, OUR own lighttpd genuinely isn't serving -- tell the
+			// server so it stops handing us 127.0.0.1 URLs (central on the next
+			// play). This is now the ONLY downgrade signal: the server's SSH probe
+			// no longer downgrades on failure, because a server->device WiFi blip
+			// says nothing about whether our own localhost lighttpd is up. localhost
+			// reachability is a LOCAL, blip-immune fact only the device can assert.
+			v.addEventListener('error', function () {
+				try {
+					var s = '' + (v.currentSrc || v.src || '');
+					if (s.indexOf('127.0.0.1') !== -1 &&
+							typeof sock !== 'undefined' && sock !== null) {
+						sock.send(generateMessage("SRV", "ANNOUNCE_CACHE_MODE",
+												  {"mode": "none"}));
+						if (typeof dbg === 'function') { dbg("cache-local-fail"); }
+					}
+				} catch (e) { /* best-effort */ }
+			});
 			document.body.appendChild(v);
 			playback.pvid = v;
 		}

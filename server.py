@@ -300,9 +300,10 @@ def _is_probe_eligible(client):
 async def _probe_cache_capability(client_key):
     """SSH-probe a device for the two real push prerequisites (cache dir exists +
     lighttpd alive) and flip cacheMode accordingly. Fire-and-forget; never blocks
-    the caller, never raises. Upgrade: none -> lighttpd-localhost when 'MM_CACHE_OK'
-    comes back. Downgrade: lighttpd-localhost -> none (and clear cachedSegments)
-    when the probe fails on a previously-capable device.
+    the caller, never raises. UPGRADE-ONLY: none -> lighttpd-localhost when
+    'MM_CACHE_OK' comes back. The probe NEVER downgrades (see NB below) -- the
+    authoritative downgrade is client-driven (the iPad announces cacheMode "none"
+    when its own localhost media load fails).
 
     Liveness is checked with shell builtins only (`kill -0` on lighttpd's pid
     file) -- the iPad-1 userland has no curl/wget/nc/ps, so an HTTP/process check
@@ -350,12 +351,17 @@ async def _probe_cache_capability(client_key):
             logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
                          client_key)
             request_save()   # coalesced: a boot storm probes N devices at once
-        elif not ok and client.cacheMode == "lighttpd-localhost":
-            client.cacheMode = "none"
-            client.cachedSegments = set()   # unreachable now; stop emitting dead localhost URLs
-            logging.info("cache-probe: %s no longer cache-capable -> none (cleared cache)",
-                         client_key)
-            request_save()   # coalesced (see above)
+        # NB: the SSH probe ONLY UPGRADES (none -> lighttpd-localhost). It does NOT
+        # downgrade on failure. An SSH timeout/failure means the SERVER couldn't
+        # reach the device over (flaky) WiFi — it says NOTHING about whether the
+        # device's OWN localhost lighttpd is serving (a local, blip-immune fact).
+        # A flaky probe was false-downgrading capable devices AND wiping their
+        # cachedSegments, so they streamed centrally and hammered the server even
+        # though the cache files were still on the device. The authoritative
+        # downgrade is now CLIENT-driven: when the iPad's own 127.0.0.1 <video>
+        # load errors, index.html re-announces cacheMode "none" via the existing
+        # ANNOUNCE_CACHE_MODE handler (which sets the mode WITHOUT wiping
+        # cachedSegments -- the cache files persist for re-upgrade reuse).
     finally:
         _probe_inflight.discard(client_key)
 

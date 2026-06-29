@@ -326,3 +326,27 @@ class TestAnnounceCacheMode:
         server.msg_response({"SRC": "k", "DEST": "SRV", "REQUEST": "ANNOUNCE_CACHE_MODE",
                              "PAYLOAD": {"mode": "hack"}}, session)
         assert server.settings.clients["k"].cacheMode == "lighttpd-localhost"
+
+    def test_client_downgrade_to_none_preserves_cached_segments(self):
+        """Client-driven downgrade: when the iPad's own localhost <video> load
+        fails, index.html re-announces mode="none". The handler must set
+        cacheMode="none" WITHOUT wiping cachedSegments -- the cache files persist
+        on the device, so a later SSH re-probe (or client re-announce) can reuse
+        them instead of re-pushing. This is the authoritative downgrade path now
+        that the SSH probe is upgrade-only."""
+        from unittest.mock import MagicMock
+        server.settings = server.Settings()
+        c = server.Client()
+        c.clientID = "sess123"
+        c.cacheMode = "lighttpd-localhost"
+        c.cachedSegments = {"abc_0", "full_def_1"}
+        server.settings.clients["ipad"] = c
+        session = MagicMock()
+        session.id = "sess123"
+        session.request.headers = {"User-Agent": "x"}
+        session.request.remote = "1.1.1.1"
+        server.msg_response({"SRC": "ipad", "DEST": "SRV", "REQUEST": "ANNOUNCE_CACHE_MODE",
+                             "PAYLOAD": {"mode": "none"}}, session)
+        after = server.settings.clients["ipad"]
+        assert after.cacheMode == "none"                       # downgraded
+        assert after.cachedSegments == {"abc_0", "full_def_1"}  # cache NOT wiped

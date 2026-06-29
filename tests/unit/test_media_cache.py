@@ -733,7 +733,15 @@ def test_probe_no_ip_skips(monkeypatch):
     assert c.cacheMode == "none"
 
 
-def test_probe_downgrades_and_clears_on_failure(monkeypatch):
+def test_probe_failure_does_not_downgrade_capable_device(monkeypatch):
+    """UPGRADE-ONLY: an SSH-probe failure on a previously-capable device must
+    NOT downgrade it or wipe its cachedSegments. An SSH timeout/error means the
+    SERVER couldn't reach the device over (flaky) WiFi -- it says nothing about
+    whether the device's OWN localhost lighttpd is serving. A flaky probe was
+    false-downgrading fully-capable devices, wiping their cache, and forcing
+    them to stream centrally (server hammering). The authoritative downgrade is
+    now client-driven (the iPad announces cacheMode "none" on a localhost media
+    load error). See server._probe_cache_capability."""
     import server
     from mosaicmesh.state import Client
     server.settings = server.Settings()
@@ -746,8 +754,8 @@ def test_probe_downgrades_and_clears_on_failure(monkeypatch):
     monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
     _run(server._probe_cache_capability("ipad1"))
-    assert c.cacheMode == "none"
-    assert c.cachedSegments == set()
+    assert c.cacheMode == "lighttpd-localhost"          # NOT downgraded
+    assert c.cachedSegments == {"abc123_0", "abc123_1"}  # cache preserved
 
 
 def test_probe_failure_leaves_none_untouched(monkeypatch):
