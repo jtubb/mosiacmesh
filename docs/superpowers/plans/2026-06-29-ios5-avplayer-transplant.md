@@ -298,15 +298,28 @@ git add tweak/mmvideo/REFINDINGS.md tweak/mmvideo/Tweak.xm
 git commit -m "docs(mmvideo): confirm RE offsets/symbols on-device; revert observe hooks"
 ```
 
-### Task 1.3: RE-PLAN CHECKPOINT
+### Task 1.3: RE-PLAN CHECKPOINT — DONE (2026-06-29)
 
-- [ ] With `REFINDINGS.md` complete, re-invoke `superpowers:writing-plans` to APPEND final bite-sized Phase 2–5 tasks below, now that exact symbols/offsets/enum values and the controller-creation hook strategy are known. The structured outline below is the input; it becomes exact code at this checkpoint.
+- [x] `REFINDINGS.md` complete (Sections 1–4 byte-resolved + the Phase-1.2 on-device confirm). Resolved values are folded into the "Resolved values (Phase 1)" block below; Phase 2–3 reference them. The one item NOT statically pinned — the playing-state controller class + the native video VIEW/LAYER (the `AVPlayerLayer` slot-in target) — is deferred to **Phase-3 first-playback observation** (the transplant *replaces*, not drives, the original engine, so the original controller's class/selectors are off the critical path). Phase-1.2 surprise to carry forward: load-time `this+8` = `FPVMediaPlayerHelper` (fullscreen-player helper), reassigned to the real controller only at play time.
 
 ---
 
 ## Phase 2 — `MMTransplantEngine` (AVFoundation wrapper + WebCore bridge)
 
-> Structured outline; the AVFoundation code is known and given here. The WebCore-callback calls use the symbols/offsets from `REFINDINGS.md` (filled at the Task 1.3 checkpoint). Each item below becomes a TDD-style task (on-device behavioral test, since these touch AVFoundation + WebCore).
+**Resolved values (Phase 1 — use these verbatim; full method-symbol table in `REFINDINGS.md` §1):**
+- The hooked backend instance is a `MediaPlayerPrivateiPhone*` (call it `bp`). Field offsets (byte-exact):
+  - `*(void**)((char*)bp + 4)` = **`WebCore::MediaPlayer*`** (the callback receiver, "m_player").
+  - `+8` = controller (load-time `FPVMediaPlayerHelper`, play-time the real controller — we neuter it), `+0xc` = item/notification helper, `+0x14` = `m_networkState (int)`, `+0x18` = `m_readyState (int)`, `+0x24` = `m_rate (float)`, `+0x2c` = flag byte (paused = bit `0x20`).
+- **WebCore callback symbols** (Mach-O leading `_`; call as `void(*)(void* mediaPlayer)` with the `+4` pointer):
+  - `__ZN7WebCore11MediaPlayer19networkStateChangedEv`
+  - `__ZN7WebCore11MediaPlayer17readyStateChangedEv`
+  - `__ZN7WebCore11MediaPlayer11timeChangedEv`
+  - (No standalone `durationChanged`/`sizeChanged`/`rateChanged` in this build — drive metadata/duration via `readyStateChanged`, position via `timeChanged`.)
+- **Hook target symbols** (Mach-O; resolution+hooking confirmed on-device Phase 1.2): `__ZN7WebCore24MediaPlayerPrivateiPhone4seekEf`, `…7setRateEf`, `…4playEv`, `…4loadERKN3WTF6StringE` (+ `pause`/`currentTime`/`duration`/`paused` per `REFINDINGS.md` §1). C++ method ABI: `void f(void* this, …)`; `this`=r0 (unambiguous), seek/setRate float in the second slot (verify the float convention when wiring 3.1 — `this` is all the bridge strictly needs).
+- **Enum ints** (confirmed): already encoded in `mmurl.h`'s `mm_status_to_states` (NetworkState 0–6, ReadyState 0–4).
+- Makefile already carries the ObjC++ link flags (`-fno-exceptions`, `-Wl,-undefined,dynamic_lookup`).
+
+> AVFoundation code is given below. Each item is a TDD-style task; its test is on-device + gated (touches AVFoundation + WebCore), so each needs explicit install authorization.
 
 ### Task 2.1: `MMTransplantEngine` lifecycle + `file://` load
 - **Files:** Create `tweak/mmvideo/MMTransplantEngine.h` / `.mm`; add to `mmvideo_FILES`.
@@ -346,13 +359,13 @@ git commit -m "docs(mmvideo): confirm RE offsets/symbols on-device; revert obser
 
 ## Phase 3 — Interception wiring (hooks + neuter + layer slot-in)
 
-> Becomes exact at the Task 1.3 checkpoint using REFINDINGS.
+> Uses the "Resolved values (Phase 1)" block above. Symbols/offsets are exact; the layer slot-in target is discovered on first playback (Task 3.2).
 
 ### Task 3.1: Side-table + hook seek/setRate/play/pause/load/currentTime/duration
-- `MSHookFunction` each `MediaPlayerPrivateiPhone::*` (symbols from REFINDINGS); each looks up its `MMTransplantEngine` in a `this*`→engine map (created on `load`) and forwards. Test (gated): seek is frame-accurate (measure via `?tdbg` drift `err` — no keyframe snap); `playbackRate` takes effect.
+- `%ctor`: `MSHookFunction` each `MediaPlayerPrivateiPhone::*` (the Resolved-values symbols). A `std::map<void*, MMTransplantEngine*>` (or an `NSMapTable`) keyed on the backend `this*` (created in the `load` hook via `[[MMTransplantEngine alloc] initWithMediaPlayer:*(void**)((char*)this+4)]`) routes each call to its engine. `seek`→`[engine seekTo:t]`, `setRate`→`[engine setRate:r]`, `play`/`pause`/`currentTime`/`duration` likewise. Test (gated): seek is frame-accurate (measure via `?tdbg` drift `err` — no keyframe snap); `playbackRate` takes effect. **First-playback observation:** log the play-time `this+8` class + drill to its video view/layer (the deferred Section-5 item) for Task 3.2.
 
-### Task 3.2: Neuter `MPAVController` + slot `AVPlayerLayer` into the plugin view
-- Hook the controller-creation/plugin-view site (REFINDINGS): suppress the original `MPAVController` load/play and add `engine.playerLayer` as the plugin view's content. Test (gated): video renders via AVPlayer in the correct on-screen rect; existing transitions (fade/slide/iris) still composite correctly.
+### Task 3.2: Neuter the original engine + slot `AVPlayerLayer` into the video view
+- Using the play-time view/layer discovered in 3.1: suppress the original controller's load/play (so only our `AVPlayer` decodes) and insert `engine.playerLayer` into the native video view's layer (same frame/z-order WebKit already drives, so transitions/compositing are inherited). If the original engine can't be cleanly neutered, hide its view + overlay ours at the same rect. Test (gated): video renders via AVPlayer in the correct on-screen rect; existing transitions (fade/slide/iris) still composite correctly; force-inline holds (no fullscreen flip).
 
 ---
 
