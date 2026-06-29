@@ -3,7 +3,7 @@ TARGET = iphone:clang:9.3:5.1
 ARCHS = armv7
 include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = mmvideo
-mmvideo_FILES = Tweak.xm
+mmvideo_FILES = Tweak.xm MMTransplantEngine.mm
 mmvideo_FRAMEWORKS = AVFoundation CoreMedia QuartzCore UIKit Foundation
 mmvideo_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -fno-exceptions
 # ObjC++ (.xm/.mm) pulls the C++ personality + memcpy that Theos doesn't auto-link
