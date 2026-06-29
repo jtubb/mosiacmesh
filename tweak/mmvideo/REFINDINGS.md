@@ -325,3 +325,14 @@ Installed an observe-only tweak hooking `MediaPlayerPrivateiPhone::{load,play,se
 - This matches the static `setMediaPlayerProxy` note: `this+8` is REASSIGNED. The load-time occupant is the FPV fullscreen-player helper; the real playback controller (the `setCurrentTime:`/`setRate:` target inferred statically) is wired in only once playback actually begins — which the observe pass could NOT trigger (iOS-5 muted-autoplay needs a user gesture, so `play`/`seek` never fired).
 
 **Consequence for the design (no blocker):** the transplant hooks `MediaPlayerPrivateiPhone` and **replaces** the engine with our `AVPlayer` — it does NOT need to drive the original controller, so the original's class/selectors are not on the critical path. The two items still genuinely unconfirmed — (a) the playing-state controller class, (b) the native video VIEW/LAYER that hosts the picture (the Section-5 AVPlayerLayer slot-in target) — are naturally observed during **Phase 3** on first real playback (our transplant code runs then, with temporary logging), or via a gesture-driven playback observe (VNC autotap / a server PLAY) if we want them earlier. The "FPV fullscreen-player helper" finding also corroborates that the original path is the forced-fullscreen movie player our inline transplant supersedes.
+
+---
+
+## Section 6 — URL extraction for the load hook  ✅ RESOLVED (Phase-3 prep)
+
+`MediaPlayerPrivateiPhone::load(const WTF::String&)` (`0x372e11a0`) does NOT read the URL chars itself — it forwards the `String&` to `SubframeLoader::loadMediaPlayerProxyPlugin` (`0x372a3d54`). So the hook extracts the URL from the `String&` arg directly via WebKit's own conversion (no `StringImpl` offset-parsing):
+
+- **Primary:** `WTF::String::createCFString() const` — symbol `__ZNK3WTF6String14createCFStringEv` (in the cache; `MSFindSymbol(NULL, …)` resolves it in the web process — WTF lives in JavaScriptCore, loaded there). ABI: `CFStringRef f(const WTF::String* this)`. The `load` hook's 2nd arg (`r1`) IS the `const String&` = a `String*`, so call `createCF(stringRef)` → a **+1-retained `CFStringRef`** → `NSString *url = (__bridge_transfer NSString*)cf;`. Guard nil (empty/null String → NULL or empty).
+- **Fallbacks if needed:** `__ZNK3WTF6String29charactersWithNullTerminationEv` (returns `UChar*`, 16-bit NUL-terminated) or `__ZNK3WTF6String4utf8Eb` (returns a `WTF::CString`).
+
+**Phase-3.1 load-hook flow:** `h_load(void* this, void* stringRef)`: call `o_load(this, stringRef)` (let WebCore set up its state machine), extract `url` via `createCF(stringRef)`, then create/lookup the `MMTransplantEngine` for `this` (`initWithMediaPlayer:*(void**)((char*)this+4)`), and `[engine loadURL:url]`. (The original proxy/controller path is neutered in Task 3.2.)
