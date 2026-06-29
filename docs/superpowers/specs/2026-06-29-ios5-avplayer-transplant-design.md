@@ -82,10 +82,10 @@ Our `AVPlayerLayer` is installed as the content of the *same* native plugin view
 ### Component 5 — Source URL
 The web client sets `<video>.src` to `http://127.0.0.1:8080/seg_*.mp4` (localhost lighttpd). `load()` **rewrites** this to `file:///var/mobile/Media/MosaicMeshCache/seg_*.mp4` for direct `AVPlayer` file decode (no lighttpd hop for video). Mapping: strip the `http://127.0.0.1:8080/` prefix → prepend the cache dir. Non-cache/non-localhost URLs (rare) pass through as-is to `AVPlayer` over http.
 
-### Component 6 — Gesture handling (parity + bonus)
-iOS-5 web `<video>` requires a user gesture to start; an **in-app `AVPlayer` does not**. v1 therefore:
-- **Bonus (opt-in):** auto-`play()` programmatically, eliminating the tap-to-start / VNC-autotap / arm dance for video.
-- **Parity fallback:** the existing arm flow (`PREPARE`/`NEEDS_ARM`/tap) still functions; if auto-play is disabled (a tweak pref), behavior matches today.
+### Component 6 — Autoplay + fullscreen restrictions (both eliminated by the transplant)
+Two iOS-5 web-`<video>` restrictions are removed as inherent consequences of putting an in-app `AVPlayer` in the path (not as separate WebKit patches):
+- **Autoplay / user-gesture:** iOS-5 web `<video>` needs a user gesture to start; an **in-app `AVPlayer` does not**. v1 auto-`play()`s programmatically, eliminating the tap-to-start / VNC-autotap / arm dance for video. (Opt-out tweak pref `AutoPlay=0` restores the arm flow for parity/debug.)
+- **Forced fullscreen → force-inline:** iOS-5 forces `<video>` into a fullscreen movie player (the proxy-plugin's behavior). The transplant renders into an **inline `AVPlayerLayer`**, so video is **always inline by construction** — forced-fullscreen never triggers. This is the desired wall behavior (no screen ever flips to player chrome) and supersedes the earlier "fullscreen parity" framing.
 
 ### Component 7 — Errors & fallback
 - `AVPlayerItem` failure → map to `MediaPlayer::networkStateChanged(FormatError/DecodeError)` so the `<video>` `error` event fires as today (preserving the `CACHE_LOCAL_FAIL` client behavior on a bad localhost/file load).

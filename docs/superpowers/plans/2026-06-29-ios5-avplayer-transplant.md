@@ -364,8 +364,8 @@ git commit -m "docs(mmvideo): confirm RE offsets/symbols on-device; revert obser
 ### Task 4.2: Gesture parity + auto-play bonus
 - Add a tweak pref (`/var/mobile/Library/Preferences/com.mosaicmesh.mmvideo.plist`) `AutoPlay` (default on). When on, `AVPlayer play` without a gesture (eliminates VNC-autotap). When off, keep the arm flow. Test (gated): with AutoPlay on, video starts with no tap; off, parity with today.
 
-### Task 4.3: Playmode parity sweep
-- Gated on-device sweep: SEGMENT, INDIVIDUAL, FULL each play/loop/seek correctly; fullscreen (`webkitEnterFullscreen`) parity. Record results in a parity checklist; fix gaps.
+### Task 4.3: Playmode parity sweep + force-inline
+- Gated on-device sweep: SEGMENT, INDIVIDUAL, FULL each play/loop/seek correctly. Confirm video stays **inline** (force-inline; the transplant's inline `AVPlayerLayer` means forced-fullscreen never triggers — verify no screen flips to a fullscreen player). Record results in a parity checklist; fix gaps.
 
 ---
 
