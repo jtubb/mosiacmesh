@@ -26,6 +26,8 @@ struct MMEngine {
     double curTime;    // cached from the observer block (avoids stret [player currentTime])
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
     int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
+    float lastRate;    // last clamped rate (log only on change — WebCore retries setRate)
+    float desiredRate; // last NONZERO rate requested — what play() resumes at (see mm_engine_play)
 };
 
 static inline AVPlayer     *PL(MMEngine *e){ return (__bridge AVPlayer     *)e->player; }
@@ -112,12 +114,15 @@ void mm_engine_load(MMEngine *e, const char *url) {
         // observer won't fire while not playing). The block retains itemRef (ARC), so
         // the item stays alive for the probe regardless of engine teardown.
         AVPlayerItem *itemRef = item;
-        for (int i = 1; i <= 8; i++) {
+        MMEngine    *engRef  = e;     // for currentTime sampling (rate-verification)
+        for (int i = 1; i <= 12; i++) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((long long)i * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 id er = [itemRef error];
-                EL([[NSString stringWithFormat:@"[eng] t+%ds item.status=%ld err=%@",
-                     i, (long)[itemRef status], er ? [er localizedDescription] : @"nil"] UTF8String]);
+                // ct = cached currentTime: the per-second DELTA of ct == playback rate
+                // (2.0s media / 1.0s wall == 2x). Survives the TICK cap.
+                EL([[NSString stringWithFormat:@"[eng] t+%ds ct=%.2f status=%ld err=%@",
+                     i, engRef->curTime, (long)[itemRef status], er ? [er localizedDescription] : @"nil"] UTF8String]);
             });
         }
     }
@@ -125,7 +130,12 @@ void mm_engine_load(MMEngine *e, const char *url) {
 
 void mm_engine_play(MMEngine *e)  {
     if (e && e->player){
-        [PL(e) play];  e->playing = 1;
+        // RESUME AT DESIRED RATE — do NOT call [AVPlayer play], which is defined as
+        // setRate:1.0 and would clobber a 2x rate. WebCore re-asserts setRate+play on a
+        // tight loop (~thousands/sec); with [play] last in each pair the rate snapped back
+        // to 1.0 every frame. Setting rate>0 directly both starts playback AND honors 2x.
+        float r = e->desiredRate > 0.0f ? e->desiredRate : 1.0f;
+        PL(e).rate = r;  e->playing = 1;
         static int n = 0;
         if (n++ < 6) {   // capped: log item status + player rate to see if it's actually decoding
             long st = (long)[IT(e) status];          // 0=Unknown 1=ReadyToPlay 2=Failed
@@ -141,6 +151,7 @@ int  mm_engine_paused(MMEngine *e){ return e ? !e->playing : 1; }   // tracked f
 
 void mm_engine_seek(MMEngine *e, double seconds) {
     if (!e || !e->player) return;
+    EL([[NSString stringWithFormat:@"[eng] SEEK -> %.3f (zero-tolerance)", seconds] UTF8String]);
     CMTime t = CMTimeMakeWithSeconds(seconds, (int32_t)NSEC_PER_SEC);
     [PL(e) seekToTime:t toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];   // frame-accurate
 }
@@ -148,6 +159,11 @@ void mm_engine_seek(MMEngine *e, double seconds) {
 void mm_engine_set_rate(MMEngine *e, float rate) {
     if (!e || !e->player) return;
     float r = mm_clamp_rate(rate, 1, 1);   // iOS 5.1 has no canPlayFast/SlowForward; assume capable
+    if (r != e->lastRate) {                // WebCore retries setRate; log only real changes
+        EL([[NSString stringWithFormat:@"[eng] SET_RATE req=%.2f -> %.2f", rate, r] UTF8String]);
+        e->lastRate = r;
+    }
+    if (r > 0.0f) e->desiredRate = r;      // remember nonzero rate so play() resumes at it
     PL(e).rate = r;
     e->playing = (r != 0.0f);
 }
