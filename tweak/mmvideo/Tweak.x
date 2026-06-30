@@ -84,23 +84,35 @@ static void mm_install(void){
         {"__ZN7WebCore24MediaPlayerPrivateiPhone4playEv",(void*)h_play,(void**)&o_play},
         {"__ZN7WebCore24MediaPlayerPrivateiPhone5pauseEv",(void*)h_pause,(void**)&o_pause},
         {"__ZN7WebCore24MediaPlayerPrivateiPhone10cancelLoadEv",(void*)h_cancelLoad,(void**)&o_cancelLoad},
-        {"__ZNK7WebCore24MediaPlayerPrivateiPhone11currentTimeEv",(void*)h_currentTime,(void**)&o_currentTime},
-        {"__ZNK7WebCore24MediaPlayerPrivateiPhone8durationEv",(void*)h_duration,(void**)&o_duration},
-        {"__ZNK7WebCore24MediaPlayerPrivateiPhone15maxTimeSeekableEv",(void*)h_maxTimeSeekable,(void**)&o_maxTimeSeekable},
-        {"__ZNK7WebCore24MediaPlayerPrivateiPhone6pausedEv",(void*)h_paused,(void**)&o_paused},
-        {"__ZNK7WebCore24MediaPlayerPrivateiPhone12networkStateEv",(void*)h_networkState,(void**)&o_networkState},
-        {"__ZNK7WebCore24MediaPlayerPrivateiPhone10readyStateEv",(void*)h_readyState,(void**)&o_readyState},
+        // GETTERS TEMPORARILY DISABLED (bring-up): hooking the const getters
+        // (currentTime/duration/maxTimeSeekable/paused/networkState/readyState)
+        // destabilizes WebCore's pre-load media-state polling -> SIGSEGV before
+        // h_load even fires. Leave them ORIGINAL for now (the original engine loads via
+        // o_load and reports state); re-add carefully once playback works. The h_* getter
+        // fns + o_* slots stay defined (unused) so nothing else changes.
+        // {"__ZNK..11currentTimeEv",(void*)h_currentTime,(void**)&o_currentTime},
+        // {"__ZNK..8durationEv",(void*)h_duration,(void**)&o_duration},
+        // {"__ZNK..15maxTimeSeekableEv",(void*)h_maxTimeSeekable,(void**)&o_maxTimeSeekable},
+        // {"__ZNK..6pausedEv",(void*)h_paused,(void**)&o_paused},
+        // {"__ZNK..12networkStateEv",(void*)h_networkState,(void**)&o_networkState},
+        // {"__ZNK..10readyStateEv",(void*)h_readyState,(void**)&o_readyState},
     };
     for (unsigned i=0;i<sizeof(H)/sizeof(H[0]);i++){
         void *s = MSFindSymbol(NULL, H[i].sym);
         char b[160]; snprintf(b,sizeof b,"[mmvideo] hook %s = %p", H[i].sym, s); mmlog(b);
         if (s) MSHookFunction(s, H[i].hook, H[i].orig);
     }
-    mmlog("[mmvideo] hooks installed (deferred)");
+    mmlog("[mmvideo] hooks installed (main-queue)");
 }
 
 %ctor {
-    mmlog("[mmvideo] phase3.2 ctor (plain ObjC; deferring hook install)");
+    // Deferred install (off the launch path), but on the MAIN queue — NOT a background
+    // queue. The previous background-queue install raced WebCore: MSHookFunction was
+    // overwriting a getter's prologue (e.g. networkState) on a bg thread WHILE the main
+    // thread concurrently executed it -> corrupted call -> SIGSEGV (self=NULL). On the
+    // main queue the overwrite serializes with WebCore's (main-thread) media calls, so
+    // no method is ever mid-rewrite when called.
+    mmlog("[mmvideo] phase3.2 ctor (plain ObjC; main-queue hook install)");
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
-                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{ mm_install(); });
+                   dispatch_get_main_queue(), ^{ mm_install(); });
 }

@@ -19,7 +19,7 @@ mmvideo_FRAMEWORKS = AVFoundation CoreMedia QuartzCore Foundation
 # -fno-objc-arc-exceptions: we're -fno-exceptions, so ARC needn't emit the SjLj
 # exception-safe cleanup landing pads (__Unwind_SjLj_*) — dropping them keeps the
 # undefined-symbol set to always-loaded libs (matches the proven load-gate build).
-mmvideo_CFLAGS = -fobjc-arc -fno-objc-arc-exceptions -Wno-deprecated-declarations -fno-exceptions
+mmvideo_CFLAGS = -fobjc-arc -fno-objc-arc-exceptions -Wno-deprecated-declarations -fno-exceptions -Wno-unused-function
 # TWO-LEVEL namespace (NOT dynamic_lookup): binds objc/CoreMedia/Foundation/Substrate
 # symbols to their specific dylib at link time. dynamic_lookup deferred them to flat
 # load-time lookup where some present-on-device symbols don't resolve -> SIGKILL

@@ -623,3 +623,30 @@ o_load done/url=…/engine created/mm_engine_load returned; mm_engine_load logs 
 parsed/item created/player created/layer created/observer added. Next session: on a FRESH
 respring'd device, use a `preload="none"` test page (so load happens only on a controlled
 tap, no crash-loop), deploy, tap ONCE, read the granular trace to pinpoint the crash line.
+
+## §16 — Playback crash isolated to the const-getter hooks (2026-06-30, screen15)
+
+The first-playback crash is NOT in our engine path — `h_load` NEVER fires (no `ENTER`
+log). It crashes earlier, in WebCore's pre-load media-state POLLING of the const getters
+we hook (`networkState`/`readyState`/…):
+- Background-queue hook install -> `EXC_BAD_ACCESS at 0x30` inside
+  `MediaPlayerPrivateiPhone::networkState` (our hook addr +0x33), `r0`(self)=`0x0`.
+  Hypothesis was a concurrent MSHookFunction-overwrite race with the main thread.
+- Switching the install to the MAIN queue (serializes the overwrite with WebCore's
+  main-thread media calls) MOVED the crash (now `EXC_BAD_ACCESS at 0xe00df8e0` in
+  `libsystem_c` called from the `networkState`/`readyState` region) but did NOT fix it.
+=> The const-getter hooks themselves destabilize WebCore's getter polling, independent
+of install timing. (Hooking `__ZNK...` const virtual getters via MSHookFunction on this
+WebCore is the suspect — likely the small-method prologue/trampoline or the polling
+re-entrancy.)
+
+FIX STAGED (built, NOT yet validated — screen15 throttled out): hook ONLY the ACTION
+methods (load/play/pause/seek/setRate/cancelLoad); leave the 6 getters ORIGINAL (the
+original engine loads via `o_load` and reports state). `-Wno-unused-function` added
+(the unused h_* getter fns). Install kept on the MAIN queue.
+RESUME (FRESH device — screen15+screen14 both throttled from cycling; the heavy
+rebuild→deploy→respring→settle→tap loop degrades a device after ~5 cycles, needs ~50s
+respring to recover): deploy the action-hooks-only build, tap ONCE, confirm `h_load:
+ENTER` fires + the `[eng] load:` trace + audio. If so, the getter hooks are confirmed;
+re-add them carefully (try NULL-self guards in h_*; or update engine state and let
+WebCore read it a different way; or hook fewer getters). Then Phase 3.2b slot-in.
