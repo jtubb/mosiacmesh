@@ -95,7 +95,15 @@ void mm_engine_load(MMEngine *e, const char *url) {
         MMEngine *eng = e;          // capture the C pointer (no retain cycle)
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
-                     usingBlock:^(CMTime t){ eng->curTime = mm_secs(t); mm_engine_poll(eng); }];
+                     usingBlock:^(CMTime t){
+                         eng->curTime = mm_secs(t);
+                         // PROOF-OF-PLAYBACK: this block fires ONLY while the player is
+                         // actually advancing. Log the first ~12 ticks — if currentTime
+                         // climbs, frames are decoding (real playback), not just "ready".
+                         static int tk = 0;
+                         if (tk++ < 12) EL([[NSString stringWithFormat:@"[eng] TICK t=%.2f", eng->curTime] UTF8String]);
+                         mm_engine_poll(eng);
+                     }];
         e->timeObserver = (__bridge_retained void *)obs;
         EL("[eng] load: observer added — DONE");
         // DIAGNOSTIC: poll item.status over time on the main queue (the periodic

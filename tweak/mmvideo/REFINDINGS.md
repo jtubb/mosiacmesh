@@ -685,3 +685,45 @@ DEVICE DISCIPLINE (reaffirmed, crash-log-confirmed — NOT a vague "throttle"): 
 no frames, no mmvideo in trace). Quiet-waiting helps only partly; a POWER-CYCLE/REBOOT
 fully clears it. Rotate freshly-rebooted devices; batch hypotheses per dylib to spend
 fewer cycles. screen14=.94 screen15=.67 screen16=.63 (all Test Group / cycled this session).
+
+## §18 — file:// VALIDATED: AVPlayer plays a local cached file (2026-06-30, screen15)
+
+Pushed a device-compatible mp4 to the cache dir (`/var/mobile/Media/MosaicMeshCache/
+mmtest.mp4`); test page src = `http://127.0.0.1:8080/mmtest.mp4` (set on-tap). Trace:
+```
+h_load: url=http://127.0.0.1:8080/mmtest.mp4   -> mm_url_to_path -> file:///var/mobile/Media/MosaicMeshCache/mmtest.mp4
+[eng] load: item/player/layer created — DONE
+t+1s item.status=1 ; play: status=1 rate=1.00 err=nil ; t+2..8s status=1
+```
+**AVPlayerItem.status = 1 (ReadyToPlay), rate=1.0, no error** — the LOCAL file loaded and
+the AVPlayer is playing. CONFIRMS §17: the http URL stalled at status=0 (Unknown) because
+iOS-5 AVPlayer progressive-HTTP load doesn't progress here; the **local file:// path (the
+transplant's intended path via mm_url_to_path) WORKS**. The injected AVPlayer now decodes
+video on a 1st-gen iPad — the core capability (frame-accurate seek + rate) is unlocked.
+
+REMAINING (now ordinary work, no more load/RE mysteries):
+1. Phase 3.2b — slot `engine.playerLayer` (AVPlayerLayer) into `FigPluginView`
+   (controller this+8, ivar +0x4) so the video is VISIBLE; neuter the original.
+2. Re-add getter feedback (networkState/readyState/currentTime/duration/paused) so WebCore
+   sees "playing" + correct time (it currently retries play/setRate forever, and
+   <video>.currentTime/duration are the original's) — carefully, since the const-getter
+   hooks crashed pre-load (§16); options: install getters only AFTER first load, or guard.
+3. For HTTP sources (non-cached), AVPlayer stalls — but the cache-push pipeline already
+   makes FULL/SEGMENT content local, so the file:// path covers the real use case. (Could
+   revisit http streaming later if needed.)
+4. Remove the temporary status/diagnostic logging.
+
+## §18b — PLAYBACK CONFIRMED: playhead advances (2026-06-30, rebooted screen15)
+
+Definitive proof (not inferred): the periodic time-observer (fires only while the player
+actually advances) logged currentTime CLIMBING on a local file:// asset:
+```
+TICK t=0.00 →0.01 →0.04 →0.31 →0.56 →0.80 →1.00 →1.29   (item.status=1, no error)
+```
+=> the injected AVPlayer is DECODING a local video in real time on a 1st-gen iPad. Core
+transplant capability proven end-to-end (load → ReadyToPlay → decode/advance); frame-
+accurate seek + variable rate are now reachable. Not visible only because the
+AVPlayerLayer isn't slotted on-screen yet (3.2b). NEXT unchanged: 3.2b layer slot-in
+(visible video) + neuter original + re-add getter feedback + verify seek/rate + strip
+diagnostics. (NOTE 2026-06-30: server device roster/settings.dat appears clobbered —
+unrelated to the transplant; worth a separate look.)
