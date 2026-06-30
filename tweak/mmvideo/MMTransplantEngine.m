@@ -17,6 +17,7 @@ typedef void (*MMVoidFn)(void *);
 
 struct MMEngine {
     void *mp;          // WebCore MediaPlayer* (callback receiver; not owned)
+    void *backend;     // MediaPlayerPrivateiPhone* self — for ivar mirroring (Option A; not owned)
     void *player;      // AVPlayer*        (retained)
     void *item;        // AVPlayerItem*    (retained)
     void *layer;       // AVPlayerLayer*   (retained)
@@ -37,9 +38,10 @@ static inline AVPlayerItem *IT(MMEngine *e){ return (__bridge AVPlayerItem *)e->
 // load (REFINDINGS §13). int64->double goes through the provided mmbuiltins __floatdidf.
 static inline double mm_secs(CMTime t){ return t.timescale ? (double)t.value / (double)t.timescale : 0.0; }
 
-MMEngine *mm_engine_create(void *mp) {
+MMEngine *mm_engine_create(void *backend, void *mp) {
     MMEngine *e = (MMEngine *)calloc(1, sizeof(MMEngine));
     if (!e) return NULL;
+    e->backend = backend;
     e->mp = mp;
     e->netChanged   = (MMVoidFn)MSFindSymbol(NULL, "__ZN7WebCore11MediaPlayer19networkStateChangedEv");
     e->readyChanged = (MMVoidFn)MSFindSymbol(NULL, "__ZN7WebCore11MediaPlayer17readyStateChangedEv");
@@ -56,6 +58,19 @@ static void mm_engine_poll(MMEngine *e) {
     mm_status_to_states((int)st, &net, &ready);
     BOOL changed = (net != e->net) || (ready != e->ready);
     e->net = net; e->ready = ready;
+    // OPTION A — ivar mirroring (no MSHookFunction; safe across the QuickTime-plugin thread
+    // that polls these getters). networkState()/readyState() are PURE ivar reads (REFINDINGS:
+    // `ldr r0,[r0,#0x14]` / `#0x18`), so writing the ivars makes the UNHOOKED getters return
+    // our AVPlayer's state — and an aligned 4-byte write is atomic, so the plugin thread never
+    // sees a torn value (the reason §21's prologue patch crashed). Also mirror m_rate (+0x24)
+    // so paused() (rate==0) reflects us. Pinned every poll so the stalled original can't
+    // reassert. Writing BEFORE the callbacks so WebCore re-reads our values.
+    if (e->backend) {
+        *(volatile int *)((char *)e->backend + 0x14) = net;      // m_networkState
+        *(volatile int *)((char *)e->backend + 0x18) = ready;    // m_readyState
+        float rr = e->playing ? (e->desiredRate > 0.0f ? e->desiredRate : 1.0f) : 0.0f;
+        *(volatile float *)((char *)e->backend + 0x24) = rr;     // m_rate (paused = rate==0)
+    }
     if (changed) {
         if (e->netChanged)   e->netChanged(e->mp);
         if (e->readyChanged) e->readyChanged(e->mp);

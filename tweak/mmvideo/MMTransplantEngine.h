@@ -10,7 +10,9 @@
 
 typedef struct MMEngine MMEngine;
 
-MMEngine *mm_engine_create(void *webCoreMediaPlayer);  // WebCore MediaPlayer* (callback receiver)
+MMEngine *mm_engine_create(void *backend, void *webCoreMediaPlayer);  // backend = MediaPlayerPrivateiPhone*
+                                                       // (self; for ivar mirroring — Option A);
+                                                       // webCoreMediaPlayer = MediaPlayer* (callbacks)
 void   mm_engine_load(MMEngine *e, const char *url);   // localhost cache URL -> file:// (mm_url_to_path)
 void   mm_engine_play(MMEngine *e);
 void   mm_engine_pause(MMEngine *e);

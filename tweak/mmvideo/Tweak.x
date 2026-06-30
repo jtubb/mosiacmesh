@@ -64,7 +64,7 @@ static void h_load(void *self, void *strRef){
     if (!url || url.length == 0) return;
     void *mp = *(void **)((char *)self + 4);    // m_player (REFINDINGS)
     dropEngine(self);                            // free+remove any prior engine for this backend
-    MMEngine *eng = mm_engine_create(mp);
+    MMEngine *eng = mm_engine_create(self, mp);  // self = backend, for ivar mirroring (Option A)
     if (!eng) return;
     [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
     mm_engine_load(eng, [url UTF8String]);
