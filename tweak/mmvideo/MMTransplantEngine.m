@@ -139,18 +139,40 @@ int   mm_engine_network_state(MMEngine *e) { return e ? e->net : 0; }
 int   mm_engine_ready_state(MMEngine *e)   { return e ? e->ready : 0; }
 void *mm_engine_player_layer(MMEngine *e)  { return e ? e->layer : NULL; }   // AVPlayerLayer* (CALayer*)
 
-// 3.2b: add our AVPlayerLayer as a sublayer of FigPluginView.layer (renders ABOVE the
-// original's placeholder => effectively neutered). Done HERE (engine .m already imports
-// AVFoundation/QuartzCore + loads fine) so Tweak.x stays minimal. CGRect ARG via setter
-// is fine (no stret); the layer is sized full-screen for bring-up. Once-only via `slotted`.
+// 3.2b + polish: add our AVPlayerLayer as the visible sublayer of FigPluginView.layer,
+// SCREEN-sized, with the original's render sublayers hidden (neuter). Done HERE (engine .m
+// already imports AVFoundation/QuartzCore + loads fine) so Tweak.x stays minimal (§19).
+// Once-only via `slotted`.
+//
+// FRAME: our layer must be SCREEN-sized, adapting to the device orientation (this iPad is
+// PORTRAIT 768x1024, not landscape — a hardcode is wrong for a mixed-orientation fleet). The
+// FigPluginView's own bounds is content-sized (too small). The right source is the ROOT layer
+// (walk superlayer up to the window's layer) = the real screen in the app's orientation. Read
+// it no-stret: CALayer boxes `bounds` as an NSValue (CA KVC, valueForKey: -> id), and
+// -[NSValue getValue:&rect] is void/pointer (no stret — §13). CALayer sublayers aren't clipped
+// to the host (masksToBounds defaults NO), so even if our frame overflows the FigPluginView it
+// fills the display. Fallback = iPad-1 portrait if the read fails.
+//
+// NEUTER: the original engine still o_loads (required — it advances WebCore networkState past
+// NETWORK_EMPTY so play() can fire) but it stalls on the http URL and never decodes. Hide the
+// host's existing render sublayers and put our opaque layer on top, so only our video shows.
 void mm_engine_attach_layer(MMEngine *e, void *fpvp) {
     if (!e || !e->layer || e->slotted || !fpvp) return;
     AVPlayerLayer *vlayer = (__bridge AVPlayerLayer *)e->layer;
     id fpv = (__bridge id)fpvp;                       // FigPluginView (UIView subclass)
     CALayer *host = ((id (*)(id, SEL))objc_msgSend)(fpv, @selector(layer));
     if (!host) return;
-    vlayer.frame = (CGRect){ {0, 0}, {1024, 768} };   // full-screen (iPad-1) for bring-up
-    [host addSublayer:vlayer];
+    CALayer *root = host, *sup;                       // walk to the window's layer (screen-sized)
+    while ((sup = [root superlayer])) root = sup;
+    CGRect rb = (CGRect){ {0,0}, {0,0} };
+    id bv = [root valueForKey:@"bounds"];             // NSValue(CGRect) — no stret
+    if (bv) [bv getValue:&rb];                          // void/pointer — no stret
+    double ww = rb.size.width, hh = rb.size.height;
+    if (ww < 1.0 || hh < 1.0 || ww > 4096.0 || hh > 4096.0) { ww = 768.0; hh = 1024.0; }  // fallback (iPad-1 portrait)
+    vlayer.frame = (CGRect){ {0, 0}, {ww, hh} };               // screen-sized, this device's orientation
+    vlayer.videoGravity = AVLayerVideoGravityResizeAspectFill; // fill the layer, no letterbox
+    for (CALayer *sub in [host sublayers]) sub.hidden = YES;   // NEUTER the original's surface
+    [host addSublayer:vlayer];                                 // ours: visible, on top
     e->slotted = 1;
 }
 
