@@ -578,3 +578,28 @@ RE-TEST (one control cycle, after builtins are linked): build "avsmoke + one emp
 respring, then the class build. LOADED => classful is an option for future tweaks; CRASHED
 => §11 confirmed as a hard metadata-ABI wall and class-free is vindicated. Either way the
 shipping engine stays CLASS-FREE (already written + clean); this only informs future work.
+
+## §14 — LOAD GATE PASSED: class-free engine loads + hooks install (2026-06-29)
+
+The class-free transplant engine now LOADS on iOS 5.1 and installs all 12
+`MediaPlayerPrivateiPhone` hooks (MobileSafari stays alive; control protocol: avsmoke
+LOADED, real engine ctor + "hooks installed (deferred)" with all 12 symbols resolved).
+NOTE: the real `Tweak.x` `%ctor` logs to `/tmp/mmvideo.log`, it does NOT write
+`/tmp/MMCTOR` — so the control script's "no MMCTOR => CRASHED" verdict is a FALSE
+NEGATIVE for the real tweak; check the log + `ps MobileSafari` instead.
+
+THE COMPLETE FIX STACK (all four required):
+1. CLASS-FREE C engine — no static ObjC `@interface`/`@implementation` (§11 metadata crash).
+2. `mmbuiltins.c` — hand-provides compiler-rt int64<->fp builtins the toolchain omits (§13).
+3. MANUAL CMTime math — NO `objc_msgSend_stret` / `CMTimeGetSeconds` (both crash the load,
+   §13): currentTime cached from the observer block's CMTime param (value/timescale via the
+   provided `__floatdidf`); duration/maxTimeSeekable routed to the ORIGINAL engine
+   (`o_duration`/`o_maxTimeSeekable`) in Tweak.x; paused tracked via a flag (no `.rate` read).
+4. TWO-LEVEL namespace linking (Makefile: dropped `-Wl,-undefined,dynamic_lookup`), with
+   per-symbol `-Wl,-U,...` ONLY for the libSystem C funcs the 9.3-SDK tbd omits (memset/
+   memcpy/memmove/calloc/free/str*/`*_chk`/`stack_chk_*`). This binds objc/CoreMedia/
+   Foundation/Substrate symbols to their dylib at link time instead of failing flat-namespace
+   load-time lookup (the real reason "present-on-device" symbols crashed under dynamic_lookup).
+
+NEXT: validate PLAYBACK (tap a `<video>` -> h_load fires -> mm_engine_create+load -> AVPlayer
+plays; seek/rate exercised) then Phase 3.2b (FigPluginView layer slot-in + neuter, §9).

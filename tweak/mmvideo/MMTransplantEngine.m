@@ -22,10 +22,17 @@ struct MMEngine {
     void *timeObserver;// id               (retained)
     MMVoidFn netChanged, readyChanged, timeChanged;
     int net, ready;
+    double curTime;    // cached from the observer block (avoids stret [player currentTime])
+    int playing;       // tracked via play/pause/setRate (avoids reading .rate)
 };
 
 static inline AVPlayer     *PL(MMEngine *e){ return (__bridge AVPlayer     *)e->player; }
 static inline AVPlayerItem *IT(MMEngine *e){ return (__bridge AVPlayerItem *)e->item; }
+
+// seconds from a CMTime by hand — value/timescale. Avoids CMTimeGetSeconds and the
+// struct-return ([currentTime]/[duration]) messaging, both of which crash the iOS-5.1
+// load (REFINDINGS §13). int64->double goes through the provided mmbuiltins __floatdidf.
+static inline double mm_secs(CMTime t){ return t.timescale ? (double)t.value / (double)t.timescale : 0.0; }
 
 MMEngine *mm_engine_create(void *mp) {
     MMEngine *e = (MMEngine *)calloc(1, sizeof(MMEngine));
@@ -82,14 +89,14 @@ void mm_engine_load(MMEngine *e, const char *url) {
         MMEngine *eng = e;          // capture the C pointer (no retain cycle)
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
-                     usingBlock:^(CMTime t){ (void)t; mm_engine_poll(eng); }];
+                     usingBlock:^(CMTime t){ eng->curTime = mm_secs(t); mm_engine_poll(eng); }];
         e->timeObserver = (__bridge_retained void *)obs;
     }
 }
 
-void mm_engine_play(MMEngine *e)  { if (e && e->player) [PL(e) play]; }
-void mm_engine_pause(MMEngine *e) { if (e && e->player) [PL(e) pause]; }
-int  mm_engine_paused(MMEngine *e){ return (e && e->player) ? (PL(e).rate == 0.0f) : 1; }
+void mm_engine_play(MMEngine *e)  { if (e && e->player){ [PL(e) play];  e->playing = 1; } }
+void mm_engine_pause(MMEngine *e) { if (e && e->player){ [PL(e) pause]; e->playing = 0; } }
+int  mm_engine_paused(MMEngine *e){ return e ? !e->playing : 1; }   // tracked flag, no .rate read
 
 void mm_engine_seek(MMEngine *e, double seconds) {
     if (!e || !e->player) return;
@@ -99,18 +106,18 @@ void mm_engine_seek(MMEngine *e, double seconds) {
 
 void mm_engine_set_rate(MMEngine *e, float rate) {
     if (!e || !e->player) return;
-    PL(e).rate = mm_clamp_rate(rate, 1, 1);   // iOS 5.1 has no canPlayFast/SlowForward; assume capable
+    float r = mm_clamp_rate(rate, 1, 1);   // iOS 5.1 has no canPlayFast/SlowForward; assume capable
+    PL(e).rate = r;
+    e->playing = (r != 0.0f);
 }
 
-double mm_engine_current_time(MMEngine *e) {
-    if (!e || !e->player) return 0.0;
-    double s = CMTimeGetSeconds([PL(e) currentTime]);
-    return (s != s) ? 0.0 : s;                // NaN guard
-}
+// currentTime is the value cached by the observer block (avoids the stret
+// [player currentTime]); duration is left to the ORIGINAL engine via the Tweak.x
+// fallback (avoids stret [item duration] + CMTimeGetSeconds — REFINDINGS §13).
+double mm_engine_current_time(MMEngine *e) { return e ? e->curTime : 0.0; }
 double mm_engine_duration(MMEngine *e) {
-    if (!e || !e->item) return 0.0;
-    double s = CMTimeGetSeconds([IT(e) duration]);
-    return (s != s || s < 0) ? 0.0 : s;
+    (void)e;
+    return 0.0;   // sentinel: Tweak.x routes duration/maxTimeSeekable to the original engine
 }
 int   mm_engine_network_state(MMEngine *e) { return e ? e->net : 0; }
 int   mm_engine_ready_state(MMEngine *e)   { return e ? e->ready : 0; }

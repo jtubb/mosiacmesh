@@ -60,8 +60,11 @@ static void h_play(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pla
 static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
 static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
 static float h_currentTime(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_current_time(e):o_currentTime(self); }
-static float h_duration(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_duration(e):o_duration(self); }
-static float h_maxTimeSeekable(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_duration(e):o_maxTimeSeekable(self); }
+// duration/maxTimeSeekable come from the ORIGINAL engine (which also loaded the URL via
+// o_load, so it knows the duration) — avoids the engine doing a stret [item duration] +
+// CMTimeGetSeconds, both of which crash the iOS-5.1 load (REFINDINGS §13).
+static float h_duration(void *self){ return o_duration(self); }
+static float h_maxTimeSeekable(void *self){ return o_maxTimeSeekable(self); }
 static bool  h_paused(void *self){ MMEngine *e=engineFor(self); return e? (mm_engine_paused(e)?true:false) : o_paused(self); }
 static int   h_networkState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_network_state(e):o_networkState(self); }
 static int   h_readyState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_ready_state(e):o_readyState(self); }

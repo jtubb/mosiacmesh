@@ -8,7 +8,9 @@ TWEAK_NAME = mmvideo
 # they resolve to libstdc++, which WebKit loads LAZILY (after Substrate injects us) =>
 # pre-%ctor SIGKILL. Plain ObjC keeps ARC (libobjc personality, always loaded) and
 # links AVFoundation fine (load-gate proven on-device 2026-06-29). See REFINDINGS §8.
-mmvideo_FILES = Tweak.x MMTransplantEngine.m
+# mmbuiltins.c hand-provides the compiler-rt int64<->fp conversion builtins the
+# toolchain ships no libclang_rt for (REFINDINGS §13) — without them the load SIGKILLs.
+mmvideo_FILES = Tweak.x MMTransplantEngine.m mmbuiltins.c
 # NO UIKit: linking it (a heavy framework MobileSafari loads early) into our image at
 # Substrate's early inject point trips the dyld load (pre-%ctor SIGKILL). We don't need
 # it linked — the layer slot-in reaches the video view's CALayer via QuartzCore + dynamic
@@ -18,5 +20,10 @@ mmvideo_FRAMEWORKS = AVFoundation CoreMedia QuartzCore Foundation
 # exception-safe cleanup landing pads (__Unwind_SjLj_*) — dropping them keeps the
 # undefined-symbol set to always-loaded libs (matches the proven load-gate build).
 mmvideo_CFLAGS = -fobjc-arc -fno-objc-arc-exceptions -Wno-deprecated-declarations -fno-exceptions
-mmvideo_LDFLAGS = -Wl,-undefined,dynamic_lookup
+# TWO-LEVEL namespace (NOT dynamic_lookup): binds objc/CoreMedia/Foundation/Substrate
+# symbols to their specific dylib at link time. dynamic_lookup deferred them to flat
+# load-time lookup where some present-on-device symbols don't resolve -> SIGKILL
+# (REFINDINGS §13). Compiler-rt builtins come from mmbuiltins.c. Only the libSystem C
+# funcs the 9.3-SDK tbd omits get per-symbol -U (they DO flat-bind from libSystem).
+mmvideo_LDFLAGS = -Wl,-U,_memset -Wl,-U,_memcpy -Wl,-U,_memmove -Wl,-U,_calloc -Wl,-U,_free -Wl,-U,_strlen -Wl,-U,_strncmp -Wl,-U,_strpbrk -Wl,-U,_strstr -Wl,-U,___memcpy_chk -Wl,-U,___memset_chk -Wl,-U,___snprintf_chk -Wl,-U,___stack_chk_fail -Wl,-U,___stack_chk_guard
 include $(THEOS)/makefiles/tweak.mk
