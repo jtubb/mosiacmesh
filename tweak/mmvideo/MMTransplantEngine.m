@@ -26,7 +26,6 @@ struct MMEngine {
     double curTime;    // cached from the observer block (avoids stret [player currentTime])
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
     int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
-    float lastRate;    // last clamped rate (log only on change — WebCore retries setRate)
     float desiredRate; // last NONZERO rate requested — what play() resumes at (see mm_engine_play)
 };
 
@@ -37,10 +36,6 @@ static inline AVPlayerItem *IT(MMEngine *e){ return (__bridge AVPlayerItem *)e->
 // struct-return ([currentTime]/[duration]) messaging, both of which crash the iOS-5.1
 // load (REFINDINGS §13). int64->double goes through the provided mmbuiltins __floatdidf.
 static inline double mm_secs(CMTime t){ return t.timescale ? (double)t.value / (double)t.timescale : 0.0; }
-
-// granular debug logger (temporary, for first-playback bring-up)
-#include <stdio.h>
-static void EL(const char *s){ FILE *f=fopen("/tmp/mmvideo.log","a"); if(f){fprintf(f,"%s\n",s); fclose(f);} }
 
 MMEngine *mm_engine_create(void *mp) {
     MMEngine *e = (MMEngine *)calloc(1, sizeof(MMEngine));
@@ -80,18 +75,16 @@ static void mm_engine_teardown(MMEngine *e) {
 
 void mm_engine_load(MMEngine *e, const char *url) {
     if (!e || !url) return;
-    EL("[eng] load: enter");
     @autoreleasepool {
         char path[512];
         NSURL *u = nil;
         if (mm_url_to_path(url, path, sizeof path)) u = [NSURL URLWithString:[NSString stringWithUTF8String:path]];
         else u = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
-        EL(u ? "[eng] load: url parsed" : "[eng] load: url nil");
         if (!u) return;
         mm_engine_teardown(e);
-        AVPlayerItem  *item   = [AVPlayerItem playerItemWithURL:u];   EL("[eng] load: item created");
-        AVPlayer      *player = [AVPlayer playerWithPlayerItem:item]; EL("[eng] load: player created");
-        AVPlayerLayer *layer  = [AVPlayerLayer playerLayerWithPlayer:player]; EL("[eng] load: layer created");
+        AVPlayerItem  *item   = [AVPlayerItem playerItemWithURL:u];
+        AVPlayer      *player = [AVPlayer playerWithPlayerItem:item];
+        AVPlayerLayer *layer  = [AVPlayerLayer playerLayerWithPlayer:player];
         e->item   = (__bridge_retained void *)item;
         e->player = (__bridge_retained void *)player;
         e->layer  = (__bridge_retained void *)layer;
@@ -100,31 +93,10 @@ void mm_engine_load(MMEngine *e, const char *url) {
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
                      usingBlock:^(CMTime t){
-                         eng->curTime = mm_secs(t);
-                         // PROOF-OF-PLAYBACK: this block fires ONLY while the player is
-                         // actually advancing. Log the first ~12 ticks — if currentTime
-                         // climbs, frames are decoding (real playback), not just "ready".
-                         static int tk = 0;
-                         if (tk++ < 12) EL([[NSString stringWithFormat:@"[eng] TICK t=%.2f", eng->curTime] UTF8String]);
+                         eng->curTime = mm_secs(t);   // cache currentTime (avoids stret read)
                          mm_engine_poll(eng);
                      }];
         e->timeObserver = (__bridge_retained void *)obs;
-        EL("[eng] load: observer added — DONE");
-        // DIAGNOSTIC: poll item.status over time on the main queue (the periodic
-        // observer won't fire while not playing). The block retains itemRef (ARC), so
-        // the item stays alive for the probe regardless of engine teardown.
-        AVPlayerItem *itemRef = item;
-        MMEngine    *engRef  = e;     // for currentTime sampling (rate-verification)
-        for (int i = 1; i <= 12; i++) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((long long)i * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                id er = [itemRef error];
-                // ct = cached currentTime: the per-second DELTA of ct == playback rate
-                // (2.0s media / 1.0s wall == 2x). Survives the TICK cap.
-                EL([[NSString stringWithFormat:@"[eng] t+%ds ct=%.2f status=%ld err=%@",
-                     i, engRef->curTime, (long)[itemRef status], er ? [er localizedDescription] : @"nil"] UTF8String]);
-            });
-        }
     }
 }
 
@@ -136,14 +108,6 @@ void mm_engine_play(MMEngine *e)  {
         // to 1.0 every frame. Setting rate>0 directly both starts playback AND honors 2x.
         float r = e->desiredRate > 0.0f ? e->desiredRate : 1.0f;
         PL(e).rate = r;  e->playing = 1;
-        static int n = 0;
-        if (n++ < 6) {   // capped: log item status + player rate to see if it's actually decoding
-            long st = (long)[IT(e) status];          // 0=Unknown 1=ReadyToPlay 2=Failed
-            float rate = PL(e).rate;
-            id err = [IT(e) error];
-            EL([[NSString stringWithFormat:@"[eng] play: item.status=%ld rate=%.2f err=%@",
-                 st, rate, err ? NSStringFromClass([err class]) : @"nil"] UTF8String]);
-        }
     }
 }
 void mm_engine_pause(MMEngine *e) { if (e && e->player){ [PL(e) pause]; e->playing = 0; } }
@@ -151,7 +115,6 @@ int  mm_engine_paused(MMEngine *e){ return e ? !e->playing : 1; }   // tracked f
 
 void mm_engine_seek(MMEngine *e, double seconds) {
     if (!e || !e->player) return;
-    EL([[NSString stringWithFormat:@"[eng] SEEK -> %.3f (zero-tolerance)", seconds] UTF8String]);
     CMTime t = CMTimeMakeWithSeconds(seconds, (int32_t)NSEC_PER_SEC);
     [PL(e) seekToTime:t toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];   // frame-accurate
 }
@@ -159,10 +122,6 @@ void mm_engine_seek(MMEngine *e, double seconds) {
 void mm_engine_set_rate(MMEngine *e, float rate) {
     if (!e || !e->player) return;
     float r = mm_clamp_rate(rate, 1, 1);   // iOS 5.1 has no canPlayFast/SlowForward; assume capable
-    if (r != e->lastRate) {                // WebCore retries setRate; log only real changes
-        EL([[NSString stringWithFormat:@"[eng] SET_RATE req=%.2f -> %.2f", rate, r] UTF8String]);
-        e->lastRate = r;
-    }
     if (r > 0.0f) e->desiredRate = r;      // remember nonzero rate so play() resumes at it
     PL(e).rate = r;
     e->playing = (r != 0.0f);
@@ -193,7 +152,6 @@ void mm_engine_attach_layer(MMEngine *e, void *fpvp) {
     vlayer.frame = (CGRect){ {0, 0}, {1024, 768} };   // full-screen (iPad-1) for bring-up
     [host addSublayer:vlayer];
     e->slotted = 1;
-    EL("[eng] attach_layer: AVPlayerLayer added to FigPluginView.layer");
 }
 
 void mm_engine_free(MMEngine *e) {
