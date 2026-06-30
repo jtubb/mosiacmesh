@@ -10,12 +10,17 @@
 #import <dispatch/dispatch.h>
 #import <stdio.h>
 #import <unistd.h>
+#import <mach/mach.h>         // vm_protect for the vtable-slot overwrite (currentTime/duration)
 
 static void mmlog(const char *m){ FILE*f=fopen("/tmp/mmvideo.log","a"); if(f){fprintf(f,"%s\n",m);fclose(f);} }
 
 // side-table: backend MediaPlayerPrivateiPhone* -> MMEngine* (a C struct, wrapped in
 // NSValue so the dict can hold it; the engine is heap-owned by us, freed on drop).
 static NSMutableDictionary *gEngines = nil;
+// gCurrentEngine: a single atomic pointer to the active engine, for the VTABLE getters
+// (currentTime/duration) which can be called from the QuickTime-plugin thread — so they must
+// NOT touch the non-thread-safe gEngines dict. The wall shows one video, so one engine.
+static MMEngine *gCurrentEngine = NULL;
 static inline id keyFor(void *self){ return [NSValue valueWithPointer:self]; }
 static MMEngine *engineFor(void *self){
     id v = gEngines ? [gEngines objectForKey:keyFor(self)] : nil;
@@ -23,7 +28,8 @@ static MMEngine *engineFor(void *self){
 }
 static void dropEngine(void *self){
     id k = keyFor(self), v = [gEngines objectForKey:k];
-    if (v){ mm_engine_free((MMEngine *)[v pointerValue]); [gEngines removeObjectForKey:k]; }
+    if (v){ MMEngine *e=(MMEngine *)[v pointerValue]; if(e==gCurrentEngine) gCurrentEngine=NULL;
+            mm_engine_free(e); [gEngines removeObjectForKey:k]; }
 }
 
 typedef CFStringRef (*CreateCFFn)(void *);   // WTF::String::createCFString() const
@@ -42,6 +48,8 @@ static bool  (*o_paused)(void*);
 static int   (*o_networkState)(void*);
 static int   (*o_readyState)(void*);
 static void  (*o_HTMLplay)(void*, bool);      // WebCore::HTMLMediaElement::play(bool isUserGesture)
+
+static void mm_install_vtable_getters(void *self);   // defined below; called from h_load (once)
 
 // 3.2b: locate FigPluginView (controller this+8, ivar +0x4 — REFINDINGS §9) and hand the
 // raw pointer to the engine, which does the CALayer work (it already imports QuartzCore +
@@ -67,7 +75,9 @@ static void h_load(void *self, void *strRef){
     MMEngine *eng = mm_engine_create(self, mp);  // self = backend, for ivar mirroring (Option A)
     if (!eng) return;
     [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
+    gCurrentEngine = eng;                        // for the vtable getters (atomic, cross-thread)
     mm_engine_load(eng, [url UTF8String]);
+    mm_install_vtable_getters(self);             // redirect currentTime/duration to our engine (once)
 }
 static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
 static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
@@ -99,6 +109,39 @@ static int   h_readyState(void *self){ MMEngine *e=engineFor(self); return e?mm_
 // gate passes; everything downstream is the PROVEN path (h_play -> mm_engine_play + slot-in).
 // This is a main-thread DOM call (not a hot cross-thread getter), so safe to patch — unlike §21.
 static void h_HTMLplay(void *self, bool isUserGesture){ (void)isUserGesture; o_HTMLplay(self, true); }
+
+// VTABLE getters for currentTime/duration (computed from the controller — not ivars, so the
+// ivar-mirror can't reach them). They're C++ virtuals; we overwrite the vtable SLOT (one
+// aligned pointer write = atomic), NOT the function prologue (the §21 torn-patch crash). Use
+// gCurrentEngine (atomic), never gEngines — these may run on the QuickTime-plugin thread.
+static float h_vt_currentTime(void *self){ MMEngine *e=gCurrentEngine; return e?(float)mm_engine_current_time(e):o_currentTime(self); }
+static float h_vt_duration(void *self){    MMEngine *e=gCurrentEngine; return e?(float)mm_engine_duration(e)   :o_duration(self);    }
+
+// Make the vtable slot writable (shared-cache page -> COW private copy via VM_PROT_COPY, the
+// same way code patching works) and overwrite it. Aligned word write is atomic for readers.
+static void mm_vt_set(void **slot, void *fn){
+    vm_protect(mach_task_self(), (vm_address_t)((uintptr_t)slot & ~((uintptr_t)4095)), 8192,
+               FALSE, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+    *slot = fn;
+}
+// Find the currentTime/duration slots by scanning the object's vtable for their runtime
+// addresses (MSFindSymbol — robust against ASLR slide), then overwrite. Once-only.
+static void mm_install_vtable_getters(void *self){
+    static int done = 0;
+    if (done || !self) return;
+    void **vt = *(void ***)self;            // object vptr -> virtual function array
+    if (!vt) return;
+    void *ct = MSFindSymbol(NULL, "__ZNK7WebCore24MediaPlayerPrivateiPhone11currentTimeEv");
+    void *du = MSFindSymbol(NULL, "__ZNK7WebCore24MediaPlayerPrivateiPhone8durationEv");
+    int hits = 0;
+    for (int i = 0; i < 64 && hits < 2; i++){
+        void *s = vt[i];
+        if (ct && s == ct){ o_currentTime = (float(*)(void*))ct; mm_vt_set(&vt[i], (void*)h_vt_currentTime); hits++; }
+        else if (du && s == du){ o_duration = (float(*)(void*))du; mm_vt_set(&vt[i], (void*)h_vt_duration); hits++; }
+    }
+    done = (hits > 0);
+    char b[64]; snprintf(b,sizeof b,"[mmvideo] vtable getters hooked: %d/2", hits); mmlog(b);
+}
 
 static void mm_install(void){
     gEngines = [[NSMutableDictionary alloc] init];

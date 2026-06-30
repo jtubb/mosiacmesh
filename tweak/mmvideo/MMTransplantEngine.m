@@ -147,8 +147,17 @@ void mm_engine_set_rate(MMEngine *e, float rate) {
 // fallback (avoids stret [item duration] + CMTimeGetSeconds — REFINDINGS §13).
 double mm_engine_current_time(MMEngine *e) { return e ? e->curTime : 0.0; }
 double mm_engine_duration(MMEngine *e) {
-    (void)e;
-    return 0.0;   // sentinel: Tweak.x routes duration/maxTimeSeekable to the original engine
+    if (!e || !e->item) return 0.0;
+    @autoreleasepool {
+        // AVPlayerItem.duration is a CMTime (stret return -> crashes, §13). Read it the
+        // no-stret way: KVC boxes it as an NSValue (valueForKey: -> id), and getValue: is
+        // void/pointer. Guard indefinite/NaN (kCMTimeIndefinite before the item is ready).
+        id dv = [IT(e) valueForKey:@"duration"];
+        if (!dv) return 0.0;
+        CMTime d; [dv getValue:&d];
+        double s = mm_secs(d);
+        return (s > 0.0 && s < 1.0e7) ? s : 0.0;
+    }
 }
 int   mm_engine_network_state(MMEngine *e) { return e ? e->net : 0; }
 int   mm_engine_ready_state(MMEngine *e)   { return e ? e->ready : 0; }
