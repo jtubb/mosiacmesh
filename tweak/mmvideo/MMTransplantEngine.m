@@ -34,6 +34,10 @@ static inline AVPlayerItem *IT(MMEngine *e){ return (__bridge AVPlayerItem *)e->
 // load (REFINDINGS §13). int64->double goes through the provided mmbuiltins __floatdidf.
 static inline double mm_secs(CMTime t){ return t.timescale ? (double)t.value / (double)t.timescale : 0.0; }
 
+// granular debug logger (temporary, for first-playback bring-up)
+#include <stdio.h>
+static void EL(const char *s){ FILE *f=fopen("/tmp/mmvideo.log","a"); if(f){fprintf(f,"%s\n",s); fclose(f);} }
+
 MMEngine *mm_engine_create(void *mp) {
     MMEngine *e = (MMEngine *)calloc(1, sizeof(MMEngine));
     if (!e) return NULL;
@@ -72,16 +76,18 @@ static void mm_engine_teardown(MMEngine *e) {
 
 void mm_engine_load(MMEngine *e, const char *url) {
     if (!e || !url) return;
+    EL("[eng] load: enter");
     @autoreleasepool {
         char path[512];
         NSURL *u = nil;
         if (mm_url_to_path(url, path, sizeof path)) u = [NSURL URLWithString:[NSString stringWithUTF8String:path]];
         else u = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
+        EL(u ? "[eng] load: url parsed" : "[eng] load: url nil");
         if (!u) return;
         mm_engine_teardown(e);
-        AVPlayerItem  *item   = [AVPlayerItem playerItemWithURL:u];
-        AVPlayer      *player = [AVPlayer playerWithPlayerItem:item];
-        AVPlayerLayer *layer  = [AVPlayerLayer playerLayerWithPlayer:player];
+        AVPlayerItem  *item   = [AVPlayerItem playerItemWithURL:u];   EL("[eng] load: item created");
+        AVPlayer      *player = [AVPlayer playerWithPlayerItem:item]; EL("[eng] load: player created");
+        AVPlayerLayer *layer  = [AVPlayerLayer playerLayerWithPlayer:player]; EL("[eng] load: layer created");
         e->item   = (__bridge_retained void *)item;
         e->player = (__bridge_retained void *)player;
         e->layer  = (__bridge_retained void *)layer;
@@ -91,6 +97,7 @@ void mm_engine_load(MMEngine *e, const char *url) {
                      queue:dispatch_get_main_queue()
                      usingBlock:^(CMTime t){ eng->curTime = mm_secs(t); mm_engine_poll(eng); }];
         e->timeObserver = (__bridge_retained void *)obs;
+        EL("[eng] load: observer added — DONE");
     }
 }
 

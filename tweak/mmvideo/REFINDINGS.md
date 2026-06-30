@@ -603,3 +603,23 @@ THE COMPLETE FIX STACK (all four required):
 
 NEXT: validate PLAYBACK (tap a `<video>` -> h_load fires -> mm_engine_create+load -> AVPlayer
 plays; seek/rate exercised) then Phase 3.2b (FigPluginView layer slot-in + neuter, §9).
+
+## §15 — Playback path crashes on FIRST execution (2026-06-30, to debug next)
+
+LOAD GATE is solid (§14, committed bab3b5e): dylib loads, all 12 hooks install,
+MobileSafari healthy. But on first REAL video load, the engine's playback path crashes
+MobileSafari — this code had NEVER run before (the class-based versions died at load).
+The crash-loop signature: a test page with `preload="auto"` triggers the buggy h_load on
+PAGE LOAD (no tap needed) -> crash -> Substrate safe-mode + launchd throttle (the device
+gets very sticky; respring `killall SpringBoard` + ~45s to recover; use a FRESH device).
+
+The path that crashes (h_load -> mm_engine_create -> mm_engine_load), candidates:
+- `gCreateCF(strRef)` URL extraction (WTF::String::createCFString) — RE'd (§6) but never
+  runtime-exercised; the hook arg `strRef` being the WTF::String* is unverified at runtime.
+- `*(void**)((char*)self+4)` m_player offset feeding mm_engine_create.
+- AVPlayer/Item/Layer creation or the periodic-observer block / __bridge_retained casts.
+GRANULAR LOGGING IS STAGED (uncommitted working tree on bab3b5e): h_load logs ENTER/
+o_load done/url=…/engine created/mm_engine_load returned; mm_engine_load logs enter/url
+parsed/item created/player created/layer created/observer added. Next session: on a FRESH
+respring'd device, use a `preload="none"` test page (so load happens only on a controlled
+tap, no crash-loop), deploy, tap ONCE, read the granular trace to pinpoint the crash line.

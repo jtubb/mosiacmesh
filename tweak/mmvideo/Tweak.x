@@ -43,20 +43,25 @@ static int   (*o_networkState)(void*);
 static int   (*o_readyState)(void*);
 
 static void h_load(void *self, void *strRef){
+    mmlog("[mmvideo] h_load: ENTER");
     o_load(self, strRef);                       // let WebCore run its load state machine
+    mmlog("[mmvideo] h_load: o_load done");
     NSString *url = nil;
     if (gCreateCF){ CFStringRef cf = gCreateCF(strRef); if (cf) url = (__bridge_transfer NSString *)cf; }
+    mmlog([[NSString stringWithFormat:@"[mmvideo] h_load: url=%@", url ? url : @"(nil)"] UTF8String]);
     if (!url || url.length == 0) return;
     void *mp = *(void **)((char *)self + 4);    // m_player (REFINDINGS)
     dropEngine(self);                            // free+remove any prior engine for this backend
     MMEngine *eng = mm_engine_create(mp);
+    mmlog(eng ? "[mmvideo] h_load: engine created" : "[mmvideo] h_load: engine create FAILED");
     if (!eng) return;
     [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
     mm_engine_load(eng, [url UTF8String]);
+    mmlog("[mmvideo] h_load: mm_engine_load returned");
 }
-static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
-static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
-static void h_play(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_play(e); else o_play(self); }
+static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_seek -> engine":"[mmvideo] h_seek -> orig"); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
+static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_setRate -> engine":"[mmvideo] h_setRate -> orig"); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
+static void h_play(void *self){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_play -> engine":"[mmvideo] h_play -> orig"); if(e) mm_engine_play(e); else o_play(self); }
 static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
 static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
 static float h_currentTime(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_current_time(e):o_currentTime(self); }
