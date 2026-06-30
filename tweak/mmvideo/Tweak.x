@@ -41,6 +41,7 @@ static float (*o_maxTimeSeekable)(void*);
 static bool  (*o_paused)(void*);
 static int   (*o_networkState)(void*);
 static int   (*o_readyState)(void*);
+static void  (*o_HTMLplay)(void*, bool);      // WebCore::HTMLMediaElement::play(bool isUserGesture)
 
 // 3.2b: locate FigPluginView (controller this+8, ivar +0x4 — REFINDINGS §9) and hand the
 // raw pointer to the engine, which does the CALayer work (it already imports QuartzCore +
@@ -83,6 +84,22 @@ static bool  h_paused(void *self){ MMEngine *e=engineFor(self); return e? (mm_en
 static int   h_networkState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_network_state(e):o_networkState(self); }
 static int   h_readyState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_ready_state(e):o_readyState(self); }
 
+// AUTOPLAY: WebCore's HTMLMediaElement gates load() + play()/setRate() on m_restrictions,
+// which it derives from Settings::mediaPlaybackRequiresUserGesture() (true on iOS-5). That
+// gate is UPSTREAM of MediaPlayerPrivateiPhone — so our action hooks can't defeat it; the
+// backend never even sees load()/play() without a gesture. Forcing this getter false makes
+// WebCore skip the RequireUserGestureFor{Load,RateChange}Restriction flags, so the NORMAL
+// pipeline (incl. our backend hooks) runs unattended — no tap. Verified call sites (534.48.3):
+//   load(): if (m_restrictions & RequireUserGestureForLoadRestriction && !isUserGesture) ec=INVALID_STATE_ERR;
+//   play(): if (m_restrictions & RequireUserGestureForRateChangeRestriction && !isUserGesture) return;
+// AUTOPLAY: HTMLMediaElement::play(bool isUserGesture) gates with (verified 534.48.3):
+//   if (m_restrictions & RequireUserGestureForRateChangeRestriction && !isUserGesture) return;
+// load() is NOT gated (h_load fires unattended) but play() IS — so a no-tap <video>.play()
+// returns early and our backend play() never fires (no video). Force isUserGesture=true so the
+// gate passes; everything downstream is the PROVEN path (h_play -> mm_engine_play + slot-in).
+// This is a main-thread DOM call (not a hot cross-thread getter), so safe to patch — unlike §21.
+static void h_HTMLplay(void *self, bool isUserGesture){ (void)isUserGesture; o_HTMLplay(self, true); }
+
 static void mm_install(void){
     gEngines = [[NSMutableDictionary alloc] init];
     gCreateCF = (CreateCFFn)MSFindSymbol(NULL, "__ZNK3WTF6String14createCFStringEv");
@@ -93,23 +110,28 @@ static void mm_install(void){
         {"__ZN7WebCore24MediaPlayerPrivateiPhone4playEv",(void*)h_play,(void**)&o_play},
         {"__ZN7WebCore24MediaPlayerPrivateiPhone5pauseEv",(void*)h_pause,(void**)&o_pause},
         {"__ZN7WebCore24MediaPlayerPrivateiPhone10cancelLoadEv",(void*)h_cancelLoad,(void**)&o_cancelLoad},
-        // GETTERS TEMPORARILY DISABLED (bring-up): hooking the const getters
-        // (currentTime/duration/maxTimeSeekable/paused/networkState/readyState)
-        // destabilizes WebCore's pre-load media-state polling -> SIGSEGV before
-        // h_load even fires. Leave them ORIGINAL for now (the original engine loads via
-        // o_load and reports state); re-add carefully once playback works. The h_* getter
-        // fns + o_* slots stay defined (unused) so nothing else changes.
-        // {"__ZNK..11currentTimeEv",(void*)h_currentTime,(void**)&o_currentTime},
-        // {"__ZNK..8durationEv",(void*)h_duration,(void**)&o_duration},
-        // {"__ZNK..15maxTimeSeekableEv",(void*)h_maxTimeSeekable,(void**)&o_maxTimeSeekable},
-        // {"__ZNK..6pausedEv",(void*)h_paused,(void**)&o_paused},
-        // {"__ZNK..12networkStateEv",(void*)h_networkState,(void**)&o_networkState},
-        // {"__ZNK..10readyStateEv",(void*)h_readyState,(void**)&o_readyState},
+        // The const getters (currentTime/duration/maxTimeSeekable/paused/networkState/
+        // readyState) are NOT hooked: they're polled at high frequency from the QuickTime
+        // media plugin's OWN thread, so MSHookFunction's multi-instruction prologue rewrite
+        // races that thread -> torn code -> SIGBUS in WebCore (crash 2026-06-30, §21 — the
+        // backtrace faulted in WebCore on the QuickTime-plugin thread, not in our hook). No
+        // main-thread install timing avoids it (the racing caller isn't the main thread).
+        // The player works fine without getter feedback; WebCore's <video> model just stays
+        // cosmetically out of sync. The h_* getter fns + o_* slots stay defined (unused) for
+        // a future NON-patching state-sync approach.
     };
     for (unsigned i=0;i<sizeof(H)/sizeof(H[0]);i++){
         void *s = MSFindSymbol(NULL, H[i].sym);
         if (s) MSHookFunction(s, H[i].hook, H[i].orig);
     }
+    // AUTOPLAY: defeat the play/rate-change gesture gate by forcing HTMLMediaElement::play's
+    // isUserGesture arg true. (The earlier Settings::mediaPlaybackRequiresUserGesture approach
+    // was wrong — that symbol doesn't exist in 534.48.3, and load isn't gated anyway; only
+    // play() is.) NULL-guarded: absent symbol -> hook simply doesn't install.
+    void *hp = MSFindSymbol(NULL, "__ZN7WebCore16HTMLMediaElement4playEb");
+    if (hp) { MSHookFunction(hp, (void*)h_HTMLplay, (void**)&o_HTMLplay);
+              mmlog("[mmvideo] autoplay: HTMLMediaElement::play(bool) hooked -> force gesture=true"); }
+    else      mmlog("[mmvideo] autoplay: HTMLMediaElement::play symbol NOT FOUND");
     mmlog("[mmvideo] hooks installed");   // single load heartbeat (deploy verification)
 }
 
