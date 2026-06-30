@@ -336,3 +336,120 @@ Installed an observe-only tweak hooking `MediaPlayerPrivateiPhone::{load,play,se
 - **Fallbacks if needed:** `__ZNK3WTF6String29charactersWithNullTerminationEv` (returns `UChar*`, 16-bit NUL-terminated) or `__ZNK3WTF6String4utf8Eb` (returns a `WTF::CString`).
 
 **Phase-3.1 load-hook flow:** `h_load(void* this, void* stringRef)`: call `o_load(this, stringRef)` (let WebCore set up its state machine), extract `url` via `createCF(stringRef)`, then create/lookup the `MMTransplantEngine` for `this` (`initWithMediaPlayer:*(void**)((char*)this+4)`), and `[engine loadURL:url]`. (The original proxy/controller path is neutered in Task 3.2.)
+
+## §7 — Phase 3.2 on-device observation (2026-06-29, screen14 192.168.1.94)
+
+**Hook layer CONFIRMED (Finding #2 resolved).** With a reliably-loading observe
+dylib hooking `MediaPlayerPrivateiPhone::{load,play,seek,setRate}`, a real tapped
+`<video>` produced:
+```
+HOOK setRate fired   -> this+8 = FPVMediaPlayerHelper, +0xc = WebCoreMediaPlayerNotificationHelper, +0x10 = __NSCFDictionary
+HOOK play   fired   -> this+8 = FPVMediaPlayerHelper
+```
+So `play` AND `setRate` DO route through `MediaPlayerPrivateiPhone` — the Phase-3.1
+interception layer is at the correct seam. (`play()` also drives a `setRate` — the
+speed-nudge primitive is on this same path.) Earlier the live display client showed
+`load` but never `play` purely because of the RENDER GATE (uncalibrated single-screen
+group => FULL never render-ready => PLAY blocked => client idles on the clock), NOT
+because play bypasses this layer.
+
+**Controller = `FPVMediaPlayerHelper` at `this+8`** (confirms §Phase-1.2). `this+0xc`
+= `WebCoreMediaPlayerNotificationHelper`, `this+0x10` = an `__NSCFDictionary`. NOTE:
+at `load` time `this+8` is NIL (controller created during/after load); it is wired by
+play/seek time. `m_player` (WebCore::MediaPlayer, C++) stays at `this+4`.
+
+**STILL NEEDED for 3.2 (slot-in target):** FPVMediaPlayerHelper's video view/layer +
+AVPlayer accessors. It is NOT in the pulled dyld_shared_cache_armv7 (string count=0,
+while WebCoreMediaPlayerNotificationHelper=15, MediaPlayerPrivateiPhone=52) — so it is
+a non-cached / dynamically-registered class. Offline class-dump needs its defining
+binary located first; or a careful on-device @selector probe.
+
+## §8 — Substrate dylib LOAD constraints on iOS 5.1 (HARD-WON, applies to the real tweak)
+
+The "intermittent SubstrateLoader crash" from the bank was NOT the launch watchdog.
+Root cause: under `-Wl,-undefined,dynamic_lookup` (flat namespace), dyld must bind
+EVERY undefined symbol by searching loaded images at our load time. Substrate injects
+the tweak EARLY in MobileSafari launch, before WebKit lazily loads libstdc++. So:
+- **C++ SjLj unwind symbols** (`___gxx_personality_sj0`, `__Unwind_SjLj_*`) pulled in
+  by ObjC++ (.xm) + ARC must bind to libstdc++ => NOT yet loaded => image SIGKILLed
+  pre-`%ctor` (crash stack is pure dyld bind under SubstrateLoader; crash report shows
+  `TASK_DYLD_INFO failed` with NO "Symbol not found" = external kill during bind).
+- **FIX (proven, 4/4 reliable loads):** compile as PLAIN ObjC (`.x`, not `.xm`) with
+  NO ARC (`-fobjc-arc` removed). Removes all C++/libstdc++ + ARC-runtime deps; ObjC
+  uses libobjc's personality (always loaded). Frameworks: Foundation only.
+- **Also unbindable here:** `sel_registerName`, `objc_getClass`, `NSSelectorFromString`
+  (adding any one => same pre-ctor SIGKILL). USE compile-time `@selector()` literals +
+  `objc_msgSend` + `respondsToSelector:` + `NSStringFromClass([x class])` instead
+  (those bind fine). Avoid ALL dynamic name->sel/class resolution.
+- Residual fragility: even symbol-identical .x builds occasionally differ at load when
+  selref/section content grows (v9 loaded, v10 with extra @selector literals crashed).
+  Keep the tweak's selref/section footprint minimal; for the real transplant strongly
+  prefer two-level-namespace linking (link AVFoundation/CoreMedia/libobjc explicitly,
+  reserve dynamic_lookup ONLY for the runtime-resolved WebCore MSFindSymbol targets).
+- Deferred-hook install (`%ctor` -> dispatch_after bg) is still good practice but was
+  NOT the fix; the bind happens before `%ctor` regardless.
+
+## §9 — SLOT-IN TARGET resolved: FigPluginView (2026-06-29, on-device ivar walk)
+
+`FPVMediaPlayerHelper` (= the controller at `MediaPlayerPrivateiPhone+0x8`) is itself
+NOT in the shared cache (dynamic/non-cached WebKit-media-plugin class). Walking its
+ivars on a live tapped `<video>` (guarded *(void**) + NSStringFromClass([class])):
+```
+FPVMediaPlayerHelper +0x4  = FigPluginView          <- NATIVE VIDEO VIEW (render surface)
+                     +0x8  = WebPluginController
+                     +0xc  = DOMHTMLElement          (the <video> DOM element)
+                     +0x10 = NSLock
+                     +0x14 = (primitive — [class] crashed here; stop the walk at +0x10)
+```
+So **`FPV` = `FigPluginView`**, and the full media path is:
+web `<video>` -> `MediaPlayerPrivateiPhone` -> WebMediaPlayerProxy plugin ->
+`WebPluginController` + **`FigPluginView`** (FigKit/CoreMedia native view that renders
+the video). `FigPluginView` is also absent from the cache (count=0; `WebPluginController`
+=51, `AVPlayerLayer`=102, `setPlayer:`=49 ARE present).
+
+**Phase-3.2 SLOT-IN PLAN (concrete):** reach `FigPluginView` via `controller(this+8)+0x4`;
+it is a UIView-family render surface, so add our `AVPlayerLayer` into `figPluginView.layer`
+(sublayer sized to bounds) and neuter the original Fig/MPAVController playback so it
+doesn't double-render. Engine already builds the `AVPlayer`+`AVPlayerLayer` (Phase 2).
+Confirm `FigPluginView`'s superclass + its own layer/bounds at 3.2 impl time with a
+MINIMAL on-device probe (one `@selector` at a time — v10 proved an @selector explosion
+trips the load threshold; v9/v11's guarded slot-class-dump is the safe idiom).
+
+OBSERVE-TOOLING NOTE: messaging `[class]` on a guarded-but-non-object ivar slot crashes
+at RUNTIME (e.g. `+0x14` above) — but the log is `fclose`-flushed per line, so the dump
+up to the bad slot survives the crash. Cap the walk (gDumps) and read partial output.
+
+## §10 — Phase 3.2a: engine converted to loadable plain-ObjC (2026-06-29)
+
+LOAD-GATE PROVEN (early, clean device): a plain-ObjC (.x) + ARC dylib that LINKS
+AVFoundation/CoreMedia/QuartzCore loads on iOS 5.1 and creates AVPlayer/AVPlayerItem/
+AVPlayerLayer + the zero-tolerance seek API (scratchpad `avsmoke.x`, "AVFoundation
+LINK+LOAD OK"). So the engine conversion is mechanical.
+
+DONE (repo, branch feat/ios5-avplayer-transplant, UNCOMMITTED working tree):
+- `MMTransplantEngine.mm` -> `MMTransplantEngine.m`, `Tweak.xm` -> `Tweak.x` (plain
+  ObjC; ObjC++ was the only reason libstdc++/`___gxx_personality_sj0` got pulled).
+- Makefile: `_FILES = Tweak.x MMTransplantEngine.m`; dropped `UIKit` from FRAMEWORKS
+  (not needed — slot-in reaches the view's CALayer via QuartzCore + objc_msgSend; and
+  linking UIKit was a load-crash suspect); added `-fno-objc-arc-exceptions`.
+- Engine: `__weak` -> `__unsafe_unretained` in the periodic-time-observer block —
+  `__weak` emits ARC SjLj cleanup (`__Unwind_SjLj_*`); safe here since teardown/dealloc
+  removes the observer before self dies. Build is now symbol-CLEAN (no libstdc++, no
+  unwind, no UIKit; deps == the proven avsmoke).
+- Hook install DEFERRED off `%ctor` (dispatch_after bg), side-table inited there.
+
+NOT YET CLEANLY VALIDATED (the open item): the FULL real tweak's on-device LOAD. The
+session's on-device tests got CONFOUNDED:
+- **launchd relaunch throttle**: after many rapid `killall MobileSafari; uiopen`
+  cycles, MobileSafari stops launching even with the PROVEN-good avsmoke dylib (control
+  test failed in the degraded state). RESET with `killall SpringBoard` (respring) +
+  ~25s settle; SPACE OUT tests; don't storm relaunches.
+- **MobileSubstrate safe-mode**: after a tweak crashes MobileSafari at load, Substrate
+  disables injection and relaunches Safari CLEAN -> "MobileSafari up + no `/tmp/MMCTOR`"
+  means it crashed + entered safe-mode (NOT "loaded fine"). Respring to exit.
+RESUME PROTOCOL (fresh, respring'd device, controlled): (1) deploy `avsmoke` first,
+confirm `MMCTOR` + "AVFoundation LINK+LOAD OK" => device healthy; (2) THEN deploy the
+real `mmvideo_real.dylib`, ONE launch, check `MMCTOR` + "[mmvideo] hooks installed";
+respring between; treat "safari up + no MMCTOR" as a crash. If the real tweak genuinely
+crashes on a healthy device while avsmoke loads, bisect by adding pieces to avsmoke
+(empty ObjC class -> +engine class -> +12 hooks) to find the load-threshold trigger.

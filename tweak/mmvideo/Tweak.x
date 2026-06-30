@@ -1,7 +1,13 @@
+// Plain ObjC + Logos (.x). Converted from Tweak.xm — see MMTransplantEngine.m header
+// for why ObjC++ (.xm) crashes at load on iOS 5.1. Behavior is the Phase-3.1
+// interception layer unchanged, except the MSHookFunction install is DEFERRED off the
+// launch critical path onto a background queue (proven-safe load pattern; the side
+// table is initialized there too, before any hook can fire).
 #import <substrate.h>
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
 #import "MMTransplantEngine.h"
+#import <dispatch/dispatch.h>
 #import <stdio.h>
 #import <unistd.h>
 
@@ -50,8 +56,7 @@ static bool  h_paused(void *self){ MMTransplantEngine *e=engineFor(self); return
 static int   h_networkState(void *self){ MMTransplantEngine *e=engineFor(self); return e?[e networkState]:o_networkState(self); }
 static int   h_readyState(void *self){ MMTransplantEngine *e=engineFor(self); return e?[e readyState]:o_readyState(self); }
 
-%ctor {
-    mmlog("[mmvideo] phase3.1 ctor");
+static void mm_install(void){
     gEngines = [[NSMutableDictionary alloc] init];
     gCreateCF = (CreateCFFn)MSFindSymbol(NULL, "__ZNK3WTF6String14createCFStringEv");
     struct { const char *sym; void *hook; void **orig; } H[] = {
@@ -73,4 +78,11 @@ static int   h_readyState(void *self){ MMTransplantEngine *e=engineFor(self); re
         char b[160]; snprintf(b,sizeof b,"[mmvideo] hook %s = %p", H[i].sym, s); mmlog(b);
         if (s) MSHookFunction(s, H[i].hook, H[i].orig);
     }
+    mmlog("[mmvideo] hooks installed (deferred)");
+}
+
+%ctor {
+    mmlog("[mmvideo] phase3.2 ctor (plain ObjC; deferring hook install)");
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{ mm_install(); });
 }

@@ -1,3 +1,8 @@
+// Plain ObjC (.m, ARC). Converted from MMTransplantEngine.mm — iOS-5.1 dyld cannot
+// flat-bind the C++ SjLj unwind symbols that ObjC++ (.mm/.xm) pulls in (libstdc++ is
+// loaded lazily by WebKit, AFTER Substrate injects us) => pre-%ctor SIGKILL. Plain
+// ObjC keeps ARC (libobjc personality, always loaded) and links AVFoundation fine
+// (load-gate proven on-device 2026-06-29). Code is otherwise unchanged from the .mm.
 #import "MMTransplantEngine.h"
 #import "mmurl.h"
 #import <AVFoundation/AVFoundation.h>
@@ -58,7 +63,10 @@ typedef void (*MMVoidFn)(void *);
     [_item addObserver:self forKeyPath:@"status" options:0 context:(void *)1];
     [_item addObserver:self forKeyPath:@"duration" options:0 context:(void *)2];
     _observing = YES;
-    __weak MMTransplantEngine *weak = self;
+    // __unsafe_unretained (not __weak): __weak emits ARC SjLj cleanup landing pads
+    // (__Unwind_SjLj_*) that destabilize the dyld load on iOS 5.1. Safe here because we
+    // removeTimeObserver in teardown/dealloc, so the block can't fire after self dies.
+    __unsafe_unretained MMTransplantEngine *weak = self;
     _timeObserver = [_player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                         queue:dispatch_get_main_queue()
                         usingBlock:^(CMTime t){ MMTransplantEngine *s = weak; if (s && s->_timeChanged && s->_mp) s->_timeChanged(s->_mp); }];
