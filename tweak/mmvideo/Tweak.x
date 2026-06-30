@@ -13,10 +13,18 @@
 
 static void mmlog(const char *m){ FILE*f=fopen("/tmp/mmvideo.log","a"); if(f){fprintf(f,"%s\n",m);fclose(f);} }
 
-// side-table: backend MediaPlayerPrivateiPhone* -> MMTransplantEngine* (dict retains the engine)
+// side-table: backend MediaPlayerPrivateiPhone* -> MMEngine* (a C struct, wrapped in
+// NSValue so the dict can hold it; the engine is heap-owned by us, freed on drop).
 static NSMutableDictionary *gEngines = nil;
 static inline id keyFor(void *self){ return [NSValue valueWithPointer:self]; }
-static MMTransplantEngine *engineFor(void *self){ return gEngines ? [gEngines objectForKey:keyFor(self)] : nil; }
+static MMEngine *engineFor(void *self){
+    id v = gEngines ? [gEngines objectForKey:keyFor(self)] : nil;
+    return v ? (MMEngine *)[v pointerValue] : NULL;
+}
+static void dropEngine(void *self){
+    id k = keyFor(self), v = [gEngines objectForKey:k];
+    if (v){ mm_engine_free((MMEngine *)[v pointerValue]); [gEngines removeObjectForKey:k]; }
+}
 
 typedef CFStringRef (*CreateCFFn)(void *);   // WTF::String::createCFString() const
 static CreateCFFn gCreateCF = NULL;
@@ -40,21 +48,23 @@ static void h_load(void *self, void *strRef){
     if (gCreateCF){ CFStringRef cf = gCreateCF(strRef); if (cf) url = (__bridge_transfer NSString *)cf; }
     if (!url || url.length == 0) return;
     void *mp = *(void **)((char *)self + 4);    // m_player (REFINDINGS)
-    MMTransplantEngine *eng = [[MMTransplantEngine alloc] initWithMediaPlayer:mp];
-    [gEngines setObject:eng forKey:keyFor(self)];   // replaces+releases any prior engine for this backend
-    [eng loadURL:url];
+    dropEngine(self);                            // free+remove any prior engine for this backend
+    MMEngine *eng = mm_engine_create(mp);
+    if (!eng) return;
+    [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
+    mm_engine_load(eng, [url UTF8String]);
 }
-static void h_seek(void *self, float t){ MMTransplantEngine *e=engineFor(self); if(e)[e seekTo:(double)t]; else o_seek(self,t); }
-static void h_setRate(void *self, float r){ MMTransplantEngine *e=engineFor(self); if(e)[e setRate:r]; else o_setRate(self,r); }
-static void h_play(void *self){ MMTransplantEngine *e=engineFor(self); if(e)[e play]; else o_play(self); }
-static void h_pause(void *self){ MMTransplantEngine *e=engineFor(self); if(e)[e pause]; else o_pause(self); }
-static void h_cancelLoad(void *self){ if(engineFor(self)) [gEngines removeObjectForKey:keyFor(self)]; o_cancelLoad(self); }
-static float h_currentTime(void *self){ MMTransplantEngine *e=engineFor(self); return e?(float)[e currentTime]:o_currentTime(self); }
-static float h_duration(void *self){ MMTransplantEngine *e=engineFor(self); return e?(float)[e duration]:o_duration(self); }
-static float h_maxTimeSeekable(void *self){ MMTransplantEngine *e=engineFor(self); return e?(float)[e duration]:o_maxTimeSeekable(self); }
-static bool  h_paused(void *self){ MMTransplantEngine *e=engineFor(self); return e?[e paused]:o_paused(self); }
-static int   h_networkState(void *self){ MMTransplantEngine *e=engineFor(self); return e?[e networkState]:o_networkState(self); }
-static int   h_readyState(void *self){ MMTransplantEngine *e=engineFor(self); return e?[e readyState]:o_readyState(self); }
+static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
+static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
+static void h_play(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_play(e); else o_play(self); }
+static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
+static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
+static float h_currentTime(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_current_time(e):o_currentTime(self); }
+static float h_duration(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_duration(e):o_duration(self); }
+static float h_maxTimeSeekable(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_duration(e):o_maxTimeSeekable(self); }
+static bool  h_paused(void *self){ MMEngine *e=engineFor(self); return e? (mm_engine_paused(e)?true:false) : o_paused(self); }
+static int   h_networkState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_network_state(e):o_networkState(self); }
+static int   h_readyState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_ready_state(e):o_readyState(self); }
 
 static void mm_install(void){
     gEngines = [[NSMutableDictionary alloc] init];

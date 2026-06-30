@@ -453,3 +453,128 @@ real `mmvideo_real.dylib`, ONE launch, check `MMCTOR` + "[mmvideo] hooks install
 respring between; treat "safari up + no MMCTOR" as a crash. If the real tweak genuinely
 crashes on a healthy device while avsmoke loads, bisect by adding pieces to avsmoke
 (empty ObjC class -> +engine class -> +12 hooks) to find the load-threshold trigger.
+
+## §11 — ROOT CAUSE: a static ObjC class crashes the dylib load (2026-06-29)
+
+CONTROLLED A/B/A on a healthy device (respring between each, avsmoke control LOADED
+first to prove the device wasn't throttled):
+```
+A  avsmoke (no ObjC class)      -> LOADED
+B  avsmoke + ONE empty class    -> CRASHED at load (no /tmp/MMCTOR, 0 safari procs)
+A  avsmoke (no ObjC class)again -> LOADED
+```
+The ONLY delta between A and B is a single trivial `@interface MMTestEngine : NSObject`
+(one no-op method). So: **a statically-defined ObjC class in the Substrate-injected
+dylib deterministically SIGKILLs the load on this iOS-5.1 device.** Almost certainly the
+iPhoneOS9.3-SDK toolchain emits ObjC2 class metadata (__objc_classlist/__objc_data/
+class_ro_t layout) in a NEWER ABI than the iOS-5.1 objc runtime expects; the runtime
+mis-parses it during `map_images` at image load (pre-%ctor) and the process dies.
+
+CONSEQUENCE: this is the REAL blocker for the transplant. `MMTransplantEngine` is a
+static ObjC class -> the real tweak crashes regardless of the §8 plain-ObjC fix. (Two
+INDEPENDENT load-crash causes exist: §8 C++ SjLj unwind from ObjC++/ARC, fixed by plain
+ObjC; and §11 static ObjC class metadata, NOT fixed by plain ObjC.) The class-free
+observe builds (v7/v9/v11) + avsmoke loaded precisely because they define NO ObjC class.
+
+CAVEAT on earlier conclusions: the v8/v10 symbol/threshold conclusions (sel_registerName
+/objc_getClass "don't bind"; @selector-count "threshold") were from UNCONTROLLED tests
+(no avsmoke control; the launchd-throttle + safe-mode confound was not yet known) and are
+UNRELIABLE — re-validate any of them with the §10 control protocol before relying on them.
+
+FIX OPTIONS for next session (design decision — engine needs to be an ObjC object for
+AVPlayer KVO + the time-observer block):
+1. RUNTIME class creation: build MMTransplantEngine at runtime via objc_allocateClassPair
+   + class_addIvar/class_addMethod + objc_registerClassPair in the deferred install (NO
+   static __objc metadata for the 5.1 runtime to mis-read). MUST first verify those
+   libobjc symbols bind under the §10 control protocol.
+2. CLASS-FREE C engine: hold AVPlayer/AVPlayerItem/AVPlayerLayer as retained CFTypeRef/
+   void*; drive via objc_msgSend; replace KVO status-observation with the periodic time
+   observer's block (already block-based) + polling AVPlayerItem.status, so no ObjC
+   observer object is needed.
+3. Older SDK (iPhoneOS6.x/5.x) that emits 5.1-compatible ObjC metadata — reopens the
+   toolchain gate; least preferred.
+
+## §12 — Redesign validation: runtime-class BLOCKED, class-free C is the path (2026-06-29)
+
+Tested fix-option-1 (runtime class via objc_allocateClassPair) under the §10 control
+protocol: `avsmoke(no class)=LOADED` then `avsmoke3(builds a class at runtime)=CRASHED
+at load`. avsmoke3 has NO static ObjC class, so the crash is the **objc runtime
+class-creation symbols failing to flat-bind** (`objc_allocateClassPair`,
+`class_addMethod`, `class_addIvar`, `objc_registerClassPair`, `object_setIvar`,
+`class_getInstanceVariable`) — referenced via `-Wl,-undefined,dynamic_lookup`, resolved
+at LOAD even though used later. All ARE present as strings in the cache, but so are
+`objc_getClass`/`sel_registerName` (which also don't bind); only the hot public
+`objc_msgSend` flat-binds. String-in-cache != exported in the flat-namespace export
+trie. **=> Fix option 1 (runtime class) is NOT viable under dynamic_lookup.**
+
+DECISION: **Fix option 2 — CLASS-FREE C engine.** avsmoke PROVES the foundation: it
+creates + uses AVPlayer/AVPlayerItem/AVPlayerLayer + zero-tol seek with NO ObjC class,
+only `objc_msgSend` on AVFoundation objects (which binds). The engine becomes C
+functions over AVFoundation objects held as retained `void*`/CFTypeRef:
+- create: `((id(*)(id,SEL,id))objc_msgSend)([AVPlayer class], @selector(playerWithPlayerItem:), item)` etc. — all via `@selector()` literals (compile-time selrefs) + `objc_msgSend` (NO sel_registerName/objc_getClass; use `[AVPlayer class]` compile-time class refs).
+- seek/rate/play/pause/currentTime/duration: direct `objc_msgSend` to the AVPlayer.
+- state: REPLACE KVO (needs an ObjC observer object) with the already-block-based
+  `addPeriodicTimeObserverForInterval:` block + POLL `AVPlayerItem.status`/`.duration`
+  in that block; fire the WebCore `*Changed` callbacks from there. No observer class.
+- the WebCore callback fn pointers stay as today (MSFindSymbol C function pointers).
+- memory: manual retain/release the AVFoundation objects (CFRetain/CFRelease or
+  `objc_msgSend(@selector(retain/release))`); the tweak file stays plain ObjC, NO ARC
+  object ivars-in-a-class (there's no class).
+CONSTRAINT for the rewrite: the dylib must define NO ObjC `@interface`/`@implementation`
+(static class metadata crashes §11) and reference NONE of the non-binding objc runtime
+symbols (§12) — only `objc_msgSend`, `@selector()` literals, `[KnownClass class]`,
+`NSStringFromClass`, Foundation/AVFoundation/CoreMedia/QuartzCore via messages.
+
+## §13 — ROOT CAUSE of the load-crash saga: missing compiler-rt builtins (2026-06-29)
+
+The real engine (class-free C, no ObjC class, no objc-runtime calls) STILL crashed at
+load. Controlled bisects narrowed it symbol-by-symbol; the decisive one: avsmoke + a
+SINGLE `(double)cmtime.value / cmtime.timescale` (manual CMTime math) CRASHED, and its
+only new undefined symbol was **`___floatdidf`** (the compiler-rt soft-float builtin for
+int64->double). The L1ghtmann toolchain **ships NO `libclang_rt`** (no builtins archive
+anywhere under `~/theos/toolchain`), so the compiler-emitted builtin call is left
+UNDEFINED; `-Wl,-undefined,dynamic_lookup` then defers it to flat-namespace load-time
+resolution, but builtins don't exist on-device (they're meant to be statically linked)
+-> SIGKILL before %ctor.
+
+**FIX VALIDATED:** hand-providing `__floatdidf` (32-bit int->double via VFP vcvt + double
+arithmetic, no recursion into the builtin) made the same dylib **LOAD + compute
+correctly** ("manual secs=3.000000"). So the whole saga of "symbol X crashes the load"
+is largely the toolchain leaving compiler-rt builtins + (under dynamic_lookup) some lib
+symbols unresolved. This likely also explains earlier `CMTimeGetSeconds`/`objc_msgSend_
+stret` crashes (their double/struct handling pulls builtins) — to be re-confirmed once
+builtins are provided.
+
+```c
+// the validated stopgap (avoids recursing into the missing builtin):
+double __floatdidf(long long a){
+    int hi = (int)(a >> 32); unsigned lo = (unsigned)a;
+    return (double)hi * 4294967296.0 + (double)lo;   // (double)int32/uint32 = vcvt, no libcall
+}
+```
+
+PATH FORWARD (engine is otherwise ready — class-free C from a73dc69+rewrite):
+1. Provide compiler-rt builtins. BEST: obtain `libclang_rt.builtins` for armv7-iOS (from
+   an Xcode toolchain or by building compiler-rt) and add to LDFLAGS — gives ALL builtins
+   at once. STOPGAP: a small `mmbuiltins.c` hand-implementing the handful the engine pulls
+   (`__floatdidf`, likely `__floatdisf`/`__divdf3`/`__muldf3`/`__floatundidf`).
+2. Re-validate (control protocol) whether `objc_msgSend_stret`/`CMTimeGetSeconds` then
+   load; if not, prefer the builtin-free manual path (CMTime value/timescale; currentTime
+   from the observer block's CMTime param; duration via the original `o_duration`).
+3. Consider switching off `dynamic_lookup` to two-level namespace once builtins are
+   statically linked (only libSystem C funcs the 9.3-SDK tbd omits need per-symbol `-U`).
+This is a TOOLCHAIN-LINKING fix, NOT a device incompatibility — the route is viable.
+
+## §11-RETEST (TODO, fold into §13 builtins work)
+
+§11 (static ObjC class crashes the load) was proven ONLY under `-Wl,-undefined,dynamic_lookup`
++ no compiler-rt builtins. Now that §13 identifies missing builtins as the float-path cause,
+§11's status is OPEN: it is either (a) a genuine ObjC2 class-metadata ABI mismatch (9.3 SDK
+vs 5.1 runtime at map_images) — classful stays dead regardless of linking; or (b) an
+unresolved class-runtime symbol (`_OBJC_METACLASS_$_NSObject`, `__objc_empty_cache`, …) not
+flat-binding under dynamic_lookup — which proper two-level linking + builtins would fix.
+RE-TEST (one control cycle, after builtins are linked): build "avsmoke + one empty
+`@interface :NSObject`" with two-level namespace + builtins; deploy avsmoke control first,
+respring, then the class build. LOADED => classful is an option for future tweaks; CRASHED
+=> §11 confirmed as a hard metadata-ABI wall and class-free is vindicated. Either way the
+shipping engine stays CLASS-FREE (already written + clean); this only informs future work.
