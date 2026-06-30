@@ -727,3 +727,32 @@ AVPlayerLayer isn't slotted on-screen yet (3.2b). NEXT unchanged: 3.2b layer slo
 (visible video) + neuter original + re-add getter feedback + verify seek/rate + strip
 diagnostics. (NOTE 2026-06-30: server device roster/settings.dat appears clobbered —
 unrelated to the transplant; worth a separate look.)
+
+## §19 — 3.2b slot-in WRITTEN but crashes at LOAD (2026-06-30) — bisect next
+
+Implemented the layer slot-in (mm_slot_in in Tweak.x, called from h_play): get
+FigPluginView = controller(this+8) ivar+0x4, set our AVPlayerLayer.frame via a
+C-constructed CGRect (setFrame: — struct ARG, no stret), `[host addSublayer:vlayer]`.
+Added `#import <QuartzCore/QuartzCore.h>` + `#import <objc/message.h>` to Tweak.x.
+
+THE BUILD CRASHES AT LOAD (pre-%ctor, no ctor log). CONTROLLED isolation on healthy
+rebooted screen15: dylib REMOVED -> Safari launches fine (pid 439/486); dylib PRESENT ->
+Safari down + ctor never logs (crash-loop -> safe-mode). Build is symbol-CLEAN (no stret,
+no sel_registerName/objc_getClass, no unwind, builtins resolved, two-level intact) and its
+undefined-symbol set matches the working tick build. So the load-breaker is in SECTION
+content (added selrefs: superlayer/layer/setFrame:/addSublayer:/respondsToSelector:, the
+QuartzCore header, the mm_slot_in __text) — the same fragile-load family as §11/§14 (this
+old objc/dyld is touchy about Mach-O content even when symbols are fine). Note the slot-in
+code is RUNTIME (h_play) yet crashes at LOAD, so the trigger is the COMPILED FORM, not
+execution → the lever is minimizing the dylib's added section footprint.
+
+BISECT PLAN (next session, against the clean control "dylib-removed-loads"): start from the
+known-loading engine (no slot-in) and add ONE thing per build, load-testing each:
+ (1) just the QuartzCore + objc/message.h imports; (2) + mm_slot_in defined-but-uncalled;
+ (3) + the h_play call. Pinpoint the breaker. Likely fixes: avoid `#import QuartzCore`
+(use `id` for layers + a hand-declared CGRect; QuartzCore stays LINKED for the engine's
+AVPlayerLayer regardless); minimize @selector literals; or move the slot-in into the
+engine .m (MMTransplantEngine.m already imports AVFoundation/QuartzCore + loads fine —
+pass `self`/the FigPluginView pointer to a new engine C function that does the addSublayer,
+so Tweak.x gains no new QuartzCore/selref footprint). The last option is most promising:
+keep Tweak.x minimal, do the layer work where QuartzCore is already cleanly in play.

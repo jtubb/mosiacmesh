@@ -6,6 +6,8 @@
 #import <substrate.h>
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <QuartzCore/QuartzCore.h>   // CALayer + CGRect (for the 3.2b layer slot-in)
+#import <objc/message.h>            // objc_msgSend (slot-in messages FigPluginView/CALayer)
 #import "MMTransplantEngine.h"
 #import <dispatch/dispatch.h>
 #import <stdio.h>
@@ -42,6 +44,33 @@ static bool  (*o_paused)(void*);
 static int   (*o_networkState)(void*);
 static int   (*o_readyState)(void*);
 
+// 3.2b: slot our AVPlayerLayer into the native video view (FigPluginView) so the engine's
+// output is VISIBLE. FigPluginView = controller(this+8) ivar +0x4 (REFINDINGS §9). Add our
+// layer as a sublayer (renders ABOVE the original's placeholder = effectively neutered).
+// Avoids CGRect-RETURN messages (bounds — stret, doesn't bind); CGRect ARG (setFrame:) is
+// fine. Guarded by superlayer!=nil so it runs once. Called from h_play (controller wired
+// by play time). Main-thread (WebCore media calls are main-thread).
+static void mm_slot_in(void *self){
+    MMEngine *e = engineFor(self);
+    if (!e) return;
+    CALayer *vlayer = (__bridge CALayer *)mm_engine_player_layer(e);
+    if (!vlayer) return;
+    id (*msg)(id,SEL) = (id (*)(id,SEL))objc_msgSend;
+    if (msg(vlayer, @selector(superlayer))) return;            // already slotted
+    void *ctrlp = *(void **)((char *)self + 8);                 // FPVMediaPlayerHelper
+    if (!ctrlp || (uintptr_t)ctrlp < 0x1000 || ((uintptr_t)ctrlp & 3)) return;
+    void *fpvp  = *(void **)((char *)ctrlp + 4);                // FigPluginView (+0x4)
+    if (!fpvp  || (uintptr_t)fpvp  < 0x1000 || ((uintptr_t)fpvp  & 3)) return;
+    id fpv = (__bridge id)fpvp;
+    if (![fpv respondsToSelector:@selector(layer)]) return;
+    CALayer *host = msg(fpv, @selector(layer));
+    if (!host) return;
+    CGRect r; r.origin.x = 0; r.origin.y = 0; r.size.width = 1024; r.size.height = 768;
+    ((void (*)(id, SEL, CGRect))objc_msgSend)(vlayer, @selector(setFrame:), r);
+    [host addSublayer:vlayer];
+    mmlog("[mmvideo] slot-in: AVPlayerLayer added to FigPluginView.layer");
+}
+
 static void h_load(void *self, void *strRef){
     mmlog("[mmvideo] h_load: ENTER");
     o_load(self, strRef);                       // let WebCore run its load state machine
@@ -61,7 +90,7 @@ static void h_load(void *self, void *strRef){
 }
 static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_seek -> engine":"[mmvideo] h_seek -> orig"); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
 static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_setRate -> engine":"[mmvideo] h_setRate -> orig"); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
-static void h_play(void *self){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_play -> engine":"[mmvideo] h_play -> orig"); if(e) mm_engine_play(e); else o_play(self); }
+static void h_play(void *self){ MMEngine *e=engineFor(self); mmlog(e?"[mmvideo] h_play -> engine":"[mmvideo] h_play -> orig"); if(e){ mm_engine_play(e); mm_slot_in(self); } else o_play(self); }
 static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
 static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
 static float h_currentTime(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_current_time(e):o_currentTime(self); }
