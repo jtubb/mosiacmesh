@@ -650,3 +650,38 @@ respring to recover): deploy the action-hooks-only build, tap ONCE, confirm `h_l
 ENTER` fires + the `[eng] load:` trace + audio. If so, the getter hooks are confirmed;
 re-add them carefully (try NULL-self guards in h_*; or update engine state and let
 WebCore read it a different way; or hook fewer getters). Then Phase 3.2b slot-in.
+
+## §17 — Playback crash FIXED + engine drives AVPlayer; item stuck Unknown on http (2026-06-30)
+
+PLAYBACK CRASH RESOLVED: the §16 fix (hook only the 6 ACTION methods, leave the const
+getters ORIGINAL; main-queue install) WORKS. On a tap (with the test page setting `src`
+on-tap so `load` fires AFTER hooks), the full transplant path executes with NO crash:
+```
+h_load: ENTER -> o_load done -> url=http://.../full_*.mp4 (gCreateCF extraction CORRECT)
+ -> engine created -> [eng] load: item/player/layer created, observer added — DONE
+h_play -> engine ; h_setRate -> engine   (repeated — WebCore retries; see below)
+```
+So: h_load fires, URL extraction works, AVPlayer/Item/Layer build cleanly, play/setRate
+route into our engine. The earlier first-playback "crash" was the CONST-GETTER hooks
+destabilizing WebCore's pre-load media polling — confirmed fixed by dropping them (§16).
+
+BUT NO OUTPUT (nothing plays): `[eng] play: item.status=0 rate=1.00 err=nil` every time.
+AVPlayerItemStatus stays **0 = Unknown** (never 1=ReadyToPlay, never 2=Failed), no error;
+player rate=1.0 (play took). The item never finishes loading -> nothing decodes. (On
+screen the QuickTime-logo placeholder is the ORIGINAL MPAVController, which loaded via
+o_load but doesn't advance since we route play to the engine.)
+
+LEADING HYPOTHESIS (test next, NO device-cycle guess): the test uses the **http server
+URL**; iOS-5 AVPlayer progressive-HTTP load is exactly the case that stalls at Unknown.
+The transplant is DESIGNED for **local `file://`** (mm_url_to_path rewrites localhost-cache
+URLs -> file://); a LOCAL asset loads to ReadyToPlay near-instantly. NEXT: push a small mp4
+to the device and test with a `file://` URL (the engine's real path) — expect status->1.
+Also: WebCore retries play/setRate because we dropped the state getters, so it never sees
+"playing" — re-add getter feedback AFTER playback works (carefully; they crashed pre-load).
+
+DEVICE DISCIPLINE (reaffirmed, crash-log-confirmed — NOT a vague "throttle"): repeated
+`killall MobileSafari`+`uiopen` cycling triggers crash-induced SIGKILL-at-launch backoff
++ Substrate safe-mode after ~3 cycles per device (crash report = `TASK_DYLD_INFO failed`,
+no frames, no mmvideo in trace). Quiet-waiting helps only partly; a POWER-CYCLE/REBOOT
+fully clears it. Rotate freshly-rebooted devices; batch hypotheses per dylib to spend
+fewer cycles. screen14=.94 screen15=.67 screen16=.63 (all Test Group / cycled this session).

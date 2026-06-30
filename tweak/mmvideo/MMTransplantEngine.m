@@ -98,10 +98,34 @@ void mm_engine_load(MMEngine *e, const char *url) {
                      usingBlock:^(CMTime t){ eng->curTime = mm_secs(t); mm_engine_poll(eng); }];
         e->timeObserver = (__bridge_retained void *)obs;
         EL("[eng] load: observer added — DONE");
+        // DIAGNOSTIC: poll item.status over time on the main queue (the periodic
+        // observer won't fire while not playing). The block retains itemRef (ARC), so
+        // the item stays alive for the probe regardless of engine teardown.
+        AVPlayerItem *itemRef = item;
+        for (int i = 1; i <= 8; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((long long)i * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                id er = [itemRef error];
+                EL([[NSString stringWithFormat:@"[eng] t+%ds item.status=%ld err=%@",
+                     i, (long)[itemRef status], er ? [er localizedDescription] : @"nil"] UTF8String]);
+            });
+        }
     }
 }
 
-void mm_engine_play(MMEngine *e)  { if (e && e->player){ [PL(e) play];  e->playing = 1; } }
+void mm_engine_play(MMEngine *e)  {
+    if (e && e->player){
+        [PL(e) play];  e->playing = 1;
+        static int n = 0;
+        if (n++ < 6) {   // capped: log item status + player rate to see if it's actually decoding
+            long st = (long)[IT(e) status];          // 0=Unknown 1=ReadyToPlay 2=Failed
+            float rate = PL(e).rate;
+            id err = [IT(e) error];
+            EL([[NSString stringWithFormat:@"[eng] play: item.status=%ld rate=%.2f err=%@",
+                 st, rate, err ? NSStringFromClass([err class]) : @"nil"] UTF8String]);
+        }
+    }
+}
 void mm_engine_pause(MMEngine *e) { if (e && e->player){ [PL(e) pause]; e->playing = 0; } }
 int  mm_engine_paused(MMEngine *e){ return e ? !e->playing : 1; }   // tracked flag, no .rate read
 
