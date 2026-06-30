@@ -6,8 +6,6 @@
 #import <substrate.h>
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>
-#import <QuartzCore/QuartzCore.h>   // CALayer + CGRect (for the 3.2b layer slot-in)
-#import <objc/message.h>            // objc_msgSend (slot-in messages FigPluginView/CALayer)
 #import "MMTransplantEngine.h"
 #import <dispatch/dispatch.h>
 #import <stdio.h>
@@ -44,31 +42,18 @@ static bool  (*o_paused)(void*);
 static int   (*o_networkState)(void*);
 static int   (*o_readyState)(void*);
 
-// 3.2b: slot our AVPlayerLayer into the native video view (FigPluginView) so the engine's
-// output is VISIBLE. FigPluginView = controller(this+8) ivar +0x4 (REFINDINGS §9). Add our
-// layer as a sublayer (renders ABOVE the original's placeholder = effectively neutered).
-// Avoids CGRect-RETURN messages (bounds — stret, doesn't bind); CGRect ARG (setFrame:) is
-// fine. Guarded by superlayer!=nil so it runs once. Called from h_play (controller wired
-// by play time). Main-thread (WebCore media calls are main-thread).
+// 3.2b: locate FigPluginView (controller this+8, ivar +0x4 — REFINDINGS §9) and hand the
+// raw pointer to the engine, which does the CALayer work (it already imports QuartzCore +
+// loads fine). Tweak.x stays minimal — NO QuartzCore/CALayer/objc_msgSend/@selector here
+// (adding those to Tweak.x crashed the load — §19). Guard reads with the pointer sanity check.
 static void mm_slot_in(void *self){
     MMEngine *e = engineFor(self);
     if (!e) return;
-    CALayer *vlayer = (__bridge CALayer *)mm_engine_player_layer(e);
-    if (!vlayer) return;
-    id (*msg)(id,SEL) = (id (*)(id,SEL))objc_msgSend;
-    if (msg(vlayer, @selector(superlayer))) return;            // already slotted
     void *ctrlp = *(void **)((char *)self + 8);                 // FPVMediaPlayerHelper
     if (!ctrlp || (uintptr_t)ctrlp < 0x1000 || ((uintptr_t)ctrlp & 3)) return;
     void *fpvp  = *(void **)((char *)ctrlp + 4);                // FigPluginView (+0x4)
     if (!fpvp  || (uintptr_t)fpvp  < 0x1000 || ((uintptr_t)fpvp  & 3)) return;
-    id fpv = (__bridge id)fpvp;
-    if (![fpv respondsToSelector:@selector(layer)]) return;
-    CALayer *host = msg(fpv, @selector(layer));
-    if (!host) return;
-    CGRect r; r.origin.x = 0; r.origin.y = 0; r.size.width = 1024; r.size.height = 768;
-    ((void (*)(id, SEL, CGRect))objc_msgSend)(vlayer, @selector(setFrame:), r);
-    [host addSublayer:vlayer];
-    mmlog("[mmvideo] slot-in: AVPlayerLayer added to FigPluginView.layer");
+    mm_engine_attach_layer(e, fpvp);
 }
 
 static void h_load(void *self, void *strRef){

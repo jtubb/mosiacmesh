@@ -22,6 +22,10 @@ double mm_engine_duration(MMEngine *e);
 int    mm_engine_network_state(MMEngine *e);           // WebCore NetworkState int
 int    mm_engine_ready_state(MMEngine *e);             // WebCore ReadyState int
 void  *mm_engine_player_layer(MMEngine *e);            // AVPlayerLayer* (CALayer*) for Phase-3 slot-in
+void   mm_engine_attach_layer(MMEngine *e, void *figPluginView);  // 3.2b: add our AVPlayerLayer
+                                                       // as a sublayer of FigPluginView.layer (done
+                                                       // in the engine .m where QuartzCore is already
+                                                       // cleanly in play; Tweak.x just passes the ptr)
 void   mm_engine_free(MMEngine *e);
 
 #endif

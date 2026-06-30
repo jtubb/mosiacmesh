@@ -10,6 +10,7 @@
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
+#import <objc/message.h>      // objc_msgSend for the dynamic FigPluginView.layer call (3.2b)
 #import <substrate.h>
 
 typedef void (*MMVoidFn)(void *);
@@ -24,6 +25,7 @@ struct MMEngine {
     int net, ready;
     double curTime;    // cached from the observer block (avoids stret [player currentTime])
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
+    int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
 };
 
 static inline AVPlayer     *PL(MMEngine *e){ return (__bridge AVPlayer     *)e->player; }
@@ -161,6 +163,22 @@ double mm_engine_duration(MMEngine *e) {
 int   mm_engine_network_state(MMEngine *e) { return e ? e->net : 0; }
 int   mm_engine_ready_state(MMEngine *e)   { return e ? e->ready : 0; }
 void *mm_engine_player_layer(MMEngine *e)  { return e ? e->layer : NULL; }   // AVPlayerLayer* (CALayer*)
+
+// 3.2b: add our AVPlayerLayer as a sublayer of FigPluginView.layer (renders ABOVE the
+// original's placeholder => effectively neutered). Done HERE (engine .m already imports
+// AVFoundation/QuartzCore + loads fine) so Tweak.x stays minimal. CGRect ARG via setter
+// is fine (no stret); the layer is sized full-screen for bring-up. Once-only via `slotted`.
+void mm_engine_attach_layer(MMEngine *e, void *fpvp) {
+    if (!e || !e->layer || e->slotted || !fpvp) return;
+    AVPlayerLayer *vlayer = (__bridge AVPlayerLayer *)e->layer;
+    id fpv = (__bridge id)fpvp;                       // FigPluginView (UIView subclass)
+    CALayer *host = ((id (*)(id, SEL))objc_msgSend)(fpv, @selector(layer));
+    if (!host) return;
+    vlayer.frame = (CGRect){ {0, 0}, {1024, 768} };   // full-screen (iPad-1) for bring-up
+    [host addSublayer:vlayer];
+    e->slotted = 1;
+    EL("[eng] attach_layer: AVPlayerLayer added to FigPluginView.layer");
+}
 
 void mm_engine_free(MMEngine *e) {
     if (!e) return;

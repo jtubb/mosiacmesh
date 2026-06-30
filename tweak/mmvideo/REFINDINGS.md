@@ -756,3 +756,35 @@ engine .m (MMTransplantEngine.m already imports AVFoundation/QuartzCore + loads 
 pass `self`/the FigPluginView pointer to a new engine C function that does the addSublayer,
 so Tweak.x gains no new QuartzCore/selref footprint). The last option is most promising:
 keep Tweak.x minimal, do the layer work where QuartzCore is already cleanly in play.
+
+## §20 — 3.2b DONE: VISIBLE AVPlayer video on iPad-1 (2026-06-30, screen15)
+
+Moving the slot-in into the engine .m (mm_engine_attach_layer; Tweak.x just reads the
+FigPluginView pointer and passes it) FIXED the §19 load crash — so the breaker WAS
+Tweak.x-specific (QuartzCore import / CALayer code in the Logos .x file); the engine .m
+already imports QuartzCore via AVFoundation and loads fine. On-device (rebooted screen15):
+```
+h_load → engine → [eng] load DONE → t+1s status=1
+[eng] attach_layer: AVPlayerLayer added to FigPluginView.layer
+TICK 0.03→0.06→0.34→0.60→0.84   (playhead advancing)
+```
+**USER CONFIRMED: video VISIBLE on screen.** End-to-end transplant working: local file ->
+AVPlayer decode -> AVPlayerLayer slotted into FigPluginView -> rendered on the iPad-1
+display. The whole project goal (AVFoundation-backed web video for frame-accurate seek +
+variable rate) is now visibly real.
+
+KEY FIX RECORDED: do CALayer/QuartzCore + objc_msgSend work in MMTransplantEngine.m (.m,
+already imports AVFoundation/QuartzCore), NOT in the Logos Tweak.x — adding QuartzCore.h +
+CALayer code to the .x crashed the dylib load (§19). Keep Tweak.x to pointer reads + engine
+C-API calls.
+
+REMAINING (polish/parity, all ordinary):
+1. Re-add getter feedback (networkState/readyState/currentTime/duration/paused) — WebCore
+   currently retries play/setRate forever + <video>.currentTime/duration are the original's.
+   Install AFTER first load to dodge the §16 pre-load-polling crash (or guard self).
+2. Verify frame-accurate SEEK (zero-tolerance) + variable RATE (the payoff) on-device.
+3. Proper neuter of the original (currently our layer renders on top = good enough; the
+   original still loaded via o_load — stop it cleanly to save resources).
+4. Frame sizing: hardcoded 1024×768; size to the actual FigPluginView bounds (avoid the
+   stret `bounds` getter — read via a non-stret path or pass the rect from WebCore).
+5. Strip the temporary diagnostics (TICK/status logs).
