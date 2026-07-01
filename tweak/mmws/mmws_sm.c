@@ -1,6 +1,7 @@
 /* mmws_sm.c — RFC-6455 client connection state machine. Pure; host-tested by mmws_sm_test.c. */
 #include "mmws_sm.h"
 #include <string.h>
+#include <stdio.h>
 
 static void emit_error(mmws_sm *sm, const char *msg) {
     sm->state = MMWS_ERR;
@@ -33,7 +34,13 @@ int mmws_sm_on_recv(mmws_sm *sm, const uint8_t *bytes, size_t len) {
     if (!sm) return -1;
     if (sm->state == MMWS_CLOSED || sm->state == MMWS_ERR) return -1;
     if (len) {
-        if (sm->rxn + len > MMWS_RXCAP) { emit_error(sm, "rx overflow"); return -1; }
+        if (sm->rxn + len > MMWS_RXCAP) {
+            static char ov[80];
+            snprintf(ov, sizeof ov, "rx overflow rxn=%u len=%u cap=%u",
+                     (unsigned)sm->rxn, (unsigned)len, (unsigned)MMWS_RXCAP);
+            emit_error(sm, ov);
+            return -1;
+        }
         memcpy(sm->rx + sm->rxn, bytes, len);
         sm->rxn += len;
     }

@@ -24,7 +24,7 @@ static id        g_webview;   /* the UIWebView, retained, for native->JS dispatc
 
 /* diagnostic log — OFF in production (bridge verified working 2026-07-01). To debug, set
  * MMWS_DEBUG 1 and re-add mmlog(...) calls; writes to /var/mobile/mmws.log (webclip-writable). */
-#define MMWS_DEBUG 0
+#define MMWS_DEBUG 1   /* drop-cause hunt: logs OPEN/CLOSE/ERROR to /var/mobile/mmws.log */
 static void mmlog(const char *fmt, ...) {
     if (!MMWS_DEBUG) return;
     static const char *paths[2] = { "/var/mobile/mmws.log", "/tmp/mmws.log" };
@@ -39,11 +39,21 @@ static id nsstr(const char *s) {
     return ((id (*)(id, SEL, const char *))objc_msgSend)(
         (id)objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s);
 }
-static void eval_on_webview(const char *js) {
-    if (!g_webview || !js) return;
-    id s = nsstr(js);
-    if (s) ((id (*)(id, SEL, id))objc_msgSend)(
-        g_webview, sel_registerName("stringByEvaluatingJavaScriptFromString:"), s);
+
+/* Runs the built JS string on the webview, then frees it. MUST run OFF the CFStream read
+ * callback (via dispatch_async_f to the main queue) — evaluating JS synchronously from inside
+ * the socket callback re-enters WebKit's JS engine mid-network-service and tears down the
+ * process with no clean error. Main-queue FIFO preserves message order. */
+static void eval_and_free(void *ctx) {
+    char *js = (char *)ctx;
+    if (js) {
+        if (g_webview) {
+            id s = nsstr(js);
+            if (s) ((id (*)(id, SEL, id))objc_msgSend)(
+                g_webview, sel_registerName("stringByEvaluatingJavaScriptFromString:"), s);
+        }
+        free(js);
+    }
 }
 
 /* escape src[0..n) into a single-quoted JS string body.
@@ -80,23 +90,28 @@ static void dispatch_js(int sid, const char *type, const uint8_t *data, size_t n
         o = (size_t)snprintf(buf, cap, "if(window.__mmwsDispatch)__mmwsDispatch(%d,'%s')", sid, type);
     }
     (void)o;
-    eval_on_webview(buf);
-    free(buf);
+    /* defer to the main queue — never eval JS synchronously from the CFStream callback */
+    dispatch_async_f(dispatch_get_main_queue(), buf, eval_and_free);
 }
 
 /* ---- mmwsconn callbacks (ud carries the JS socket id) ------------------------------------- */
-static void cb_open (MMWSConn *c, void *ud) { (void)c; dispatch_js((int)(intptr_t)ud, "open", NULL, 0, 0, 0); }
+static void cb_open (MMWSConn *c, void *ud) {
+    (void)c; mmlog("[mmws] OPEN sid=%d\n", (int)(intptr_t)ud);
+    dispatch_js((int)(intptr_t)ud, "open", NULL, 0, 0, 0);
+}
 static void cb_msg  (MMWSConn *c, uint8_t op, const uint8_t *d, size_t n, void *ud) {
     (void)c; (void)op; dispatch_js((int)(intptr_t)ud, "message", d, n, 0, 0);
 }
 static void cb_close(MMWSConn *c, uint16_t code, void *ud) {
     int sid = (int)(intptr_t)ud;
+    mmlog("[mmws] CLOSE sid=%d code=%d\n", sid, code);
     dispatch_js(sid, "close", NULL, 0, code, 1);
     if (sid >= 0 && sid < MMWS_MAXID) g_conns[sid] = NULL;
     dispatch_async_f(dispatch_get_main_queue(), c, (dispatch_function_t)mmwsconn_free);  /* defer free */
 }
 static void cb_error(MMWSConn *c, const char *msg, void *ud) {
     int sid = (int)(intptr_t)ud;
+    mmlog("[mmws] ERROR sid=%d msg=%s\n", sid, msg ? msg : "?");
     dispatch_js(sid, "error", (const uint8_t *)(msg ? msg : "error"), msg ? strlen(msg) : 5, 0, 0);
     if (sid >= 0 && sid < MMWS_MAXID) g_conns[sid] = NULL;
     dispatch_async_f(dispatch_get_main_queue(), c, (dispatch_function_t)mmwsconn_free);
@@ -164,6 +179,7 @@ static void handle_mmws(const char *url) {
     } else if (strcmp(op, "close") == 0) {
         if (!g_conns[sid]) return;
         int code = 1000; const char *cc = strstr(query, "c="); if (cc) code = atoi(cc + 2);
+        mmlog("[mmws] JS-close sid=%d code=%d (SockJS closed the ws)\n", sid, code);
         mmwsconn_close(g_conns[sid], (uint16_t)code);
     }
 }
