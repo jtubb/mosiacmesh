@@ -56,6 +56,33 @@ Questions to answer:
    `[webview stringByEvaluatingJavaScriptFromString: @"__mmwsDispatch(id,'message', <json-escaped>)"]`.
    Escape payloads for JS-string safety.
 
+## §3 CONFIRMED ON THE LIVE WEBCLIP (2026-07-01, observe-only probe `tweak/mmwsprobe/`)
+
+Probe hooks ALL classes declaring the two selectors (runtime scan) + logs firing, tagged by
+bundle id. Results from **com.apple.webapp / Web.app (pid 256)** — the authoritative webclip:
+
+- **INTERCEPTION hook = `-[WebAppController webView:shouldStartLoadWithRequest:navigationType:]`**
+  FIRED: `self=WebAppController nav=5 url=http://192.168.1.60:3000/?tdbg` (the client page load).
+  So `mmws://` navigations from JS will land here → intercept (return NO) + drive mmwsconn.
+  The `webView` arg is the UIWebView → use it for native->JS `stringByEvaluatingJavaScriptFromString:`.
+- **INJECTION hook = `-[UIWebViewWebViewDelegate webView:didClearWindowObject:forFrame:]`**
+  FIRED first (before `-[UIWebView …]` and before page JS). The 2nd arg (windowObject) is the
+  page's `WebScriptObject` → inject with `[windowObject evaluateWebScript:@MMWS_JS]` (no UIWebView
+  ref needed for injection). Webclip declarers: WebDefaultFrameLoadDelegate, UIWebView,
+  UIWebViewWebViewDelegate. FIRING order: UIWebViewWebViewDelegate, then UIWebView.
+- **native->JS** = `-[UIWebView stringByEvaluatingJavaScriptFromString:]` on the webView from the
+  shouldStartLoad hook (cache it), OR re-eval on the cached windowObject.
+
+CONTRAST — Safari (com.apple.mobilesafari, pid 236): injection fires on `TabDocument` (a WebUI
+class ABSENT in the webclip) and it does NOT use shouldStartLoadWithRequest at all (drives the
+private WebView + WebPolicyDelegate). So Safari data is NOT transferable for these hooks — the
+webclip's WebAppController + UIWebViewWebViewDelegate are authoritative. (Probe is harmless/
+observe-only; remove `tweak/mmwsprobe/` dylib from the device when the real bridge ships.)
+
+Net: the bridge tweak hooks WebAppController.shouldStartLoad (mmws:// intercept) +
+UIWebViewWebViewDelegate.didClearWindowObject (inject mmws.js via evaluateWebScript) + caches the
+UIWebView for stringByEvaluatingJavaScriptFromString dispatch. All three confirmed reachable.
+
 ## §2 OPEN ITEMS
 - Confirm the exact class owning each selector (hook target): `WebAppController` for
   shouldStartLoad; the frameLoadDelegate class for didClearWindowObject. (class-dump the

@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmwsprobe
+Name: mmwsprobe
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh Layer-3 bridge RE probe (observe-only) for the webclip
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate
