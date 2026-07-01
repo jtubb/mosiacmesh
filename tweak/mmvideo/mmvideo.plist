@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict><key>Filter</key><dict><key>Bundles</key><array>
   <string>com.apple.mobilesafari</string>
-  <string>com.apple.WebApp</string>
+  <string>com.apple.webapp</string>
 </array></dict></dict>
 </plist>

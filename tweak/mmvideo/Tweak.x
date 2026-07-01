@@ -178,6 +178,13 @@ static void mm_install(void){
     mmlog("[mmvideo] hooks installed");   // single load heartbeat (deploy verification)
 }
 
+// NOTE: a WebSocket-enable experiment lived here (force RuntimeEnabledFeatures::webSocketEnabled
+// / WebSocket::isAvailable true). REMOVED — iOS-5.1's built-in WebSocket is the disabled/broken
+// Hixie-76-era impl that does NOT interoperate with the RFC-6455 aiohttp server, so forcing it on
+// just makes SockJS commit to websocket and fail ("cannot connect") in BOTH Safari and the
+// webclip. The whole iOS-5.1 fleet correctly runs SockJS over XHR; enabling ws is a dead end
+// (only a native RFC-6455 transplant behind window.WebSocket would work — not worth it).
+
 %ctor {
     // Deferred install (off the launch path), but on the MAIN queue — NOT a background
     // queue. The previous background-queue install raced WebCore: MSHookFunction was
