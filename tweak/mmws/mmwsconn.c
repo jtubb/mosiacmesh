@@ -9,6 +9,16 @@
 
 #define MMWSCONN_TXCAP 32768
 
+/* breadcrumb into the same file as Tweak.x's bc() — locate a stall in the CFStream callbacks */
+#ifdef MMWSCONN_BC
+static void cbc(const char *s, long n) {
+    FILE *f = fopen("/var/mobile/mmws_bc.txt", "a");
+    if (f) { fprintf(f, "%s %ld\n", s, n); fclose(f); }
+}
+#else
+#define cbc(s, n) ((void)0)
+#endif
+
 struct MMWSConn {
     CFReadStreamRef  rs;
     CFWriteStreamRef ws;
@@ -39,7 +49,7 @@ static void conn_flush(MMWSConn *c) {
     while (c->tx_off < c->tx_len && c->w_ready && !c->dead) {
         CFIndex w = CFWriteStreamWrite(c->ws, c->tx + c->tx_off, (CFIndex)(c->tx_len - c->tx_off));
         if (w > 0) c->tx_off += (size_t)w;
-        else { c->w_ready = 0; break; }          /* would block, or error surfaces via callback */
+        else { c->w_ready = 0; cbc("Wblock", (long)(c->tx_len - c->tx_off)); break; }  /* would block */
     }
     if (c->tx_off >= c->tx_len) c->tx_off = c->tx_len = 0;
 }
@@ -91,22 +101,26 @@ static void read_cb(CFReadStreamRef s, CFStreamEventType ev, void *info) {
     if (ev == kCFStreamEventHasBytesAvailable) {
         uint8_t buf[4096];
         CFIndex n = CFReadStreamRead(s, buf, (CFIndex)sizeof buf);
+        cbc("R", (long)n);
         if (n > 0) mmws_sm_on_recv(&c->sm, buf, (size_t)n);
         else if (n < 0) { if (c->cb.on_error) c->cb.on_error(c, "read error", c->cb.ud); conn_teardown(c); }
     } else if (ev == kCFStreamEventErrorOccurred) {
+        cbc("Rerr", 0);
         if (c->cb.on_error) c->cb.on_error(c, "read stream error", c->cb.ud); conn_teardown(c);
     } else if (ev == kCFStreamEventEndEncountered) {
+        cbc("Reof", 0);
         if (c->cb.on_close) c->cb.on_close(c, 1006, c->cb.ud); conn_teardown(c);
-    }
+    } else { cbc("Rev", (long)ev); }
 }
 
 static void write_cb(CFWriteStreamRef s, CFStreamEventType ev, void *info) {
     (void)s;
     MMWSConn *c = (MMWSConn *)info;
     if (c->dead) return;
-    if (ev == kCFStreamEventCanAcceptBytes) { c->w_ready = 1; conn_flush(c); }
-    else if (ev == kCFStreamEventOpenCompleted) { /* connected — handshake is queued, flush on CanAccept */ }
+    if (ev == kCFStreamEventCanAcceptBytes) { cbc("Wok", (long)(c->tx_len - c->tx_off)); c->w_ready = 1; conn_flush(c); }
+    else if (ev == kCFStreamEventOpenCompleted) { cbc("Wopen", 0); }
     else if (ev == kCFStreamEventErrorOccurred) {
+        cbc("Werr", 0);
         if (c->cb.on_error) c->cb.on_error(c, "write stream error", c->cb.ud); conn_teardown(c);
     }
 }

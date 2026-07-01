@@ -22,9 +22,10 @@
 static MMWSConn *g_conns[MMWS_MAXID];
 static id        g_webview;   /* the UIWebView, retained, for native->JS dispatch */
 
-/* diagnostic log — OFF in production (bridge verified working 2026-07-01). To debug, set
- * MMWS_DEBUG 1 and re-add mmlog(...) calls; writes to /var/mobile/mmws.log (webclip-writable). */
-#define MMWS_DEBUG 1   /* drop-cause hunt: logs OPEN/CLOSE/ERROR to /var/mobile/mmws.log */
+/* diagnostic log — OFF in production. MMWS_DEBUG=1 logs OPEN/CLOSE/ERROR events to
+ * /var/mobile/mmws.log AND per-step breadcrumbs to /var/mobile/mmws_bc.txt (bc). The LAST
+ * breadcrumb before a silent crash names the operation that killed the process. */
+#define MMWS_DEBUG 1
 static void mmlog(const char *fmt, ...) {
     if (!MMWS_DEBUG) return;
     static const char *paths[2] = { "/var/mobile/mmws.log", "/tmp/mmws.log" };
@@ -32,6 +33,12 @@ static void mmlog(const char *fmt, ...) {
         FILE *f = fopen(paths[i], "a");
         if (f) { va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap); fclose(f); }
     }
+}
+/* breadcrumb: append step+aux; read the tail after a crash to see the last op reached */
+static void bc(const char *step, unsigned aux) {
+    if (!MMWS_DEBUG) return;
+    FILE *f = fopen("/var/mobile/mmws_bc.txt", "a");
+    if (f) { fprintf(f, "%s %u\n", step, aux); fclose(f); }
 }
 
 /* ---- native -> JS (main thread; run-loop callbacks already are) --------------------------- */
@@ -49,8 +56,10 @@ static void eval_and_free(void *ctx) {
     if (js) {
         if (g_webview) {
             id s = nsstr(js);
+            bc("evalPre", (unsigned)(s ? 1 : 0));
             if (s) ((id (*)(id, SEL, id))objc_msgSend)(
                 g_webview, sel_registerName("stringByEvaluatingJavaScriptFromString:"), s);
+            bc("evalPost", 0);
         }
         free(js);
     }
@@ -100,7 +109,7 @@ static void cb_open (MMWSConn *c, void *ud) {
     dispatch_js((int)(intptr_t)ud, "open", NULL, 0, 0, 0);
 }
 static void cb_msg  (MMWSConn *c, uint8_t op, const uint8_t *d, size_t n, void *ud) {
-    (void)c; (void)op; dispatch_js((int)(intptr_t)ud, "message", d, n, 0, 0);
+    (void)c; (void)op; bc("msg", (unsigned)n); dispatch_js((int)(intptr_t)ud, "message", d, n, 0, 0);
 }
 static void cb_close(MMWSConn *c, uint16_t code, void *ud) {
     int sid = (int)(intptr_t)ud;
@@ -165,8 +174,10 @@ static void handle_mmws(const char *url) {
         mmwsconn_cb cb;
         cb.on_open = cb_open; cb.on_message = cb_msg; cb.on_close = cb_close; cb.on_error = cb_error;
         cb.ud = (void *)(intptr_t)sid;
+        bc("openPre", (unsigned)sid);
         MMWSConn *c = mmwsconn_open(host, port, path, &cb);
         g_conns[sid] = c;
+        bc("openPost", (unsigned)(c ? 1 : 0));
         if (!c) dispatch_js(sid, "error", (const uint8_t *)"open failed", 11, 0, 0);
     } else if (strcmp(op, "send") == 0) {
         if (!g_conns[sid]) return;
@@ -174,7 +185,9 @@ static void handle_mmws(const char *url) {
         if (d) { d += 2; const char *e = strchr(d, '&'); size_t len = e ? (size_t)(e - d) : strlen(d);
                  char *buf = (char *)malloc(len + 1); if (!buf) return;
                  size_t dn = pct_decode(d, len, buf, len + 1);
+                 bc("sendPre", (unsigned)dn);
                  mmwsconn_send_text(g_conns[sid], (const uint8_t *)buf, dn);
+                 bc("sendPost", 0);
                  free(buf); }
     } else if (strcmp(op, "close") == 0) {
         if (!g_conns[sid]) return;

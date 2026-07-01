@@ -11,11 +11,17 @@
         var q = '';
         for (var k in args) if (args.hasOwnProperty(k)) q += (q ? '&' : '') + k + '=' + encodeURIComponent(args[k]);
         var u = 'mmws://' + op + '/' + id + (q ? ('?' + q) : '');
-        var f = document.createElement('iframe');
-        f.style.display = 'none';
-        f.src = u;
-        (document.documentElement || document.body).appendChild(f);
-        setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 0);
+        // Defer the iframe navigation to a FRESH JS turn. Never navigate synchronously inside a
+        // __mmwsDispatch eval: shouldStartLoad needs the main thread, but the main thread is
+        // blocked in stringByEvaluatingJavaScriptFromString waiting on the web thread -> deadlock
+        // (hang, no crash). setTimeout(0) lets the eval return first, main thread free. See REFINDINGS.
+        setTimeout(function () {
+            var f = document.createElement('iframe');
+            f.style.display = 'none';
+            f.src = u;
+            (document.documentElement || document.body).appendChild(f);
+            setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 0);
+        }, 0);
     }
     w.__mmwsNative = {
         open:  function (id, url)  { nav('open',  id, { url: url }); },

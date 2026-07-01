@@ -91,3 +91,60 @@ UIWebView for stringByEvaluatingJavaScriptFromString dispatch. All three confirm
   different JS->native channel (e.g. XHR to a `mmws://` host the tweak answers). SockJS control
   msgs are small, so start simple.
 - Verify end-to-end on-device: access log flips device IP from `xhr_send` to `.../websocket`.
+
+## §4 STABILITY DEBUGGING (2026-07-01) — bridge connects but is NOT yet production-stable
+
+The bridge does a real `101` upgrade and carries traffic, but does not HOLD. Three distinct
+bugs found by breadcrumb-instrumenting the message/socket path (Tweak.x `bc()` +
+mmwsconn.c `cbc()` behind `-DMMWSCONN_BC`; breadcrumbs to `/var/mobile/mmws_bc.txt`,
+events to `/var/mobile/mmws.log`). Two FIXED, one OPEN:
+
+1. **CRASH (FIXED, commit 273e5ac).** `dispatch_js` called `stringByEvaluatingJavaScriptFromString:`
+   SYNCHRONOUSLY from inside the CFStream read callback → re-entered WebKit's JS engine
+   mid-network-service → process torn down inside WebKit (NO crash report, NO socket error;
+   only dies under message traffic, so a 1-min check passes). FIX: `dispatch_js` builds the JS
+   and hands it to `eval_and_free` via `dispatch_async_f(main_queue,…)` — eval on a clean
+   main-loop turn. Signature: breadcrumbs balanced afterward, Web.app stays alive.
+2. **DEADLOCK/HANG (FIXED, bridge-shim.js).** After #1, the eval ran on the main thread but the
+   bridge-shim navigated the send-iframe SYNCHRONOUSLY inside the eval (proven by nesting
+   `evalPre→sendPre→sendPost→evalPost`). A received msg → eval (main thread) → `ws.send` →
+   iframe `mmws://` → `shouldStartLoad` needs the main thread → but main is blocked in the eval
+   waiting on the web thread → HANG (breadcrumb `evalPre` with NO `evalPost`, Web.app alive,
+   run loop frozen, client stalls, "video won't start"). FIX: `bridge-shim.js` `nav()` wraps the
+   iframe creation in `setTimeout(0)` — the send fires on a fresh JS turn, eval returns first,
+   main thread free. Signature: video now plays FULLY THROUGH.
+3. **RELOAD-AT-LOOP (OPEN — the remaining bug).** At the playlist/video loop the client
+   PAGE-RELOADS (confirmed: a `'boot'` CLIENTLOG tag at the reconnect; NO server `RELOAD`
+   broadcast → it's a client SELF-reload, almost certainly its global uncaught-error handler
+   tripping on something the bridge does during the loop's PLAY/PREPARE burst). The reload
+   tears down the WS with no clean close (balanced breadcrumbs, `OPEN` increments, `CLOSE=0`
+   `ERROR=0`), and the fresh page's WS re-attempt is SLOW (~2-3 min) → SockJS falls back to XHR
+   in between. Continuity: repeated multi-minute gaps, reconnect every ~loop-period.
+   NEXT STEPS: (a) breadcrumb `didClearWindowObject` (page-load) to timestamp the reload vs the
+   burst; (b) find the JS error — inspect the client's uncaught-error/self-reload handler
+   (`index.html` ~line 348) + wrap the polyfill/bridge-shim in try/catch, log the error;
+   (c) figure out why the POST-RELOAD ws re-handshake is slow (orphaned old MMWSConn? the new
+   page's `mmws://open` reuses sid=1 and overwrites `g_conns[1]`, leaking the old socket —
+   clean up the old conn on a new open, and/or on didClearWindowObject free all g_conns).
+
+### Verification method (use this, not mmws.log OPEN/CLOSE — those mislead)
+- `python tools/_ws_continuity.py <client_id> --last-min N` — CLIENTLOG cadence continuity. A
+  connected client emits clock-sync every ~30s; any gap > ~75s = it disconnected. This is the
+  HONEST stability metric. (mmws.log OPEN=1/CLOSE=0 can mean "held" OR "opened once then died
+  silently"; access-log silence can mean "held ws" OR "offline" — both ambiguous. Cadence is not.)
+  Bar for "stable": 15+ min, zero gaps, under live playlist traffic.
+- `python tools/_ws_timing_profile.py --last-min 12` — per-device clock-sync metrics
+  (prec/phStd/sPrec) labeled by actual transport from the access log.
+
+### Baseline timing already captured (for the eventual before/after)
+- BEFORE (fleet on XHR, 24 devices, `_ws_before.txt`): prec≈22, phStd≈130, **sPrec≈50**.
+- WS signal (screen15 when connected): **sPrec≈24-32** — ~½ the XHR sPrec (sPrec = server-time
+  round-trip precision, the transport-bound metric). Promising but not a clean measurement until
+  the bridge holds.
+
+### State to resume from
+- Current on-device build = MMWS_DEBUG=1 + breadcrumbs (both fixes in). screen15 has it; it
+  plays but reloads/disconnects at each loop. XHR is the stable fleet default; NOTHING rolled out.
+- DO NOT fleet-onboard the bridge until #3 is fixed and a 15-min continuity soak is clean.
+  `tools/mmws.dylib` (onboarding artifact) is a WIP debug build — rebuild clean (MMWS_DEBUG=0,
+  drop -DMMWSCONN_BC) before any rollout.
