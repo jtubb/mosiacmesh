@@ -237,3 +237,56 @@ sub-problem (probe the static-bool data symbol next, or patch the DOM-binding fe
 3. Wire mmwsconn callbacks → WebSocket::didConnect / didReceiveMessage(fromUTF8(...)) on the captured
    this. Reuse the host-tested mmws.c/mmws_sm.c/mmwsconn.c (already proven).
 4. Soak in Safari with tools/_ws_continuity.py (15+ min, zero gaps) before porting to the webclip.
+
+### §6.1 THE GATE IS THE BLOCKER — no symbol/ObjC switch exists (2026-07-01, iter3+iter4)
+Confirmed `window.WebSocket` is ABSENT in Safari (its SockJS = 786 xhr_send / 0 websocket, live).
+Every enable path checked resolves to nothing:
+- `RuntimeEnabledFeatures::webSocketEnabled()` / `isWebSocketEnabled` (static bool, corrected 18-char
+  mangling) / `s_isWebSocketEnabled` / `RuntimeEnabledFeatures::shared` — NONE found (inlined).
+- `WebCore::Settings::{setWebSocketEnabled,setWebSocketsEnabled,webSocketEnabled}` — NONE found.
+- ObjC `WebPreferences` EXISTS but has NO `setWebSocketsEnabled:`/`setWebSocketEnabled:`/etc. selector;
+  `WebView` has no enable method. `jsDOMWindowWebSocketConstructor` getter is internal-linkage (L
+  symbol) ⇒ MSFindSymbol can't reach it.
+Conclusion: Apple hard-gated WebSocket off in 534.46 with no runtime switch. So exposing the ctor
+needs machine-code work.
+
+### §6.2 GATE-SOLVING PLAN (chosen: push C) — disassembly to find + flip the inlined flag
+MSFindSymbol only reaches EXPORTED symbols; the flag + the binding getter are inlined/internal, so
+the plan is offline disassembly of WebCore:
+1. Extract WebCore from the device dyld shared cache (`/System/Library/Caches/com.apple.dyld/
+   dyld_shared_cache_armv7`) — dsc_extractor / a decache tool — to get a disassemblable WebCore.
+2. Find the DOM-binding WebSocket constructor getter (search for the "WebSocket" property string +
+   the JSDOMWindow property table, or xrefs) and read the `LDR` of the inlined
+   `RuntimeEnabledFeatures` webSocket bool → its address (as an offset from WebCore's base).
+3. At %ctor: `MSGetImageByName`/`_dyld_get_image` WebCore base + that offset → write 1 (true) EARLY
+   (before pages build their window) to expose the ctor. (Or, fallback: find + NOP the feature-check
+   branch in the binding getter.)
+4. Then the §6 transplant hooks (connect/send/close → mmwsconn; didConnect/didReceiveMessage back).
+Anchors I DO have (exported, for xref/orientation while disassembling): `WebSocket::connect`
+`__ZN7WebCore9WebSocket7connectERKN3WTF6StringERi`, `WebSocketChannel::connect` `…16WebSocketChannel7connectEv`.
+Note the whole point: once the flag is flipped, the exposed WebSocket still uses the OLD broken
+protocol — so the backend transplant (hook connect/send → mmwsconn RFC-6455) is still required.
+
+### §6.3 BREAKTHROUGH — WebCore symbol table extracted; gate getter located (2026-07-01)
+Pulled the 199MB `dyld_shared_cache_armv7` (clean; scp -O with a long timeout — dd-append corrupts,
+don't). Wrote `tools/_dsc_extract.py` (v1 dyld cache reader: find image, dump LC_SYMTAB, hexdump a
+vmaddr). WebCore has its FULL LOCAL symbol table (57,499 syms) — a goldmine; every binding/JSC
+function is now nameable (no more mangling guesses). Key finds:
+- `jsDOMWindowWebSocketConstructor(ExecState*, JSValue, const Identifier&)` @ **0x375a367c** — the
+  gate getter. It's mangled with **`Identifier`** (`…RKNS0_10IdentifierE`), NOT `PropertyName` —
+  THAT's why the runtime MSFindSymbol probe missed it. It IS external (t=0x1e) ⇒ hookable at runtime.
+- `getDOMConstructor<JSWebSocketConstructor>(ExecState*, JSDOMGlobalObject*)` @ 0x375af5ec — returns
+  the ctor. `setJSDOMWindowWebSocketConstructor` @ 0x37591b10. `JSDOMWindow::webSocket(ExecState*)`
+  @ 0x375aef34. Plus all JSWebSocket* bindings.
+- Disassembled 0x375a367c (llvm-mc, thumbv7): prologue + identifier compare + getDOMConstructor
+  path — NO obvious `RuntimeEnabledFeatures` flag LDR at the top. HYPOTHESIS: the WebSocket property
+  may be conditionally ADDED to the JSDOMWindow property hash table based on the flag (so when
+  disabled the getter is never reached), i.e. the gate is in the table setup / getOwnPropertySlot,
+  not this getter. NEEDS careful analysis next session (with WebKit-534 source for the JSDOMWindow
+  binding + struct offsets) OR just runtime-hook the getter to force it + also ensure the property
+  is enumerable.
+NEXT SESSION (well-scoped, mostly host-side): (1) re-pull cache (~4min) + `_dsc_extract.py`;
+(2) determine the exact gate mechanism (analyze JSDOMWindowTable / getOwnPropertySlot near the
+WebSocket entry; find the flag LDR); (3) flip it (or hook the getter/table); verify `typeof
+WebSocket` != undefined in Safari; (4) then the §6 backend transplant (hook WebSocket::connect/
+send/close → mmwsconn, deliver via didConnect/didReceiveMessage). Cache is scratchpad-temporary.
