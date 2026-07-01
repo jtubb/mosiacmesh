@@ -186,3 +186,54 @@ TOOL FIX (committed): `tools/_ws_continuity.py` now flags LEADING + TRAILING sil
 now). It previously only measured gaps BETWEEN samples, so a hung client that stopped emitting read
 as "STABLE" — this produced two false "it's stable" calls this session. Always check "silent since
 last sample" is < threshold.
+
+## §6 APPROACH C — WebCore WebSocket-backend transplant (chosen 2026-07-01; RE started)
+
+Decision: abandon the URL-scheme JS bridge (fundamentally deadlock-prone, §5). Instead transplant
+WebCore's WebSocket network backend so the REAL `window.WebSocket` runs on our host-tested
+`mmwsconn` RFC-6455 socket — no eval, no iframe, no main↔web crossing → the deadlock class cannot
+exist. WebCore-level ⇒ identical in Safari + webclip. Test in Safari (readable /tmp logs). Symbol
+discovery via `tweak/mmwscprobe/` (MSFindSymbol probe, mmvideo method).
+
+### Symbol map (Safari, iOS-5.1 WebKit 534.46, 2026-07-01) — `mmwscprobe`
+CLASSES PRESENT (vtable FOUND): `WebCore::WebSocket`, `WebCore::WebSocketChannel`,
+`WebCore::SocketStreamHandle`. (ThreadableWebSocketChannel / WebSocketHandshake / WebSocketChannelClient
+/ SocketStreamHandleCFNet vtables NOT found — non-polymorphic or differently named.)
+HOOKABLE METHODS (FOUND):
+- `WebSocket::connect(WTF::String const&, int&)` = `__ZN7WebCore9WebSocket7connectERKN3WTF6StringERi`
+- `WebSocket::send(WTF::String const&, int&)`    = `__ZN7WebCore9WebSocket4sendERKN3WTF6StringERi`
+- `WebSocketChannel::connect()`                  = `__ZN7WebCore16WebSocketChannel7connectEv`
+- `WebSocketChannel::send(WTF::String const&)`   = `__ZN7WebCore16WebSocketChannel4sendERKN3WTF6StringE`
+- `WebSocketChannel::close()`                    = `__ZN7WebCore16WebSocketChannel5closeEv`
+GATE (expose window.WebSocket) — NOT found (inlined): `RuntimeEnabledFeatures::webSocketEnabled`,
+`WebSocket::isAvailable`, `WebSocket::setIsAvailable`. So exposing the constructor is an OPEN
+sub-problem (probe the static-bool data symbol next, or patch the DOM-binding feature check).
+
+### Transplant design (hook at the DOM level — get the WebSocket* directly, no ivar RE)
+- HOOK `WebSocket::connect(this, url, ec)` → capture (this=client, url), start `mmwsconn_open(url)`,
+  skip the real channel connect. `WebSocket::send(this, msg, ec)` → `mmwsconn_send_text`.
+  `WebSocket::close(this, …)` → `mmwsconn_close`.
+- DELIVER events from mmwsconn callbacks by calling the WebSocket's own client callbacks (they fire
+  the JS onopen/onmessage/onerror) — ALL FOUND (iter2):
+  - `WebSocket::didConnect()`             = `__ZN7WebCore9WebSocket10didConnectEv`
+  - `WebSocket::didReceiveMessage(String)`= `__ZN7WebCore9WebSocket17didReceiveMessageERKN3WTF6StringE`
+  - `WebSocket::didReceiveMessageError()` = `__ZN7WebCore9WebSocket22didReceiveMessageErrorEv`
+  - `WebSocket::close()`                  = `__ZN7WebCore9WebSocket5closeEv`  (no-arg, FOUND)
+  - `didClose(...)` full sig NOT yet matched — low priority (use close() / retry sigs later).
+- STRING bridge (iter2, ALL FOUND): `WTF::String::fromUTF8(const char*)`
+  `__ZN3WTF6String8fromUTF8EPKc`; `WTF::String(const char*)` ctor `__ZN3WTF6StringC1EPKc`;
+  `WTF::String::createCFString()` `__ZNK3WTF6String14createCFStringEv`. So C↔WebCore string passing is solved.
+- PREREQUISITE STILL OPEN: expose `window.WebSocket` (the gate). All gate accessors inlined/not-found.
+  iter3 re-probes the static-bool DATA with CORRECTED mangling length
+  `__ZN7WebCore22RuntimeEnabledFeatures18isWebSocketEnabledE` (18 chars — I mis-counted 21 in iter1/2).
+  If that data symbol resolves, MSFindSymbol it + write 1 at %ctor (early, before pages set up their
+  window) to expose the constructor. **iter3 result pending — device slow to return from a reboot.**
+  If the data symbol is ALSO absent, fallbacks: hook the JSDOMWindow WebSocket-constructor getter, or
+  patch the inlined feature check at the binding site.
+
+### Transplant surface = COMPLETE except the gate. Build plan once gate confirmed:
+1. Solve the gate (flip isWebSocketEnabled) → verify window.WebSocket is defined in Safari.
+2. Hook WebSocket::connect (capture this+url, start mmwsconn, skip real connect) + send + close.
+3. Wire mmwsconn callbacks → WebSocket::didConnect / didReceiveMessage(fromUTF8(...)) on the captured
+   this. Reuse the host-tested mmws.c/mmws_sm.c/mmwsconn.c (already proven).
+4. Soak in Safari with tools/_ws_continuity.py (15+ min, zero gaps) before porting to the webclip.

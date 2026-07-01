@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmwscprobe
+Name: mmwscprobe
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh WebCore WebSocket-backend symbol discovery probe (approach C)
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate
