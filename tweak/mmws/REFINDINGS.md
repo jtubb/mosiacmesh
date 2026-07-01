@@ -148,3 +148,41 @@ events to `/var/mobile/mmws.log`). Two FIXED, one OPEN:
 - DO NOT fleet-onboard the bridge until #3 is fixed and a 15-min continuity soak is clean.
   `tools/mmws.dylib` (onboarding artifact) is a WIP debug build — rebuild clean (MMWS_DEBUG=0,
   drop -DMMWSCONN_BC) before any rollout.
+
+## §5 CORRECTED DIAGNOSIS OF #3 (2026-07-01) — it's the deadlock, not a leak/reload
+
+Chased two wrong sub-hypotheses first (record so nobody re-chases them):
+- NOT a JS-error self-reload: `jserror` CLIENTLOG count = 0 across the whole fleet. `window.onerror`
+  logs but does not reload.
+- NOT (primarily) a memory-leak/jetsam: the accelerating-reload pattern was the OLD buggy builds
+  (crash #1 + deadlock #2). On the current build a clean-reboot soak did boot=1, OPEN=1, ERROR=0,
+  process ALIVE the whole time — no reload, no jetsam. (RSS measurement dead-ended anyway: iOS-5
+  `ps l` doesn't list Web.app, `ps ax` lists it but has no RSS column.)
+
+WHAT IT ACTUALLY IS: **the same main↔web deadlock as #2, only DELAYED — it now hangs after minutes
+on a message BURST (the demo PLAY / playlist loop), not after 20s.** Hard evidence from the soak:
+breadcrumbs `evalPre=74 / evalPost=73` (one eval entered, never returned), breadcrumb file frozen
+at 13:56, CLIENTLOG silent from 13:54 onward (~21 min), yet `Web pid` alive + `OPEN=1`. Classic
+hang: process alive, run loop frozen inside `stringByEvaluatingJavaScriptFromString:`.
+
+ROOT (fundamental to the channel design): `stringByEvaluatingJavaScriptFromString:` called from the
+MAIN thread BLOCKS main waiting on the WEB thread; a send's iframe→`shouldStartLoad` runs on the
+WEB thread and BLOCKS it waiting on MAIN. When a burst has both directions in flight they deadlock.
+`setTimeout(0)` on the send (fix #2) only shrank the window; it can't close it.
+
+FIX DIRECTION (next session — a redesign, not a patch): make the native↔JS channel non-blocking in
+BOTH directions. Options to try:
+  (a) DELIVER inbound msgs without blocking main: don't push via `stringByEvaluatingJavaScriptFromString`
+      from a CFStream/main context — instead native buffers inbound frames and the JS polls them
+      (a `setInterval` in mmws.js calling a cheap native read via the mmws:// scheme), so no main→web
+      blocking call carries payloads.
+  (b) or run the eval on the WEB thread (where JS already lives) instead of main.
+  (c) or replace the iframe send channel with one that doesn't route through main-thread
+      `shouldStartLoad`.
+Reassess whether the URL-scheme bridge is even the right substrate — a WebCore SocketStreamHandle
+backend transplant (DESIGN.md approach A) sidesteps the whole main↔web JS-bridge threading problem.
+
+TOOL FIX (committed): `tools/_ws_continuity.py` now flags LEADING + TRAILING silence (last sample →
+now). It previously only measured gaps BETWEEN samples, so a hung client that stopped emitting read
+as "STABLE" — this produced two false "it's stable" calls this session. Always check "silent since
+last sample" is < threshold.

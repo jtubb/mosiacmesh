@@ -41,15 +41,22 @@ if len(win) < 2:
     print(f"{args.client}: only {len(win)} sample(s) in last {args.last_min:g} min — offline/just-connected"); sys.exit(1)
 
 gaps = []
+# LEADING silence: window start to the first sample (was the client already dead?)
+if win[0] - cutoff > args.gap:
+    gaps.append((int(cutoff), win[0], int(win[0] - cutoff)))
 for i in range(1, len(win)):
     d = win[i] - win[i-1]
     if d > args.gap:
         gaps.append((win[i-1], win[i], d))
+# TRAILING silence: last sample to NOW (log's newest ts). Catches a client that hung/died and
+# never came back — the exact false-STABLE bug this tool had. `last` is "now" per the log.
+if last - win[-1] > args.gap:
+    gaps.append((win[-1], last, int(last - win[-1])))
 
 span_min = (win[-1] - win[0]) / 60.0
 print(f"\n=== {args.client} continuity (last {args.last_min:g} min) ===")
-print(f"  samples: {len(win)}   span: {span_min:.1f} min   expected ~{int(span_min*2)} @30s cadence")
-print(f"  max gap: {max((win[i]-win[i-1]) for i in range(1,len(win)))}s   (threshold {args.gap:g}s)")
+print(f"  samples: {len(win)}   span: {span_min:.1f} min of {args.last_min:g}-min window   expected ~{int(args.last_min*2)} @30s cadence")
+print(f"  silent since last sample (to now): {last - win[-1]}s   (threshold {args.gap:g}s)")
 if gaps:
     print(f"  DISCONNECTS ({len(gaps)}):")
     for a, b, d in gaps:
