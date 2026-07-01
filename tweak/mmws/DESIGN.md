@@ -67,7 +67,15 @@ host-testable functions first, then device wiring):
       (3) DELIVER native->JS events: call `stringByEvaluatingJavaScriptFromString:@"__mmwsDispatch(…)"`
           on the main thread from the `mmwsconn_cb` callbacks — needs a ref to the page's UIWebView
           (find it in Web.app).
-- [ ] Verify: access log flips the device from `xhr_send` to a real `…/websocket` 101 upgrade.
+- [x] **Bridge tweak built + VERIFIED WORKING on the live webclip (2026-07-01).** `Tweak.x` hooks
+      WebAppController.shouldStartLoad (mmws:// intercept) + UIWebViewWebViewDelegate.didClearWindowObject
+      (inject bridge-shim.js+mmws.js via evaluateWebScript). Access log `mm_live.err` showed
+      `GET /sockjs/250/kex4am4z/websocket HTTP/1.1" 101` from the device — a real RFC-6455 upgrade,
+      NO xhr_send fallback, app sending REGISTER/CLIENTLOG over the socket. mmwsbuiltins.c provides
+      __udivsi3/__umodsi3 (base64 /3; no libclang_rt). Logos gotcha: '\\'/'\'' char literals crash
+      its tokenizer — use numeric 0x5C/0x27.
+- [ ] REMAINING: clean redeploy (diagnostics gated behind MMWS_DEBUG=0) + fleet rollout via
+      tools/onboard_devices.ps1 (install mmws.dylib+plist alongside mmvideo).
 
 ## Constraints / gotchas (carried from this session)
 
