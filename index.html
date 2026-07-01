@@ -578,7 +578,15 @@
 		if (playback._armPlaying) { try { v.removeEventListener('playing', playback._armPlaying); } catch (e) {} }
 		playback._armPlaying = function () { v.removeEventListener('playing', playback._armPlaying); playback._armPlaying = null; onArmed(); };
 		v.addEventListener('playing', playback._armPlaying);
-		if (VIDEO_MUTED) { var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); } }
+		// Attempt a MUTED autoplay to arm during PREPARE (unconditionally — not just when
+		// VIDEO_MUTED). On the mmvideo AVPlayer-transplant this succeeds with NO tap: muted
+		// doesn't matter to the gesture hook, so 'playing' fires -> onArmed -> activated=true
+		// BEFORE the 700ms timer, and NEEDS_ARM (hence the server's Veency arming tap) is never
+		// sent. Muting the arm keeps audio silent until GO (seekAndPlay restores v.muted=
+		// VIDEO_MUTED). On stock iOS-5, muted autoplay is still gesture-gated and rejected, so
+		// it falls through to the NEEDS_ARM/tap path unchanged. See tweak/mmvideo + onboard 5.4i.
+		v.muted = true;
+		var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); }
 		playback.armTimer = setTimeout(function () {
 			if (!playback.activated) {
 				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });
