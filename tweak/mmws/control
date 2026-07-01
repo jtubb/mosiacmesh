@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmws
+Name: mmws
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh native RFC-6455 WebSocket bridge for the iOS-5 webclip
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate
