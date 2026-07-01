@@ -1364,6 +1364,45 @@ foreach ($h in $targets) {
         }
     }
 
+    # 5.4ii) install the mmws MobileSubstrate tweak (native RFC-6455 WebSocket bridge).
+    #        iOS-5.1 WebKit has no usable WebSocket (the built-in one is the disabled/old-
+    #        protocol impl that won't interop with the RFC-6455 server), so SockJS falls back
+    #        to XHR polling. mmws injects a native RFC-6455 client behind window.WebSocket:
+    #        a JS polyfill + bridge-shim (window.__mmwsNative) navigates a hidden iframe to
+    #        mmws://; the tweak hooks -[WebAppController shouldStartLoadWithRequest:] to
+    #        intercept it and drives a CFStream RFC-6455 socket, dispatching results back via
+    #        stringByEvaluatingJavaScriptFromString. SockJS then uses a real websocket.
+    #        VERIFIED on-device 2026-07-01 (server access log: ".../websocket" 101 upgrade,
+    #        no xhr fallback). Filter is com.apple.webapp (the webclip host). Self-contained
+    #        (Foundation+CoreFoundation + hand-provided __udivsi3/__umodsi3). Source lives in
+    #        tweak/mmws/ (build via tweak/mmws/build.sh, then copy the .dylib to tools/mmws.dylib).
+    #        Coexists with mmvideo (different hooks). XHR still works if absent -- this is a
+    #        latency/overhead optimization, not a hard requirement.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+        $mmwsDylibSrc = Join-Path $PSScriptRoot 'mmws.dylib'
+        $mmwsPlistSrc = Join-Path $PSScriptRoot 'mmws.plist'
+        if (-not (Test-Path $mmwsDylibSrc) -or -not (Test-Path $mmwsPlistSrc)) {
+            Write-Host "  mmws: dylib/plist missing in tools/ -- skipped (build tweak/mmws + copy mmws.dylib to tools/)" -ForegroundColor Yellow
+        } else {
+            try {
+                $dlDir = '/Library/MobileSubstrate/DynamicLibraries'
+                & $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" "mkdir -p $dlDir" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy $mmwsDylibSrc "${User}@${hostName}:$dlDir/mmws.dylib" 2>&1 | Out-Null
+                & $scp -i $KeyPath -P $p @sshLegacy $mmwsPlistSrc "${User}@${hostName}:$dlDir/mmws.plist" 2>&1 | Out-Null
+                # scp is byte-identical; chmod + non-empty check is a sufficient verify.
+                $mmwsChk = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+                    "chmod 644 $dlDir/mmws.dylib $dlDir/mmws.plist; [ -s $dlDir/mmws.dylib ] && [ -s $dlDir/mmws.plist ] && echo MMWS_OK || echo MMWS_EMPTY" 2>&1) | Out-String
+                if ($mmwsChk -match 'MMWS_OK') {
+                    Write-Host "  mmws: native WebSocket bridge installed (loads on respring)" -ForegroundColor Green
+                } else {
+                    Write-Host "  mmws install unexpected: $($mmwsChk.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+                }
+            } catch {
+                Write-Host "  mmws install failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        }
+    }
+
     # 5.5) respring after successful tweak install -- MobileSubstrate only
     #      injects tweaks at SpringBoard launch, so without this the .dylibs
     #      are on disk but inert (activator listeners empty, send returns 255).
