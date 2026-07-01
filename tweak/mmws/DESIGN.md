@@ -53,8 +53,21 @@ host-testable functions first, then device wiring):
 - [ ] Native CFStream socket wrapper driving the pure functions against the real server
       (`ws://192.168.1.60:3000/sockjs/<srv>/<sess>/websocket`), validated with the live access
       log (`mm_live.err`) showing a real `…/websocket` 101 upgrade for the device IP.
-- [ ] JS exposure (B or A) so SockJS in the webclip selects `websocket` — verify via the
-      access log flipping the device from `xhr_send` to `…/websocket`.
+- [x] JS polyfill written — `mmws.js` (ES5 `window.WebSocket` shim, routes through the native
+      bridge contract `window.__mmwsNative` {open/send/close} + `window.__mmwsDispatch` for
+      native->JS events; also sets `MozWebSocket` since SockJS probes it).
+- [ ] **Bridge RE (device, the remaining unknown)** — in the `com.apple.webapp` process:
+      (1) INJECT `mmws.js` into every page before SockJS runs (hook WebCore page-load / evaluate
+          the script, or inject via the UIWebView).
+      (2) SURFACE `__mmwsNative` to JS. iOS-5 UIWebView has no WKScriptMessageHandler and no
+          JSContext access (iOS7+), so the classic path is a **custom URL scheme**: open/send/close
+          navigate a hidden iframe to `mmws://…`; hook the webclip's resource-load / UIWebView
+          delegate to intercept `mmws://` and call `mmwsconn_*`. (Alternative: RE a WebCore JS
+          binding to add a native global — more work.)
+      (3) DELIVER native->JS events: call `stringByEvaluatingJavaScriptFromString:@"__mmwsDispatch(…)"`
+          on the main thread from the `mmwsconn_cb` callbacks — needs a ref to the page's UIWebView
+          (find it in Web.app).
+- [ ] Verify: access log flips the device from `xhr_send` to a real `…/websocket` 101 upgrade.
 
 ## Constraints / gotchas (carried from this session)
 
