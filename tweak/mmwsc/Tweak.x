@@ -218,16 +218,24 @@ static void *o_chanClose, *o_chanDisc, *o_chanSend;
 static void h_chanNoop(void *chan) { }
 static void h_chanSendNoop(void *chan, const void *str) { }
 
-%hook TabDocument
-- (void)webView:(id)wv didClearWindowObject:(id)win forFrame:(id)frame {
-    %orig;
-    mmlog("[mmwsc] bc: hook fired frame=%p (%s)\n", (void *)frame, frame ? object_getClassName(frame) : "-");
-    if (frame) {
-        void *ctx = ((void *(*)(id, SEL))objc_msgSend)(frame, sel_registerName("globalContext"));
-        mmlog("[mmwsc] bc: globalContext=%p\n", ctx);
-        install_websocket(ctx);
-    }
+/* didClearWindowObject fires per frame in BOTH hosts — Safari via TabDocument, the webclip
+ * (com.apple.webapp UIWebView) via UIWebViewWebViewDelegate. Same body: frame -> globalContext ->
+ * install window.WebSocket. WebCore (and thus the transplant hooks) is shared, so nothing else
+ * differs between the two hosts. A %hook on a class absent from the current process is a no-op, so
+ * both hooks coexist safely. */
+static void mmwsc_on_did_clear(id frame) {
+    if (!frame) return;
+    void *ctx = ((void *(*)(id, SEL))objc_msgSend)(frame, sel_registerName("globalContext"));
+    mmlog("[mmwsc] bc: didClearWindowObject frame=%s ctx=%p\n", object_getClassName(frame), ctx);
+    install_websocket(ctx);
 }
+
+%hook TabDocument                 /* Safari (com.apple.mobilesafari) */
+- (void)webView:(id)wv didClearWindowObject:(id)win forFrame:(id)frame { %orig; mmwsc_on_did_clear(frame); }
+%end
+
+%hook UIWebViewWebViewDelegate    /* the webclip (com.apple.webapp) */
+- (void)webView:(id)wv didClearWindowObject:(id)win forFrame:(id)frame { %orig; mmwsc_on_did_clear(frame); }
 %end
 
 %ctor {
