@@ -290,3 +290,31 @@ NEXT SESSION (well-scoped, mostly host-side): (1) re-pull cache (~4min) + `_dsc_
 WebSocket entry; find the flag LDR); (3) flip it (or hook the getter/table); verify `typeof
 WebSocket` != undefined in Safari; (4) then the §6 backend transplant (hook WebSocket::connect/
 send/close → mmwsconn, deliver via didConnect/didReceiveMessage). Cache is scratchpad-temporary.
+
+### §6.4 GATE SOLVED (2026-07-02) — direct-install, NO flag flip. tweak/mmwsc. VERIFIED.
+Never needed to flip the inlined flag or analyze getOwnPropertySlot. Install the ctor DIRECTLY at
+window creation. `tweak/mmwsc` (Safari-only plist for now): hook
+`-[TabDocument webView:didClearWindowObject:forFrame:]` →
+1. `ctx = [frame globalContext]` (JSGlobalContextRef).
+2. `shell = JSContextGetGlobalObject(ctx)` — this is the **JSDOMWindowShell** (a proxy), NOT the
+   window. Passing it to getDOMConstructor CRASHED (breadcrumbs died exactly at getDOMConstructor).
+3. FIX: `window = JSDOMWindowShell::unwrappedObject(shell)`
+   (`__ZN7WebCore16JSDOMWindowShell15unwrappedObjectEv`) → the REAL JSDOMWindow. shell ptr != window
+   ptr (proved: 0x…c8128 vs 0x…4128).
+4. `ctor = getDOMConstructor<JSWebSocketConstructor>(exec=ctx, window)` → the real ctor object.
+5. `JSObjectSetProperty(ctx, shell, "WebSocket"/"MozWebSocket", ctor)` — set on the SHELL (JS-visible).
+VERIFIED: `JSObjectGetProperty(ctx, shell, "WebSocket")` reads back == the installed ctor (match=1),
+i.e. JS sees it. Safari STABLE. Symbols all via MSFindSymbol (getDOMConstructor + JSC C API +
+unwrappedObject); Foundation-only link.
+GOTCHAS BURNED IN:
+- **A .dylib with NO .plist loads into EVERY process.** Disabling a tweak by moving ONLY its plist
+  orphans the dylib → it injects globally (mmvideo did this → crashed Safari in dyld). Move the
+  DYLIB aside too (or give it a scoped plist).
+- **Never JSEvaluateScript inside didClearWindowObject** — re-enters the interpreter mid-window-init
+  → instant crash. Property get/set (JSObject{Get,Set}Property) is safe; running script is not.
+- uiopen is flaky relaunching Safari after killall; a respring (killall SpringBoard) resets it.
+  Repeated inject-crashes trip MobileSubstrate safe mode (all tweaks disabled) → needs a reboot.
+STILL AHEAD (step 2 + integration): the exposed ctor speaks the OLD protocol. Backend transplant
+(hook WebSocket::connect/send/close → mmwsconn RFC-6455). AND: SockJS blacklists old-Safari ws
+(Safari stayed on xhr_send even with window.WebSocket present+visible), so the client likely uses
+window.WebSocket DIRECTLY (or force SockJS's ws transport) rather than SockJS auto-select.
