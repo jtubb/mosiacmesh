@@ -318,3 +318,27 @@ STILL AHEAD (step 2 + integration): the exposed ctor speaks the OLD protocol. Ba
 (hook WebSocket::connect/send/close → mmwsconn RFC-6455). AND: SockJS blacklists old-Safari ws
 (Safari stayed on xhr_send even with window.WebSocket present+visible), so the client likely uses
 window.WebSocket DIRECTLY (or force SockJS's ws transport) rather than SockJS auto-select.
+
+### §6.5 STEP 2 BACKEND TRANSPLANT — WORKING + VERIFIED (2026-07-02). tweak/mmwsc.
+%ctor MSHookFunction: `WebSocket::connect(String&,int&)`→h_connect (extract url via
+createCFString→CFStringGetCString, parse ws://host:port/path, mmwsconn_open, map ws↔conn, THEN call
+orig so WebCore sets m_state=CONNECTING); `WebSocketChannel::connect()`
+(`__ZN7WebCore16WebSocketChannel7connectEv`, no-arg) → NO-OP (never start the old socket);
+`WebSocket::send`→mmwsconn_send_text (skip orig); `WebSocket::close()`→mmwsconn_close+orig.
+DELIVERY (mmwsconn cb, ud=WebSocket*, on the main run loop = WebKit thread): on_open→
+`WebSocket::didConnect(ws)`; on_msg→`didReceiveMessage(ws, String(cstr))` (String via the
+`WTF::String::String(const char*)` ctor; StringImpl leaked per msg — dtor inlined, TODO
+StringImpl::deref); on_close→`didClose(ws,0)` (`…8didCloseEm`); on_error→`didReceiveMessageError`.
+PROVEN on-device (Safari, screen15): `?wstest` gated self-test in index.html → new WebSocket →
+h_connect → mmwsconn 101 → didConnect→onopen; AND the REAL client's SockJS **auto-picked websocket**
+(`/sockjs/892/…/websocket`) — so "SockJS blacklists old Safari" was WRONG; it avoided ws only because
+window.WebSocket was absent. Real protocol (REGISTER etc.) delivered; on_msg 26→33/45s continuous,
+Safari stable ~19min, ZERO on_close/on_error. NO burst-deadlock (that was the URL-scheme JS channel;
+this delivers C++ directly on the main thread).
+**CRITICAL DEPLOY GOTCHA — ad-hoc SIGN (`ldid -S`).** An UNSIGNED dylib is amfi-SIGKILLed at LOAD in
+dyld with NO message — mimics a symbol-bind failure but is NOT (a real bind fail = SIGABRT +
+"Symbol not found"). 36KB exposure slipped through; 60KB transplant did not. Diagnose via
+`DYLD_INSERT_LIBRARIES=<signed copy> /bin/ls` (runs %ctor when signed; SIGKILL unsigned). build.sh
+now `ldid -S`es the output.
+NEXT: longer soak + real demo (video PLAY bursts) under load; StringImpl::deref to stop the leak;
+then webclip (add com.apple.webapp + the UIWebViewWebViewDelegate didClearWindowObject hook) + fleet.

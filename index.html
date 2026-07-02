@@ -24,6 +24,25 @@
   <script src="/js/transitions.js"></script>
   <script src="/js/mesh-viewport.js"></script>
   <script>
+    /* mmws transplant self-test (ES5). Gated on ?wstest — no effect otherwise. Beacons results to
+       the server access log as /wsprobe_* image requests so we can verify the native ws transplant
+       (mmwsc) end-to-end without on-device console access. Talks to SockJS's raw ws echo endpoint. */
+    if (window.location.search.indexOf('wstest') >= 0) {
+      try {
+        var mb = function (tag) { try { new Image().src = '/wsprobe_' + tag + '?t=' + (new Date()).getTime(); } catch (e) {} };
+        mb('haveWS_' + (typeof window.WebSocket));
+        if (window.WebSocket) {
+          var tws = new WebSocket('ws://192.168.1.60:3000/sockjs/websocket');
+          tws.onopen = function () { mb('open'); };
+          tws.onmessage = function (ev) { mb('msg_' + encodeURIComponent(('' + ev.data).substr(0, 16))); };
+          tws.onerror = function () { mb('error'); };
+          tws.onclose = function () { mb('close'); };
+          mb('created_rs' + tws.readyState);
+        }
+      } catch (err) { try { new Image().src = '/wsprobe_throw_' + encodeURIComponent(('' + err).substr(0, 30)); } catch (e2) {} }
+    }
+  </script>
+  <script>
     var blink = true;
     // Tracks whether we have already told the server "my
     // ProgrammableTimer is synced" since our LAST sock-open. Reset to

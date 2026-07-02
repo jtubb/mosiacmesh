@@ -14,11 +14,14 @@
  * STEP 2 (next): hook WebSocket::connect/send/close -> mmwsconn RFC-6455 (the exposed ctor still
  * speaks the old broken protocol, so the backend transplant is still required). */
 #import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <substrate.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <stdio.h>
 #import <stdarg.h>
+#import <string.h>
+#include "mmwsconn.h"   /* host-tested RFC-6455 transport (mmws.c/mmws_sm.c/mmwsconn.c) */
 
 static void mmlog(const char *fmt, ...) {
     static const char *paths[2] = { "/var/mobile/mmwsc.log", "/tmp/mmwsc.log" };
@@ -77,6 +80,119 @@ static void install_websocket(void *ctx) {
     }
 }
 
+/* ===================== STEP 2: backend transplant =====================
+ * The exposed ctor still speaks WebCore's OLD ws protocol. Intercept WebSocket::connect/send/close
+ * and drive our host-tested mmwsconn (RFC-6455) instead; no-op the real WebSocketChannel socket;
+ * deliver events by calling the WebSocket's own didConnect/didReceiveMessage/didClose. All on the
+ * WebKit main thread (mmwsconn schedules on the current run loop = main), same thread WebCore
+ * expects channel callbacks on. */
+typedef void (*ws_connect_t)(void *ws, const void *url, int *ec);
+typedef bool (*ws_send_t)(void *ws, const void *msg, int *ec);
+typedef void (*ws_close_t)(void *ws);
+typedef void (*chan_connect_t)(void *chan);
+typedef void (*ws_v_t)(void *ws);                       /* didConnect / didReceiveMessageError */
+typedef void (*ws_msg_t)(void *ws, const void *str);    /* didReceiveMessage(const String&) */
+typedef void (*ws_close_d_t)(void *ws, unsigned long unhandled);   /* didClose(unsigned long) */
+typedef CFStringRef (*createcf_t)(const void *str);     /* WTF::String::createCFString() const */
+typedef void (*strctor_t)(void *out, const char *cchars);          /* WTF::String::String(const char*) */
+
+static ws_connect_t  o_connect;
+static ws_send_t     o_send;
+static ws_close_t    o_close;
+static chan_connect_t o_chanConnect;
+static ws_v_t        f_didConnect;
+static ws_msg_t      f_didMsg;
+static ws_v_t        f_didMsgErr;
+static ws_close_d_t  f_didClose;
+static createcf_t    f_createCF;
+static strctor_t     f_strCtor;
+
+#define MMWSC_MAXWS 8
+static struct { void *ws; MMWSConn *conn; } g_wsmap[MMWSC_MAXWS];
+static MMWSConn *wsmap_get(void *ws) { for (int i = 0; i < MMWSC_MAXWS; i++) if (g_wsmap[i].ws == ws) return g_wsmap[i].conn; return 0; }
+static void wsmap_put(void *ws, MMWSConn *c) { for (int i = 0; i < MMWSC_MAXWS; i++) if (!g_wsmap[i].ws) { g_wsmap[i].ws = ws; g_wsmap[i].conn = c; return; } }
+static void wsmap_del(void *ws) { for (int i = 0; i < MMWSC_MAXWS; i++) if (g_wsmap[i].ws == ws) { g_wsmap[i].ws = 0; g_wsmap[i].conn = 0; return; } }
+
+/* WTF::String& -> C string via createCFString (const method: this=r0=the String*) */
+static void str_to_c(const void *wtfstr, char *buf, int bufsz) {
+    buf[0] = 0;
+    if (!f_createCF || !wtfstr) return;
+    CFStringRef cf = f_createCF(wtfstr);
+    if (cf) { CFStringGetCString(cf, buf, bufsz, kCFStringEncodingUTF8); CFRelease(cf); }
+}
+
+/* --- delivery: mmwsconn callbacks (ud = the WebSocket*), all on the main run loop --- */
+static void cb_open(MMWSConn *c, void *ud) {
+    mmlog("[mmwsc/tx] on_open ws=%p -> didConnect\n", ud);
+    if (f_didConnect) f_didConnect(ud);
+}
+static void cb_msg(MMWSConn *c, uint8_t op, const uint8_t *data, size_t len, void *ud) {
+    char buf[4096]; size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
+    memcpy(buf, data, n); buf[n] = 0;
+    mmlog("[mmwsc/tx] on_msg ws=%p op=%d len=%d -> didReceiveMessage\n", ud, op, (int)len);
+    if (f_didMsg && f_strCtor) {
+        void *s = 0;                       /* a WTF::String is one pointer (StringImpl*) */
+        f_strCtor(&s, buf);                /* construct in-place; refs a new StringImpl */
+        f_didMsg(ud, &s);                  /* pass const String& */
+        /* NOTE: String dtor is inlined (no symbol) -> the StringImpl is intentionally leaked per
+         * message for now. Low rate (register/heartbeats); fix by finding StringImpl::deref. */
+    }
+}
+static void cb_close(MMWSConn *c, uint16_t code, void *ud) {
+    mmlog("[mmwsc/tx] on_close ws=%p code=%d -> didClose\n", ud, code);
+    wsmap_del(ud);
+    if (f_didClose) f_didClose(ud, 0);
+}
+static void cb_error(MMWSConn *c, const char *msg, void *ud) {
+    mmlog("[mmwsc/tx] on_error ws=%p %s -> didReceiveMessageError\n", ud, msg ? msg : "");
+    if (f_didMsgErr) f_didMsgErr(ud);
+}
+
+/* parse "ws://host[:port][/path]" (wss -> port 443 default, but mmwsconn has no TLS) */
+static int parse_ws(const char *url, char *host, int hostsz, int *port, char *path, int pathsz) {
+    host[0] = 0; path[0] = '/'; path[1] = 0; *port = 80;
+    const char *p = url;
+    if (strncmp(p, "ws://", 5) == 0) p += 5;
+    else if (strncmp(p, "wss://", 6) == 0) { p += 6; *port = 443; }
+    else return -1;
+    int i = 0; while (*p && *p != ':' && *p != '/' && i < hostsz - 1) host[i++] = *p++; host[i] = 0;
+    if (*p == ':') { p++; *port = 0; while (*p >= '0' && *p <= '9') { *port = *port * 10 + (*p - '0'); p++; } }
+    if (*p == '/') { int j = 0; while (*p && j < pathsz - 1) path[j++] = *p++; path[j] = 0; }
+    return host[0] ? 0 : -1;
+}
+
+/* --- intercepts --- */
+static void h_connect(void *ws, const void *url, int *ec) {
+    char urlbuf[600]; str_to_c(url, urlbuf, sizeof urlbuf);
+    char host[128], path[420]; int port = 80;
+    mmlog("[mmwsc/tx] connect ws=%p url=%s\n", ws, urlbuf);
+    if (parse_ws(urlbuf, host, sizeof host, &port, path, sizeof path) == 0) {
+        mmwsconn_cb cb; cb.on_open = cb_open; cb.on_message = cb_msg; cb.on_close = cb_close; cb.on_error = cb_error; cb.ud = ws;
+        MMWSConn *conn = mmwsconn_open(host, port, path, &cb);
+        mmlog("[mmwsc/tx] mmwsconn_open(%s,%d,%s) = %p\n", host, port, path, conn);
+        if (conn) wsmap_put(ws, conn);
+    } else mmlog("[mmwsc/tx] parse_ws FAILED for %s\n", urlbuf);
+    /* let WebCore set m_state=CONNECTING + m_url (its channel->connect() is our no-op) */
+    if (o_connect) o_connect(ws, url, ec);
+}
+static bool h_send(void *ws, const void *msg, int *ec) {
+    MMWSConn *conn = wsmap_get(ws);
+    if (conn) { char buf[4096]; str_to_c(msg, buf, sizeof buf);
+        mmwsconn_send_text(conn, (const uint8_t *)buf, strlen(buf)); }
+    if (ec) *ec = 0;
+    return true;   /* skip the dead channel; report queued */
+}
+static void h_close(void *ws) {
+    MMWSConn *conn = wsmap_get(ws);
+    mmlog("[mmwsc/tx] close ws=%p conn=%p\n", ws, conn);
+    if (conn) mmwsconn_close(conn, 1000);
+    if (o_close) o_close(ws);   /* WebCore sets m_state=CLOSING (channel close is harmless-idle) */
+}
+static void h_chanConnect(void *chan) {
+    /* NO-OP: never start the old-protocol socket; mmwsconn is the real transport. */
+    mmlog("[mmwsc/tx] WebSocketChannel::connect no-op (chan=%p)\n", chan);
+}
+
 %hook TabDocument
 - (void)webView:(id)wv didClearWindowObject:(id)win forFrame:(id)frame {
     %orig;
@@ -99,4 +215,24 @@ static void install_websocket(void *ctx) {
     g_getProp    = (getprop_t)MSFindSymbol(NULL, "_JSObjectGetProperty");
     mmlog("\n[mmwsc] ctor: getWSCtor=%p ctxGlobal=%p unwrap=%p setProp=%p strCreate=%p\n",
           (void *)g_getWSCtor, (void *)g_ctxGlobal, (void *)g_unwrap, (void *)g_setProp, (void *)g_strCreate);
+
+    /* --- STEP 2 backend transplant: resolve delivery/string symbols + hook connect/send/close --- */
+    f_didConnect = (ws_v_t)MSFindSymbol(NULL, "__ZN7WebCore9WebSocket10didConnectEv");
+    f_didMsg     = (ws_msg_t)MSFindSymbol(NULL, "__ZN7WebCore9WebSocket17didReceiveMessageERKN3WTF6StringE");
+    f_didMsgErr  = (ws_v_t)MSFindSymbol(NULL, "__ZN7WebCore9WebSocket22didReceiveMessageErrorEv");
+    f_didClose   = (ws_close_d_t)MSFindSymbol(NULL, "__ZN7WebCore9WebSocket8didCloseEm");
+    f_createCF   = (createcf_t)MSFindSymbol(NULL, "__ZNK3WTF6String14createCFStringEv");
+    f_strCtor    = (strctor_t)MSFindSymbol(NULL, "__ZN3WTF6StringC1EPKc");
+    void *p;
+    p = MSFindSymbol(NULL, "__ZN7WebCore9WebSocket7connectERKN3WTF6StringERi");
+    if (p) MSHookFunction(p, (void *)h_connect, (void **)&o_connect);
+    p = MSFindSymbol(NULL, "__ZN7WebCore9WebSocket4sendERKN3WTF6StringERi");
+    if (p) MSHookFunction(p, (void *)h_send, (void **)&o_send);
+    p = MSFindSymbol(NULL, "__ZN7WebCore9WebSocket5closeEv");
+    if (p) MSHookFunction(p, (void *)h_close, (void **)&o_close);
+    p = MSFindSymbol(NULL, "__ZN7WebCore16WebSocketChannel7connectEv");
+    if (p) MSHookFunction(p, (void *)h_chanConnect, (void **)&o_chanConnect);
+    mmlog("[mmwsc] tx: didConnect=%p didMsg=%p didClose=%p createCF=%p strCtor=%p connectHooked=%d chanHooked=%d\n",
+          (void *)f_didConnect, (void *)f_didMsg, (void *)f_didClose, (void *)f_createCF, (void *)f_strCtor,
+          o_connect != 0, o_chanConnect != 0);
 }
