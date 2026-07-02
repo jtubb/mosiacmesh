@@ -95,8 +95,6 @@ typedef void (*ws_msg_t)(void *ws, const void *str);    /* didReceiveMessage(con
 typedef void (*ws_close_d_t)(void *ws, unsigned long unhandled);   /* didClose(unsigned long) */
 typedef CFStringRef (*createcf_t)(const void *str);     /* WTF::String::createCFString() const */
 typedef void (*strctor_t)(void *out, const char *cchars);          /* WTF::String::String(const char*) */
-typedef void (*strimpldtor_t)(void *impl);                         /* WTF::StringImpl::~StringImpl() */
-typedef void (*fastfree_t)(void *p);                               /* WTF::fastFree() */
 
 static ws_connect_t  o_connect;
 static ws_send_t     o_send;
@@ -108,9 +106,6 @@ static ws_v_t        f_didMsgErr;
 static ws_close_d_t  f_didClose;
 static createcf_t    f_createCF;
 static strctor_t     f_strCtor;
-static strimpldtor_t f_strImplDtor;   /* + f_fastFree: release the per-message StringImpl (leak fix) */
-static fastfree_t    f_fastFree;
-static int           g_freeProbe;     /* diagnostic: log the first few refcount reads to prove layout */
 
 #define MMWSC_MAXWS 8
 static struct { void *ws; MMWSConn *conn; } g_wsmap[MMWSC_MAXWS];
@@ -151,21 +146,11 @@ static void cb_msg(MMWSConn *c, uint8_t op, const uint8_t *data, size_t len, voi
     memcpy(buf, data, n); buf[n] = 0;
     mmlog("[mmwsc/tx] on_msg ws=%p op=%d len=%d -> didReceiveMessage\n", ud, op, (int)len);
     if (f_didMsg && f_strCtor) {
-        void *s = 0;                       /* a WTF::String is one pointer (StringImpl*); s == StringImpl* */
-        f_strCtor(&s, buf);                /* construct in-place; refs a new StringImpl (fresh: 1 ref) */
-        unsigned rc0 = s ? *(volatile unsigned *)s : 0;   /* m_refCount word (offset 0), packed "1 ref" */
-        f_didMsg(ud, &s);                  /* pass const String&; MessageEvent copies + releases synchronously */
-        /* Release our per-message StringImpl (fixes the leak). m_refCount is packed at offset 0, so we
-         * don't decode it — we DESTROY only when the word returns to its just-constructed value, i.e.
-         * our ref is the last one (event released, no listener retained the string). Any other value
-         * (retained string, unexpected layout) -> skip, leaving the old benign leak, never corrupting.
-         * ~StringImpl + fastFree is exactly what StringImpl::destroy() does at the final deref. */
-        if (s && f_strImplDtor && f_fastFree) {
-            unsigned rc1 = *(volatile unsigned *)s;
-            int freed = 0;
-            if (rc0 != 0 && rc1 == rc0) { f_strImplDtor(s); f_fastFree(s); freed = 1; }
-            if (g_freeProbe < 6) { mmlog("[mmwsc/tx] strfree rc0=%u rc1=%u freed=%d len=%d\n", rc0, rc1, freed, (int)n); g_freeProbe++; }
-        }
+        void *s = 0;                       /* a WTF::String is one pointer (StringImpl*) */
+        f_strCtor(&s, buf);                /* construct in-place; refs a new StringImpl */
+        f_didMsg(ud, &s);                  /* pass const String& */
+        /* NOTE: String dtor is inlined (no symbol) -> the StringImpl is intentionally leaked per
+         * message for now. Low rate (register/heartbeats); fix by finding StringImpl::deref. */
     }
 }
 static void cb_close(MMWSConn *c, uint16_t code, void *ud) {
@@ -271,12 +256,6 @@ static void mmwsc_on_did_clear(id frame) {
     f_didClose   = (ws_close_d_t)MSFindSymbol(NULL, "__ZN7WebCore9WebSocket8didCloseEm");
     f_createCF   = (createcf_t)MSFindSymbol(NULL, "__ZNK3WTF6String14createCFStringEv");
     f_strCtor    = (strctor_t)MSFindSymbol(NULL, "__ZN3WTF6StringC1EPKc");
-    /* Per-message StringImpl leak fix. WTF::String::~String and StringImpl::deref are inlined-only in
-     * this build (no symbols), so we release by hand with the two primitives that DO exist:
-     * ~StringImpl + fastFree. Safe because cb_msg destroys ONLY when the refcount reads exactly 1. */
-    f_strImplDtor = (strimpldtor_t)MSFindSymbol(NULL, "__ZN3WTF10StringImplD1Ev");
-    if (!f_strImplDtor) f_strImplDtor = (strimpldtor_t)MSFindSymbol(NULL, "__ZN3WTF10StringImplD2Ev");
-    f_fastFree    = (fastfree_t)MSFindSymbol(NULL, "__ZN3WTF8fastFreeEPv");
     void *p;
     p = MSFindSymbol(NULL, "__ZN7WebCore9WebSocket7connectERKN3WTF6StringERi");
     if (p) MSHookFunction(p, (void *)h_connect, (void **)&o_connect);
@@ -294,7 +273,7 @@ static void mmwsc_on_did_clear(id frame) {
     if (p) MSHookFunction(p, (void *)h_chanSendNoop, (void **)&o_chanSend);
     p = MSFindSymbol(NULL, "__ZN7WebCore9WebSocketD0Ev");   /* ~WebSocket (deleting dtor) */
     if (p) MSHookFunction(p, (void *)h_wsDtor, (void **)&o_wsDtor);
-    mmlog("[mmwsc] tx: didConnect=%p didMsg=%p didClose=%p createCF=%p strCtor=%p strImplDtor=%p fastFree=%p connectHooked=%d chanHooked=%d\n",
+    mmlog("[mmwsc] tx: didConnect=%p didMsg=%p didClose=%p createCF=%p strCtor=%p connectHooked=%d chanHooked=%d\n",
           (void *)f_didConnect, (void *)f_didMsg, (void *)f_didClose, (void *)f_createCF, (void *)f_strCtor,
-          (void *)f_strImplDtor, (void *)f_fastFree, o_connect != 0, o_chanConnect != 0);
+          o_connect != 0, o_chanConnect != 0);
 }
