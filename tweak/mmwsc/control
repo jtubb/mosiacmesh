@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmwsc
+Name: mmwsc
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh WebCore WebSocket transplant (approach C)
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate

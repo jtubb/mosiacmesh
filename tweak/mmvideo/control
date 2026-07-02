@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmvideo
+Name: mmvideo
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh AVPlayer video-engine transplant for iPad-1
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate

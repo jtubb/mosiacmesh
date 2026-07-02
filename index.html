@@ -24,6 +24,25 @@
   <script src="/js/transitions.js"></script>
   <script src="/js/mesh-viewport.js"></script>
   <script>
+    /* mmws transplant self-test (ES5). Gated on ?wstest — no effect otherwise. Beacons results to
+       the server access log as /wsprobe_* image requests so we can verify the native ws transplant
+       (mmwsc) end-to-end without on-device console access. Talks to SockJS's raw ws echo endpoint. */
+    if (window.location.search.indexOf('wstest') >= 0) {
+      try {
+        var mb = function (tag) { try { new Image().src = '/wsprobe_' + tag + '?t=' + (new Date()).getTime(); } catch (e) {} };
+        mb('haveWS_' + (typeof window.WebSocket));
+        if (window.WebSocket) {
+          var tws = new WebSocket('ws://192.168.1.60:3000/sockjs/websocket');
+          tws.onopen = function () { mb('open'); setTimeout(function () { try { tws.close(); mb('closeCalled'); } catch (e) {} }, 4000); };
+          tws.onmessage = function (ev) { mb('msg_' + encodeURIComponent(('' + ev.data).substr(0, 16))); };
+          tws.onerror = function () { mb('error'); };
+          tws.onclose = function () { mb('close'); };
+          mb('created_rs' + tws.readyState);
+        }
+      } catch (err) { try { new Image().src = '/wsprobe_throw_' + encodeURIComponent(('' + err).substr(0, 30)); } catch (e2) {} }
+    }
+  </script>
+  <script>
     var blink = true;
     // Tracks whether we have already told the server "my
     // ProgrammableTimer is synced" since our LAST sock-open. Reset to
@@ -578,7 +597,15 @@
 		if (playback._armPlaying) { try { v.removeEventListener('playing', playback._armPlaying); } catch (e) {} }
 		playback._armPlaying = function () { v.removeEventListener('playing', playback._armPlaying); playback._armPlaying = null; onArmed(); };
 		v.addEventListener('playing', playback._armPlaying);
-		if (VIDEO_MUTED) { var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); } }
+		// Attempt a MUTED autoplay to arm during PREPARE (unconditionally — not just when
+		// VIDEO_MUTED). On the mmvideo AVPlayer-transplant this succeeds with NO tap: muted
+		// doesn't matter to the gesture hook, so 'playing' fires -> onArmed -> activated=true
+		// BEFORE the 700ms timer, and NEEDS_ARM (hence the server's Veency arming tap) is never
+		// sent. Muting the arm keeps audio silent until GO (seekAndPlay restores v.muted=
+		// VIDEO_MUTED). On stock iOS-5, muted autoplay is still gesture-gated and rejected, so
+		// it falls through to the NEEDS_ARM/tap path unchanged. See tweak/mmvideo + onboard 5.4i.
+		v.muted = true;
+		var pp = v.play(); if (pp && pp['catch']) { pp['catch'](function () {}); }
 		playback.armTimer = setTimeout(function () {
 			if (!playback.activated) {
 				dbg("send-NEEDS_ARM"); sendMsg("NEEDS_ARM", { prepareId: prepareId });
@@ -990,7 +1017,13 @@
 			var v = getPersistentVideo();
 			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
 			v.style.opacity = '1';       // restore visibility (clearVideo keep-alive set it to 0)
-			v.loop = false;              // playlist advances via renderPlayback, not element loop
+			// A lone looping video has NO next item for renderPlayback to advance to (that only
+			// switches items at clock boundaries), and a clock-driven seek can't restart an ENDED
+			// <video> (needs .play(); loop=false + no 'ended' handler froze it at the last frame).
+			// So for a single looping item, use native element loop -> it wraps on its own and the
+			// drift-loop seeks keep it clock-synced. Multi-item playlists keep loop off (advance via
+			// renderPlayback).
+			v.loop = (playback.loop && playback.items.length === 1);
 			v.muted = VIDEO_MUTED;       // muted (kiosk) unless audio wanted; fallback re-mutes if blocked
 			v.volume = 1;                // restore audio (clearVideo set volume=0 for the keep-alive)
 			hideBlackout();              // drop the 'stopped' cover
