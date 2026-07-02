@@ -356,8 +356,18 @@ FIX: no-op the channel methods that touch the handle —
 mmwsconn is the transport; WebCore's close/destroy call the no-ops harmlessly. VERIFIED: with the
 fix, `?tdbg` soaked stable (pid held, on_msg 10→18) and deliberate `ws.close()` runs through
 h_close/o_close with NO new crash (was a reliable SIGSEGV before).
-ALSO added (lifecycle robustness, design-sound but not yet soak-verified — device degraded after a
-very long session, Safari exiting w/o crash reports = jetsam, needs a reboot for a clean soak):
-`~WebSocket` (D0, `__ZN7WebCore9WebSocketD0Ev`) hooked as the SINGLE teardown owner (wsmap_del +
-mmwsconn_free) so a callback never fires on a freed ws (dangling ud on navigate/GC); + each mmwsconn
-callback guards `wsmap_get(ud)` before delivering.
+LIFECYCLE (all VERIFIED on a clean-rebooted device 2026-07-02):
+- `~WebSocket` (D0, `__ZN7WebCore9WebSocketD0Ev`) hooked as the SINGLE teardown owner (wsmap_del +
+  mmwsconn_free) so a callback never fires on a freed ws (dangling ud on navigate/GC); each mmwsconn
+  callback guards `wsmap_get(ud)` before delivering.
+- FINAL close fix: `h_close` NEVER calls WebCore's `WebSocket::close()` (`o_close`) — even with the
+  channel methods no-op'd, close() drove the dead channel further (close timer/bufferedAmount) and
+  vanished Safari (no crash report = watchdog/jetsam, not SIGSEGV). Instead h_close = teardown_ws
+  (mmwsconn_free, closes the socket) + didClose(ws,0) (fires the JS 'close' event) directly.
+VERIFIED on a clean device: `?tdbg` holds (90s, on_msg rising, survives navigation/reconnect);
+`?wstest` deliberate ws.close() → Safari SURVIVES, close=1 + teardown=2 (clean), and the OTHER
+(client) ws keeps delivering after — closing one transplanted socket doesn't disturb others. Zero new
+crashes across the whole clean-device soak. So gate + backend transplant + full open/message/close/
+navigate lifecycle are all working on a 1st-gen iPad.
+NEXT: real demo (video PLAY message bursts) under load; StringImpl::deref to stop the per-msg leak;
+webclip port (com.apple.webapp + UIWebViewWebViewDelegate didClearWindowObject) + fleet.
