@@ -132,10 +132,6 @@ void mm_engine_seek(MMEngine *e, double seconds) {
     if (!e || !e->player) return;
     CMTime t = CMTimeMakeWithSeconds(seconds, (int32_t)NSEC_PER_SEC);
     [PL(e) seekToTime:t toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];   // frame-accurate
-    // NOTE (2026-07-02): tried ±50ms tolerant seeks to cut per-loop re-decode on the 256MB iPad-1
-    // webclip OOM — did NOT prevent the jetsam and muddied the loop, so reverted. The crash is a
-    // cumulative-memory CEILING under sustained video+WebKit+ws, not a single leak (mmvideo objects
-    // release cleanly; removeTimeObserver already present). Production mitigation = periodic RELOAD.
 }
 
 void mm_engine_set_rate(MMEngine *e, float rate) {
