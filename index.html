@@ -33,7 +33,7 @@
         mb('haveWS_' + (typeof window.WebSocket));
         if (window.WebSocket) {
           var tws = new WebSocket('ws://192.168.1.60:3000/sockjs/websocket');
-          tws.onopen = function () { mb('open'); };
+          tws.onopen = function () { mb('open'); setTimeout(function () { try { tws.close(); mb('closeCalled'); } catch (e) {} }, 4000); };
           tws.onmessage = function (ev) { mb('msg_' + encodeURIComponent(('' + ev.data).substr(0, 16))); };
           tws.onerror = function () { mb('error'); };
           tws.onclose = function () { mb('close'); };

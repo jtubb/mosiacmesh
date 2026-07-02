@@ -342,3 +342,22 @@ dyld with NO message — mimics a symbol-bind failure but is NOT (a real bind fa
 now `ldid -S`es the output.
 NEXT: longer soak + real demo (video PLAY bursts) under load; StringImpl::deref to stop the leak;
 then webclip (add com.apple.webapp + the UIWebViewWebViewDelegate didClearWindowObject hook) + fleet.
+
+### §6.6 CLOSE-PATH CRASH FIXED (2026-07-02). The ?tdbg SIGSEGV.
+User: "Safari crashes when loading tdbg." `?wstest` held 19min but `?tdbg` crashed — because the
+client CLOSES its ws (SockJS churn), and `?wstest` never closed. Symbolicated: SIGSEGV
+(EXC_BAD_ACCESS) thread 2 (WebThread), mmwsc offset 0x48b2 = inside `h_close`, at the `o_close(ws)`
+call. ROOT CAUSE: no-op'ing `WebSocketChannel::connect()` leaves the channel's SocketStreamHandle
+NULL; WebCore's `WebSocket::close()` → `m_channel->close()` NULL-derefs it. (Same trap for
+`~WebSocket` → `m_channel->disconnect()`.)
+FIX: no-op the channel methods that touch the handle —
+`WebSocketChannel::close()` (`__ZN7WebCore16WebSocketChannel5closeEv`),
+`disconnect()` (`…10disconnectEv`), `send(String&)` (`…4sendERKN3WTF6StringE`). The channel is inert;
+mmwsconn is the transport; WebCore's close/destroy call the no-ops harmlessly. VERIFIED: with the
+fix, `?tdbg` soaked stable (pid held, on_msg 10→18) and deliberate `ws.close()` runs through
+h_close/o_close with NO new crash (was a reliable SIGSEGV before).
+ALSO added (lifecycle robustness, design-sound but not yet soak-verified — device degraded after a
+very long session, Safari exiting w/o crash reports = jetsam, needs a reboot for a clean soak):
+`~WebSocket` (D0, `__ZN7WebCore9WebSocketD0Ev`) hooked as the SINGLE teardown owner (wsmap_del +
+mmwsconn_free) so a callback never fires on a freed ws (dangling ud on navigate/GC); + each mmwsconn
+callback guards `wsmap_get(ud)` before delivering.

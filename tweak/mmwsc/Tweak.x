@@ -121,12 +121,27 @@ static void str_to_c(const void *wtfstr, char *buf, int bufsz) {
     if (cf) { CFStringGetCString(cf, buf, bufsz, kCFStringEncodingUTF8); CFRelease(cf); }
 }
 
-/* --- delivery: mmwsconn callbacks (ud = the WebSocket*), all on the main run loop --- */
+typedef void (*ws_dtor_t)(void *ws);
+static ws_dtor_t o_wsDtor;
+/* SINGLE teardown owner: when the WebSocket is destroyed (close/stop/navigate/GC all funnel to
+ * ~WebSocket), free its mmwsconn + unmap. Guarantees no mmwsconn callback ever fires on a freed
+ * ws (dangling ud). Runs on the WebThread, same thread as the callbacks — no race. */
+static void teardown_ws(void *ws) {
+    MMWSConn *conn = wsmap_get(ws);
+    if (conn) { mmlog("[mmwsc/tx] teardown ws=%p conn=%p\n", ws, conn); wsmap_del(ws); mmwsconn_free(conn); }
+}
+static void h_wsDtor(void *ws) { teardown_ws(ws); if (o_wsDtor) o_wsDtor(ws); }
+
+/* --- delivery: mmwsconn callbacks (ud = the WebSocket*), all on the WebThread run loop.
+ * Each guards on wsmap_get(ud): if the ws was already torn down, drop the event. Teardown/free is
+ * owned solely by ~WebSocket (h_wsDtor) — the callbacks only DELIVER, never free. --- */
 static void cb_open(MMWSConn *c, void *ud) {
+    if (!wsmap_get(ud)) return;
     mmlog("[mmwsc/tx] on_open ws=%p -> didConnect\n", ud);
     if (f_didConnect) f_didConnect(ud);
 }
 static void cb_msg(MMWSConn *c, uint8_t op, const uint8_t *data, size_t len, void *ud) {
+    if (!wsmap_get(ud)) return;
     char buf[4096]; size_t n = len < sizeof(buf) - 1 ? len : sizeof(buf) - 1;
     memcpy(buf, data, n); buf[n] = 0;
     mmlog("[mmwsc/tx] on_msg ws=%p op=%d len=%d -> didReceiveMessage\n", ud, op, (int)len);
@@ -139,13 +154,14 @@ static void cb_msg(MMWSConn *c, uint8_t op, const uint8_t *data, size_t len, voi
     }
 }
 static void cb_close(MMWSConn *c, uint16_t code, void *ud) {
+    if (!wsmap_get(ud)) return;
     mmlog("[mmwsc/tx] on_close ws=%p code=%d -> didClose\n", ud, code);
-    wsmap_del(ud);
-    if (f_didClose) f_didClose(ud, 0);
+    if (f_didClose) f_didClose(ud, 0);     /* deliver only; ~WebSocket owns free+unmap */
 }
 static void cb_error(MMWSConn *c, const char *msg, void *ud) {
+    if (!wsmap_get(ud)) return;
     mmlog("[mmwsc/tx] on_error ws=%p %s -> didReceiveMessageError\n", ud, msg ? msg : "");
-    if (f_didMsgErr) f_didMsgErr(ud);
+    if (f_didMsgErr) f_didMsgErr(ud);      /* deliver only; ~WebSocket owns free+unmap */
 }
 
 /* parse "ws://host[:port][/path]" (wss -> port 443 default, but mmwsconn has no TLS) */
@@ -192,6 +208,13 @@ static void h_chanConnect(void *chan) {
     /* NO-OP: never start the old-protocol socket; mmwsconn is the real transport. */
     mmlog("[mmwsc/tx] WebSocketChannel::connect no-op (chan=%p)\n", chan);
 }
+/* Since connect() is a no-op, the channel's SocketStreamHandle is never created (m_handle NULL).
+ * WebCore's close/destroy path (WebSocket::close -> m_channel->close(); ~WebSocket ->
+ * m_channel->disconnect()) would NULL-deref it -> SIGSEGV. No-op ALL channel methods that touch the
+ * handle; mmwsconn is the real transport, so the channel is inert. */
+static void *o_chanClose, *o_chanDisc, *o_chanSend;
+static void h_chanNoop(void *chan) { }
+static void h_chanSendNoop(void *chan, const void *str) { }
 
 %hook TabDocument
 - (void)webView:(id)wv didClearWindowObject:(id)win forFrame:(id)frame {
@@ -232,6 +255,14 @@ static void h_chanConnect(void *chan) {
     if (p) MSHookFunction(p, (void *)h_close, (void **)&o_close);
     p = MSFindSymbol(NULL, "__ZN7WebCore16WebSocketChannel7connectEv");
     if (p) MSHookFunction(p, (void *)h_chanConnect, (void **)&o_chanConnect);
+    p = MSFindSymbol(NULL, "__ZN7WebCore16WebSocketChannel5closeEv");
+    if (p) MSHookFunction(p, (void *)h_chanNoop, (void **)&o_chanClose);
+    p = MSFindSymbol(NULL, "__ZN7WebCore16WebSocketChannel10disconnectEv");
+    if (p) MSHookFunction(p, (void *)h_chanNoop, (void **)&o_chanDisc);
+    p = MSFindSymbol(NULL, "__ZN7WebCore16WebSocketChannel4sendERKN3WTF6StringE");
+    if (p) MSHookFunction(p, (void *)h_chanSendNoop, (void **)&o_chanSend);
+    p = MSFindSymbol(NULL, "__ZN7WebCore9WebSocketD0Ev");   /* ~WebSocket (deleting dtor) */
+    if (p) MSHookFunction(p, (void *)h_wsDtor, (void **)&o_wsDtor);
     mmlog("[mmwsc] tx: didConnect=%p didMsg=%p didClose=%p createCF=%p strCtor=%p connectHooked=%d chanHooked=%d\n",
           (void *)f_didConnect, (void *)f_didMsg, (void *)f_didClose, (void *)f_createCF, (void *)f_strCtor,
           o_connect != 0, o_chanConnect != 0);
