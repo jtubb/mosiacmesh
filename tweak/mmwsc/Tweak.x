@@ -199,10 +199,12 @@ static bool h_send(void *ws, const void *msg, int *ec) {
     return true;   /* skip the dead channel; report queued */
 }
 static void h_close(void *ws) {
-    MMWSConn *conn = wsmap_get(ws);
-    mmlog("[mmwsc/tx] close ws=%p conn=%p\n", ws, conn);
-    if (conn) mmwsconn_close(conn, 1000);
-    if (o_close) o_close(ws);   /* WebCore sets m_state=CLOSING (channel close is harmless-idle) */
+    mmlog("[mmwsc/tx] close ws=%p (teardown + didClose, NO o_close)\n", ws);
+    /* Do NOT call o_close: WebCore's WebSocket::close() drives the half-baked channel beyond the
+       methods we no-op'd (close timer / bufferedAmount / etc.) and takes Safari down. Instead tear
+       down mmwsconn (closes the socket) and fire the JS 'close' event via didClose directly. */
+    teardown_ws(ws);                     /* unmap + mmwsconn_free (closes the socket) */
+    if (f_didClose) f_didClose(ws, 0);   /* fire the JS 'close' event */
 }
 static void h_chanConnect(void *chan) {
     /* NO-OP: never start the old-protocol socket; mmwsconn is the real transport. */
