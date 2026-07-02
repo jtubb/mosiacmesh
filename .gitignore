@@ -54,3 +54,4 @@ graphify-out/
 
 # Timestamped settings backups (data-safety net)
 settings_backups/
+.superpowers/

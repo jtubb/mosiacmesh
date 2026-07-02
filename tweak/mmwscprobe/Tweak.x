@@ -125,5 +125,61 @@ static void probe(const char *sym) {
     probe("__ZN7WebCore9WebSocket8didCloseEjNS_9WebSocket31ClosingHandshakeCompletionStatusEtRKN3WTF6StringE");
     probe("__ZN7WebCore9WebSocket8didCloseEt");
 
+    plog("-- ITER4: alternate gate paths (Settings C++ + WebPreferences ObjC) --\n");
+    probe("__ZN7WebCore8Settings19setWebSocketEnabledEb");
+    probe("__ZN7WebCore8Settings20setWebSocketsEnabledEb");
+    probe("__ZNK7WebCore8Settings16webSocketEnabledEv");
+    probe("__ZN7WebCore22RuntimeEnabledFeatures6sharedEv");
+    /* the DOM-binding constructor getter (if exported, hook it to always return the ctor) */
+    probe("__ZN7WebCoreL31jsDOMWindowWebSocketConstructorEPN3JSC9ExecStateENS0_7JSValueERKNS0_12PropertyNameE");
+    probe("__ZN7WebCore31jsDOMWindowWebSocketConstructorEPN3JSC9ExecStateENS0_7JSValueERKNS0_12PropertyNameE");
+
+    plog("-- ITER4: ObjC WebPreferences / WebView gate selectors --\n");
+    Class wp = objc_getClass("WebPreferences");
+    plog("  WebPreferences class: %s\n", wp ? "EXISTS" : "-");
+    if (wp) {
+        const char *sels[] = { "setWebSocketsEnabled:", "setWebSocketEnabled:",
+                               "webSocketsEnabled", "_setWebSocketsEnabled:",
+                               "setWebSocketEnabledPreferenceKey:", "setHixie76WebSocketProtocolEnabled:" };
+        for (int i = 0; i < 6; i++) {
+            SEL s = sel_registerName(sels[i]);
+            plog("    -[WebPreferences %-38s] %s\n", sels[i],
+                 class_getInstanceMethod(wp, s) ? "YES" : "-");
+        }
+    }
+    Class pv = objc_getClass("WebView");
+    plog("  WebView class: %s\n", pv ? "EXISTS" : "-");
+    if (pv) {
+        const char *cs[] = { "_enableWebSocket", "enableWebSockets", "_setWebSocketsEnabled:" };
+        for (int i = 0; i < 3; i++) {
+            SEL s = sel_registerName(cs[i]);
+            plog("    WebView responds %-24s inst=%s cls=%s\n", cs[i],
+                 class_getInstanceMethod(pv, s) ? "Y" : "-",
+                 class_getClassMethod(pv, s) ? "Y" : "-");
+        }
+    }
+
+    plog("-- ITER5: EXPOSURE path (install window.WebSocket via getDOMConstructor + JSC C API) --\n");
+    probe("__ZN7WebCore17getDOMConstructorINS_22JSWebSocketConstructorEEEPN3JSC8JSObjectEPNS2_9ExecStateEPKNS_17JSDOMGlobalObjectE");
+    probe("_JSContextGetGlobalObject");
+    probe("_JSObjectSetProperty");
+    probe("_JSStringCreateWithUTF8CString");
+    probe("_JSStringRelease");
+    probe("_JSEvaluateScript");
+    /* which class owns the frame-load delegate in Safari + WebFrame globalContext access */
+    Class wf = objc_getClass("WebFrame");
+    plog("  WebFrame class: %s\n", wf ? "EXISTS" : "-");
+    if (wf) {
+        const char *s[] = { "globalContext", "_globalContextRef", "DOMDocument", "dataSource" };
+        for (int i = 0; i < 4; i++) { SEL se = sel_registerName(s[i]);
+            plog("    -[WebFrame %-18s] %s\n", s[i], class_getInstanceMethod(wf, se) ? "YES" : "-"); }
+    }
+    Class td = objc_getClass("TabDocument");
+    if (td) {
+        SEL se = sel_registerName("webView:didClearWindowObject:forFrame:");
+        plog("  -[TabDocument webView:didClearWindowObject:forFrame:] %s\n",
+             class_getInstanceMethod(td, se) ? "YES (Safari injection hook)" : "-");
+    }
+
     plog("[mmwscprobe] done.\n");
 }
