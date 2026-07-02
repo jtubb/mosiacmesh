@@ -1017,7 +1017,13 @@
 			var v = getPersistentVideo();
 			v.style.display = 'block';   // viewport-locked (fixed 100%/100%) in <body>
 			v.style.opacity = '1';       // restore visibility (clearVideo keep-alive set it to 0)
-			v.loop = false;              // playlist advances via renderPlayback, not element loop
+			// A lone looping video has NO next item for renderPlayback to advance to (that only
+			// switches items at clock boundaries), and a clock-driven seek can't restart an ENDED
+			// <video> (needs .play(); loop=false + no 'ended' handler froze it at the last frame).
+			// So for a single looping item, use native element loop -> it wraps on its own and the
+			// drift-loop seeks keep it clock-synced. Multi-item playlists keep loop off (advance via
+			// renderPlayback).
+			v.loop = (playback.loop && playback.items.length === 1);
 			v.muted = VIDEO_MUTED;       // muted (kiosk) unless audio wanted; fallback re-mutes if blocked
 			v.volume = 1;                // restore audio (clearVideo set volume=0 for the keep-alive)
 			hideBlackout();              // drop the 'stopped' cover
