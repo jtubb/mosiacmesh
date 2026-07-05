@@ -1634,9 +1634,14 @@
 			}
 			else if (data_obj.REQUEST == "CONFIG")
 			{
-				playback.warmable = !!(data_obj.PAYLOAD && data_obj.PAYLOAD.warmable);
-				// If the buffer was already built single-element, upgrade to two elements now.
-				if (playback.vbuf) { playback.vbuf.setup(playback.warmable); playback.pvid = playback.vbuf.active(); }
+				var _w = !!(data_obj.PAYLOAD && data_obj.PAYLOAD.warmable);
+				// warmable is device-constant; REGISTER (=> CONFIG) is re-sent on EVERY reconnect. Only
+				// (re)build the buffer when warmable actually CHANGES, so a mid-playback reconnect CONFIG
+				// never rebuilds/orphans the live (and, on iPad-1, blessed) <video>.
+				if (_w !== playback.warmable) {
+					playback.warmable = _w;
+					if (playback.vbuf) { playback.vbuf.setup(_w); playback.pvid = playback.vbuf.active(); }
+				}
 			}
 			else if(data_obj.REQUEST == "STOP")
 			{
