@@ -84,6 +84,23 @@ from mosaicmesh.calibration import (
 from mosaicmesh.websocket.session_store import session_request
 
 
+def client_warmable(client):
+    """True if the device can pre-decode a second <video> for clip warming.
+    False for the legacy iPad-1 class (iOS/Safari <= 5 / old WebKit), which cannot
+    sustain two concurrent inline decodes (verified 2026-07-05). Unknown => True
+    (assume modern; the client warm path no-ops safely if it can't actually warm)."""
+    def _major(v):
+        try:
+            return int(str(v or "").split(".")[0])
+        except (ValueError, TypeError):
+            return None
+    os_name = (getattr(client, "osName", "") or "").lower()
+    os_major = _major(getattr(client, "osVersion", ""))
+    if os_name in ("ios", "iphone os") and os_major is not None and os_major <= 5:
+        return False
+    return True
+
+
 def msg_response(msg,session):
     import server
     clientid = session.id
@@ -307,6 +324,11 @@ def msg_response(msg,session):
             "autoConfigured": client.autoConfigured,
             "capabilities": client.capabilities
         }
+
+        # Tell the client whether it may double-buffer video (clip warming). Per-client
+        # (device-derived), so it can't ride the group-wide PREPARE payload.
+        broadcast_to_client(msg["SRC"], {"REQUEST": "CONFIG",
+                                         "PAYLOAD": {"warmable": client_warmable(client)}})
 
     elif(msg["REQUEST"] == "UPDATECLIENT"):
         # Cache client reference to avoid repeated dictionary lookups

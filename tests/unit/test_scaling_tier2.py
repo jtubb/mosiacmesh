@@ -65,6 +65,8 @@ def _run_register(monkeypatch, src, ua):
     class _Mgr:
         def broadcast(self, *a, **k):
             pass
+        def get(self, session_id, default=None):
+            return default
     monkeypatch.setattr(server, "socketmanager", _Mgr(), raising=False)
     legacy.msg_response(_register_msg(src), _Sess())
     return server.settings.clients[src]
