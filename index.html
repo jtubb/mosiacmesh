@@ -23,6 +23,7 @@
   <script src="/js/animations.js"></script>
   <script src="/js/transitions.js"></script>
   <script src="/js/mesh-viewport.js"></script>
+  <script src="/js/video-buffer.js"></script>
   <script>
     /* mmws transplant self-test (ES5). Gated on ?wstest — no effect otherwise. Beacons results to
        the server access log as /wsprobe_* image requests so we can verify the native ws transplant
@@ -124,6 +125,7 @@
 		// the activation does NOT transfer to a freshly-created element. So we reuse
 		// ONE persistent <video> (pvid) across items and bless it once via a tap
 		// (see #tapstart). pvid persists across items; videoSrc tracks its loaded src.
+		warmable: false, vbuf: null,
 		pvid: null, activated: false, videoSrc: null, armTimer: null, _armPlaying: null,
 		boundaryTimer: null,
 		// shownIndex: the playlist index whose DOM (canvas/<video>) is currently
@@ -179,50 +181,47 @@
 	// no audio).
 	var VIDEO_MUTED = false;
 
-	// One persistent video element, created once and reused for every video item
-	// so a single user gesture keeps the whole session playable on iOS.
+	// One persistent video element (or two on warmable devices), created once and
+	// reused for every video item so a single user gesture keeps the whole session
+	// playable on iOS. On iPad-1 (warmable=false) exactly one element is created,
+	// preserving today's behavior. On modern devices a second element warms the
+	// next clip in the background.
 	function getPersistentVideo() {
-		if (!playback.pvid) {
-			var v = document.createElement('video');
-			v.muted = VIDEO_MUTED; // unmuted only when audio is wanted (needs a gesture)
-			v.setAttribute('webkit-playsinline', '');
-			v.setAttribute('playsinline', '');
-			v.preload = 'auto';
-			// Lock the video to the viewport itself (position:fixed, full size). It
-			// is appended to <body>, NOT #canvas — #canvas is transform-centered,
-			// which (a) is a containing block that would trap a fixed child and
-			// (b) mis-positions under scroll on iOS-5. Explicit 100%/100% also sizes
-			// it (iOS-5 won't auto-size a <video> to its content).
-			v.style.position = 'fixed';
-			v.style.left = '0'; v.style.top = '0';
-			v.style.width = '100%'; v.style.height = '100%';
-			v.style.background = '#000';
-			v.style.zIndex = '1';
-			v.style.display = 'none';
-			// Once the video actually starts (modern autoplay, the muted fallback,
-			// or a post-tap play), drop the overlay and mark the session active. On
-			// iPad 1 'playing' won't fire until the gesture, so the overlay persists.
-			v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
-			// CLIENT-AUTHORITATIVE cache downgrade. If a LOCALHOST (cached) source
-			// fails to load, OUR own lighttpd genuinely isn't serving -- tell the
-			// server so it stops handing us 127.0.0.1 URLs (central on the next
-			// play). This is now the ONLY downgrade signal: the server's SSH probe
-			// no longer downgrades on failure, because a server->device WiFi blip
-			// says nothing about whether our own localhost lighttpd is up. localhost
-			// reachability is a LOCAL, blip-immune fact only the device can assert.
-			v.addEventListener('error', function () {
-				try {
-					var s = '' + (v.currentSrc || v.src || '');
-					if (s.indexOf('127.0.0.1') !== -1 &&
-							typeof sock !== 'undefined' && sock !== null) {
-						sock.send(generateMessage("SRV", "ANNOUNCE_CACHE_MODE",
-												  {"mode": "none"}));
-						if (typeof dbg === 'function') { dbg("cache-local-fail"); }
-					}
-				} catch (e) { /* best-effort */ }
+		if (!playback.vbuf) {
+			// mkVideo = the EXACT per-element setup the single-element block used (moved
+			// out of getPersistentVideo verbatim), so both elements are identical to
+			// today's pvid. The vbuf's setup() owns display/opacity/zIndex, so mkVideo
+			// does NOT set display:none.
+			var mkVideo = function () {
+				var v = document.createElement('video');
+				v.muted = VIDEO_MUTED; // unmuted only when audio is wanted (needs a gesture)
+				v.setAttribute('webkit-playsinline', '');
+				v.setAttribute('playsinline', '');
+				v.preload = 'auto';
+				v.style.position = 'fixed';
+				v.style.left = '0'; v.style.top = '0';
+				v.style.width = '100%'; v.style.height = '100%';
+				v.style.background = '#000';
+				v.style.zIndex = '1';
+				v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+				v.addEventListener('error', function () {
+					try {
+						var s = '' + (v.currentSrc || v.src || '');
+						if (s.indexOf('127.0.0.1') !== -1 && typeof sock !== 'undefined' && sock !== null) {
+							sock.send(generateMessage("SRV", "ANNOUNCE_CACHE_MODE", {"mode": "none"}));
+							if (typeof dbg === 'function') { dbg("cache-local-fail"); }
+						}
+					} catch (e) { /* best-effort */ }
+				});
+				return v;
+			};
+			playback.vbuf = makeVideoBuffer({
+				mkVideo: mkVideo,
+				mount: function (el) { document.body.appendChild(el); },
+				isVideo: isVideoItem
 			});
-			document.body.appendChild(v);
-			playback.pvid = v;
+			playback.vbuf.setup(!!playback.warmable);
+			playback.pvid = playback.vbuf.active();
 		}
 		return playback.pvid;
 	}
@@ -1031,6 +1030,9 @@
 			playback.video = v;
 			playback.currentEl = v;
 			playback.videoIndex = i;
+			// Warm the next clip on the idle buffer (modern only; no-op on iPad-1).
+			var _ni = nextPlaylistIndex(i, playback.items.length, playback.loop);
+			if (_ni >= 0) { playback.vbuf.warmNext(playback.items[_ni]); }
 			var seekAndPlay = function() {
 				try { v.currentTime = (offsetMs || 0) / 1000; } catch (e) {}
 				var p = v.play();
@@ -1046,14 +1048,19 @@
 				}
 			};
 			if (item.file !== playback.videoSrc) {
-				// New clip: (re)load, then seek+play once metadata is ready. Cancel any
-				// boundary seek still pending for the previous clip's timeline.
 				if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
 				playback.videoSrc = item.file;
-				v.src = item.file;
-				var once = function() { v.removeEventListener('loadedmetadata', once); seekAndPlay(); };
-				v.addEventListener('loadedmetadata', once);
-				try { v.load(); } catch (e) {}
+				var warm = playback.vbuf.flipTo(item.file);   // non-null => already-loaded warm element
+				if (warm) {
+					playback.pvid = warm; v = warm;
+					playback.video = v; playback.currentEl = v;
+					seekAndPlay();                              // warm: no src/load, just seek+play (instant)
+				} else {
+					v.src = item.file;                          // cold path (unchanged): load then seek+play
+					var once = function() { v.removeEventListener('loadedmetadata', once); seekAndPlay(); };
+					v.addEventListener('loadedmetadata', once);
+					try { v.load(); } catch (e) {}
+				}
 			} else if (v.readyState >= 1) {
 				// Same clip already loaded. Only (re)seek if it's paused or
 				// meaningfully off the target. A redundant PLAY/renderPlayback for
@@ -1624,6 +1631,12 @@
 				} else {
 					renderPlayback();
 				}
+			}
+			else if (data_obj.REQUEST == "CONFIG")
+			{
+				playback.warmable = !!(data_obj.PAYLOAD && data_obj.PAYLOAD.warmable);
+				// If the buffer was already built single-element, upgrade to two elements now.
+				if (playback.vbuf) { playback.vbuf.setup(playback.warmable); playback.pvid = playback.vbuf.active(); }
 			}
 			else if(data_obj.REQUEST == "STOP")
 			{
