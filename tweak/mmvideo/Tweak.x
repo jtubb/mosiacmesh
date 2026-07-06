@@ -21,6 +21,7 @@ static NSMutableDictionary *gEngines = nil;
 // (currentTime/duration) which can be called from the QuickTime-plugin thread — so they must
 // NOT touch the non-thread-safe gEngines dict. The wall shows one video, so one engine.
 static MMEngine *gCurrentEngine = NULL;
+double g_curTime = 0.0; double g_curDuration = 0.0;   // stable: getter reads these, never the freeable engine
 static inline id keyFor(void *self){ return [NSValue valueWithPointer:self]; }
 static MMEngine *engineFor(void *self){
     id v = gEngines ? [gEngines objectForKey:keyFor(self)] : nil;
@@ -114,8 +115,8 @@ static void h_HTMLplay(void *self, bool isUserGesture){ (void)isUserGesture; o_H
 // ivar-mirror can't reach them). They're C++ virtuals; we overwrite the vtable SLOT (one
 // aligned pointer write = atomic), NOT the function prologue (the §21 torn-patch crash). Use
 // gCurrentEngine (atomic), never gEngines — these may run on the QuickTime-plugin thread.
-static float h_vt_currentTime(void *self){ MMEngine *e=gCurrentEngine; return e?(float)mm_engine_current_time(e):o_currentTime(self); }
-static float h_vt_duration(void *self){    MMEngine *e=gCurrentEngine; return e?(float)mm_engine_duration(e)   :o_duration(self);    }
+static float h_vt_currentTime(void *self){ return gCurrentEngine ? (float)g_curTime : o_currentTime(self); }
+static float h_vt_duration(void *self){ return gCurrentEngine ? (float)g_curDuration : o_duration(self); }
 
 // Make the vtable slot writable (shared-cache page -> COW private copy via VM_PROT_COPY, the
 // same way code patching works) and overwrite it. Aligned word write is atomic for readers.

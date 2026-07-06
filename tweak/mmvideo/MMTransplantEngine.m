@@ -25,6 +25,8 @@ struct MMEngine {
     MMVoidFn netChanged, readyChanged, timeChanged;
     int net, ready;
     double curTime;    // cached from the observer block (avoids stret [player currentTime])
+    double curDuration;// cached on the observer's MAIN queue — reading it live in the vtable
+                       // getter (WebThread) via valueForKey tripped a CF-assertion SIGTRAP.
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
     int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
     float desiredRate; // last NONZERO rate requested — what play() resumes at (see mm_engine_play)
@@ -88,6 +90,7 @@ static void mm_engine_teardown(MMEngine *e) {
     if (e->player)       { id t = (__bridge_transfer id)e->player;       e->player = NULL;       (void)t; }
 }
 
+extern double g_curTime; extern double g_curDuration;
 void mm_engine_load(MMEngine *e, const char *url) {
     if (!e || !url) return;
     @autoreleasepool {
@@ -109,6 +112,14 @@ void mm_engine_load(MMEngine *e, const char *url) {
                      queue:dispatch_get_main_queue()
                      usingBlock:^(CMTime t){
                          eng->curTime = mm_secs(t);   // cache currentTime (avoids stret read)
+                         // cache duration HERE (main queue) so the WebThread vtable getter
+                         // only does an atomic read — never a live valueForKey (SIGTRAP §crash).
+                         @autoreleasepool {
+                             id dv = [IT(eng) valueForKey:@"duration"];
+                             if (dv) { CMTime d; [dv getValue:&d]; double s = mm_secs(d);
+                                       if (s > 0.0 && s < 1.0e7) eng->curDuration = s; }
+                         }
+                         g_curTime = eng->curTime; g_curDuration = eng->curDuration;  // publish to stable globals
                          mm_engine_poll(eng);
                      }];
         e->timeObserver = (__bridge_retained void *)obs;
@@ -146,19 +157,10 @@ void mm_engine_set_rate(MMEngine *e, float rate) {
 // [player currentTime]); duration is left to the ORIGINAL engine via the Tweak.x
 // fallback (avoids stret [item duration] + CMTimeGetSeconds — REFINDINGS §13).
 double mm_engine_current_time(MMEngine *e) { return e ? e->curTime : 0.0; }
-double mm_engine_duration(MMEngine *e) {
-    if (!e || !e->item) return 0.0;
-    @autoreleasepool {
-        // AVPlayerItem.duration is a CMTime (stret return -> crashes, §13). Read it the
-        // no-stret way: KVC boxes it as an NSValue (valueForKey: -> id), and getValue: is
-        // void/pointer. Guard indefinite/NaN (kCMTimeIndefinite before the item is ready).
-        id dv = [IT(e) valueForKey:@"duration"];
-        if (!dv) return 0.0;
-        CMTime d; [dv getValue:&d];
-        double s = mm_secs(d);
-        return (s > 0.0 && s < 1.0e7) ? s : 0.0;
-    }
-}
+// Return the value the observer block cached on the MAIN queue. The live valueForKey read
+// now happens there (safe), NOT here — h_vt_duration calls this on the WebThread, where a
+// live AVFoundation/CF call trips a CF-assertion SIGTRAP (the vtable-getter crash).
+double mm_engine_duration(MMEngine *e) { return e ? e->curDuration : 0.0; }
 int   mm_engine_network_state(MMEngine *e) { return e ? e->net : 0; }
 int   mm_engine_ready_state(MMEngine *e)   { return e ? e->ready : 0; }
 void *mm_engine_player_layer(MMEngine *e)  { return e ? e->layer : NULL; }   // AVPlayerLayer* (CALayer*)
