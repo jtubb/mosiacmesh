@@ -21,7 +21,7 @@ static NSMutableDictionary *gEngines = nil;
 // (currentTime/duration) which can be called from the QuickTime-plugin thread — so they must
 // NOT touch the non-thread-safe gEngines dict. The wall shows one video, so one engine.
 static MMEngine *gCurrentEngine = NULL;
-double g_curTime = 0.0; double g_curDuration = 0.0;   // stable: getter reads these, never the freeable engine
+volatile float g_curTime = 0.0f; volatile float g_curDuration = 0.0f;   // I3: 4-byte atomic on armv7; getter reads these, never the freeable engine
 static inline id keyFor(void *self){ return [NSValue valueWithPointer:self]; }
 static MMEngine *engineFor(void *self){
     id v = gEngines ? [gEngines objectForKey:keyFor(self)] : nil;
@@ -30,7 +30,9 @@ static MMEngine *engineFor(void *self){
 static void dropEngine(void *self){
     id k = keyFor(self), v = [gEngines objectForKey:k];
     if (v){ MMEngine *e=(MMEngine *)[v pointerValue]; if(e==gCurrentEngine) gCurrentEngine=NULL;
-            mm_engine_free(e); [gEngines removeObjectForKey:k]; }
+            [gEngines removeObjectForKey:k]; mm_engine_mark_dead(e); mm_engine_pause(e);
+            dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_free(e); });   // C1: free on main = serialized w/ observer block
+    }
 }
 
 typedef CFStringRef (*CreateCFFn)(void *);   // WTF::String::createCFString() const

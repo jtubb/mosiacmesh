@@ -29,6 +29,7 @@ struct MMEngine {
                        // getter (WebThread) via valueForKey tripped a CF-assertion SIGTRAP.
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
     int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
+    int dead;          // C1b: set in dropEngine (WebThread); observer bails so it can't publish stale time
     float desiredRate; // last NONZERO rate requested — what play() resumes at (see mm_engine_play)
 };
 
@@ -85,12 +86,12 @@ static void mm_engine_teardown(MMEngine *e) {
         [PL(e) removeTimeObserver:(__bridge id)e->timeObserver];
     }
     if (e->timeObserver) { id t = (__bridge_transfer id)e->timeObserver; e->timeObserver = NULL; (void)t; }
-    if (e->layer)        { id t = (__bridge_transfer id)e->layer;        e->layer = NULL;        (void)t; }
+    if (e->layer)        { id t = (__bridge_transfer id)e->layer; [t removeFromSuperlayer]; e->layer = NULL; (void)t; }  // I7: unparent
     if (e->item)         { id t = (__bridge_transfer id)e->item;         e->item = NULL;         (void)t; }
     if (e->player)       { id t = (__bridge_transfer id)e->player;       e->player = NULL;       (void)t; }
 }
 
-extern double g_curTime; extern double g_curDuration;
+extern volatile float g_curTime; extern volatile float g_curDuration;
 void mm_engine_load(MMEngine *e, const char *url) {
     if (!e || !url) return;
     @autoreleasepool {
@@ -106,11 +107,12 @@ void mm_engine_load(MMEngine *e, const char *url) {
         e->item   = (__bridge_retained void *)item;
         e->player = (__bridge_retained void *)player;
         e->layer  = (__bridge_retained void *)layer;
-        e->net = 2; e->ready = 0;   // Loading / HaveNothing until status advances
+        e->net = 2; e->ready = 0; e->dead = 0;   // Loading / HaveNothing until status advances
         MMEngine *eng = e;          // capture the C pointer (no retain cycle)
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
                      usingBlock:^(CMTime t){
+                         if (eng->dead) return;   // C1b: dropped engine — stop publishing (no flicker/UAF)
                          eng->curTime = mm_secs(t);   // cache currentTime (avoids stret read)
                          // cache duration HERE (main queue) so the WebThread vtable getter
                          // only does an atomic read — never a live valueForKey (SIGTRAP §crash).
@@ -137,6 +139,7 @@ void mm_engine_play(MMEngine *e)  {
     }
 }
 void mm_engine_pause(MMEngine *e) { if (e && e->player){ [PL(e) pause]; e->playing = 0; } }
+void mm_engine_mark_dead(MMEngine *e){ if (e) e->dead = 1; }  // C1b: called from dropEngine
 int  mm_engine_paused(MMEngine *e){ return e ? !e->playing : 1; }   // tracked flag, no .rate read
 
 void mm_engine_seek(MMEngine *e, double seconds) {
