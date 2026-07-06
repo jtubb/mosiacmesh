@@ -30,6 +30,7 @@ struct MMEngine {
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
     int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
     int dead;          // C1b: set in dropEngine (WebThread); observer bails so it can't publish stale time
+    double lastCt; int stallTicks;   // vtfix5: near-end stall watchdog
     float desiredRate; // last NONZERO rate requested — what play() resumes at (see mm_engine_play)
 };
 
@@ -107,7 +108,7 @@ void mm_engine_load(MMEngine *e, const char *url) {
         e->item   = (__bridge_retained void *)item;
         e->player = (__bridge_retained void *)player;
         e->layer  = (__bridge_retained void *)layer;
-        e->net = 2; e->ready = 0; e->dead = 0;   // Loading / HaveNothing until status advances
+        e->net = 2; e->ready = 0; e->dead = 0; e->lastCt = -1.0; e->stallTicks = 0;   // Loading / HaveNothing until status advances
         MMEngine *eng = e;          // capture the C pointer (no retain cycle)
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
@@ -122,6 +123,13 @@ void mm_engine_load(MMEngine *e, const char *url) {
                                        if (s > 0.0 && s < 1.0e7) eng->curDuration = s; }
                          }
                          g_curTime = eng->curTime; g_curDuration = eng->curDuration;  // publish to stable globals
+                         { if (eng->playing && eng->curTime == eng->lastCt) eng->stallTicks++; else eng->stallTicks = 0;
+                           eng->lastCt = eng->curTime;
+                           if (eng->stallTicks >= 6 && eng->curDuration > 1.0 && eng->curTime > eng->curDuration - 2.0) {
+                             eng->stallTicks = 0;
+                             [PL(eng) seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
+                             PL(eng).rate = (eng->desiredRate > 0.0f ? eng->desiredRate : 1.0f);
+                             FILE *_f=fopen("/tmp/mmvideo.log","a"); if(_f){fprintf(_f,"[dbg] STALL-LOOP recovered near end%c",10);fclose(_f);} } }
                          mm_engine_poll(eng);
                      }];
         e->timeObserver = (__bridge_retained void *)obs;
@@ -146,6 +154,7 @@ void mm_engine_seek(MMEngine *e, double seconds) {
     if (!e || !e->player) return;
     CMTime t = CMTimeMakeWithSeconds(seconds, (int32_t)NSEC_PER_SEC);
     [PL(e) seekToTime:t toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];   // frame-accurate
+    if (e->playing) { PL(e).rate = (e->desiredRate > 0.0f ? e->desiredRate : 1.0f); }  // vtfix4: re-assert rate so a near-boundary seek can't strand the player stopped
 }
 
 void mm_engine_set_rate(MMEngine *e, float rate) {
