@@ -81,7 +81,7 @@ static void h_load(void *self, void *strRef){
     gCurrentEngine = eng;                        // for the vtable getters (atomic, cross-thread)
     mm_engine_load(eng, [url UTF8String]);
 }
-static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); { char _b[64]; snprintf(_b,sizeof _b,"[dbg] SEEK t=%.2f gct=%.2f",(double)t,(double)g_curTime); mmlog(_b); } if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
+static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
 static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
 static void h_play(void *self){ MMEngine *e=engineFor(self); if(e){ mm_engine_play(e); mm_slot_in(self); mm_hook_controller(self); } else o_play(self); }
 static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
