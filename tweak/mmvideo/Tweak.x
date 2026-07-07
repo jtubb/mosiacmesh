@@ -39,10 +39,6 @@ static void  (*o_setRate)(void*,float);
 static void  (*o_play)(void*);
 static void  (*o_pause)(void*);
 static void  (*o_cancelLoad)(void*);
-static float (*o_maxTimeSeekable)(void*);
-static bool  (*o_paused)(void*);
-static int   (*o_networkState)(void*);
-static int   (*o_readyState)(void*);
 static void  (*o_HTMLplay)(void*, bool);      // WebCore::HTMLMediaElement::play(bool isUserGesture)
 
 
@@ -76,12 +72,6 @@ static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) d
 static void h_play(void *self){ MMEngine *e=engineFor(self); if(e){ dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_play(e); mm_slot_in(e, self); mm_hook_controller(self); }); } else o_play(self); }
 static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_pause(e); }); else o_pause(self); }
 static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
-// maxTimeSeekable comes from the ORIGINAL engine (which loaded the URL via o_load) — avoids
-// the engine doing a stret CMTime read that crashes the iOS-5.1 load (REFINDINGS §13).
-static float h_maxTimeSeekable(void *self){ return o_maxTimeSeekable(self); }
-static bool  h_paused(void *self){ MMEngine *e=engineFor(self); return e? (mm_engine_paused(e)?true:false) : o_paused(self); }
-static int   h_networkState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_network_state(e):o_networkState(self); }
-static int   h_readyState(void *self){ MMEngine *e=engineFor(self); return e?mm_engine_ready_state(e):o_readyState(self); }
 
 // AUTOPLAY: WebCore's HTMLMediaElement gates load() + play()/setRate() on m_restrictions,
 // which it derives from Settings::mediaPlaybackRequiresUserGesture() (true on iOS-5). That
