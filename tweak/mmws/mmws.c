@@ -115,8 +115,11 @@ int mmws_make_key(const uint8_t rnd16[16], char *out, size_t outlen) {
     return b64enc(rnd16, 16, out, outlen) ? 1 : 0;
 }
 
+/* Reject CR/LF so a crafted ua/origin can't inject extra headers into the handshake. */
+static int mmws_hdr_safe(const char *s){ for(;*s;s++) if(*s==13||*s==10) return 0; return 1; }
 int mmws_build_open_request(const char *host, const char *path,
-                            const char *key_b64, char *out, size_t outlen) {
+                            const char *key_b64, const char *ua, const char *origin,
+                            char *out, size_t outlen) {
     if (!host || !path || !key_b64 || !out) return 0;
     int n = snprintf(out, outlen,
         "GET %s HTTP/1.1\r\n"
@@ -124,10 +127,17 @@ int mmws_build_open_request(const char *host, const char *path,
         "Upgrade: websocket\r\n"
         "Connection: Upgrade\r\n"
         "Sec-WebSocket-Key: %s\r\n"
-        "Sec-WebSocket-Version: 13\r\n"
-        "\r\n",
+        "Sec-WebSocket-Version: 13\r\n",
         path, host, key_b64);
     if (n <= 0 || (size_t)n >= outlen) return 0;
+    /* Match a browser native WS handshake: browsers always send User-Agent + Origin.
+       An empty UA leaves the server unable to classify the device -> it falls to Default. */
+    if (ua && ua[0] && mmws_hdr_safe(ua)) { int m = snprintf(out+n, outlen-n, "User-Agent: %s\r\n", ua);
+                       if (m <= 0 || (size_t)(n+m) >= outlen) return 0; n += m; }
+    if (origin && origin[0] && mmws_hdr_safe(origin)) { int m = snprintf(out+n, outlen-n, "Origin: %s\r\n", origin);
+                               if (m <= 0 || (size_t)(n+m) >= outlen) return 0; n += m; }
+    { int m = snprintf(out+n, outlen-n, "\r\n");
+      if (m <= 0 || (size_t)(n+m) >= outlen) return 0; n += m; }
     return n;
 }
 

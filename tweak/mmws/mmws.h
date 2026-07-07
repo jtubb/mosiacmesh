@@ -43,7 +43,8 @@ int mmws_make_key(const uint8_t rnd16[16], char *out, size_t outlen);
  * for `path` on `host` (host may include :port). `key_b64` from mmws_make_key.
  * Returns bytes written (excl. NUL), or 0 on short buffer. */
 int mmws_build_open_request(const char *host, const char *path,
-                            const char *key_b64, char *out, size_t outlen);
+                            const char *key_b64, const char *ua, const char *origin,
+                            char *out, size_t outlen);
 
 /* Validate the server's opening-handshake response held in `buf` (len bytes).
  * Checks "HTTP/1.1 101", Upgrade: websocket, Connection: Upgrade, and

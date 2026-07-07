@@ -125,7 +125,7 @@ static void write_cb(CFWriteStreamRef s, CFStreamEventType ev, void *info) {
     }
 }
 
-MMWSConn *mmwsconn_open(const char *host, int port, const char *path, const mmwsconn_cb *cb) {
+MMWSConn *mmwsconn_open(const char *host, int port, const char *path, const char *ua, const char *origin, const mmwsconn_cb *cb) {
     if (!host || !path || !cb) return NULL;
     MMWSConn *c = (MMWSConn *)calloc(1, sizeof *c);
     if (!c) return NULL;
@@ -154,7 +154,7 @@ MMWSConn *mmwsconn_open(const char *host, int port, const char *path, const mmws
     char hostport[160];
     snprintf(hostport, sizeof hostport, "%s:%d", host, port);
     uint8_t key16[16]; rand_bytes(key16, 16);
-    if (mmws_sm_start(&c->sm, hostport, path, key16, conn_send, conn_event, c) != 0) {
+    if (mmws_sm_start(&c->sm, hostport, path, ua, origin, key16, conn_send, conn_event, c) != 0) {
         mmwsconn_free(c); return NULL;
     }
     return c;

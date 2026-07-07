@@ -43,6 +43,7 @@ typedef struct {
 /* Zero-init, compute the accept from rnd_key16, and emit the opening handshake via send().
  * Returns 0 ok, -1 on bad args. State -> CONNECTING. */
 int  mmws_sm_start(mmws_sm *sm, const char *host, const char *path,
+                   const char *ua, const char *origin,
                    const uint8_t rnd_key16[16],
                    mmws_send_fn send, mmws_event_fn event, void *ud);
 

@@ -23,7 +23,7 @@ typedef struct {
 
 /* Open a WebSocket to ws://host:port<path>. Schedules on the CURRENT run loop; callbacks fire
  * on that run loop's thread. Returns NULL on immediate failure. `cb` is copied. */
-MMWSConn *mmwsconn_open(const char *host, int port, const char *path, const mmwsconn_cb *cb);
+MMWSConn *mmwsconn_open(const char *host, int port, const char *path, const char *ua, const char *origin, const mmwsconn_cb *cb);
 
 /* Send an application message (masked). 0 ok, -1 if not open / too big. */
 int  mmwsconn_send_text  (MMWSConn *c, const uint8_t *data, size_t len);

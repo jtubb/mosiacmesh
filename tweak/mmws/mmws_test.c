@@ -58,8 +58,8 @@ int main(void) {
           f.payload_len == 256 && f.header_len == 4, "decode 16-bit len header");
 
     /* 5) build_open_request */
-    char req[256];
-    int rl = mmws_build_open_request("192.168.1.60:3000", "/sockjs/x/y/websocket", "abc123==", req, sizeof req);
+    char req[512];
+    int rl = mmws_build_open_request("192.168.1.60:3000", "/sockjs/x/y/websocket", "abc123==", "TestUA/1.0", "http://192.168.1.60:3000", req, sizeof req);
     CHECK(rl > 0, "build_open_request > 0");
     CHECK(strstr(req, "GET /sockjs/x/y/websocket HTTP/1.1\r\n") != NULL, "req: request line");
     CHECK(strstr(req, "Host: 192.168.1.60:3000\r\n") != NULL, "req: Host");
@@ -67,6 +67,16 @@ int main(void) {
     CHECK(strstr(req, "Sec-WebSocket-Key: abc123==\r\n") != NULL, "req: Key");
     CHECK(strstr(req, "Sec-WebSocket-Version: 13\r\n") != NULL, "req: Version 13");
     CHECK(strstr(req, "\r\n\r\n") != NULL, "req: header terminator");
+
+    /* 5a) forwarded UA + Origin present (browser-native WS parity) */
+    CHECK(strstr(req, "User-Agent: TestUA/1.0") != NULL, "req: forwarded User-Agent");
+    CHECK(strstr(req, "Origin: http://192.168.1.60:3000") != NULL, "req: forwarded Origin");
+    /* 5b) CRLF-injection guard: a ua containing CR/LF must be rejected (no header emitted) */
+    { char evil[64]; snprintf(evil, sizeof evil, "Bad%c%cX-Injected: 1", 13, 10);
+      char req2[512];
+      int rl2 = mmws_build_open_request("h:1", "/p", "k==", evil, NULL, req2, sizeof req2);
+      CHECK(rl2 > 0 && strstr(req2, "X-Injected") == NULL && strstr(req2, "User-Agent:") == NULL,
+            "req: CRLF-injection ua rejected"); }
 
     /* 6) check_open_response */
     const char *ok = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"

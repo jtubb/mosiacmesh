@@ -24,7 +24,7 @@
         }, 0);
     }
     w.__mmwsNative = {
-        open:  function (id, url)  { nav('open',  id, { url: url }); },
+        open:  function (id, url)  { nav('open',  id, { url: url, ua: navigator.userAgent, origin: location.protocol + '//' + location.host }); },
         send:  function (id, data) { nav('send',  id, { d: data }); },
         close: function (id, code) { nav('close', id, { c: code }); }
     };

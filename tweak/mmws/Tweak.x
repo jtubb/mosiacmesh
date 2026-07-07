@@ -163,6 +163,9 @@ static void handle_mmws(const char *url) {
         const char *u = strstr(query, "url=");
         if (u) { u += 4; const char *e = strchr(u, '&'); size_t len = e ? (size_t)(e - u) : strlen(u);
                  pct_decode(u, len, wsurl, sizeof wsurl); }
+        /* forward the browser's UA + Origin (parity with a native WS handshake) */
+        char mmua[400]; mmua[0]=0; { const char *a=strstr(query,"ua="); if(a){ a+=3; const char *e=strchr(a,'&'); size_t l=e?(size_t)(e-a):strlen(a); pct_decode(a,l,mmua,sizeof mmua); } }
+        char mmorig[200]; mmorig[0]=0; { const char *a=strstr(query,"origin="); if(a){ a+=7; const char *e=strchr(a,'&'); size_t l=e?(size_t)(e-a):strlen(a); pct_decode(a,l,mmorig,sizeof mmorig); } }
         const char *q = wsurl;
         if (strncmp(q, "ws://", 5) == 0) q += 5;
         char host[160]; int hi = 0;
@@ -175,7 +178,7 @@ static void handle_mmws(const char *url) {
         cb.on_open = cb_open; cb.on_message = cb_msg; cb.on_close = cb_close; cb.on_error = cb_error;
         cb.ud = (void *)(intptr_t)sid;
         bc("openPre", (unsigned)sid);
-        MMWSConn *c = mmwsconn_open(host, port, path, &cb);
+        MMWSConn *c = mmwsconn_open(host, port, path, mmua, mmorig, &cb);
         g_conns[sid] = c;
         bc("openPost", (unsigned)(c ? 1 : 0));
         if (!c) dispatch_js(sid, "error", (const uint8_t *)"open failed", 11, 0, 0);

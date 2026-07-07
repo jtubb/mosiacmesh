@@ -39,7 +39,7 @@ static void start_conn(mmws_sm *sm, tctx *c, char acc[64]) {
     uint8_t rnd[16]; for (int i = 0; i < 16; i++) rnd[i] = (uint8_t)i;
     char key[32]; mmws_make_key(rnd, key, sizeof key);
     mmws_accept_key(key, acc, 64);
-    mmws_sm_start(sm, "h:3000", "/sockjs/x/y/websocket", rnd, t_send, t_event, c);
+    mmws_sm_start(sm, "h:3000", "/sockjs/x/y/websocket", NULL, NULL, rnd, t_send, t_event, c);
 }
 static int build_resp(char *out, size_t outlen, const char *acc) {
     return snprintf(out, outlen,

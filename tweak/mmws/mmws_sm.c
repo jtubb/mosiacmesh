@@ -15,7 +15,8 @@ static void rx_consume(mmws_sm *sm, size_t k) {
     sm->rxn -= k;
 }
 
-int mmws_sm_start(mmws_sm *sm, const char *host, const char *path, const uint8_t rnd16[16],
+int mmws_sm_start(mmws_sm *sm, const char *host, const char *path,
+                  const char *ua, const char *origin, const uint8_t rnd16[16],
                   mmws_send_fn send, mmws_event_fn event, void *ud) {
     if (!sm || !host || !path || !rnd16) return -1;
     memset(sm, 0, sizeof *sm);
@@ -23,8 +24,8 @@ int mmws_sm_start(mmws_sm *sm, const char *host, const char *path, const uint8_t
     char key[32];
     if (!mmws_make_key(rnd16, key, sizeof key)) return -1;
     if (!mmws_accept_key(key, sm->accept, sizeof sm->accept)) return -1;
-    char req[600];
-    int n = mmws_build_open_request(host, path, key, req, sizeof req);
+    char req[1024];
+    int n = mmws_build_open_request(host, path, key, ua, origin, req, sizeof req);
     if (n <= 0) return -1;
     if (sm->send) sm->send(sm->ud, (const uint8_t *)req, (size_t)n);
     return 0;
