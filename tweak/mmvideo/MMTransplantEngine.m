@@ -214,6 +214,29 @@ void mm_engine_attach_layer(MMEngine *e, void *fpvp) {
     e->slotted = 1;
 }
 
+// ============================ Option A: controller ObjC-hook ============================
+// WebCore's currentTime()/duration() FORWARD to the ObjC MPAVController at (backend+8) — see
+// REFINDINGS: `msgSend(controller, currentTime)` -> double. So feed our value by hooking THAT
+// ObjC method (MSHookMessageEx), instead of overwriting WebCore's C++ vtable (the CF SIGTRAP).
+extern void MSHookMessageEx(Class _cls, SEL sel, IMP imp, IMP *result);
+static double (*o_ctrlCT)(id,SEL)  = 0;
+static double mm_ctrlCT(id s, SEL c){ (void)s;(void)c; return (double)g_curTime; }
+static double (*o_ctrlDur)(id,SEL) = 0;
+static double mm_ctrlDur(id s, SEL c){ (void)s;(void)c; return (double)g_curDuration; }
+void mm_hook_controller(void *backend){
+    static int done = 0;
+    if (done || !backend) return;
+    void *ctrl = *(void **)((char *)backend + 8);          // MPAVController (nil until play time)
+    if (!ctrl || ((uintptr_t)ctrl & 3) || (uintptr_t)ctrl < 0x1000) return;
+    id c = (__bridge id)ctrl; Class cls = [c class];
+    if (!cls) return;
+    if ([c respondsToSelector:@selector(_currentTime)]) MSHookMessageEx(cls, @selector(_currentTime), (IMP)mm_ctrlCT,  (IMP *)&o_ctrlCT);
+    if ([c respondsToSelector:@selector(_duration)])    MSHookMessageEx(cls, @selector(_duration),    (IMP)mm_ctrlDur, (IMP *)&o_ctrlDur);
+    done = 1;
+    { FILE *_f=fopen("/tmp/mmvideo.log","a"); if(_f){fprintf(_f,"[mmvideo] _currentTime/_duration hooked on %s CTorig=%p%c", [NSStringFromClass(cls) UTF8String], (void*)o_ctrlCT, 10);fclose(_f);} }
+}
+
+
 void mm_engine_free(MMEngine *e) {
     if (!e) return;
     @autoreleasepool { mm_engine_teardown(e); }

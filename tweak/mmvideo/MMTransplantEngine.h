@@ -17,6 +17,7 @@ void   mm_engine_load(MMEngine *e, const char *url);   // localhost cache URL ->
 void   mm_engine_play(MMEngine *e);
 void   mm_engine_pause(MMEngine *e);
 void mm_engine_mark_dead(MMEngine *e);
+void mm_hook_controller(void *backend);
 int    mm_engine_paused(MMEngine *e);
 void   mm_engine_seek(MMEngine *e, double seconds);    // frame-accurate (zero tolerance)
 void   mm_engine_set_rate(MMEngine *e, float rate);    // mm_clamp_rate -> AVPlayer.rate

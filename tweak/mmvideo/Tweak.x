@@ -80,11 +80,10 @@ static void h_load(void *self, void *strRef){
     [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
     gCurrentEngine = eng;                        // for the vtable getters (atomic, cross-thread)
     mm_engine_load(eng, [url UTF8String]);
-    mm_install_vtable_getters(self);             // redirect currentTime/duration to our engine (once)
 }
 static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); { char _b[64]; snprintf(_b,sizeof _b,"[dbg] SEEK t=%.2f gct=%.2f",(double)t,(double)g_curTime); mmlog(_b); } if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
 static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
-static void h_play(void *self){ MMEngine *e=engineFor(self); if(e){ mm_engine_play(e); mm_slot_in(self); } else o_play(self); }
+static void h_play(void *self){ MMEngine *e=engineFor(self); if(e){ mm_engine_play(e); mm_slot_in(self); mm_hook_controller(self); } else o_play(self); }
 static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
 static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
 static float h_currentTime(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_current_time(e):o_currentTime(self); }
