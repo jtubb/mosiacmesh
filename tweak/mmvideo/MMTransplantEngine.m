@@ -42,6 +42,8 @@ static inline AVPlayerItem *IT(MMEngine *e){ return (__bridge AVPlayerItem *)e->
 // load (REFINDINGS §13). int64->double goes through the provided mmbuiltins __floatdidf.
 static inline double mm_secs(CMTime t){ return t.timescale ? (double)t.value / (double)t.timescale : 0.0; }
 
+typedef void (*MMWTFn)(void); typedef bool (*MMWTBoolFn)(void);
+static MMWTFn gWTLock = NULL, gWTUnlock = NULL; static MMWTBoolFn gWTIsCurrent = NULL;
 MMEngine *mm_engine_create(void *backend, void *mp) {
     MMEngine *e = (MMEngine *)calloc(1, sizeof(MMEngine));
     if (!e) return NULL;
@@ -50,6 +52,9 @@ MMEngine *mm_engine_create(void *backend, void *mp) {
     e->netChanged   = (MMVoidFn)MSFindSymbol(NULL, "__ZN7WebCore11MediaPlayer19networkStateChangedEv");
     e->readyChanged = (MMVoidFn)MSFindSymbol(NULL, "__ZN7WebCore11MediaPlayer17readyStateChangedEv");
     e->timeChanged  = (MMVoidFn)MSFindSymbol(NULL, "__ZN7WebCore11MediaPlayer11timeChangedEv");
+    if (!gWTLock)      gWTLock      = (MMWTFn)MSFindSymbol(NULL, "_WebThreadLock");
+    if (!gWTUnlock)    gWTUnlock    = (MMWTFn)MSFindSymbol(NULL, "_WebThreadUnlock");
+    if (!gWTIsCurrent) gWTIsCurrent = (MMWTBoolFn)MSFindSymbol(NULL, "_WebThreadIsCurrent");
     return e;
 }
 
@@ -62,17 +67,16 @@ static void mm_engine_poll(MMEngine *e) {
     mm_status_to_states((int)st, &net, &ready);
     BOOL changed = (net != e->net) || (ready != e->ready);
     e->net = net; e->ready = ready;
-    // OPTION A — ivar mirroring (no MSHookFunction; safe across the QuickTime-plugin thread
-    // that polls these getters). networkState()/readyState() are PURE ivar reads (REFINDINGS:
-    // `ldr r0,[r0,#0x14]` / `#0x18`), so writing the ivars makes the UNHOOKED getters return
-    // our AVPlayer's state — and an aligned 4-byte write is atomic, so the plugin thread never
-    // sees a torn value (the reason §21's prologue patch crashed). Also mirror m_rate (+0x24)
-    // so paused() (rate==0) reflects us. Pinned every poll so the stalled original can't
-    // reassert. Writing BEFORE the callbacks so WebCore re-reads our values.
+    float rr = e->playing ? (e->desiredRate > 0.0f ? e->desiredRate : 1.0f) : 0.0f;
+    // WebCore's HTMLMediaElement timers are WEBTHREAD-affine. This observer runs on the MAIN
+    // thread, so hold the WebThreadLock across the ivar writes + MediaPlayer callbacks: it parks
+    // the WebThread so timeChanged()/networkStateChanged() can't race its timer processing — the
+    // cross-thread CFRunLoopTimer over-release that is the intermittent WebThread SIGTRAP.
+    BOOL wtLocked = NO;
+    if (gWTLock && (!gWTIsCurrent || !gWTIsCurrent())) { gWTLock(); wtLocked = YES; }
     if (e->backend) {
-        *(volatile int *)((char *)e->backend + 0x14) = net;      // m_networkState
+        *(volatile int *)((char *)e->backend + 0x14) = net;      // m_networkState (atomic ivar mirror)
         *(volatile int *)((char *)e->backend + 0x18) = ready;    // m_readyState
-        float rr = e->playing ? (e->desiredRate > 0.0f ? e->desiredRate : 1.0f) : 0.0f;
         *(volatile float *)((char *)e->backend + 0x24) = rr;     // m_rate (paused = rate==0)
     }
     if (changed) {
@@ -80,6 +84,7 @@ static void mm_engine_poll(MMEngine *e) {
         if (e->readyChanged) e->readyChanged(e->mp);
     }
     if (e->timeChanged) e->timeChanged(e->mp);
+    if (wtLocked && gWTUnlock) gWTUnlock();
 }
 
 static void mm_engine_teardown(MMEngine *e) {

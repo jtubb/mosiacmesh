@@ -30,8 +30,8 @@ static MMEngine *engineFor(void *self){
 static void dropEngine(void *self){
     id k = keyFor(self), v = [gEngines objectForKey:k];
     if (v){ MMEngine *e=(MMEngine *)[v pointerValue]; if(e==gCurrentEngine) gCurrentEngine=NULL;
-            [gEngines removeObjectForKey:k]; mm_engine_mark_dead(e); mm_engine_pause(e);
-            dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_free(e); });   // C1: free on main = serialized w/ observer block
+            [gEngines removeObjectForKey:k]; mm_engine_mark_dead(e);
+            dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_pause(e); mm_engine_free(e); });   // all-AV-on-main: pause+free where the player's timers live
     }
 }
 
@@ -58,8 +58,7 @@ static void mm_install_vtable_getters(void *self);   // defined below; called fr
 // raw pointer to the engine, which does the CALayer work (it already imports QuartzCore +
 // loads fine). Tweak.x stays minimal — NO QuartzCore/CALayer/objc_msgSend/@selector here
 // (adding those to Tweak.x crashed the load — §19). Guard reads with the pointer sanity check.
-static void mm_slot_in(void *self){
-    MMEngine *e = engineFor(self);
+static void mm_slot_in(MMEngine *e, void *self){
     if (!e) return;
     void *ctrlp = *(void **)((char *)self + 8);                 // FPVMediaPlayerHelper
     if (!ctrlp || (uintptr_t)ctrlp < 0x1000 || ((uintptr_t)ctrlp & 3)) return;
@@ -79,12 +78,12 @@ static void h_load(void *self, void *strRef){
     if (!eng) return;
     [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
     gCurrentEngine = eng;                        // for the vtable getters (atomic, cross-thread)
-    mm_engine_load(eng, [url UTF8String]);
+    dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_load(eng, [url UTF8String]); });   // all-AV-on-main: player born on the main runloop
 }
-static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) mm_engine_seek(e,(double)t); else o_seek(self,t); }
-static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) mm_engine_set_rate(e,r); else o_setRate(self,r); }
-static void h_play(void *self){ MMEngine *e=engineFor(self); if(e){ mm_engine_play(e); mm_slot_in(self); mm_hook_controller(self); } else o_play(self); }
-static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) mm_engine_pause(e); else o_pause(self); }
+static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_seek(e,(double)t); }); else o_seek(self,t); }
+static void h_setRate(void *self, float r){ MMEngine *e=engineFor(self); if(e) dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_set_rate(e,r); }); else o_setRate(self,r); }
+static void h_play(void *self){ MMEngine *e=engineFor(self); if(e){ dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_play(e); mm_slot_in(e, self); mm_hook_controller(self); }); } else o_play(self); }
+static void h_pause(void *self){ MMEngine *e=engineFor(self); if(e) dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_pause(e); }); else o_pause(self); }
 static void h_cancelLoad(void *self){ if(engineFor(self)) dropEngine(self); o_cancelLoad(self); }
 static float h_currentTime(void *self){ MMEngine *e=engineFor(self); return e?(float)mm_engine_current_time(e):o_currentTime(self); }
 // duration/maxTimeSeekable come from the ORIGINAL engine (which also loaded the URL via
