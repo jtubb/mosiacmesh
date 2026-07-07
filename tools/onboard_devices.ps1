@@ -1326,13 +1326,15 @@ foreach ($h in $targets) {
     #       variable playback rate + NO-TAP autoplay + adaptive full-screen fill,
     #       none of which the stock iOS-5 <video> can do. scp the prebuilt armv7
     #       dylib + its MobileSubstrate filter plist (targets com.apple.mobilesafari
-    #       + com.apple.WebApp -- the Safari + webclip display clients) into
+    #       + com.apple.webapp -- the Safari + webclip display clients) into
     #       /Library/MobileSubstrate/DynamicLibraries; the 5.5 respring loads it.
     #       Self-contained: two-level-namespace linked with statically-provided
     #       compiler-rt builtins, so NO extra device packages are required.
-    #       Source lives in tweak/mmvideo/ (build via tweak/mmvideo/build.sh, then
-    #       copy the .dylib to tools/mmvideo.dylib). Same scp-from-local idiom as
-    #       the lighttpd/insomnia steps to dodge the heredoc quote-loss bug.
+    #       Source lives in tweak/mmvideo/ (build via tweak/mmvideo/_build_milestone.sh,
+    #       then copy the built .dylib to tools/mmvideo.dylib). Current build = vtfixA7
+    #       (commit ef7c7a8 WebThreadLock crash fix + _currentTime feedback with mesh
+    #       sync; 9h crash-free on-device, dead getter code pruned). Same scp-from-local
+    #       idiom as the lighttpd/insomnia steps to dodge the heredoc quote-loss bug.
     #
     #       NOTE: with this installed, the iPad autoplays video without the
     #       server's Veency arming tap -- the display client's prepareFirstItem
