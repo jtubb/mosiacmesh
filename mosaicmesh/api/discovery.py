@@ -83,6 +83,7 @@ def auto_configure_client(client_key, client):
         server.settings.displays.setdefault("Desktop", Display())
     else:
         client.displayID = "Default"
+        server.settings.displays.setdefault("Default", Display())
 
     # Generate friendly name if not set
     if not client.friendlyName:
