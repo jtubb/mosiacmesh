@@ -126,7 +126,16 @@ param(
     [string]$VncPassword = "mosaicmesh",
     # Skip Veency plist write entirely (leave veency defaults: Prompt=true,
     # no password). Useful if you've already configured it manually.
-    [switch]$SkipVncConfig
+    [switch]$SkipVncConfig,
+    # OPT-IN: install the mmws native-WebSocket bridge (tweak/mmws). Default OFF.
+    # mmws is WIP + unstable on iOS-5: it destabilizes the SockJS transport the
+    # display client depends on, so devices REGISTER then drop and never stay
+    # online in their group (root-caused on the fleet 2026-07-07; see memory
+    # ios5-websocket-transport). SockJS's XHR fallback works fine without it.
+    # When this is NOT set, onboarding actively REMOVES any stale mmws a prior
+    # run left, so re-onboarding REPAIRS an affected device. Only pass this on a
+    # device you're actively developing mmws on.
+    [switch]$InstallMmws
 )
 
 # Canonical MosaicMesh tweak set -- everything our scripts rely on plus the
@@ -1366,21 +1375,32 @@ foreach ($h in $targets) {
         }
     }
 
-    # 5.4ii) install the mmws MobileSubstrate tweak (native RFC-6455 WebSocket bridge).
-    #        iOS-5.1 WebKit has no usable WebSocket (the built-in one is the disabled/old-
-    #        protocol impl that won't interop with the RFC-6455 server), so SockJS falls back
-    #        to XHR polling. mmws injects a native RFC-6455 client behind window.WebSocket:
-    #        a JS polyfill + bridge-shim (window.__mmwsNative) navigates a hidden iframe to
-    #        mmws://; the tweak hooks -[WebAppController shouldStartLoadWithRequest:] to
-    #        intercept it and drives a CFStream RFC-6455 socket, dispatching results back via
-    #        stringByEvaluatingJavaScriptFromString. SockJS then uses a real websocket.
-    #        VERIFIED on-device 2026-07-01 (server access log: ".../websocket" 101 upgrade,
-    #        no xhr fallback). Filter is com.apple.webapp (the webclip host). Self-contained
-    #        (Foundation+CoreFoundation + hand-provided __udivsi3/__umodsi3). Source lives in
-    #        tweak/mmws/ (build via tweak/mmws/build.sh, then copy the .dylib to tools/mmws.dylib).
-    #        Coexists with mmvideo (different hooks). XHR still works if absent -- this is a
-    #        latency/overhead optimization, not a hard requirement.
-    if ($status -eq "OK" -and $pkgsToInstall -and $scp) {
+    # 5.4ii) mmws (native RFC-6455 WebSocket bridge) -- OPT-IN ONLY, default OFF.
+    #        The idea: iOS-5.1 WebKit has no usable WebSocket, so SockJS falls back to XHR
+    #        polling; mmws injects a native RFC-6455 client behind window.WebSocket so SockJS
+    #        can use a real websocket. It DID a 101 upgrade on 2026-07-01, but later proved
+    #        UNSTABLE (reload-at-loop; it destabilizes the SockJS transport). Fleet symptom
+    #        (2026-07-07): onboarded devices REGISTER then drop -- they show in a group but
+    #        never stay online -- because mmws breaks the connection SockJS otherwise holds
+    #        over XHR. A/B proven on screen1: mmws present -> offline; mmws removed -> online
+    #        (Test Group onlineCount 0 -> 1, steady 30s XHR heartbeat). XHR is NOT a
+    #        degradation here -- it's the working path. So we DO NOT install mmws unless
+    #        -InstallMmws is explicitly passed, and in the default path we REMOVE any stale
+    #        mmws a prior onboarding left (so re-onboarding repairs the device). See memory
+    #        ios5-websocket-transport. mmvideo (the AVPlayer transplant, step 5.4i) is
+    #        unaffected -- different hooks, and it stays installed.
+    if ($status -eq "OK" -and $pkgsToInstall -and $scp -and -not $InstallMmws) {
+        # DEFAULT: mmws must be ABSENT. Remove any leftover (dylib/plist + any .off
+        # backups) so a device broken by a previous mmws install is repaired here.
+        $dlDir = '/Library/MobileSubstrate/DynamicLibraries'
+        $mmwsRm = (& $ssh -i $KeyPath -p $p @sshLegacy "$User@$hostName" `
+            "rm -f $dlDir/mmws.dylib $dlDir/mmws.plist $dlDir/mmws.dylib.off $dlDir/mmws.plist.off; echo MMWS_ABSENT" 2>&1) | Out-String
+        if ($mmwsRm -match 'MMWS_ABSENT') {
+            Write-Host "  mmws: not installed (opt-in via -InstallMmws); removed any stale copy" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  mmws removal unexpected: $($mmwsRm.Trim() -replace '\s+',' ')" -ForegroundColor Yellow
+        }
+    } elseif ($status -eq "OK" -and $pkgsToInstall -and $scp -and $InstallMmws) {
         $mmwsDylibSrc = Join-Path $PSScriptRoot 'mmws.dylib'
         $mmwsPlistSrc = Join-Path $PSScriptRoot 'mmws.plist'
         if (-not (Test-Path $mmwsDylibSrc) -or -not (Test-Path $mmwsPlistSrc)) {
