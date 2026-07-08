@@ -81,28 +81,32 @@ def main():
     ap.add_argument("--host", default="192.168.1.60:3000")
     ap.add_argument("--span", choices=["mirror", "mesh"], default="mirror")
     ap.add_argument("--secs", type=int, default=10, help="seconds per animation")
+    ap.add_argument("--name", default=NAME,
+                    help="playlist name — use a distinct name per span "
+                         "(e.g. 'All Effects Demo (Mesh)' for --span mesh)")
     args = ap.parse_args()
 
+    name = args.name
     base = "http://%s/api/playlists" % args.host
     items = build_items(args.span, args.secs)
     ct = {"Content-Type": "application/json"}
 
     # Does it already exist? -> PUT (needs If-Match); else POST.
     try:
-        r = _req("GET", base + "/" + urllib.parse.quote(NAME))
+        r = _req("GET", base + "/" + urllib.parse.quote(name))
         existing = json.loads(r.read().decode())
         existing = existing.get("playlist", existing)
         ver = existing.get("_serverVersion", 0)
         h = dict(ct); h["If-Match"] = str(ver)
-        rr = _req("PUT", base + "/" + urllib.parse.quote(NAME),
+        rr = _req("PUT", base + "/" + urllib.parse.quote(name),
                   {"items": items, "loop": True}, h)
         print("updated %r (v%s->%s), span=%s, %d items, all %d transitions"
-              % (NAME, ver, ver + 1, args.span, len(items), len(TRANSITIONS)))
+              % (name, ver, ver + 1, args.span, len(items), len(TRANSITIONS)))
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            rr = _req("POST", base, {"name": NAME, "items": items, "loop": True}, ct)
+            rr = _req("POST", base, {"name": name, "items": items, "loop": True}, ct)
             print("created %r, span=%s, %d items, all %d transitions"
-                  % (NAME, args.span, len(items), len(TRANSITIONS)))
+                  % (name, args.span, len(items), len(TRANSITIONS)))
         else:
             raise
 
