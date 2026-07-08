@@ -30,3 +30,26 @@ class PrecacheWindow:
 
     def drained(self):
         return not self._waiting and not self._active
+
+
+class CacheState:
+    """Per-client cached token (one live token per client). Ack-driven; replaces
+    push-progress polling."""
+
+    def __init__(self):
+        self._cached = {}   # client_key -> token
+        self._failed = {}   # client_key -> token
+
+    def record_cached(self, client, token):
+        self._cached[client] = token
+        if self._failed.get(client) == token:
+            del self._failed[client]
+
+    def record_failed(self, client, token):
+        self._failed[client] = token
+
+    def is_cached(self, client, token):
+        return self._cached.get(client) == token
+
+    def cached_clients(self, clients, token):
+        return [c for c in clients if self._cached.get(c) == token]
