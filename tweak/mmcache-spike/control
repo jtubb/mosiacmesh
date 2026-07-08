@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmcachespike
+Name: mmcachespike
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh SPIKE — mmcache:// download bridge (Plan 2 de-risk; throwaway)
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate

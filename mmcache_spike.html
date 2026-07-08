@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta charset="utf-8">
+<title>mmcache spike</title>
+<style>
+  html,body { margin:0; padding:0; background:#000; color:#0f0; font:13px/1.4 monospace; }
+  #log { padding:8px; white-space:pre-wrap; word-break:break-all; }
+  video { width:100%; height:52%; background:#111; display:block; }
+  .ok { color:#4f4; } .err { color:#f44; }
+</style>
+</head>
+<body>
+<video id="v" playsinline webkit-playsinline></video>
+<div id="log"></div>
+<script>
+// mmcache SPIKE test page (Plan 2, Task 1). Proves the mmcache:// download bridge on a
+// device that has the mmcache-spike tweak (+ mmvideo for file:// autoplay). ES5 only.
+var TOKEN = 'spk1';
+var CENTRAL = 'http://' + window.location.host + '/media/server/videos/taptest_480.mp4';
+var fired = false;
+
+function log(m, cls) {
+  var d = document.getElementById('log');
+  var line = '[' + (new Date()).toLocaleTimeString() + '] ' + m;
+  d.innerHTML += (cls ? '<span class="' + cls + '">' + line + '</span>' : line) + '\n';
+  window.scrollTo(0, document.body.scrollHeight);
+}
+var v = document.getElementById('v');
+
+// native -> JS: the tweak calls these via stringByEvaluatingJavaScriptFromString
+window.__mmCacheDone = function (t, b) {
+  log('__mmCacheDone token=' + t + ' bytes=' + b, 'ok');
+  var local = 'file:///var/mobile/Media/mmcache/' + t + '.mp4';
+  log('setting video src -> ' + local);
+  v.src = local;
+  try { v.load(); } catch (e) {}
+  var p = v.play();
+  if (p && p['catch']) { p['catch'](function (e) { log('play() rejected (mmvideo present?): ' + e, 'err'); }); }
+  v.addEventListener('playing', function () { log('VIDEO PLAYING from local file — SPIKE PASS', 'ok'); }, false);
+};
+window.__mmCacheFail = function (t, r) { log('__mmCacheFail token=' + t + ' reason=' + r, 'err'); };
+
+function fire() {
+  if (fired) { return; }
+  fired = true;
+  log('central url: ' + CENTRAL);
+  log('dispatching mmcache://fetch (iframe nav) ...');
+  var f = document.createElement('iframe');
+  f.style.display = 'none';
+  f.src = 'mmcache://fetch?token=' + encodeURIComponent(TOKEN) + '&url=' + encodeURIComponent(CENTRAL);
+  document.body.appendChild(f);
+  log('nav dispatched. If the tweak is injected, the download starts on a bg thread;');
+  log('watch for __mmCacheDone above (and /var/mobile/mmcache_spike.log on device).');
+}
+
+log('mmcache spike ready. Tap the screen (or wait 1.5s) to fire the fetch.');
+document.body.onclick = fire;
+setTimeout(fire, 1500);
+</script>
+</body>
+</html>
