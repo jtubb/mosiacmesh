@@ -109,6 +109,7 @@ from mosaicmesh.api.displays import (
     api_displays_list, api_displays_create, api_displays_delete,
 )
 from mosaicmesh.api.renders import api_renders_list
+from mosaicmesh import memdebug   # memory/thread leak instrumentation
 from mosaicmesh.websocket.legacy import msg_response
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
@@ -2138,6 +2139,12 @@ async def cache_stats_handler(request):
     }
     return web.json_response(stats)
 
+
+async def memory_stats_handler(request):
+    """Debug endpoint: process memory + thread + object-type snapshot (leak hunting)."""
+    return web.json_response(memdebug.snapshot(full=True))
+
+
 # --- Granular discovery REST endpoints (one handler per resource) ---
 
 # (path, mtime) -> duration in seconds (or None). Avoids re-probing unchanged
@@ -2516,6 +2523,7 @@ if __name__ == '__main__':
                 
                 oneshot = True
                 save_counter = 0
+                memwatch_counter = 0
 
                 try:
                     while True:
@@ -2535,6 +2543,16 @@ if __name__ == '__main__':
                         if save_counter >= 10:
                             save_settings_incremental()
                             save_counter = 0
+
+                        # Memory/thread leak watch (~every 60s): logs RSS + which
+                        # object types / threads grew since the last tick (memdebug).
+                        memwatch_counter += 1
+                        if memwatch_counter >= 12:
+                            memwatch_counter = 0
+                            try:
+                                logging.info(memdebug.growth_line())
+                            except Exception as _mw:
+                                logging.debug('memwatch failed: %s', _mw)
                         
                         if oneshot:
                             #inform any active clients that they need to reload
@@ -2559,6 +2577,7 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/media/{client}/{sub}/{file}', media_handler),
         app.router.add_route('POST', '/upload/{dest}', upload_handler),
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
+        app.router.add_route('GET', '/debug/memory', memory_stats_handler)
         # Discovery API endpoints (granular handlers)
         app.router.add_route('GET', '/api/media', api_media)
         app.router.add_route('DELETE', '/api/media', api_media_delete)
