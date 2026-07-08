@@ -860,6 +860,34 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
             if _client_is_push_eligible(server.settings.clients.get(_push_key)):
                 asyncio.ensure_future(
                     server._push_segment_to_cached_clients(_push_key, token, _push_n, kind="full"))
+        # Client-pull (Plan 1): kick a throttled PRECACHE for the SAME cache-eligible
+        # clients the legacy push targets, so each device can pull its own segment
+        # outbound (PSM-safe) instead of relying on the inbound scp. The two coexist
+        # during rollout; Plan 2 finalizes the pull URL + retires the push. Fire-and-
+        # forget: a precache-trigger failure must never break the render.
+        try:
+            _pull_urls = {}
+            for _push_key, _push_n in seg_push_targets:
+                _pull_urls[_push_key] = "/media/%s/videos/seg_%s_%d.mp4" % (_push_key, token, _push_n)
+            for _push_key, _push_n in full_push_targets:
+                _pull_urls.setdefault(_push_key, "/media/server/videos/full_%s_%d.mp4" % (token, _push_n))
+            if _pull_urls:
+                notify_precache_on_ready(display_id, token, _pull_urls)
+        except Exception as _e:
+            logging.warning("precache trigger skipped: %s", _e)
+
+
+def notify_precache_on_ready(group, token, client_urls):
+    """Called when a group's render reaches READY. Kicks a throttled client-pull for
+    the cache-capable members. cacheMode 'none' clients stream centrally (unchanged)."""
+    import server
+    caps = {}
+    for key, url in client_urls.items():
+        client = server.settings.clients.get(key)
+        if client is not None and getattr(client, "cacheMode", "none") != "none":
+            caps[key] = url
+    if caps:
+        server.start_precache(group, token, caps)
 
 
 async def render_group_async(display_id):
