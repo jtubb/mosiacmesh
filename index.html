@@ -24,6 +24,8 @@
   <script src="/js/transitions.js"></script>
   <script src="/js/mesh-viewport.js"></script>
   <script src="/js/video-buffer.js"></script>
+  <script src="/js/mmCache.js"></script>
+  <script src="/js/mmCacheBackendMmvideo.js"></script>
   <script>
     /* mmws transplant self-test (ES5). Gated on ?wstest — no effect otherwise. Beacons results to
        the server access log as /wsprobe_* image requests so we can verify the native ws transplant
@@ -1047,16 +1049,20 @@
 					});
 				}
 			};
-			if (item.file !== playback.videoSrc) {
+			// Prefer the locally-cached file when this item's render token is cached; else the
+			// central URL (stream fallback). item.token is the render token carried in the item.
+			var _localSrc = (window.mmCache && item.token) ? mmCache.localSrc(item.token) : null;
+			var _srcToUse = _localSrc || item.file;
+			if (_srcToUse !== playback.videoSrc) {
 				if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
-				playback.videoSrc = item.file;
-				var warm = playback.vbuf.flipTo(item.file);   // non-null => already-loaded warm element
+				playback.videoSrc = _srcToUse;
+				var warm = playback.vbuf.flipTo(_srcToUse);   // non-null => already-loaded warm element
 				if (warm) {
 					playback.pvid = warm; v = warm;
 					playback.video = v; playback.currentEl = v;
 					seekAndPlay();                              // warm: no src/load, just seek+play (instant)
 				} else {
-					v.src = item.file;                          // cold path (unchanged): load then seek+play
+					v.src = _srcToUse;                          // cold path: load then seek+play
 					var once = function() { v.removeEventListener('loadedmetadata', once); seekAndPlay(); };
 					v.addEventListener('loadedmetadata', once);
 					try { v.load(); } catch (e) {}
@@ -1651,6 +1657,11 @@
 			{
 				pausePlayback();
 			}
+			else if (data_obj.REQUEST === 'PRECACHE' && window.mmCache) {
+				// PAYLOAD: { url, token }. Pass this client's displayID as group so
+				// evict-on-supersede scopes per group inside mmCache.handlePrecache.
+				mmCache.handlePrecache({ group: (window._mmDisplayID || 'self'), url: data_obj.PAYLOAD.url, token: data_obj.PAYLOAD.token });
+			}
 		}
 	}
 
@@ -1659,6 +1670,20 @@
 	   this.css("top", ( $(window).height() - this.height() ) / 2  + "px");
 	   this.css("left", ( $(window).width() - this.width() ) / 2 + "px");
 	   return this;
+	}
+
+	// Client-pull cache: register the iOS-5 backend only if the mmvideo bridge injected
+	// (window.__mmCacheReady). Without it, mmCache stays backend-less and PRECACHE acks
+	// CACHE_FAILED 'no-backend' -> server advances -> this client streams centrally (safe).
+	if (window.__mmCacheReady && window.__mmRegisterMmvideoBackend) {
+	  window.__mmRegisterMmvideoBackend();
+	}
+	if (window.mmCache) {
+	  mmCache.onAck = function (req, payload) {
+	    if (sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN) {
+	      sock.send(generateMessage('SRV', req, payload));   // req = 'CACHED' | 'CACHE_FAILED'
+	    }
+	  };
 	}
 
 	mosiacMeshConnect(mosiacMeshCallback);
