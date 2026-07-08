@@ -58,6 +58,11 @@
     }
   };
 
+  mmCache.localSrc = function (token) {
+    if (mmCache.backend && mmCache.backend.has(token)) { return mmCache.backend.localSrc(token); }
+    return null;
+  };
+
   root.mmCache = mmCache;
   if (typeof module !== 'undefined' && module.exports) { module.exports = mmCache; }
 })(typeof window !== 'undefined' ? window : global);

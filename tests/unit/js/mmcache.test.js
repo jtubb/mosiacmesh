@@ -55,3 +55,13 @@ test('size-cap: evicts oldest until under cap', function () {
   assert.deepStrictEqual(b.evicted, ['A']);   // oldest evicted, now 60 <= 100
   assert.strictEqual(mmCache._tokens['A'], undefined);
 });
+
+test('localSrc delegates to backend, null when uncached', function () {
+  const mmCache = loadMmCache();
+  mmCache._reset();
+  const b = mockBackend();
+  mmCache.registerBackend(b);
+  assert.strictEqual(mmCache.localSrc('T1'), null);
+  b.store['T1'] = 'u';
+  assert.strictEqual(mmCache.localSrc('T1'), 'local://T1');
+});
