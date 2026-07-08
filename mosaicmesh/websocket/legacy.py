@@ -84,6 +84,28 @@ from mosaicmesh.calibration import (
 from mosaicmesh.websocket.session_store import session_request
 
 
+def handle_cache_ack(msg):
+    """CACHED / CACHE_FAILED from a client: record state, advance that group's
+    throttle window, and grant PRECACHE to the next waiting client."""
+    import sys
+    _server = globals().get("server") or sys.modules.get("server")
+    if _server is None:
+        import server as _server
+    src = msg.get("SRC")
+    token = (msg.get("PAYLOAD") or {}).get("token")
+    group = getattr(_server, "precache_group", {}).get(src)
+    if msg["REQUEST"] == "CACHED":
+        _server.cache_state.record_cached(src, token)
+    else:
+        _server.cache_state.record_failed(src, token)
+    win = getattr(_server, "precache_windows", {}).get(group)
+    if win is not None:
+        nxt = win.advance(src)
+        if nxt is not None:
+            url = getattr(_server, "precache_urls", {}).get(nxt)
+            _server._send_precache(nxt, url, getattr(_server, "precache_token", token))
+
+
 def client_warmable(client):
     """True if the device can pre-decode a second <video> for clip warming.
     False for the legacy iPad-1 class (iOS/Safari <= 5 / old WebKit), which cannot
@@ -180,6 +202,9 @@ def msg_response(msg,session):
         if client and mode in ("none", "lighttpd-localhost", "service-worker"):
             client.cacheMode = mode
         response["PAYLOAD"] = {"cacheMode": getattr(client, "cacheMode", "none")}
+
+    elif(msg["REQUEST"] == "CACHED" or msg["REQUEST"] == "CACHE_FAILED"):
+        handle_cache_ack(msg)
 
     elif(msg["REQUEST"] == "REMOVE_CLIENT"):
         # Admin-initiated removal of a single device. The device re-registers
