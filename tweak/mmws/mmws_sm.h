@@ -7,14 +7,19 @@
  * via an `event` callback. The CFStream socket (device-only, next layer) just pumps bytes
  * in via mmws_sm_on_recv() and writes whatever `send` hands it. See DESIGN.md.
  *
- * MosaicMesh messages are small JSON, so fixed buffers (no alloc) are fine; oversize -> ERROR.
+ * Most MosaicMesh messages are small JSON, but a mesh-mode playlist broadcast (22 items x
+ * meshQuad/meshGlobal/effects) can reach ~20KB in a single ws frame, so RXCAP is sized
+ * generously. A frame larger than RXCAP can never reassemble -> rx overflow -> ws drop ->
+ * SockJS falls back to XHR (the fleet-wide XHR fallback root-caused 2026-07-08).
  */
 #ifndef MMWS_SM_H
 #define MMWS_SM_H
 #include "mmws.h"
 
-#define MMWS_RXCAP 16384   /* inbound reassembly buffer */
-#define MMWS_TXCAP 16384   /* max single outbound message (header+payload) */
+#define MMWS_RXCAP 131072  /* inbound reassembly buffer, 128KB (was 16KB — mesh playlist
+                              broadcasts ~20KB overflowed it and dropped the ws) */
+#define MMWS_TXCAP 16384   /* max single outbound message (header+payload); client-sent
+                              messages (SERVERTIME/READY/REGISTER/CLIENTLOG) are all small */
 
 typedef enum { MMWS_CONNECTING = 0, MMWS_OPEN, MMWS_CLOSING, MMWS_CLOSED, MMWS_ERR } mmws_state;
 
