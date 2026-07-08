@@ -17,7 +17,7 @@
 <script>
 // mmcache SPIKE test page (Plan 2, Task 1). Proves the mmcache:// download bridge on a
 // device that has the mmcache-spike tweak (+ mmvideo for file:// autoplay). ES5 only.
-var TOKEN = 'spk1';
+var TOKEN = 'prodv1';
 var CENTRAL = 'http://' + window.location.host + '/media/server/videos/taptest_480.mp4';
 var fired = false;
 
@@ -58,6 +58,8 @@ function fire() {
   log('watch for __mmCacheDone above (and /var/mobile/mmcache_spike.log on device).');
 }
 
+log('window.__mmCacheReady = ' + (window.__mmCacheReady === true ? 'true (didClearWindowObject hook fired — PROD OK)' : 'MISSING (hook did not set it)'),
+    window.__mmCacheReady === true ? 'ok' : 'err');
 log('mmcache spike ready. Tap the screen (or wait 1.5s) to fire the fetch.');
 document.body.onclick = fire;
 setTimeout(fire, 1500);
