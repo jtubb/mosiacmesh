@@ -56,10 +56,10 @@ A client-pull download that plays from a local file eliminates the SSH-push, lig
 - `evict(token)` — drop the stored copy.
 - `has(token) → bool`.
 
-### iOS-5 / mmvideo backend
-- **New native primitive** `fetchToCache(url, token)`: an `NSURLSession` (or `NSData`) download → save to `/var/mobile/Media/mmcache/<token>.mp4` → fire a JS callback over the **existing mmvideo.js bridge** (`__mmCacheDone(token)` / `__mmCacheFail(token, reason)`). One download at a time per device (the server throttle bounds fleet concurrency).
-- `localSrc(token)` = `file:///var/mobile/Media/mmcache/<token>.mp4`. mmvideo's existing `playerItemWithURL:` plays a `file://` URL unchanged.
-- `evict(token)` = unlink the file.
+### iOS-5 / mmvideo backend  *(corrected per the on-device spike — see `tweak/mmcache-spike/SPIKE-FINDINGS.md`)*
+- **New native primitive** `fetchToCache(url, token)`: an **`NSData dataWithContentsOfURL:`** download (iOS-5 has NO `NSURLSession`) on a background `dispatch_async_f` queue → save to **`/var/mobile/Media/MosaicMeshCache/<token>.mp4`** → fire a JS callback via `stringByEvaluatingJavaScriptFromString` (`__mmCacheDone(token, bytes)` / `__mmCacheFail(token, reason)`). The `mmcache://` scheme is intercepted by a `%hook WebAppController` / `shouldStartLoadWithRequest` (coexists with mmws via `%orig`).
+- `localSrc(token)` = **`http://127.0.0.1:8080/<token>.mp4`**, NOT `file://`. WebKit blocks a `file://` media resource from an `http://`-origin page, so `<video src="file://…">` never engages mmvideo. mmvideo's `mm_url_to_path` maps `http://127.0.0.1:8080/<name>` → `file://MosaicMeshCache/<name>` and AVPlayer plays the LOCAL file — the mapping is in the WebKit MediaPlayer hook, **before any network fetch**, so lighttpd is not involved in playback (proven on-device: video autostarted fullscreen, no tap).
+- `evict(token)` = unlink `/var/mobile/Media/MosaicMeshCache/<token>.mp4`.
 
 ### Modern backend (JS only, zero native)
 - Register `js/sw.js` (Service Worker) at boot; it intercepts fetches for cached segment URLs and serves them from the Cache API.

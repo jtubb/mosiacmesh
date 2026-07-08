@@ -32,8 +32,11 @@ var v = document.getElementById('v');
 // native -> JS: the tweak calls these via stringByEvaluatingJavaScriptFromString
 window.__mmCacheDone = function (t, b) {
   log('__mmCacheDone token=' + t + ' bytes=' + b, 'ok');
-  var local = 'file:///var/mobile/Media/mmcache/' + t + '.mp4';
-  log('setting video src -> ' + local);
+  // mmvideo intercepts http://127.0.0.1:8080/<name> and maps it to the local file
+  // (mm_url_to_path -> file://MosaicMeshCache/<name>) — a raw file:// src is blocked by
+  // WebKit's cross-origin policy from an http page, so use mmvideo's convention.
+  var local = 'http://127.0.0.1:8080/' + t + '.mp4';
+  log('setting video src -> ' + local + ' (mmvideo maps to local file)');
   v.src = local;
   try { v.load(); } catch (e) {}
   var p = v.play();

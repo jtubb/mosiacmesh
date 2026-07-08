@@ -33,7 +33,7 @@ test('fetchToCache navigates mmcache://fetch and resolves on __mmCacheDone', fun
   assert.strictEqual(done, 'T1');
   assert.strictEqual(b.has('T1'), true);
   assert.strictEqual(b.size('T1'), 12345);
-  assert.strictEqual(b.localSrc('T1'), 'file:///var/mobile/Media/mmcache/T1.mp4');
+  assert.strictEqual(b.localSrc('T1'), 'http://127.0.0.1:8080/T1.mp4');  // mmvideo maps to local file
   assert.strictEqual(b.localSrc('T2'), null);
 });
 

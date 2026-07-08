@@ -21,6 +21,12 @@
 - NEVER burst-SSH the fleet (memory: fleet-ssh-no-burst) — the on-device rollout is sequential + paced.
 - Plan-1 coordinator is committed: `mmCache.registerBackend(b)`, `mmCache.handlePrecache({group,url,token})`, `mmCache.onAck`, `mmCache.localSrc(token)`.
 
+> **⚑ SPIKE OUTCOME (Task 1 PASS, 2026-07-08 — supersedes `file://`/`mmcache/` below; see `tweak/mmcache-spike/SPIKE-FINDINGS.md`):**
+> - Download API is **`NSData dataWithContentsOfURL:`** on a bg `dispatch_async_f` queue (iOS-5 has NO `NSURLSession`; no Blocks).
+> - Download dir is **`/var/mobile/Media/MosaicMeshCache/<token>.mp4`** (the dir `mm_url_to_path` maps), NOT `mmcache/`.
+> - **`localSrc` returns `http://127.0.0.1:8080/<token>.mp4`, NOT `file://`** — a raw `file://` media src is cross-origin-blocked by WebKit from an http page; mmvideo intercepts the `127.0.0.1:8080` URL and plays the local file (no lighttpd fetch). Already fixed in `js/mmCacheBackendMmvideo.js` (Task 2) + its test.
+> - The bridge (`mmcache://` `WebAppController` hook) coexists with mmws and the tweak loads clean — Task 4 productionizes the spike tweak into `tweak/mmvideo/`.
+
 ---
 
 ## File Structure

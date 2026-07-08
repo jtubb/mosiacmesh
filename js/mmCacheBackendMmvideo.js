@@ -2,7 +2,14 @@
 // the mmvideo native cache bridge (mmcache:// scheme JS->native; window.__mmCacheDone/
 // __mmCacheFail native->JS). Mirrors the mmws bridge pattern. No Promise/fetch (ES5).
 (function (root) {
-  var CACHE_DIR = 'file:///var/mobile/Media/mmcache/';
+  // localSrc uses mmvideo's http://127.0.0.1:8080/<name> convention, NOT a raw file://.
+  // WebKit blocks a file:// media resource from an http-origin page (cross-origin), so
+  // <video src="file://..."> never engages mmvideo's MediaPlayer hook. mmvideo intercepts
+  // the 127.0.0.1:8080 URL (mm_url_to_path -> file://MosaicMeshCache/<name>) and plays the
+  // LOCAL file via AVPlayer with no network fetch — proven on-device (spike, sign1screen1).
+  // The native backend (Plan 2 Task 4) therefore downloads into /var/mobile/Media/
+  // MosaicMeshCache/ so mm_url_to_path resolves the same <name>.
+  var CACHE_DIR = 'http://127.0.0.1:8080/';
   var _present = {};   // token -> bytes (download acked-present on device)
   var _pending = {};   // token -> { onDone: fn, onFail: fn }
 
