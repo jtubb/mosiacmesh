@@ -65,3 +65,23 @@ test('localSrc delegates to backend, null when uncached', function () {
   b.store['T1'] = 'u';
   assert.strictEqual(mmCache.localSrc('T1'), 'local://T1');
 });
+
+test('handlePrecache: success acks CACHED; failure acks CACHE_FAILED', function () {
+  const mmCache = loadMmCache();
+  mmCache._reset();
+  const acks = [];
+  mmCache.onAck = function (req, payload) { acks.push([req, payload.token]); };
+  // success backend
+  const ok = mockBackend(); mmCache.registerBackend(ok);
+  mmCache.handlePrecache({ group: 'G1', url: 'http://c/seg', token: 'T1' });
+  assert.deepStrictEqual(ok.fetched, [['http://c/seg', 'T1']]);
+  assert.deepStrictEqual(acks, [['CACHED', 'T1']]);
+  assert.strictEqual(mmCache.state('T1'), 'cached');
+  // failure backend
+  const bad = mockBackend();
+  bad.fetchToCache = function (url, token, onDone, onFail) { onFail(token, 'net'); };
+  mmCache.registerBackend(bad); acks.length = 0;
+  mmCache.handlePrecache({ group: 'G2', url: 'http://c/seg2', token: 'T2' });
+  assert.deepStrictEqual(acks, [['CACHE_FAILED', 'T2']]);
+  assert.strictEqual(mmCache.state('T2'), 'failed');
+});

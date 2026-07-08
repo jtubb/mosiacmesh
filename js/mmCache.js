@@ -63,6 +63,16 @@
     return null;
   };
 
+  mmCache.onAck = null;   // client wires this to sendMsg("SRV", req, payload)
+
+  mmCache.handlePrecache = function (msg) {
+    if (!mmCache.backend) { if (mmCache.onAck) { mmCache.onAck('CACHE_FAILED', { token: msg.token, reason: 'no-backend' }); } return; }
+    mmCache._supersede(msg.group, msg.token);
+    mmCache.backend.fetchToCache(msg.url, msg.token,
+      function (token) { mmCache._enforceCap(); if (mmCache.onAck) { mmCache.onAck('CACHED', { token: token }); } },
+      function (token, reason) { mmCache._markFailed(token); if (mmCache.onAck) { mmCache.onAck('CACHE_FAILED', { token: token, reason: reason || 'err' }); } });
+  };
+
   root.mmCache = mmCache;
   if (typeof module !== 'undefined' && module.exports) { module.exports = mmCache; }
 })(typeof window !== 'undefined' ? window : global);
