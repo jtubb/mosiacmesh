@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmcache
+Name: mmcache
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: MosaicMesh client-pull cache bridge (Plan 2)
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate
