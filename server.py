@@ -111,6 +111,7 @@ from mosaicmesh.api.displays import (
 from mosaicmesh.api.renders import api_renders_list
 from mosaicmesh import memdebug   # memory/thread leak instrumentation
 from mosaicmesh.websocket.legacy import msg_response
+from mosaicmesh import cache_pull
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
 # server.handle_websocket_message(...) directly. The handler is also NOT YET
 # wired into ws_handler (dispatch.py only dispatches to msg_response); when
@@ -148,6 +149,37 @@ VEENCY_PASSWORD = os.environ.get("MMVNCPW") or "mosaicmesh"
 # read-modify-write; the proxy itself has its own internal queuing.
 _veency_pool = {}
 _veency_lock = asyncio.Lock()
+
+# Client-pull cache orchestration (Tasks 9-11). These module-level singletons
+# are shared between start_precache (below) and handle_cache_ack in legacy.py.
+# cache_state is reset by start_precache on each new render; the others are
+# accumulated across the current push epoch.
+cache_state = cache_pull.CacheState()
+precache_windows = {}       # group -> PrecacheWindow
+precache_urls = {}          # client_key -> central segment URL
+precache_group = {}         # client_key -> group
+precache_token = None       # token currently being pushed
+
+
+def _send_precache(client_key, url, token):
+    """Broadcast a PRECACHE to one client (client-pull grant)."""
+    broadcast_to_client(client_key, {"REQUEST": "PRECACHE",
+                                     "PAYLOAD": {"url": url, "token": token}})
+
+
+def start_precache(group, token, client_urls, n=3):
+    """Begin a throttled client-pull for `group`: window of `n`, send PRECACHE to
+    the initial grant set; CACHED/CACHE_FAILED acks advance it (see legacy.handle_cache_ack)."""
+    global precache_token
+    precache_token = token
+    for k, u in client_urls.items():
+        precache_urls[k] = u
+        precache_group[k] = group
+    win = cache_pull.PrecacheWindow(list(client_urls.keys()), n=n)
+    precache_windows[group] = win
+    for k in win.start():
+        _send_precache(k, precache_urls.get(k), token)
+
 
 # Render pipeline constants + functions live in mosaicmesh.render (imported above).
 # Device lifecycle script constants + functions live in mosaicmesh.device_scripts (imported above).
