@@ -255,6 +255,29 @@ def _do_tap(proxy, cx, cy):
         pass
 
 
+def _veency_reachable(ip, timeout=2.0):
+    """Plain-socket liveness probe to the Veency port. A dozing/offline iPad's
+    vncdotool `api.connect` can strand a Twisted connector + thread/fd that the
+    auto-arm error path can NEVER reclaim (it only disconnects a *pooled* proxy, and
+    a failed connect was never pooled) -- the slow fd/thread leak that built up over
+    long video sessions against unreachable screens. A raw socket cleans up on close,
+    so we probe first and skip the vncdotool handshake entirely when the port isn't
+    answering. Runs in the executor (blocking connect), bounded by `timeout`."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect((ip, VEENCY_PORT))
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
 async def _get_pooled_vnc(client_key, ip):
     """Return a connected ThreadedVNCClientProxy for the given iPad,
     reusing a pooled connection if one exists. First-call cold path:
@@ -267,6 +290,11 @@ async def _get_pooled_vnc(client_key, ip):
     # Cold connect outside the lock so other clients aren't blocked
     # by this iPad's handshake.
     loop = asyncio.get_event_loop()
+    # Reachability guard (defense against the auto-arm connector leak): skip the
+    # vncdotool handshake for a screen whose Veency port isn't answering, so a
+    # dozing/offline iPad can't strand a Twisted connector the error path can't free.
+    if not await loop.run_in_executor(None, _veency_reachable, ip):
+        raise ConnectionError("veency port unreachable at " + str(ip))
     proxy = await loop.run_in_executor(
         None,
         lambda: api.connect(f"{ip}::{VEENCY_PORT}",
