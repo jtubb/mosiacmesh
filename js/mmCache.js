@@ -24,6 +24,23 @@
 
   mmCache._markFailed = function (token) { if (mmCache._tokens[token]) { mmCache._tokens[token].failed = true; } };
 
+  mmCache._forget = function (token) {
+    delete mmCache._tokens[token];
+    var i = mmCache._order.indexOf(token);
+    if (i >= 0) { mmCache._order.splice(i, 1); }
+  };
+
+  mmCache._supersede = function (group, newToken) {
+    var t, tok;
+    for (tok in mmCache._tokens) {
+      if (mmCache._tokens.hasOwnProperty(tok) && mmCache._tokens[tok].group === group && tok !== newToken) {
+        if (mmCache.backend) { mmCache.backend.evict(tok); }
+        mmCache._forget(tok);
+      }
+    }
+    mmCache._recordToken(newToken, group);
+  };
+
   root.mmCache = mmCache;
   if (typeof module !== 'undefined' && module.exports) { module.exports = mmCache; }
 })(typeof window !== 'undefined' ? window : global);
