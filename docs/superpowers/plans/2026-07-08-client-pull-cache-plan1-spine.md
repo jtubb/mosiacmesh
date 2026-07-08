@@ -15,6 +15,7 @@
 - The render **token** (existing `render_token`) is the cache key; a new token for a group supersedes the old.
 - Fleet WiFi is saturation-sensitive: server pull concurrency is bounded by a rolling window `N` (config default 3).
 - Tests: JS via `python pytest_runner.py --js` (or `node --test tests/unit/js/mmcache.test.js`); Python via `python -m pytest tests/unit/test_cache_pull.py -c tests/pytest.ini -v`.
+- **JS test harness — SUPERSEDES the `require(...)` shown in Tasks 1-6.** This package is `"type":"module"`, so tests are ESM and load the ES5 browser-global `js/mmCache.js` via a `node:vm` sandbox (like `gotime-ready.test.js`). A shared helper `tests/unit/js/_mmcache_load.js` (already committed) exports `loadMmCache()` (returns a FRESH `mmCache` per call) and `mockBackend()`. Every JS task APPENDS its test(s) to `tests/unit/js/mmcache.test.js`, whose header is `import { test } from 'node:test'; import assert from 'node:assert'; import { loadMmCache, mockBackend } from './_mmcache_load.js';`. Each test begins `const mmCache = loadMmCache();` then the brief's assertions verbatim. Do NOT use `require`, `module.exports`, an inline `mockBackend`, or a `.cjs` file — those in the task bodies below are the superseded originals. Tasks needing size (Task 4) add `.size`/`.sizes` to a `mockBackend()` instance; Task 6's failure case overrides `.fetchToCache` on a fresh `mockBackend()`.
 - Messages use the `{SRC,DEST,REQUEST,PAYLOAD}` shape; new REQUESTs: `PRECACHE` (server→client), `CACHED` / `CACHE_FAILED` (client→server).
 
 ---
