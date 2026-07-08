@@ -41,6 +41,23 @@
     mmCache._recordToken(newToken, group);
   };
 
+  mmCache.capBytes = 500 * 1024 * 1024;
+
+  mmCache._totalBytes = function () {
+    var sum = 0, i, tok;
+    if (!mmCache.backend || !mmCache.backend.size) { return 0; }
+    for (i = 0; i < mmCache._order.length; i++) { tok = mmCache._order[i]; sum += (mmCache.backend.size(tok) || 0); }
+    return sum;
+  };
+
+  mmCache._enforceCap = function () {
+    while (mmCache._order.length > 1 && mmCache._totalBytes() > mmCache.capBytes) {
+      var oldest = mmCache._order[0];
+      if (mmCache.backend) { mmCache.backend.evict(oldest); }
+      mmCache._forget(oldest);
+    }
+  };
+
   root.mmCache = mmCache;
   if (typeof module !== 'undefined' && module.exports) { module.exports = mmCache; }
 })(typeof window !== 'undefined' ? window : global);
