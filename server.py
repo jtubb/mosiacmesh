@@ -160,6 +160,8 @@ precache_urls = {}          # client_key -> central segment URL
 precache_group = {}         # client_key -> group
 precache_token = None       # token currently being pushed
 precache_segtoken = {}      # client_key -> segment NAME (the PRECACHE token = url basename)
+PRECACHE_ACK_TIMEOUT = 20.0  # s: advance the throttle window past a client that never acks
+                             # a PRECACHE grant (offline / stale client JS with no handler)
 
 
 def _seg_name_from_url(url):
@@ -193,7 +195,7 @@ def start_precache(group, token, client_urls, n=3):
         precache_segtoken[k] = _seg_name_from_url(u)
     win = cache_pull.PrecacheWindow(list(client_urls.keys()), n=n)
     precache_windows[group] = win
-    for k in win.start():
+    for k in win.start(time.time()):
         _send_precache(k, precache_urls.get(k), precache_segtoken.get(k))
 
 
@@ -2447,6 +2449,21 @@ async def process():
         }
         socketmanager.broadcast(jsonpickle.encode(stale_notification))
         logging.info(f"{len(stale_clients)} clients went offline")
+
+    # Sweep precache windows: advance past a client that never acked its PRECACHE grant
+    # (offline / stale client JS with no handler) so a group's client-pull doesn't stall
+    # behind it. Timed-out clients are marked failed; the freed slots grant the next.
+    for _grp, _win in list(precache_windows.items()):
+        try:
+            _timed_out, _granted = _win.sweep_timeouts(current_time, PRECACHE_ACK_TIMEOUT)
+            for _k in _timed_out:
+                cache_state.record_failed(_k, precache_segtoken.get(_k))
+            for _k in _granted:
+                _send_precache(_k, precache_urls.get(_k), precache_segtoken.get(_k))
+            if _win.drained():
+                precache_windows.pop(_grp, None)
+        except Exception as _e:
+            logging.error("precache window sweep failed for %s: %s", _grp, _e)
 
     # Release any PREPARING groups whose timeout has elapsed
     try:

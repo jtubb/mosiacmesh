@@ -113,7 +113,7 @@ def handle_cache_ack(msg):
         _server.cache_state.record_failed(src, token)
     win = getattr(_server, "precache_windows", {}).get(group)
     if win is not None:
-        nxt = win.advance(src)
+        nxt = win.advance(src, time.time())
         if nxt is not None:
             url = getattr(_server, "precache_urls", {}).get(nxt)
             _server._send_precache(nxt, url, getattr(_server, "precache_segtoken", {}).get(nxt))
