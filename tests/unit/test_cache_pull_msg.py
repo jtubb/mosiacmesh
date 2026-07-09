@@ -6,30 +6,36 @@ def _make_server(sent):
     srv = types.SimpleNamespace()
     srv.cache_state = CacheState()
     srv.precache_windows = {"G1": PrecacheWindow(["a", "b", "c"], n=1)}
-    srv.precache_urls = {"c": "http://c/seg-c"}     # url to grant next
+    srv.precache_urls = {"b": "http://c/seg-b", "c": "http://c/seg-c"}
     srv.precache_group = {"a": "G1", "b": "G1", "c": "G1"}
     srv.precache_token = "T1"
+    # the PRECACHE token is the per-client SEGMENT NAME (url basename)
+    srv.precache_segtoken = {"a": "seg_T1_0", "b": "seg_T1_0", "c": "seg_T1_0"}
+    srv.settings = types.SimpleNamespace(clients={"a": types.SimpleNamespace(cachedSegments=set())})
     srv._send_precache = lambda key, url, token: sent.append((key, url, token))
     return srv
 
-def test_cached_ack_advances_window_and_grants_next(monkeypatch):
+def test_cached_ack_marks_segment_and_advances(monkeypatch):
     sent = []
     srv = _make_server(sent)
     monkeypatch.setattr(legacy, "server", srv, raising=False)
     srv.precache_windows["G1"].start()               # a active; b, c still waiting
-    assert sent == []                                # nothing sent yet (start() doesn't use _send_precache)
-    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHED", "PAYLOAD": {"token": "T1"}})
-    assert srv.cache_state.is_cached("a", "T1") is True
-    # advance("a") should grant "b" as next (n=1 window)
+    assert sent == []                                # start() doesn't use _send_precache
+    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHED", "PAYLOAD": {"token": "seg_T1_0"}})
+    assert srv.cache_state.is_cached("a", "seg_T1_0") is True
+    # segment marked on the Client (seg_ prefix stripped -> the key _per_client_items checks)
+    assert "T1_0" in srv.settings.clients["a"].cachedSegments
+    # advance("a") grants "b" next (n=1 window), carrying b's seg-token
     assert len(sent) == 1
-    assert sent[0][0] == "b"                        # b is the next client granted
-    assert sent[0][2] == "T1"                       # correct token
+    assert sent[0][0] == "b"
+    assert sent[0][2] == "seg_T1_0"
 
-def test_cache_failed_advances_window_and_records_failure(monkeypatch):
+def test_cache_failed_advances_window_without_marking(monkeypatch):
     sent = []
     srv = _make_server(sent)
     monkeypatch.setattr(legacy, "server", srv, raising=False)
     srv.precache_windows["G1"].start()               # a active
-    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_FAILED", "PAYLOAD": {"token": "T1"}})
-    assert srv.cache_state.is_cached("a", "T1") is False
-    assert sent[0][0] == "b"                        # still advances to next client
+    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_FAILED", "PAYLOAD": {"token": "seg_T1_0"}})
+    assert srv.cache_state.is_cached("a", "seg_T1_0") is False
+    assert "T1_0" not in srv.settings.clients["a"].cachedSegments   # failed -> not cached
+    assert sent[0][0] == "b"                          # still advances to the next client

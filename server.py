@@ -159,26 +159,41 @@ precache_windows = {}       # group -> PrecacheWindow
 precache_urls = {}          # client_key -> central segment URL
 precache_group = {}         # client_key -> group
 precache_token = None       # token currently being pushed
+precache_segtoken = {}      # client_key -> segment NAME (the PRECACHE token = url basename)
+
+
+def _seg_name_from_url(url):
+    """The segment file's basename minus '.mp4' = the PRECACHE token the client caches
+    under and the mmvideo/mmcache tweak saves as <name>.mp4 (e.g. 'seg_<rt>_<i>' or
+    'full_<rt>_<i>'). _per_client_items serves http://127.0.0.1:8080/<name>.mp4 for a
+    cached client, so the downloaded file name MUST equal the segment name."""
+    base = (url or "").rsplit("/", 1)[-1]        # seg_<rt>_<i>.mp4
+    if base.endswith(".mp4"):
+        base = base[:-4]
+    return base
 
 
 def _send_precache(client_key, url, token):
-    """Broadcast a PRECACHE to one client (client-pull grant)."""
+    """Broadcast a PRECACHE to one client (client-pull grant). `token` is the segment
+    NAME so the device saves <token>.mp4 -- the name _per_client_items + mm_url_to_path map."""
     broadcast_to_client(client_key, {"REQUEST": "PRECACHE",
                                      "PAYLOAD": {"url": url, "token": token}})
 
 
 def start_precache(group, token, client_urls, n=3):
     """Begin a throttled client-pull for `group`: window of `n`, send PRECACHE to
-    the initial grant set; CACHED/CACHE_FAILED acks advance it (see legacy.handle_cache_ack)."""
+    the initial grant set; CACHED/CACHE_FAILED acks advance it (see legacy.handle_cache_ack).
+    Each PRECACHE carries the per-client SEGMENT NAME (url basename) as its token."""
     global precache_token
     precache_token = token
     for k, u in client_urls.items():
         precache_urls[k] = u
         precache_group[k] = group
+        precache_segtoken[k] = _seg_name_from_url(u)
     win = cache_pull.PrecacheWindow(list(client_urls.keys()), n=n)
     precache_windows[group] = win
     for k in win.start():
-        _send_precache(k, precache_urls.get(k), token)
+        _send_precache(k, precache_urls.get(k), precache_segtoken.get(k))
 
 
 # Render pipeline constants + functions live in mosaicmesh.render (imported above).

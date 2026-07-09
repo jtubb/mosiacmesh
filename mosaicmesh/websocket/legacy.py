@@ -96,6 +96,19 @@ def handle_cache_ack(msg):
     group = getattr(_server, "precache_group", {}).get(src)
     if msg["REQUEST"] == "CACHED":
         _server.cache_state.record_cached(src, token)
+        # Mark the segment cached on the Client so _per_client_items rewrites its item to
+        # the local http://127.0.0.1:8080/<segname>.mp4 URL (the play-from-local path).
+        # cachedSegments holds seg keys: 'seg_<rt>_<i>' -> '<rt>_<i>' (strip 'seg_');
+        # 'full_<rt>_<i>' stays verbatim (that's the key _per_client_items checks).
+        settings = getattr(_server, "settings", None)
+        client = settings.clients.get(src) if settings else None
+        if client is not None and token:
+            segkey = token[4:] if token.startswith("seg_") else token
+            cs = getattr(client, "cachedSegments", None)
+            if not isinstance(cs, set):
+                cs = set(cs) if cs else set()
+                client.cachedSegments = cs
+            cs.add(segkey)
     else:
         _server.cache_state.record_failed(src, token)
     win = getattr(_server, "precache_windows", {}).get(group)
@@ -103,7 +116,7 @@ def handle_cache_ack(msg):
         nxt = win.advance(src)
         if nxt is not None:
             url = getattr(_server, "precache_urls", {}).get(nxt)
-            _server._send_precache(nxt, url, getattr(_server, "precache_token", token))
+            _server._send_precache(nxt, url, getattr(_server, "precache_segtoken", {}).get(nxt))
 
 
 def client_warmable(client):
