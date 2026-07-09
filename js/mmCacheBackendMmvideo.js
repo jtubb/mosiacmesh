@@ -28,7 +28,14 @@
     name: 'mmvideo',
     fetchToCache: function (url, token, onDone, onFail) {
       _pending[token] = { onDone: onDone, onFail: onFail };
-      _nav('mmcache://fetch?token=' + encodeURIComponent(token) + '&url=' + encodeURIComponent(url));
+      // The server sends a root-relative url (/media/...); the mmvideo tweak's NSData
+      // fetch needs an ABSOLUTE http:// url. Resolve against the page origin (the server
+      // the webclip loaded from). Already-absolute urls pass through unchanged.
+      var abs = url;
+      if (url && url.indexOf('http') !== 0 && typeof window !== 'undefined' && window.location && window.location.host) {
+        abs = (window.location.protocol || 'http:') + '//' + window.location.host + url;
+      }
+      _nav('mmcache://fetch?token=' + encodeURIComponent(token) + '&url=' + encodeURIComponent(abs));
     },
     localSrc: function (token) {
       return _present.hasOwnProperty(token) ? (CACHE_DIR + token + '.mp4') : null;

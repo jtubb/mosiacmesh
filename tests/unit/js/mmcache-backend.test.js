@@ -8,7 +8,7 @@ function loadBackend() {
   const code = fs.readFileSync(new URL('../../../js/mmCacheBackendMmvideo.js', import.meta.url), 'utf8');
   const navs = [];
   const sandbox = {
-    window: {},
+    window: { location: { protocol: 'http:', host: 'srv:3000' } },
     document: {
       documentElement: { appendChild: function () {} },
       createElement: function () { return { style: {}, parentNode: null,
@@ -35,6 +35,13 @@ test('fetchToCache navigates mmcache://fetch and resolves on __mmCacheDone', fun
   assert.strictEqual(b.size('T1'), 12345);
   assert.strictEqual(b.localSrc('T1'), 'http://127.0.0.1:8080/T1.mp4');  // mmvideo maps to local file
   assert.strictEqual(b.localSrc('T2'), null);
+});
+
+test('fetchToCache resolves a root-relative url to an absolute http url', function () {
+  const { w, navs } = loadBackend();
+  const b = w._mmCacheBackendMmvideo;
+  b.fetchToCache('/media/k/videos/seg_x_0.mp4', 'X0', function () {}, function () {});
+  assert.ok(navs[0].indexOf('url=' + encodeURIComponent('http://srv:3000/media/k/videos/seg_x_0.mp4')) !== -1);
 });
 
 test('fetchToCache rejects on __mmCacheFail; evict clears + navigates', function () {
