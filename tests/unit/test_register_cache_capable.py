@@ -3,6 +3,7 @@ from mosaicmesh.websocket.legacy import apply_cache_capability
 
 
 def test_cacheCapable_true_upgrades_default_none():
+    """Legacy client sending only cacheCapable (no cacheBackend) -> mmvideo path."""
     c = types.SimpleNamespace(cacheMode="none")
     apply_cache_capability(c, {"cacheCapable": True})
     assert c.cacheMode == "lighttpd-localhost"
@@ -19,3 +20,22 @@ def test_does_not_override_a_non_default_mode():
     c.cacheMode = "something-else"
     apply_cache_capability(c, {"cacheCapable": True})
     assert c.cacheMode == "something-else"        # only upgrades from the default 'none'
+
+
+def test_cacheBackend_mmvideo_maps_to_lighttpd_localhost():
+    c = types.SimpleNamespace(cacheMode="none")
+    apply_cache_capability(c, {"cacheCapable": True, "cacheBackend": "mmvideo"})
+    assert c.cacheMode == "lighttpd-localhost"
+
+
+def test_cacheBackend_modern_maps_to_service_worker():
+    c = types.SimpleNamespace(cacheMode="none")
+    apply_cache_capability(c, {"cacheCapable": True, "cacheBackend": "modern"})
+    assert c.cacheMode == "service-worker"
+
+
+def test_cacheBackend_modern_upgrade_only_from_none():
+    """The modern mapping still respects the upgrade-only-from-none invariant."""
+    c = types.SimpleNamespace(cacheMode="lighttpd-localhost")
+    apply_cache_capability(c, {"cacheCapable": True, "cacheBackend": "modern"})
+    assert c.cacheMode == "lighttpd-localhost"   # not overwritten

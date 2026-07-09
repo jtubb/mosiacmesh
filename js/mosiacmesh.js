@@ -124,7 +124,8 @@ function getUDID() {
 			var cw = window.innerWidth || (document.documentElement && document.documentElement.clientWidth) || screen.width;
 			var ch = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
 			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height,
-				"canvasWidth": cw, "canvasHeight": ch, "touch": hasTouch, "cacheCapable": !!(window.mmCache && window.mmCache.backend)}));
+				"canvasWidth": cw, "canvasHeight": ch, "touch": hasTouch, "cacheCapable": !!(window.mmCache && window.mmCache.backend),
+					"cacheBackend": (window.mmCache && window.mmCache.backend && window.mmCache.backend.name) ? window.mmCache.backend.name : null}));
 			// Re-report the viewport whenever it changes (e.g. entering full screen
 			// for calibration, or rotating). REGISTER only captures it once; if the
 			// page registered while NOT full screen, the stored canvas dims would be

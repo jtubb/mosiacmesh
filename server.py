@@ -969,6 +969,11 @@ async def javascript_handler(request):
             # the file contents in memory.
             headers = {"Cache-Control": "no-cache, no-store, must-revalidate",
                        "Pragma": "no-cache", "Expires": "0"}
+            # Let the /js/-served Service Worker claim the root scope so it can
+            # intercept /media/... requests (index.html registers it with
+            # {scope:'/'}). Narrowly scoped to sw.js — not all JS responses.
+            if os.path.basename(file_path) == "sw.js":
+                headers["Service-Worker-Allowed"] = "/"
             return web.Response(body=data, content_type='text/javascript',
                                 headers=headers)
 

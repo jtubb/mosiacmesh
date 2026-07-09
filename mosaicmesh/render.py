@@ -622,12 +622,17 @@ async def _run_ffmpeg(cmd, label, semaphore):
 
 
 def _client_is_push_eligible(c):
-    """True iff a client is cache-capable and reachable: exists, is in
-    lighttpd-localhost cacheMode, is online, and has an IP. Used to build
-    seg_push_targets / full_push_targets lists (which the client-pull path
-    consumes). Pure — unit-tested."""
+    """True iff a client is cache-capable and reachable: exists, is in a
+    cache-capable cacheMode (lighttpd-localhost mmvideo OR service-worker
+    modern), is online, and has an IP. Used to build seg_push_targets /
+    full_push_targets lists (which the client-pull PRECACHE path consumes).
+    Both backends need a PRECACHE: the mmvideo tweak pulls into its local
+    lighttpd, and the modern SW pulls the SAME /media/ URL into its Cache-API
+    (its SW is cache-first; nothing else fills the cache). This gate is
+    intentionally WIDER than the URL-rewrite gate in _per_client_items /
+    _local_cache_src, which stays lighttpd-localhost-only. Pure — unit-tested."""
     return bool(c is not None
-                and getattr(c, "cacheMode", "none") == "lighttpd-localhost"
+                and getattr(c, "cacheMode", "none") in ("lighttpd-localhost", "service-worker")
                 and getattr(c, "isOnline", False)
                 and getattr(c, "ip", ""))
 

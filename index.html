@@ -1689,7 +1689,10 @@
 	  window.__mmRegisterMmvideoBackend();
 	} else if (('serviceWorker' in navigator) && ('caches' in window) && window.__mmRegisterModernBackend) {
 	  window.__mmRegisterModernBackend();
-	  try { navigator.serviceWorker.register('js/sw.js'); } catch (e) {}
+	  // Root scope so the SW can intercept /media/... (default scope would be
+	  // /js/). The server sends Service-Worker-Allowed: / for js/sw.js to permit
+	  // a /js/-served worker to claim the root scope.
+	  try { navigator.serviceWorker.register('js/sw.js', { scope: '/' }); } catch (e) {}
 	}
 	if (window.mmCache) {
 	  mmCache.onAck = function (req, payload) {

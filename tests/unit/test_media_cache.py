@@ -383,6 +383,59 @@ def test_per_client_items_emits_central_url_for_service_worker_client():
     assert items[1]["file"] == "/media/modern/seg_9a27f533acb6_1.mp4"
 
 
+# --- The two-gate split (modern SW fix): PRECACHE-eligibility WIDENS to include
+#     service-worker; URL-rewrite STAYS lighttpd-localhost only. -----------------
+
+def _push_eligible_client(cache_mode):
+    c = server.Client()
+    c.clientKey = "x"
+    c.cacheMode = cache_mode
+    c.isOnline = True
+    c.ip = "10.0.0.5"
+    return c
+
+
+def test_push_eligible_includes_service_worker():
+    """Gate 1 (PRECACHE-eligibility) must include service-worker so modern
+    clients get a PRECACHE to fill their Cache-API."""
+    from mosaicmesh import render
+    assert render._client_is_push_eligible(_push_eligible_client("service-worker")) is True
+    assert render._client_is_push_eligible(_push_eligible_client("lighttpd-localhost")) is True
+    assert render._client_is_push_eligible(_push_eligible_client("none")) is False
+
+
+def test_two_gate_split_service_worker_eligible_but_not_url_rewritten():
+    """The crux of the two-gate split: a service-worker client IS precache-
+    eligible but its play URL is NOT rewritten to 127.0.0.1:8080 (stays
+    central /media/), while a lighttpd-localhost client with the seg cached
+    IS rewritten."""
+    from mosaicmesh import render
+    # Gate 1: eligibility
+    sw = _push_eligible_client("service-worker")
+    lt = _push_eligible_client("lighttpd-localhost")
+    assert render._client_is_push_eligible(sw) is True
+    assert render._client_is_push_eligible(lt) is True
+
+    # Gate 2: URL rewrite in _per_client_items
+    d = _build_test_display()
+    c_sw = server.Client()
+    c_sw.clientKey = "modern"
+    c_sw.cacheMode = "service-worker"
+    c_sw.cachedSegments = {"9a27f533acb6_1"}  # ignored for SW
+    c_sw.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
+    sw_items = server._per_client_items(d, "modern", c_sw)
+    assert sw_items[1]["file"] == "/media/modern/seg_9a27f533acb6_1.mp4"
+    assert "127.0.0.1" not in sw_items[1]["file"]
+
+    c_lt = server.Client()
+    c_lt.clientKey = "ipad1"
+    c_lt.cacheMode = "lighttpd-localhost"
+    c_lt.cachedSegments = {"9a27f533acb6_1"}
+    c_lt.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
+    lt_items = server._per_client_items(d, "ipad1", c_lt)
+    assert lt_items[1]["file"] == "http://127.0.0.1:8080/seg_9a27f533acb6_1.mp4"
+
+
 def test_per_client_items_emits_central_url_for_cacheMode_none():
     """Default-mode iPads (cacheMode=none) keep the legacy central URL."""
     d = _build_test_display()

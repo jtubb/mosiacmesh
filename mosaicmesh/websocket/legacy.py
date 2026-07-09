@@ -137,12 +137,23 @@ def client_warmable(client):
 
 
 def apply_cache_capability(client, payload):
-    """Client-reported cache capability on REGISTER (replaces the deleted SSH probe). A
-    client with an mmCache backend (mmvideo tweak or modern SW) serves its pulled segments
-    at http://127.0.0.1:8080/<name>, so mark it cache-capable -> _per_client_items routes it
-    the local URL. Only upgrades from the default 'none'; a later ANNOUNCE_CACHE_MODE 'none'
+    """Client-reported cache capability on REGISTER (replaces the deleted SSH probe).
+    Maps the client's mmCache backend NAME to a server cacheMode:
+      - cacheBackend == "modern"  -> "service-worker": the modern client keeps the
+        central /media/ URL and its Service Worker serves it from the Cache-API.
+        (It does NOT serve at 127.0.0.1:8080 — only the mmvideo tweak does.)
+      - else if cacheCapable truthy (mmvideo tweak, or a legacy client that reports
+        only cacheCapable) -> "lighttpd-localhost": _per_client_items rewrites its
+        play URL to http://127.0.0.1:8080/<name>, which the mmvideo tweak maps to
+        the pulled local file.
+    Only upgrades from the default 'none'; a later ANNOUNCE_CACHE_MODE 'none'
     (client-side local-play failure) remains authoritative."""
-    if client is not None and (payload or {}).get("cacheCapable") and getattr(client, "cacheMode", "none") == "none":
+    p = payload or {}
+    if client is None or getattr(client, "cacheMode", "none") != "none":
+        return
+    if p.get("cacheBackend") == "modern":
+        client.cacheMode = "service-worker"
+    elif p.get("cacheCapable"):
         client.cacheMode = "lighttpd-localhost"
 
 
