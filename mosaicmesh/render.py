@@ -1274,9 +1274,9 @@ def _media_item_payload(me):
 # Per-client URL routing for media-cache-aware clients. See spec
 # 2026-06-03-media-cache-design.md. For SEGMENT items on an iPad in
 # lighttpd-localhost cache mode that has the segment cached, returns
-# the localhost URL so Safari fetches from local lighttpd (zero LAN
-# bandwidth). For every other case -- non-SEGMENT items, cache miss,
-# different cache mode -- returns the central-server URL.
+# the localhost URL so mmvideo serves from its local MosaicMeshCache dir
+# (zero LAN bandwidth). For every other case -- non-SEGMENT items, cache
+# miss, different cache mode -- returns the central-server URL.
 #
 # Accepts both real `MediaElement` instances (whose .playmode is a
 # `PlayMode` enum) and dict-like / stub items (whose .playmode may
@@ -1354,9 +1354,9 @@ def _per_client_items(display, key, c):
     Media-cache aware (2026-06-03): when this client is in
     cacheMode='lighttpd-localhost' AND has the segment cached locally
     (seg_<token>_<i> in client.cachedSegments), the per-iPad URL is
-    rewritten to http://127.0.0.1:8080/seg_<token>_<i>.mp4 so the
-    iPad's Safari fetches from its local lighttpd instead of competing
-    for shared WiFi bandwidth at PLAY time. INDIVIDUAL-mode items are
+    rewritten to http://127.0.0.1:8080/seg_<token>_<i>.mp4 so
+    mmvideo serves it from the local MosaicMeshCache dir, bypassing
+    WiFi entirely at PLAY time. INDIVIDUAL-mode items are
     NOT cached by this design (no ind_HASH_N tracking in cachedSegments),
     so they keep the central-server URL. See spec
     docs/superpowers/specs/2026-06-03-media-cache-design.md."""
@@ -1372,8 +1372,8 @@ def _per_client_items(display, key, c):
             sub = "videos" if ext == ".mp4" else "images"
             full_name = "full_" + token + "_" + str(i)
             # FULL device-cache (mirror sync, seam 4): a cache-capable client that
-            # has the shared FULL VIDEO pushed locally serves it from
-            # lighttpd-localhost so the mirror doesn't compete for WiFi at PLAY
+            # has the shared FULL VIDEO pushed locally serves it via mmvideo
+            # so the mirror doesn't compete for WiFi at PLAY
             # (the FULL-desync cause). Images stay central (tiny). INERT until the
             # push seam populates the "full_<token>_<i>" key in cachedSegments —
             # see docs/superpowers/specs/2026-06-28-full-device-caching-design.md.

@@ -1050,10 +1050,7 @@
 					});
 				}
 			};
-			// Prefer the locally-cached file when this item's render token is cached; else the
-			// central URL (stream fallback). item.token is the render token carried in the item.
-			var _localSrc = (window.mmCache && item.token) ? mmCache.localSrc(item.token) : null;
-			var _srcToUse = _localSrc || item.file;
+			var _srcToUse = item.file;
 			if (_srcToUse !== playback.videoSrc) {
 				if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); playback.boundaryTimer = null; }
 				playback.videoSrc = _srcToUse;

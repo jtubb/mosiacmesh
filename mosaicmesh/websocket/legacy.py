@@ -95,7 +95,6 @@ def handle_cache_ack(msg):
     token = (msg.get("PAYLOAD") or {}).get("token")
     group = getattr(_server, "precache_group", {}).get(src)
     if msg["REQUEST"] == "CACHED":
-        _server.cache_state.record_cached(src, token)
         # Mark the segment cached on the Client so _per_client_items rewrites its item to
         # the local http://127.0.0.1:8080/<segname>.mp4 URL (the play-from-local path).
         # cachedSegments holds seg keys: 'seg_<rt>_<i>' -> '<rt>_<i>' (strip 'seg_');
@@ -109,8 +108,6 @@ def handle_cache_ack(msg):
                 cs = set(cs) if cs else set()
                 client.cachedSegments = cs
             cs.add(segkey)
-    else:
-        _server.cache_state.record_failed(src, token)
     win = getattr(_server, "precache_windows", {}).get(group)
     if win is not None:
         nxt = win.advance(src, time.time())

@@ -161,31 +161,6 @@ export function makeStore() {
       if (d) Object.assign(d, patch);
     },
 
-    /**
-     * CACHE_PROGRESS SockJS hook (2026-06-14). Live-updates one device's
-     * cache fields so the Fleet cache chip climbs without a page reload —
-     * the chip reads store.displays, which is otherwise only refreshed at
-     * hydrate(). payload: {clientKey, token, n, percent, mbps, status,
-     * bytesSent, totalBytes}. On status 'cached' the segment finished, so we
-     * record its seg_key (`<token>_<n>`) — deviceCacheStatus recomputes the
-     * propagation % from cachedSegments/expectedSegments. Other statuses
-     * ('pushing'/'stalled') just reflect the in-flight progress.
-     */
-    setCacheProgress(p) {
-      if (!p || !p.clientKey) return;
-      const d = this.displays.find(x => x.clientKey === p.clientKey);
-      if (!d) return;
-      d.cachePushProgress = {
-        status: p.status, percent: p.percent, mbps: p.mbps,
-        bytesSent: p.bytesSent, totalBytes: p.totalBytes,
-      };
-      if (p.status === 'cached' && p.token != null && p.n != null) {
-        const segKey = `${p.token}_${p.n}`;
-        if (!Array.isArray(d.cachedSegments)) d.cachedSegments = [];
-        if (d.cachedSegments.indexOf(segKey) === -1) d.cachedSegments.push(segKey);
-      }
-    },
-
     setRenderInProgress(displayID, inProgress) {
       this.renderInProgress = { ...this.renderInProgress, [displayID]: !!inProgress };
     },

@@ -152,9 +152,6 @@ _veency_lock = asyncio.Lock()
 
 # Client-pull cache orchestration (Tasks 9-11). These module-level singletons
 # are shared between start_precache (below) and handle_cache_ack in legacy.py.
-# cache_state is reset by start_precache on each new render; the others are
-# accumulated across the current push epoch.
-cache_state = cache_pull.CacheState()
 precache_windows = {}       # group -> PrecacheWindow
 precache_urls = {}          # client_key -> central segment URL
 precache_group = {}         # client_key -> group
@@ -2053,8 +2050,6 @@ async def process():
     for _grp, _win in list(precache_windows.items()):
         try:
             _timed_out, _granted = _win.sweep_timeouts(current_time, PRECACHE_ACK_TIMEOUT)
-            for _k in _timed_out:
-                cache_state.record_failed(_k, precache_segtoken.get(_k))
             for _k in _granted:
                 _send_precache(_k, precache_urls.get(_k), precache_segtoken.get(_k))
             if _win.drained():
