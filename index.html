@@ -26,6 +26,7 @@
   <script src="/js/video-buffer.js"></script>
   <script src="/js/mmCache.js"></script>
   <script src="/js/mmCacheBackendMmvideo.js"></script>
+  <script src="/js/mmCacheBackendModern.js"></script>
   <script>
     /* mmws transplant self-test (ES5). Gated on ?wstest — no effect otherwise. Beacons results to
        the server access log as /wsprobe_* image requests so we can verify the native ws transplant
@@ -1681,11 +1682,14 @@
 	   return this;
 	}
 
-	// Client-pull cache: register the iOS-5 backend only if the mmvideo bridge injected
-	// (window.__mmCacheReady). Without it, mmCache stays backend-less and PRECACHE acks
-	// CACHE_FAILED 'no-backend' -> server advances -> this client streams centrally (safe).
+	// Register the cache backend that fits this client: mmvideo (iOS-5 native bridge) if the
+	// mmcache tweak injected; else the modern Cache-API backend on a real browser. Neither ->
+	// mmCache stays backend-less (PRECACHE acks CACHE_FAILED -> streams centrally, safe).
 	if (window.__mmCacheReady && window.__mmRegisterMmvideoBackend) {
 	  window.__mmRegisterMmvideoBackend();
+	} else if (('serviceWorker' in navigator) && ('caches' in window) && window.__mmRegisterModernBackend) {
+	  window.__mmRegisterModernBackend();
+	  try { navigator.serviceWorker.register('js/sw.js'); } catch (e) {}
 	}
 	if (window.mmCache) {
 	  mmCache.onAck = function (req, payload) {
