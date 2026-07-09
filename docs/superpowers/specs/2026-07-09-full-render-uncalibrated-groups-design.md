@@ -66,14 +66,17 @@ uncalibrated → keep the existing `{"status":"ERROR","error":"group not calibra
 response (unchanged semantics for that case). Otherwise proceed to
 `render_queue.enqueue(name, display_id)` exactly as today.
 
-### Trigger point 2 — auto-enqueue on save (`render_queue.py`)
+### Trigger point 2 — auto-enqueue on save
 
-`enqueue_playlist_for_calibrated_groups(playlist_name)` currently iterates
-calibrated groups only. Widen it to also include uncalibrated groups **when the
-playlist does not need calibration**. Rename to
-`enqueue_playlist_for_eligible_groups` (the old name becomes inaccurate); update
-its single caller. Group eligibility = `_group_is_calibrated(g) or not
-_playlist_needs_calibration(items)`.
+`enqueue_playlist_for_calibrated_groups(playlist_name)` is **defined in
+`mosaicmesh/render.py`** and called from `mosaicmesh/render_queue.py:90` (via the
+`R.` render-module alias); it currently iterates calibrated groups only. Widen it
+to also include uncalibrated groups **when the playlist does not need
+calibration**. Rename to `enqueue_playlist_for_eligible_groups` (the old name
+becomes inaccurate) and update all references: the definition (`render.py`), the
+caller (`render_queue.py:90`), and the monkeypatch in
+`tests/unit/test_render_queue.py:74`. Group eligibility =
+`_group_is_calibrated(g) or not _playlist_needs_calibration(items)`.
 
 ### Decisions
 
