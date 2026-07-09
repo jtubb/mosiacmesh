@@ -1789,38 +1789,6 @@
 	<div id="blackout" style="display:none; position:fixed; left:0; top:0; width:100%; height:100%; z-index:2; background:#000;"></div>
 	<div id="preload" class="preload"></div>
 	<script>
-// Service Worker registration -- modern devices only. iOS 5 Safari
-// has navigator.serviceWorker == undefined; the if-guard makes this
-// block a no-op there. (The Promise-chain syntax (.then) is fine
-// for iOS 5 to PARSE -- it only fails to execute, and we never enter
-// the if branch on iOS 5.) See spec
-// docs/superpowers/specs/2026-06-03-media-cache-design.md Task 13.
-(function(){
-	try {
-		if (navigator && navigator.serviceWorker) {
-			navigator.serviceWorker.register('/sw.js').then(function(reg){
-				if (navigator.serviceWorker.controller) {
-					announceCacheMode();
-				} else {
-					navigator.serviceWorker.addEventListener('controllerchange',
-						announceCacheMode);
-				}
-			}).catch(function(){
-				// SW registration failed (e.g., file 404). Don't announce
-				// -- server keeps this client at cacheMode="none".
-			});
-		}
-	} catch (e) { /* iOS 5 with modern syntax errors -- ignore */ }
-})();
-
-function announceCacheMode(){
-	try {
-		if (typeof sock === "undefined" || sock === null) return;
-		sock.send(generateMessage("SRV", "ANNOUNCE_CACHE_MODE",
-								  {"mode": "service-worker"}));
-	} catch (e) { /* best-effort */ }
-}
-
 // Called by the existing PRELOAD message handler when running on a
 // modern device. Issues a non-Range fetch() for each new SEGMENT URL,
 // which populates the Service Worker's Cache API. Subsequent <video>
