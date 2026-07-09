@@ -57,10 +57,21 @@ For each display group whose **current render is READY**:
 3. Select the group's **online, cache-capable, has-IP** clients whose
    `cachedSegments` are missing ≥1 expected seg key
    (`expected − client.cachedSegments`).
-4. If any are missing, build each client's missing-segment pull URLs and call
-   `start_precache(group, token, urls, n=3)`. The `PrecacheWindow` paces the
-   sends at 3 concurrent; subsequent cycles (once the window drains) pick up any
-   still-missing clients.
+4. If any are missing, build `client_urls = {client_key: url}` with **ONE
+   missing seg per client** (the deterministic first missing key, sorted) and
+   call `start_precache(group, token, urls, n=3)`. The `PrecacheWindow` paces
+   the sends at 3 concurrent.
+
+**One seg per client per cycle — why, and the multi-seg behavior.**
+`start_precache` / `PrecacheWindow` are keyed one-URL-per-client
+(`client_urls: {key -> url}`), so a single call precaches one segment per
+client. A client missing multiple segs (e.g. Demo's `_0` and `_1`) is resolved
+over **successive process() cycles**: cycle N precaches everyone's first missing
+seg (window paces at 3); once that window drains and is popped, the next cycle
+finds the still-missing seg and precaches it. This also **incidentally repairs a
+pre-existing limitation**: the render-time pull builder overwrites
+`_pull_urls[key]` per segment, so a multi-segment playlist currently caches only
+ONE seg per client at render time — the reconcile fills the rest.
 
 Because only ONE window exists per group and step 2 skips while it's active, a
 24-way simultaneous reconnect drains **3-at-a-time per group** across successive
