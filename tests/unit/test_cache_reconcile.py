@@ -108,3 +108,15 @@ def test_reconcile_noop_when_nothing_missing(fresh_settings, monkeypatch):
     monkeypatch.setattr(server, "start_precache", lambda *a, **k: called.append(a))
     server.reconcile_group_cache("G1")
     assert called == []
+
+def test_reconcile_all_calls_each_group_and_isolates_errors(fresh_settings, monkeypatch):
+    fresh_settings.displays["G1"] = Display()
+    fresh_settings.displays["G2"] = Display()
+    seen = []
+    def _fake(did):
+        seen.append(did)
+        if did == "G1":
+            raise RuntimeError("boom")   # one group failing must not stop the others
+    monkeypatch.setattr(server, "reconcile_group_cache", _fake)
+    server._reconcile_all_group_caches()   # must not raise
+    assert set(seen) == {"G1", "G2"}

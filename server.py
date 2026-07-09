@@ -248,6 +248,17 @@ def reconcile_group_cache(display_id):
     start_precache(display_id, token, client_urls)
 
 
+def _reconcile_all_group_caches():
+    """Run the per-group cache fill-reconcile for every display group. Called
+    once per process() cycle. Per-group errors are isolated so one bad group
+    never stalls the loop."""
+    for _did in list(settings.displays.keys()):
+        try:
+            reconcile_group_cache(_did)
+        except Exception as _e:
+            logging.error("cache reconcile failed for %s: %s", _did, _e)
+
+
 _reconcile_inflight = set()     # client IPs with a cache reconcile currently running
 
 
@@ -2108,6 +2119,12 @@ async def process():
                 precache_windows.pop(_grp, None)
         except Exception as _e:
             logging.error("precache window sweep failed for %s: %s", _grp, _e)
+
+    # Fill-reconcile: re-PRECACHE cache-capable clients missing the current
+    # render's segments (e.g. offline/reconnecting when the render's PRECACHE
+    # fired). Throttled: reconcile_group_cache skips a group whose PrecacheWindow
+    # is still draining, so a mass reconnect drains 3-at-a-time.
+    _reconcile_all_group_caches()
 
     # Release any PREPARING groups whose timeout has elapsed
     try:
