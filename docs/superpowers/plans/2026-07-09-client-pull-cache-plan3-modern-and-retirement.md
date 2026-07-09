@@ -301,6 +301,32 @@ git commit -m "feat(register): client reports cache-capable -> cacheMode (replac
 
 ---
 
+## Task 4b: Retire the pre-existing standalone Service Worker (superseded by Plan 3's)
+
+**Files:**
+- Delete: `sw.js` (root — the old standalone SW from the 2026-06-03 media-cache design; Plan 3's `js/sw.js` supersedes it)
+- Modify: `index.html` — remove the old SW registration IIFE (the `(function(){ ... navigator.serviceWorker.register('/sw.js') ... })()` block, ~line 1788) and the `announceCacheMode` function IF that block is its only caller
+
+**Interfaces:** leaves ONE modern-cache path — Plan 3's `js/sw.js` + `mmCacheBackendModern` (registered by Task 3's feature-detect). Modern-client `cacheMode` now comes from Task 4's REGISTER `cacheCapable` (which replaces `announceCacheMode`). MUST run AFTER Task 4 so `cacheMode` is never left without a source.
+
+- [ ] **Step 1: Grep announceCacheMode usage** — `grep -nE "announceCacheMode" index.html js/*.js` — confirm the old `/sw.js` registration IIFE is its only caller. If it's called elsewhere, keep the function and remove only the IIFE + the old `sw.js`.
+
+- [ ] **Step 2: Remove the old SW registration IIFE** in `index.html` (the `(function(){ try { if (navigator && navigator.serviceWorker) { navigator.serviceWorker.register('/sw.js') ... } } ... })()` block near line 1788, including its comment header). Delete `announceCacheMode` if now unused (per Step 1).
+
+- [ ] **Step 3: Delete the old `sw.js`** (root).
+
+- [ ] **Step 4: Verify** — `node --test tests/unit/js/*.js` (all pass; index.html still parses). Confirm `grep -rnE "'/sw.js'|announceCacheMode" index.html js` shows no dangling references (Plan 3's registration uses `'js/sw.js'`, a different string).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git rm sw.js
+git add index.html
+git commit -m "refactor(sw): retire the old standalone sw.js; Plan 3's coordinator-integrated SW is the sole modern path"
+```
+
+---
+
 ## Task 5: Delete the SSH cache-capability probe
 
 **Files:**
