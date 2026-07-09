@@ -871,6 +871,8 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
                 _pull_urls[_push_key] = "/media/%s/videos/seg_%s_%d.mp4" % (_push_key, token, _push_n)
             for _push_key, _push_n in full_push_targets:
                 _pull_urls.setdefault(_push_key, "/media/server/videos/full_%s_%d.mp4" % (token, _push_n))
+            logging.info("precache trigger: seg_targets=%d full_targets=%d pull_urls=%d token=%s",
+                         len(seg_push_targets), len(full_push_targets), len(_pull_urls), token)
             if _pull_urls:
                 notify_precache_on_ready(display_id, token, _pull_urls)
         except Exception as _e:
@@ -886,6 +888,8 @@ def notify_precache_on_ready(group, token, client_urls):
         client = server.settings.clients.get(key)
         if client is not None and getattr(client, "cacheMode", "none") != "none":
             caps[key] = url
+    logging.info("notify_precache: token=%s in=%d caps=%d keys=%s",
+                 token, len(client_urls), len(caps), list(caps.keys())[:6])
     if caps:
         server.start_precache(group, token, caps)
 

@@ -1658,6 +1658,15 @@
 				pausePlayback();
 			}
 			else if (data_obj.REQUEST === 'PRECACHE' && window.mmCache) {
+				// Lazily (re)register the mmvideo backend if the bridge injected but the initial
+				// page-load registration missed it (__mmCacheReady set AFTER that script ran).
+				// PRECACHE arrives well after load, so the flag is reliably set by now.
+				if (!mmCache.backend && window.__mmCacheReady && window.__mmRegisterMmvideoBackend) {
+					window.__mmRegisterMmvideoBackend();
+				}
+				if (sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN) {
+					sock.send(generateMessage('SRV', 'CLIENTLOG', { msg: 'mmcache-precache ready=' + (!!window.__mmCacheReady) + ' backend=' + (mmCache.backend ? mmCache.backend.name : 'none') + ' token=' + data_obj.PAYLOAD.token }));
+				}
 				// PAYLOAD: { url, token }. Pass this client's displayID as group so
 				// evict-on-supersede scopes per group inside mmCache.handlePrecache.
 				mmCache.handlePrecache({ group: (window._mmDisplayID || 'self'), url: data_obj.PAYLOAD.url, token: data_obj.PAYLOAD.token });

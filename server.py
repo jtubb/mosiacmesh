@@ -176,6 +176,7 @@ def _seg_name_from_url(url):
 def _send_precache(client_key, url, token):
     """Broadcast a PRECACHE to one client (client-pull grant). `token` is the segment
     NAME so the device saves <token>.mp4 -- the name _per_client_items + mm_url_to_path map."""
+    logging.info("_send_precache -> %s token=%s", client_key, token)
     broadcast_to_client(client_key, {"REQUEST": "PRECACHE",
                                      "PAYLOAD": {"url": url, "token": token}})
 
