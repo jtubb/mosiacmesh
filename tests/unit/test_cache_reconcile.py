@@ -62,3 +62,49 @@ def test_needing_sorts_multiple_missing(fresh_settings, monkeypatch):
     fresh_settings.displays["G1"] = Display()
     fresh_settings.clients["c"] = _mk_client("G1", cached=[])
     assert server.clients_needing_precache("G1") == {"c": ["tok_0", "tok_1"]}
+
+def test_reconcile_skips_when_window_active(fresh_settings, monkeypatch):
+    monkeypatch.setattr(server, "precache_windows", {"G1": object()})
+    called = []
+    monkeypatch.setattr(server, "start_precache", lambda *a, **k: called.append(a))
+    server.reconcile_group_cache("G1")
+    assert called == []
+
+def test_reconcile_skips_when_not_ready(fresh_settings, monkeypatch):
+    monkeypatch.setattr(server, "precache_windows", {})
+    d = Display(); d.renderedToken = "tok"; d.currentPlaylistName = "P"
+    d.renders = {"P": {"state": "RENDERING"}}
+    fresh_settings.displays["G1"] = d
+    called = []
+    monkeypatch.setattr(server, "start_precache", lambda *a, **k: called.append(a))
+    server.reconcile_group_cache("G1")
+    assert called == []
+
+def test_reconcile_starts_precache_one_seg_per_client(fresh_settings, monkeypatch):
+    monkeypatch.setattr(server, "precache_windows", {})
+    d = Display(); d.renderedToken = "tok"; d.currentPlaylistName = "P"
+    d.renders = {"P": {"state": "READY"}}
+    fresh_settings.displays["G1"] = d
+    monkeypatch.setattr(server, "clients_needing_precache",
+                        lambda did: {"ck1": ["tok_0", "tok_1"], "ck2": ["tok_0"]})
+    calls = []
+    monkeypatch.setattr(server, "start_precache",
+                        lambda group, token, urls, **k: calls.append((group, token, urls)))
+    server.reconcile_group_cache("G1")
+    assert len(calls) == 1
+    group, token, urls = calls[0]
+    assert group == "G1" and token == "tok"
+    # one seg per client (the first, sorted) -> URL via pull_url_for_seg_key
+    assert urls == {"ck1": "/media/ck1/videos/seg_tok_0.mp4",
+                    "ck2": "/media/ck2/videos/seg_tok_0.mp4"}
+
+def test_reconcile_noop_when_nothing_missing(fresh_settings, monkeypatch):
+    monkeypatch.setattr(server, "precache_windows", {})
+    d = Display(); d.renderedToken = "tok"; d.currentPlaylistName = "P"
+    d.renders = {"P": {"state": "READY"}}
+    fresh_settings.displays["G1"] = d
+    monkeypatch.setattr(server, "clients_needing_precache", lambda did: {})
+    called = []
+    monkeypatch.setattr(server, "start_precache", lambda *a, **k: called.append(a))
+    server.reconcile_group_cache("G1")
+    assert called == []

@@ -71,6 +71,7 @@ from mosaicmesh.render import (
     _group_online_keys, _begin_prepare, _prepare_unsynced_clients,
     _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL,
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
+    RENDER_READY,
     revalidate_renders_on_boot,
     sweep_orphan_render_assets,
     mark_group_recalibrated,
@@ -218,6 +219,33 @@ def clients_needing_precache(display_id):
         if missing:
             out[key] = sorted(missing)
     return out
+
+
+def reconcile_group_cache(display_id):
+    """Self-heal: if the group's current render is READY and no PrecacheWindow is
+    active, re-PRECACHE ONE missing seg per online cache-capable client that lacks
+    it. Skipping while a window is in flight throttles a mass reconnect (3-at-a-
+    time via the window); multiple missing segs per client resolve over successive
+    process() cycles. Only re-sends EXISTING assets -- never encodes."""
+    if display_id in precache_windows:
+        return   # a window is draining -- don't clobber
+    display = settings.displays.get(display_id)
+    if display is None:
+        return
+    token = getattr(display, "renderedToken", None)
+    if not token:
+        return
+    cur = getattr(display, "currentPlaylistName", None)
+    entry = (getattr(display, "renders", None) or {}).get(cur) if cur else None
+    if not entry or entry.get("state") != RENDER_READY:
+        return
+    needing = clients_needing_precache(display_id)
+    if not needing:
+        return
+    client_urls = {}
+    for key, missing in needing.items():
+        client_urls[key] = pull_url_for_seg_key(key, missing[0])   # one/cycle, sorted
+    start_precache(display_id, token, client_urls)
 
 
 _reconcile_inflight = set()     # client IPs with a cache reconcile currently running
