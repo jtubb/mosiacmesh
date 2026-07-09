@@ -72,6 +72,7 @@ from mosaicmesh.render import (
     _stop_group_playback,
     _apply_playlist,
     _group_is_calibrated,
+    _playlist_needs_calibration,
     render_token,
     _set_render_state,
     is_playlist_ready,
@@ -586,7 +587,8 @@ def msg_response(msg,session):
         display = server.settings.displays.get(display_id)
         if not display or name not in server.settings.playlists:
             response["PAYLOAD"] = {"status": "ERROR", "error": "unknown playlist/group"}
-        elif not _group_is_calibrated(display_id):
+        elif (_playlist_needs_calibration(server.settings.playlists[name].items)
+              and not _group_is_calibrated(display_id)):
             response["PAYLOAD"] = {"status": "ERROR", "error": "group not calibrated"}
         else:
             elements = _build_media_elements(server.settings.playlists[name].items)

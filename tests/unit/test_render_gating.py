@@ -47,6 +47,15 @@ def _calibrated_group_with_seg_playlist(settings):
     return d, pl
 
 
+def _uncalibrated_group_with_full_playlist(settings):
+    d = Display()   # no boundingBox, no calibrated client -> _group_is_calibrated False
+    settings.displays["U1"] = d
+    pl = Playlist(); pl.name = "F"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "FULL"}]
+    settings.playlists["F"] = pl
+    return d, pl
+
+
 def test_play_rejects_unready(fresh_settings):
     d, pl = _calibrated_group_with_seg_playlist(fresh_settings)
     R._apply_playlist("G1", pl)   # applied but never rendered
@@ -135,3 +144,33 @@ def test_needs_calibration_empty_is_false():
 
 def test_needs_calibration_none_items_is_false():
     assert R._playlist_needs_calibration(None) is False
+
+
+def test_render_full_only_on_uncalibrated_group_queues(fresh_settings, monkeypatch):
+    d, pl = _uncalibrated_group_with_full_playlist(fresh_settings)
+    calls = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: calls.append((name, did)))
+    import jsonpickle
+    out = jsonpickle.decode(server.msg_response(
+        {"REQUEST": "RENDER", "PAYLOAD": {"displayID": "U1", "name": "F"},
+         "SRC": "a", "DEST": "SRV"}, _MockSession()))
+    assert out["PAYLOAD"]["status"] == "QUEUED"
+    assert calls == [("F", "U1")]
+
+
+def test_render_segment_on_uncalibrated_group_still_refused(fresh_settings, monkeypatch):
+    d = Display(); fresh_settings.displays["U1"] = d      # uncalibrated
+    pl = Playlist(); pl.name = "S"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["S"] = pl
+    called = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: called.append((name, did)))
+    import jsonpickle
+    out = jsonpickle.decode(server.msg_response(
+        {"REQUEST": "RENDER", "PAYLOAD": {"displayID": "U1", "name": "S"},
+         "SRC": "a", "DEST": "SRV"}, _MockSession()))
+    assert out["PAYLOAD"]["status"] == "ERROR"
+    assert out["PAYLOAD"]["error"] == "group not calibrated"
+    assert called == []
