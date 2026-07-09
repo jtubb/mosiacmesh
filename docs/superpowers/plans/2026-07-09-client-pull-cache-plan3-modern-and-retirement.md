@@ -230,40 +230,73 @@ git commit -m "feat(client): feature-detect + register mmvideo|modern cache back
 
 ## PART B — Legacy retirement (full deletion)
 
-## Task 4: Client announces cache-capable on backend register (replaces the probe)
+## Task 4: Client reports cache-capable on REGISTER (replaces the probe)
 
 **Files:**
-- Modify: `js/mmCacheBackendMmvideo.js` (`__mmRegisterMmvideoBackend`) and `js/mmCacheBackendModern.js` (`__mmRegisterModernBackend`)
+- Modify: `js/mosiacmesh.js` (the REGISTER payload built in the SockJS `onopen`)
+- Modify: `mosaicmesh/websocket/legacy.py` (a small `apply_cache_capability` helper + call it in the REGISTER branch)
+- Test: `tests/unit/test_register_cache_capable.py` (Create)
 
 **Interfaces:**
-- Produces: a client→server `ANNOUNCE_CACHE_MODE {mode:"lighttpd-localhost"}` when a backend registers, so `cacheMode` is client-driven (the SSH probe is deleted in Task 5). The existing `ANNOUNCE_CACHE_MODE` handler (legacy.py:219, whitelisted) sets it.
+- Produces: REGISTER payload carries `cacheCapable: bool`; `apply_cache_capability(client, payload)` sets `client.cacheMode = "lighttpd-localhost"` when true and the client is still at the default `"none"`. Replaces the deleted SSH probe. **REGISTER fires on connect, AFTER index.html registered the backend, so `window.mmCache.backend` is set by then** — announcing at register-time (before the socket opens) would silently no-op, which is why this rides REGISTER.
 
-- [ ] **Step 1: Announce on register (mmvideo)** — in `js/mmCacheBackendMmvideo.js`, change `__mmRegisterMmvideoBackend` to also announce:
+- [ ] **Step 1: Add cacheCapable to the REGISTER payload** — in `js/mosiacmesh.js`, the SockJS `onopen` builds the REGISTER message (`sock.send(generateMessage("SRV","REGISTER",{ "width": ..., "touch": hasTouch }))`). Add one field to that PAYLOAD object:
 
 ```javascript
-  root.__mmRegisterMmvideoBackend = function () {
-    if (root.mmCache && root.mmCache.registerBackend) {
-      root.mmCache.registerBackend(backend);
-      // Tell the server this client is cache-capable so _per_client_items serves it the
-      // http://127.0.0.1:8080/<name> URL (mmvideo maps it locally). Replaces the SSH probe.
-      if (root.sock && typeof SockJS !== 'undefined' && root.sock.readyState === SockJS.OPEN && root.generateMessage) {
-        root.sock.send(root.generateMessage('SRV', 'ANNOUNCE_CACHE_MODE', { mode: 'lighttpd-localhost' }));
-      }
-    }
-  };
+					"touch": hasTouch, "cacheCapable": !!(window.mmCache && window.mmCache.backend)}));
+```
+(ES5-safe. `window.mmCache.backend` is non-null iff index.html registered the mmvideo or modern backend before connect.)
+
+- [ ] **Step 2: Write the failing test**
+
+```python
+# tests/unit/test_register_cache_capable.py
+import types
+from mosaicmesh.websocket.legacy import apply_cache_capability
+
+def test_cacheCapable_true_upgrades_default_none():
+    c = types.SimpleNamespace(cacheMode="none")
+    apply_cache_capability(c, {"cacheCapable": True})
+    assert c.cacheMode == "lighttpd-localhost"
+
+def test_cacheCapable_false_leaves_none():
+    c = types.SimpleNamespace(cacheMode="none")
+    apply_cache_capability(c, {"cacheCapable": False})
+    assert c.cacheMode == "none"
+
+def test_does_not_override_a_non_default_mode():
+    c = types.SimpleNamespace(cacheMode="none")   # simulate an already-decided value
+    c.cacheMode = "something-else"
+    apply_cache_capability(c, {"cacheCapable": True})
+    assert c.cacheMode == "something-else"        # only upgrades from the default 'none'
 ```
 
-- [ ] **Step 2: Announce on register (modern)** — make the identical change in `js/mmCacheBackendModern.js`'s `__mmRegisterModernBackend`.
+- [ ] **Step 3: Run to verify it fails**
 
-- [ ] **Step 3: Confirm the server handler accepts it** — verify `ANNOUNCE_CACHE_MODE`'s whitelist (legacy.py ~223) includes `"lighttpd-localhost"`; if not, add it. (Read the handler; it already sets `client.cacheMode` from the whitelisted `mode`.)
+Run: `python -m pytest tests/unit/test_register_cache_capable.py -c tests/pytest.ini -q`
+Expected: FAIL — `ImportError: cannot import name 'apply_cache_capability'`.
 
-- [ ] **Step 4: JS suite** — `node --test tests/unit/js/*.js` (parses; existing tests green — `sock`/`generateMessage` are absent in the vm sandbox so the guard skips).
+- [ ] **Step 4: Implement + wire the helper** — add to `mosaicmesh/websocket/legacy.py` (module level, near `handle_cache_ack`):
 
-- [ ] **Step 5: Commit**
+```python
+def apply_cache_capability(client, payload):
+    """Client-reported cache capability on REGISTER (replaces the deleted SSH probe). A
+    client with an mmCache backend (mmvideo tweak or modern SW) serves its pulled segments
+    at http://127.0.0.1:8080/<name>, so mark it cache-capable -> _per_client_items routes it
+    the local URL. Only upgrades from the default 'none'; a later ANNOUNCE_CACHE_MODE 'none'
+    (client-side local-play failure) remains authoritative."""
+    if client is not None and (payload or {}).get("cacheCapable") and getattr(client, "cacheMode", "none") == "none":
+        client.cacheMode = "lighttpd-localhost"
+```
+Then in the REGISTER branch of `msg_response` (grep `"REGISTER"`), after the `Client` is created/updated and in scope, call `apply_cache_capability(client, msg.get("PAYLOAD"))`.
+
+- [ ] **Step 5: Run to verify it passes** — `python -m pytest tests/unit/test_register_cache_capable.py -c tests/pytest.ini -q` → PASS (3). Then `python -c "import server"` (side-effect-free) + `node --test tests/unit/js/*.js` (mosiacmesh.js still parses).
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add js/mmCacheBackendMmvideo.js js/mmCacheBackendModern.js
-git commit -m "feat(client): announce cache-capable on backend register (client-driven cacheMode)"
+git add js/mosiacmesh.js mosaicmesh/websocket/legacy.py tests/unit/test_register_cache_capable.py
+git commit -m "feat(register): client reports cache-capable -> cacheMode (replaces the SSH probe)"
 ```
 
 ---
