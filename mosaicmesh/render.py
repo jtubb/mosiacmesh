@@ -1066,9 +1066,11 @@ def revalidate_renders_on_boot():
                 _set_render_state(display, name, RENDER_STALE, token=cur)
 
 
-def enqueue_playlist_for_calibrated_groups(playlist_name):
+def enqueue_playlist_for_eligible_groups(playlist_name):
     """For a saved renderable playlist, set QUEUED + enqueue a render against
-    every calibrated group. N/A playlists (no renderable items) are skipped."""
+    every ELIGIBLE group: a calibrated group (any playmode), OR any group when
+    the playlist needs no calibration (FULL/SCRIPT-only). N/A playlists (no
+    renderable items) are skipped."""
     import server
     from mosaicmesh import render_queue
     pl = server.settings.playlists.get(playlist_name)
@@ -1077,9 +1079,10 @@ def enqueue_playlist_for_calibrated_groups(playlist_name):
     elements = _build_media_elements(pl.items)
     if not any(_is_renderable(me) for me in elements):
         return
+    needs_cal = _playlist_needs_calibration(pl.items)
     changed = False
     for did, display in server.settings.displays.items():
-        if not _group_is_calibrated(did):
+        if needs_cal and not _group_is_calibrated(did):
             continue
         if is_playlist_ready(playlist_name, did):
             continue   # already current — don't re-encode

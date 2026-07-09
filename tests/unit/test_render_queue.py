@@ -71,7 +71,7 @@ def test_parse_ffmpeg_progress_line():
 
 def test_debounce_coalesces(monkeypatch):
     calls = []
-    monkeypatch.setattr("mosaicmesh.render.enqueue_playlist_for_calibrated_groups",
+    monkeypatch.setattr("mosaicmesh.render.enqueue_playlist_for_eligible_groups",
                         lambda name: calls.append(name))
     monkeypatch.setattr(Q, "DEBOUNCE_SECONDS", 0.05, raising=False)
 

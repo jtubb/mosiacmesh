@@ -87,4 +87,4 @@ async def _debounce_fire(playlist_name):
         return
     _debounce_tasks.pop(playlist_name, None)
     from mosaicmesh import render as R
-    R.enqueue_playlist_for_calibrated_groups(playlist_name)
+    R.enqueue_playlist_for_eligible_groups(playlist_name)

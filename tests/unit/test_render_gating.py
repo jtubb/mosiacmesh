@@ -197,3 +197,23 @@ def test_assign_segment_on_uncalibrated_group_still_not_calibrated(fresh_setting
         {"REQUEST": "ASSIGN_PLAYLIST", "PAYLOAD": {"displayID": "U1", "name": "S"},
          "SRC": "a", "DEST": "SRV"}, _MockSession()))
     assert out["PAYLOAD"]["status"] == "NOT_CALIBRATED"
+
+
+def test_enqueue_eligible_includes_uncalibrated_for_full_only(fresh_settings, monkeypatch):
+    d, pl = _uncalibrated_group_with_full_playlist(fresh_settings)   # group "U1", playlist "F"
+    enq = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: enq.append((name, did)))
+    R.enqueue_playlist_for_eligible_groups("F")
+    assert ("F", "U1") in enq
+
+def test_enqueue_eligible_skips_uncalibrated_for_segment(fresh_settings, monkeypatch):
+    d = Display(); fresh_settings.displays["U1"] = d      # uncalibrated
+    pl = Playlist(); pl.name = "S"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["S"] = pl
+    enq = []
+    monkeypatch.setattr("mosaicmesh.render_queue.enqueue",
+                        lambda name, did: enq.append((name, did)))
+    R.enqueue_playlist_for_eligible_groups("S")
+    assert ("S", "U1") not in enq
