@@ -645,7 +645,8 @@ def msg_response(msg,session):
             _apply_playlist(display_id, pl)
             display = server.settings.displays.get(display_id)
             has_renderable = any(_is_renderable(me) for me in display.mediaElements)
-            if has_renderable and not _group_is_calibrated(display_id):
+            if (has_renderable and _playlist_needs_calibration(pl.items)
+                    and not _group_is_calibrated(display_id)):
                 status = "NOT_CALIBRATED"
             elif has_renderable and not is_playlist_ready(name, display_id):
                 status = "RENDER_REQUIRED"

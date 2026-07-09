@@ -174,3 +174,26 @@ def test_render_segment_on_uncalibrated_group_still_refused(fresh_settings, monk
     assert out["PAYLOAD"]["status"] == "ERROR"
     assert out["PAYLOAD"]["error"] == "group not calibrated"
     assert called == []
+
+
+def test_assign_full_only_on_uncalibrated_group_not_blocked(fresh_settings, monkeypatch):
+    d, pl = _uncalibrated_group_with_full_playlist(fresh_settings)
+    # A FULL-only playlist on an uncalibrated group must NOT be NOT_CALIBRATED.
+    # It will be RENDER_REQUIRED (no render yet) or ok, but never NOT_CALIBRATED.
+    import jsonpickle
+    out = jsonpickle.decode(server.msg_response(
+        {"REQUEST": "ASSIGN_PLAYLIST", "PAYLOAD": {"displayID": "U1", "name": "F"},
+         "SRC": "a", "DEST": "SRV"}, _MockSession()))
+    assert out["PAYLOAD"]["status"] != "NOT_CALIBRATED"
+    assert out["PAYLOAD"]["status"] in ("RENDER_REQUIRED", "ok")
+
+def test_assign_segment_on_uncalibrated_group_still_not_calibrated(fresh_settings):
+    d = Display(); fresh_settings.displays["U1"] = d      # uncalibrated
+    pl = Playlist(); pl.name = "S"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["S"] = pl
+    import jsonpickle
+    out = jsonpickle.decode(server.msg_response(
+        {"REQUEST": "ASSIGN_PLAYLIST", "PAYLOAD": {"displayID": "U1", "name": "S"},
+         "SRC": "a", "DEST": "SRV"}, _MockSession()))
+    assert out["PAYLOAD"]["status"] == "NOT_CALIBRATED"
