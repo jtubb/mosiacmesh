@@ -637,6 +637,16 @@ def _client_is_push_eligible(c):
                 and getattr(c, "ip", ""))
 
 
+def pull_url_for_seg_key(client_key, seg_key):
+    """Client-pull URL for a cached-segment key. FULL keys ('full_<token>_<i>')
+    map to the shared server asset; SEGMENT keys ('<token>_<i>') to the client's
+    own per-screen warp. DRY: used by BOTH the render-time PRECACHE trigger and
+    the periodic cache reconcile so they build identical URLs."""
+    if seg_key.startswith("full_"):
+        return "/media/server/videos/%s.mp4" % seg_key
+    return "/media/%s/videos/seg_%s.mp4" % (client_key, seg_key)
+
+
 async def _encode_group(media_elements, display_id, token, progress_cb=None):
     """Encode all SEGMENT/INDIVIDUAL items in `media_elements` for `display_id`'s
     calibrated screens, writing seg_<token>_<i>/ind_<token>_<i> assets. Pure
@@ -828,9 +838,9 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
         try:
             _pull_urls = {}
             for _push_key, _push_n in seg_push_targets:
-                _pull_urls[_push_key] = "/media/%s/videos/seg_%s_%d.mp4" % (_push_key, token, _push_n)
+                _pull_urls[_push_key] = pull_url_for_seg_key(_push_key, "%s_%d" % (token, _push_n))
             for _push_key, _push_n in full_push_targets:
-                _pull_urls.setdefault(_push_key, "/media/server/videos/full_%s_%d.mp4" % (token, _push_n))
+                _pull_urls.setdefault(_push_key, pull_url_for_seg_key(_push_key, "full_%s_%d" % (token, _push_n)))
             logging.info("precache trigger: seg_targets=%d full_targets=%d pull_urls=%d token=%s",
                          len(seg_push_targets), len(full_push_targets), len(_pull_urls), token)
             if _pull_urls:
