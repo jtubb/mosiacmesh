@@ -902,13 +902,18 @@ foreach ($h in $targets) {
     #        MosaicMeshCache/ dir + mmvideo's mm_url_to_path; no on-device
     #        web server (lighttpd) is needed.
 
-    # 5.4f) mark this client as lighttpd-localhost cacheMode on the
-    #       server side so future PLAY payloads route to the iPad's
-    #       localhost lighttpd. Requires that the iPad has REGISTERed
-    #       with the server at least once (so settings.clients has
-    #       an entry for it). Onboarding usually triggers a REGISTER
-    #       via step 7 (open MosaicMesh page); for fresh-imaged iPads
-    #       you may need a second onboarding pass.
+    # 5.4f) mark this client's cacheMode = "lighttpd-localhost" on the
+    #       server side. The name is a legacy wire value retained across
+    #       the client-pull migration: it now means "cache-capable, serve
+    #       the 127.0.0.1:8080 URL", which the mmvideo/mmcache tweak maps
+    #       to the local file (mm_url_to_path) -- no actual lighttpd. This
+    #       marking is largely redundant now that clients self-announce
+    #       cacheCapable at REGISTER, but is kept because it also refreshes
+    #       the start/stop/login scripts below in the same pass. Requires
+    #       that the iPad has REGISTERed with the server at least once (so
+    #       settings.clients has an entry for it). Onboarding usually
+    #       triggers a REGISTER via step 7 (open MosaicMesh page); for
+    #       fresh-imaged iPads you may need a second onboarding pass.
     if ($status -eq "OK" -and $pkgsToInstall) {
         try {
             # Look up the iPad's clientKey via /api/discovery/devices.
