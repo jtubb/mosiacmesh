@@ -218,19 +218,7 @@ def start_precache(group, token, client_urls, n=3):
 _PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
 _PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
 
-_PROBE_CONCURRENCY = 4          # max concurrent cache-capability SSH probes
-_PROBE_TIMEOUT_S = 20           # overall ceiling per probe
-_PROBE_CONNECT_TIMEOUT_S = 10   # ssh ConnectTimeout
-_probe_sem = None
-_probe_inflight = set()         # client_keys with a probe currently running
 _reconcile_inflight = set()     # client IPs with a cache reconcile currently running
-
-
-def _get_probe_sem():
-    global _probe_sem
-    if _probe_sem is None:
-        _probe_sem = asyncio.Semaphore(_PROBE_CONCURRENCY)
-    return _probe_sem
 
 
 def parse_args():
@@ -362,108 +350,6 @@ async def _get_pooled_vnc(client_key, ip):
             return existing
         _veency_pool[client_key] = proxy
     return proxy
-
-
-def _is_probe_eligible(client):
-    """True for the provisioned display devices we SSH-probe for cache
-    capability: Apple touch devices (iPad-1 reclassifies to deviceType
-    'tablet'; iOS phones report 'smartphone') that have an IP. Everything
-    else never gets cacheMode and always serves centrally."""
-    if not getattr(client, "ip", ""):
-        return False
-    dt = (getattr(client, "deviceType", "") or "").lower()
-    osn = (getattr(client, "osName", "") or "").lower()
-    return dt in ("tablet", "smartphone") or osn == "ios"
-
-
-async def _probe_cache_capability(client_key):
-    """SSH-probe a device for the two real push prerequisites (cache dir exists +
-    lighttpd alive) and flip cacheMode accordingly. Fire-and-forget; never blocks
-    the caller, never raises. UPGRADE-ONLY: none -> lighttpd-localhost when
-    'MM_CACHE_OK' comes back. The probe NEVER downgrades (see NB below) -- the
-    authoritative downgrade is client-driven (the iPad announces cacheMode "none"
-    when its own localhost media load fails).
-
-    Liveness is checked with shell builtins only (`kill -0` on lighttpd's pid
-    file) -- the iPad-1 userland has no curl/wget/nc/ps, so an HTTP/process check
-    would always fail with 127 ('command not found') and wrongly report the
-    device not-capable even while lighttpd is serving."""
-    client = settings.clients.get(client_key)
-    if not client or not getattr(client, "ip", ""):
-        return
-    if client_key in _probe_inflight:
-        return                                  # no duplicate concurrent probe
-    _probe_inflight.add(client_key)
-    try:
-        remote = ("test -d /var/mobile/Media/MosaicMeshCache && "
-                  "kill -0 \"$(cat /var/run/lighttpd.pid 2>/dev/null)\" 2>/dev/null && "
-                  "echo MM_CACHE_OK")
-        cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
-               + ["-T", "-o", "ConnectTimeout=%d" % _PROBE_CONNECT_TIMEOUT_S,
-                  "%s@%s" % (SSH_USER, client.ip), remote])
-        ok = False
-        async with _get_probe_sem():
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE)
-                out, _err = await asyncio.wait_for(
-                    proc.communicate(), timeout=_PROBE_TIMEOUT_S)
-                ok = (proc.returncode == 0 and b"MM_CACHE_OK" in (out or b""))
-                if not ok:
-                    logging.warning(
-                        "cache-probe %s not capable (rc=%s): %s",
-                        client_key, getattr(proc, "returncode", "?"),
-                        (_err or b"").decode("utf-8", "replace").strip()[-200:])
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-                ok = False
-            except Exception as e:            # noqa: BLE001
-                logging.warning("cache-probe %s: %s", client_key, e)
-                ok = False
-        client.cacheProbedMs = int(time.time() * 1000)
-        if ok and client.cacheMode != "lighttpd-localhost":
-            client.cacheMode = "lighttpd-localhost"
-            logging.info("cache-probe: %s is cache-capable -> lighttpd-localhost",
-                         client_key)
-            request_save()   # coalesced: a boot storm probes N devices at once
-        # NB: the SSH probe ONLY UPGRADES (none -> lighttpd-localhost). It does NOT
-        # downgrade on failure. An SSH timeout/failure means the SERVER couldn't
-        # reach the device over (flaky) WiFi — it says NOTHING about whether the
-        # device's OWN localhost lighttpd is serving (a local, blip-immune fact).
-        # A flaky probe was false-downgrading capable devices AND wiping their
-        # cachedSegments, so they streamed centrally and hammered the server even
-        # though the cache files were still on the device. The authoritative
-        # downgrade is now CLIENT-driven: when the iPad's own 127.0.0.1 <video>
-        # load errors, index.html re-announces cacheMode "none" via the existing
-        # ANNOUNCE_CACHE_MODE handler (which sets the mode WITHOUT wiping
-        # cachedSegments -- the cache files persist for re-upgrade reuse).
-    finally:
-        _probe_inflight.discard(client_key)
-
-
-def _maybe_fire_cache_probe(client_key, client):
-    """Fire-and-forget the cache-capability probe for an eligible device.
-    No-op for ineligible devices, and safe to call from a synchronous context
-    with no running event loop (returns without scheduling)."""
-    if not _is_probe_eligible(client):
-        return
-    # Cooldown: skip if this device was probed within the last 5 min. The in-flight
-    # guard (_probe_inflight) already prevents concurrent duplicates, but without a
-    # cooldown a reconnect storm (200 iPads re-REGISTERing) re-queues a probe for every
-    # device that merely finished a probe seconds ago -> an SSH pile-up. cacheProbedMs
-    # is stamped on a successful probe.
-    _last = getattr(client, "cacheProbedMs", 0) or 0
-    if _last and (time.time() * 1000 - _last) < 300000:
-        return
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        return   # no running loop (sync context) -> don't construct/schedule
-    asyncio.ensure_future(_probe_cache_capability(client_key))
 
 
 async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n, kind="seg"):

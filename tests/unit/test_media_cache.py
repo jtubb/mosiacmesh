@@ -15,17 +15,6 @@ class _Item:
         self.seg_n = seg_n
 
 
-def test_is_probe_eligible():
-    import server
-    from mosaicmesh.state import Client
-    def mk(dt, ip, osn="iOS"):
-        c = Client(); c.deviceType = dt; c.ip = ip; c.osName = osn; return c
-    assert server._is_probe_eligible(mk("tablet", "192.168.1.50")) is True
-    assert server._is_probe_eligible(mk("smartphone", "192.168.1.51", "iOS")) is True
-    assert server._is_probe_eligible(mk("desktop", "192.168.1.52", "Windows")) is False
-    assert server._is_probe_eligible(mk("tablet", "")) is False          # no ip
-
-
 def test_client_has_cacheProbedMs_default():
     from mosaicmesh.state import Client
     c = Client()
@@ -675,132 +664,6 @@ def test_expected_seg_keys_only_includes_segment_video_items():
         f"expected only the bunny SEGMENT at index 1, got {expected}"
 
 
-class _FakeProc:
-    def __init__(self, rc, out=b"", err=b""):
-        self.returncode = rc; self._out = out; self._err = err
-    async def communicate(self):
-        return (self._out, self._err)
-    def kill(self):
-        self.returncode = -9
-
-
-def test_probe_sets_lighttpd_localhost_on_ok(monkeypatch):
-    import server
-    from mosaicmesh.state import Client
-    server.settings = server.Settings()
-    c = Client(); c.ip = "192.168.1.50"; c.cacheMode = "none"
-    server.settings.clients = {"ipad1": c}
-    async def fake_exec(*a, **k):
-        return _FakeProc(0, out=b"MM_CACHE_OK\n")
-    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
-    _run(server._probe_cache_capability("ipad1"))
-    assert c.cacheMode == "lighttpd-localhost"
-    assert c.cacheProbedMs is not None
-
-
-def test_probe_timeout_kills_and_stays_none(monkeypatch):
-    import server, asyncio as _a
-    from mosaicmesh.state import Client
-    server.settings = server.Settings()
-    c = Client(); c.ip = "192.168.1.50"; c.cacheMode = "none"
-    server.settings.clients = {"ipad1": c}
-    killed = {"n": 0}
-    class _Hang(_FakeProc):
-        def kill(self): killed["n"] += 1
-    async def fake_exec(*a, **k): return _Hang(None)
-    async def fake_wait_for(*a, **k): raise _a.TimeoutError()
-    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(server.asyncio, "wait_for", fake_wait_for)
-    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
-    _run(server._probe_cache_capability("ipad1"))
-    assert killed["n"] == 1
-    assert c.cacheMode == "none"
-
-
-def test_probe_no_ip_skips(monkeypatch):
-    import server
-    from mosaicmesh.state import Client
-    server.settings = server.Settings()
-    c = Client(); c.ip = ""; c.cacheMode = "none"
-    server.settings.clients = {"x": c}
-    called = {"n": 0}
-    async def fake_exec(*a, **k):
-        called["n"] += 1; return _FakeProc(0, b"MM_CACHE_OK")
-    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
-    _run(server._probe_cache_capability("x"))
-    assert called["n"] == 0
-    assert c.cacheMode == "none"
-
-
-def test_probe_failure_does_not_downgrade_capable_device(monkeypatch):
-    """UPGRADE-ONLY: an SSH-probe failure on a previously-capable device must
-    NOT downgrade it or wipe its cachedSegments. An SSH timeout/error means the
-    SERVER couldn't reach the device over (flaky) WiFi -- it says nothing about
-    whether the device's OWN localhost lighttpd is serving. A flaky probe was
-    false-downgrading fully-capable devices, wiping their cache, and forcing
-    them to stream centrally (server hammering). The authoritative downgrade is
-    now client-driven (the iPad announces cacheMode "none" on a localhost media
-    load error). See server._probe_cache_capability."""
-    import server
-    from mosaicmesh.state import Client
-    server.settings = server.Settings()
-    c = Client(); c.ip = "192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"
-    c.cachedSegments = {"abc123_0", "abc123_1"}
-    server.settings.clients = {"ipad1": c}
-    async def fake_exec(*a, **k):
-        return _FakeProc(1, out=b"", err=b"curl: connection refused")
-    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
-    _run(server._probe_cache_capability("ipad1"))
-    assert c.cacheMode == "lighttpd-localhost"          # NOT downgraded
-    assert c.cachedSegments == {"abc123_0", "abc123_1"}  # cache preserved
-
-
-def test_probe_failure_leaves_none_untouched(monkeypatch):
-    import server
-    from mosaicmesh.state import Client
-    server.settings = server.Settings()
-    c = Client(); c.ip = "192.168.1.50"; c.cacheMode = "none"
-    server.settings.clients = {"ipad1": c}
-    async def fake_exec(*a, **k):
-        return _FakeProc(1)
-    monkeypatch.setattr(server.asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr(server, "saveSettings", lambda *a, **k: None)
-    _run(server._probe_cache_capability("ipad1"))
-    assert c.cacheMode == "none"
-
-
-def test_register_fires_probe_for_eligible(monkeypatch):
-    import server, asyncio as _a
-    from mosaicmesh.state import Client
-    fired = []
-    async def fake_probe(key):
-        fired.append(key)
-    monkeypatch.setattr(server, "_probe_cache_capability", fake_probe)
-    c = Client(); c.ip = "192.168.1.50"; c.deviceType = "tablet"
-    async def drive():
-        server._maybe_fire_cache_probe("ipad1", c)   # ensure_future inside running loop
-        await _a.sleep(0)                              # let the scheduled task run
-    _run(drive())
-    assert fired == ["ipad1"]
-
-
-def test_maybe_fire_skips_ineligible(monkeypatch):
-    import server, asyncio as _a
-    from mosaicmesh.state import Client
-    fired = []
-    async def fake_probe(key): fired.append(key)
-    monkeypatch.setattr(server, "_probe_cache_capability", fake_probe)
-    c = Client(); c.ip = ""; c.deviceType = "tablet"   # no ip -> ineligible
-    async def drive():
-        server._maybe_fire_cache_probe("x", c)
-        await _a.sleep(0)
-    _run(drive())
-    assert fired == []
-
-
 def test_devices_payload_includes_cacheProbedMs():
     import server
     from mosaicmesh.state import Client
@@ -813,13 +676,3 @@ def test_devices_payload_includes_cacheProbedMs():
     assert d["cacheProbedMs"] == 1234567
 
 
-def test_maybe_fire_no_loop_is_safe(monkeypatch):
-    import server
-    from mosaicmesh.state import Client
-    fired = []
-    async def fake_probe(key): fired.append(key)
-    monkeypatch.setattr(server, "_probe_cache_capability", fake_probe)
-    c = Client(); c.ip = "192.168.1.50"; c.deviceType = "tablet"
-    # No running loop here -> must return without raising and without firing.
-    server._maybe_fire_cache_probe("ipad1", c)
-    assert fired == []

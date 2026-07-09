@@ -336,10 +336,6 @@ def msg_response(msg,session):
         # Apply client-reported cache capability (replaces the SSH probe for capable clients).
         apply_cache_capability(client, msg.get("PAYLOAD"))
 
-        # Auto-onboard local cache: probe eligible (iPad/tablet) devices for
-        # lighttpd + cache dir and flip cacheMode so the post-render push engages.
-        server._maybe_fire_cache_probe(msg["SRC"], client)
-
         # Auto-configuration for new clients
         if is_new_client:
             client.discoveryTime = time.time()

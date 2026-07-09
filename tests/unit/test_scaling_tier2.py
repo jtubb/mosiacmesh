@@ -61,7 +61,6 @@ def _run_register(monkeypatch, src, ua):
     monkeypatch.setattr(server, "_client_ip", lambda req: "192.168.1.9", raising=False)
     monkeypatch.setattr(legacy, "auto_configure_client", lambda *a, **k: None)
     monkeypatch.setattr(legacy, "sync_new_client_to_group", lambda *a, **k: None)
-    monkeypatch.setattr(server, "_maybe_fire_cache_probe", lambda *a, **k: None, raising=False)
     class _Mgr:
         def broadcast(self, *a, **k):
             pass
