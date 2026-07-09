@@ -139,6 +139,19 @@ def client_warmable(client):
 def msg_response(msg,session):
     import server
     clientid = session.id
+    # Any message from a known client refreshes its online status (not just REGISTER):
+    # a client actively communicating IS online, even if a SockJS/ws reconnect resumed
+    # without re-REGISTERing. Without this, isOnline is set True ONLY at REGISTER, so a
+    # live-but-not-recently-registered client reads offline -> _client_is_push_eligible
+    # False -> empty seg_push_targets -> NO cache push AND NO client-pull PRECACHE. The
+    # REGISTER handler also sets these (here it's a harmless no-op until the client row
+    # exists, then real on every subsequent message).
+    _src = msg.get("SRC") if isinstance(msg, dict) else None
+    if _src:
+        _c = server.settings.clients.get(_src)
+        if _c is not None:
+            _c.isOnline = True
+            _c.lastSeen = time.time()
     # session.request is None for xhr_send-delivered MESSAGEs (the iPad-1 polling
     # transport), so fall back to the request captured at OPEN. Still guard None — a
     # session whose OPEN had no request must not crash the handler before dispatch.
