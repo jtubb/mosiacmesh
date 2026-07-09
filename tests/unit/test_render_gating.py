@@ -111,3 +111,27 @@ def test_evaluate_schedules_holds_until_ready(fresh_settings, monkeypatch):
     R._set_render_state(d, "P", R.RENDER_READY, token=tok)
     server.evaluate_schedules(datetime.datetime(2020, 1, 1, 12, 0))
     assert started == ["G1"]
+
+
+def test_needs_calibration_full_only_is_false():
+    assert R._playlist_needs_calibration([{"playmode": "FULL"}]) is False
+
+def test_needs_calibration_script_only_is_false():
+    assert R._playlist_needs_calibration([{"playmode": "SCRIPT"}]) is False
+
+def test_needs_calibration_full_plus_script_is_false():
+    assert R._playlist_needs_calibration(
+        [{"playmode": "FULL"}, {"playmode": "SCRIPT"}]) is False
+
+def test_needs_calibration_any_segment_is_true():
+    assert R._playlist_needs_calibration(
+        [{"playmode": "FULL"}, {"playmode": "SEGMENT"}]) is True
+
+def test_needs_calibration_any_individual_is_true():
+    assert R._playlist_needs_calibration([{"playmode": "INDIVIDUAL"}]) is True
+
+def test_needs_calibration_empty_is_false():
+    assert R._playlist_needs_calibration([]) is False
+
+def test_needs_calibration_none_items_is_false():
+    assert R._playlist_needs_calibration(None) is False

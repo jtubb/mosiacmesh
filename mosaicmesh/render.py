@@ -983,6 +983,15 @@ def _group_is_calibrated(display_id):
     return any(c.measuredPerimeter is not None for _k, c in _group_clients(display_id))
 
 
+def _playlist_needs_calibration(items):
+    """True iff the playlist contains a SEGMENT or INDIVIDUAL item — the two
+    playmodes that warp per-screen and read measuredPerimeter/boundingBox.
+    FULL (mirror) and SCRIPT need no calibration, so a FULL/SCRIPT-only playlist
+    can render on an uncalibrated group. Operates on raw playlist item dicts."""
+    return any((it or {}).get("playmode") in ("SEGMENT", "INDIVIDUAL")
+               for it in (items or []))
+
+
 def _render_assets_exist(playlist_name, display_id, token):
     """True if every renderable item's per-client asset exists on disk for this
     token. Conservative: a single missing file demotes the entry to STALE.
