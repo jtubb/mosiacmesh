@@ -387,13 +387,12 @@ async def api_discovery_configure(request):
 
     if action == "clear_cache":
         # Operator/test helper: drop a client's server-side
-        # cachedSegments record so the next force_push (or
-        # subsequent render) re-pushes the segments. Doesn't touch
-        # the actual files on the iPad (lighttpd will keep serving
-        # stale-but-byte-identical content until the push lands a
-        # newer copy). With no clientKey, clears all
-        # lighttpd-localhost clients (handy for re-running an
-        # acceptance test from scratch).
+        # cachedSegments record so the next render's PRECACHE has the
+        # device re-pull the segments. Doesn't touch the actual files
+        # already on the iPad (the device keeps serving its local copy
+        # until a newer pull lands). With no clientKey, clears all
+        # cache-capable (lighttpd-localhost marker) clients (handy for
+        # re-running an acceptance test from scratch).
         ck = data.get("clientKey")
         cleared = 0
         if ck:
