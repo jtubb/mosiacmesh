@@ -76,6 +76,7 @@ from mosaicmesh.render import (
     mark_group_recalibrated,
     is_playlist_ready,
     pull_url_for_seg_key,
+    _client_is_push_eligible,
 )
 from mosaicmesh.device_scripts import (
     SSH_KEY_PATH, SSH_USER, SSH_LEGACY_OPTS, DISPLAY_URL,
@@ -195,6 +196,28 @@ def start_precache(group, token, client_urls, n=3):
     precache_windows[group] = win
     for k in win.start(time.time()):
         _send_precache(k, precache_urls.get(k), precache_segtoken.get(k))
+
+
+def clients_needing_precache(display_id):
+    """{client_key: sorted(missing seg keys)} for ONLINE, cache-capable, has-IP
+    clients in `display_id` whose cachedSegments lack >=1 of the group's expected
+    seg keys (the current renderedToken's segments). Empty if the group expects
+    no segs. Used by the periodic cache reconcile."""
+    display = settings.displays.get(display_id)
+    expected = _expected_seg_keys_for_display(display)
+    if not expected:
+        return {}
+    out = {}
+    for key, c in settings.clients.items():
+        if getattr(c, "displayID", None) != display_id:
+            continue
+        if not _client_is_push_eligible(c):
+            continue
+        cached = set(getattr(c, "cachedSegments", None) or [])
+        missing = set(expected) - cached
+        if missing:
+            out[key] = sorted(missing)
+    return out
 
 
 _reconcile_inflight = set()     # client IPs with a cache reconcile currently running
