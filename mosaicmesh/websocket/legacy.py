@@ -136,6 +136,16 @@ def client_warmable(client):
     return True
 
 
+def apply_cache_capability(client, payload):
+    """Client-reported cache capability on REGISTER (replaces the deleted SSH probe). A
+    client with an mmCache backend (mmvideo tweak or modern SW) serves its pulled segments
+    at http://127.0.0.1:8080/<name>, so mark it cache-capable -> _per_client_items routes it
+    the local URL. Only upgrades from the default 'none'; a later ANNOUNCE_CACHE_MODE 'none'
+    (client-side local-play failure) remains authoritative."""
+    if client is not None and (payload or {}).get("cacheCapable") and getattr(client, "cacheMode", "none") == "none":
+        client.cacheMode = "lighttpd-localhost"
+
+
 def msg_response(msg,session):
     import server
     clientid = session.id
@@ -322,6 +332,9 @@ def msg_response(msg,session):
                 client.deviceModel = "iPad"
             logging.info(f"Reclassified {msg['SRC']} as iPad (Apple+desktop UA, "
                          f"touch, {client.deviceWidth}x{client.deviceHeight})")
+
+        # Apply client-reported cache capability (replaces the SSH probe for capable clients).
+        apply_cache_capability(client, msg.get("PAYLOAD"))
 
         # Auto-onboard local cache: probe eligible (iPad/tablet) devices for
         # lighttpd + cache dir and flip cacheMode so the post-render push engages.
