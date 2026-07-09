@@ -164,9 +164,6 @@ def _setup_seg_group(monkeypatch, n_clients):
     me.playmode = PlayMode.SEGMENT; me.duration = 5
     monkeypatch.setattr(r, "resolve_media_path", lambda f: "/abs/a.mp4")
     monkeypatch.setattr(r, "get_video_dimensions", lambda p: (640, 480))
-    async def _noop_push(*a, **k):
-        return None
-    monkeypatch.setattr(server, "_push_segment_to_cached_clients", _noop_push, raising=False)
     return me
 
 

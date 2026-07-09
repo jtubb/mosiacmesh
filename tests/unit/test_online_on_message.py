@@ -1,5 +1,5 @@
 # tests/unit/test_online_on_message.py — a live client's message marks it online
-# (not just REGISTER), so _client_is_push_eligible sees it and the cache push/pull fire.
+# (not just REGISTER), so _client_is_push_eligible sees it and the client-pull PRECACHE fires.
 import types
 import server
 import mosaicmesh.websocket.legacy as legacy

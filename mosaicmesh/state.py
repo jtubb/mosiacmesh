@@ -235,19 +235,15 @@ class Client():
         # Hashes of segments currently cached on this device, in the
         # form "<encode_ver_hash>_<segment_index>" (matches the
         # seg_<HASH>_<N>.mp4 filename convention from the render
-        # pipeline). Populated by _push_segment_to_cached_clients on
-        # successful scp; pruned by _reconcile_ipad_cache.
+        # pipeline). Populated when the device confirms a PRECACHE pull;
+        # pruned by _reconcile_ipad_cache.
         self.cachedSegments = set()
         # Wall-clock ms of the last server-side cache-capability SSH probe
         # (None = never probed). Observability only; nothing gates on it.
         self.cacheProbedMs = None
-        # In-memory only (does not persist; meaningful only during a
-        # push). Set to a dict by _push_segment_to_cached_clients when
-        # a push starts; cleared to None when the push ends (success
-        # or stall). Shape: {"token", "n", "bytesSent", "totalBytes",
-        # "startedMs", "lastChangeMs", "status", "mbps"}.
-        # See docs/superpowers/specs/2026-06-03-cache-progress-and-
-        # propagation-ui.md.
+        # Always None (SSH push retired). Kept as a field so older
+        # settings.dat objects deserialize without AttributeError, and
+        # so the /api/discovery/devices API schema is unchanged.
         self.cachePushProgress = None
 
 
@@ -314,9 +310,9 @@ def migrate_client_objects():
             client.cachedSegments = set()
         if not hasattr(client, 'cacheProbedMs'):
             client.cacheProbedMs = None
-        # cachePushProgress is transient (a push is meaningful only
-        # while the process is live), so unconditionally reset on
-        # startup -- any state in settings.dat is stale.
+        # cachePushProgress is always None (SSH push retired); reset
+        # unconditionally on startup so any stale state in settings.dat
+        # from an old server version is cleared.
         client.cachePushProgress = None
         if not hasattr(client, 'profileName'):
             client.profileName = None

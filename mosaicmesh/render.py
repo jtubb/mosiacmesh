@@ -104,21 +104,6 @@ RENDER_FAILED = "FAILED"        # ffmpeg errored; needs manual Retry
 #   $env:MMRENDER_HWACCEL = "cuda"   (or "qsv", "d3d11va")
 _VIDEO_HWACCEL = os.environ.get("MMRENDER_HWACCEL") or ""
 
-# Cap on parallel cache-push scps to the iPad fleet. The cache is meant
-# to AVOID WiFi saturation at PLAY time, but if we fire 24 parallel
-# scps right after a render we saturate the same AP and every push
-# times out. With 24 contending streams the per-iPad rate dropped to
-# ~100 KB/s (~2.4 MB/s aggregate, all going to one AP). MMPUSH_
-# CONCURRENCY=2 keeps each push at ~LAN line rate and lets a fresh
-# render's 24x100MB push fan-out complete in ~5-10 min total instead
-# of all timing out.
-_PUSH_CONCURRENCY = int(os.environ.get("MMPUSH_CONCURRENCY") or 2)
-
-# Lazy module-level semaphore (created on first use, when an event
-# loop is guaranteed to exist; we don't want to bind it to whatever
-# loop happened to be current at import time).
-_push_sem = None
-
 # Recognized video source extensions. SEGMENT/INDIVIDUAL items are transcoded
 # to .mp4 by ffmpeg regardless of source; FULL items play directly in the
 # browser (.mp4/.webm/.m4v are broadly playable, .mov needs h264/Safari/Chrome).
@@ -204,16 +189,6 @@ def _fit_within(src_w, src_h, cap):
     if w % 2: w -= 1
     if h % 2: h -= 1
     return (w, h)
-
-
-def _get_push_sem():
-    """Return the module-level push semaphore, creating it on first
-    use inside the running event loop. Safe to call from any
-    coroutine; not safe to call before any loop has started."""
-    global _push_sem
-    if _push_sem is None:
-        _push_sem = asyncio.Semaphore(_PUSH_CONCURRENCY)
-    return _push_sem
 
 
 # ---------------------------------------------------------------------------
@@ -647,10 +622,10 @@ async def _run_ffmpeg(cmd, label, semaphore):
 
 
 def _client_is_push_eligible(c):
-    """True iff a cache-push to this client is worth spawning (T2.1): the client
-    exists, is in lighttpd-localhost cacheMode, is online, and has an IP. Pure —
-    unit-tested. A push to an offline/incapable client is a no-op or a doomed
-    scp that would occupy a _PUSH_CONCURRENCY slot until the stall timeout."""
+    """True iff a client is cache-capable and reachable: exists, is in
+    lighttpd-localhost cacheMode, is online, and has an IP. Used to build
+    seg_push_targets / full_push_targets lists (which the client-pull path
+    consumes). Pure — unit-tested."""
     return bool(c is not None
                 and getattr(c, "cacheMode", "none") == "lighttpd-localhost"
                 and getattr(c, "isOnline", False)
@@ -713,11 +688,11 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
                 cmd = build_ffmpeg_transcode_cmd(src_path, out_path, tw, th,
                                                  extra_video_filters=evf, extra_audio_filters=eaf)
                 video_jobs.append((cmd, "server/full_" + str(i)))
-                # FULL device-cache (seam 1): push this ONE shared asset to every
-                # cache-eligible client so PLAY serves it from localhost instead of
-                # streaming centrally (the FULL-desync cause). FULL mirrors on every
-                # screen regardless of calibration -> target push-eligible clients
-                # directly, not the calibrated subset.
+                # FULL device-cache (seam 1): record each cache-eligible client so
+                # the client-pull path (notify_precache_on_ready) can PRECACHE the
+                # ONE shared asset from localhost instead of streaming centrally.
+                # FULL mirrors on every screen regardless of calibration -> target
+                # cache-capable clients directly, not the calibrated subset.
                 for _fk, _fc in _group_clients(display_id):
                     if _client_is_push_eligible(_fc):
                         full_push_targets.append((_fk, i))
@@ -841,30 +816,10 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
         await asyncio.gather(*[_run_and_count(cmd, lbl) for cmd, lbl in video_jobs])
         logging.info("render: %d ffmpeg jobs done in %.1fs",
                      len(video_jobs), time.time() - t0)
-        # Cache-push: fire-and-forget scp of each seg_ file to its iPad's
-        # lighttpd cache dir. T2.1: pre-filter to clients that are actually
-        # cache-capable AND online before spawning. An OFFLINE cache client's
-        # scp can't connect and holds a _PUSH_CONCURRENCY slot until the stall
-        # timeout — at fleet scale that starves the push queue. Skipped clients
-        # get the segment from the central URL on next PLAY, and the periodic
-        # _reconcile_ipad_cache re-pushes once they're back online.
-        # See docs/superpowers/specs/2026-06-03-media-cache-design.md
-        for _push_key, _push_n in seg_push_targets:
-            if _client_is_push_eligible(server.settings.clients.get(_push_key)):
-                asyncio.ensure_future(
-                    server._push_segment_to_cached_clients(_push_key, token, _push_n))
-        # FULL device-cache (seam 1): push the shared full_ asset to each eligible
-        # client (already pre-filtered at collection; re-check guards a since-gone
-        # client). kind="full" routes to the shared central src in the push fn.
-        for _push_key, _push_n in full_push_targets:
-            if _client_is_push_eligible(server.settings.clients.get(_push_key)):
-                asyncio.ensure_future(
-                    server._push_segment_to_cached_clients(_push_key, token, _push_n, kind="full"))
-        # Client-pull (Plan 1): kick a throttled PRECACHE for the SAME cache-eligible
-        # clients the legacy push targets, so each device can pull its own segment
-        # outbound (PSM-safe) instead of relying on the inbound scp. The two coexist
-        # during rollout; Plan 2 finalizes the pull URL + retires the push. Fire-and-
-        # forget: a precache-trigger failure must never break the render.
+        # Client-pull: kick a throttled PRECACHE so each cache-eligible device
+        # pulls its own segment outbound (PSM-safe). The SSH segment-push has been
+        # retired; client-pull is the sole cache path. Fire-and-forget: a
+        # precache-trigger failure must never break the render.
         try:
             _pull_urls = {}
             for _push_key, _push_n in seg_push_targets:

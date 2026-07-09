@@ -208,11 +208,9 @@ def get_discovered_devices():
             # somehow slipped through migrate_client_objects.
             "cacheMode": getattr(client, "cacheMode", "none"),
             "cachedSegments": sorted(list(getattr(client, "cachedSegments", set()) or set())),
-            # Progress-aware fields (2026-06-03 second iteration).
-            # cachePushProgress is None when idle, dict when active --
-            # see Client.cachePushProgress for the schema. The two
-            # derived fields below let dashboards render
-            # "cached N/M (P%)" without computing it themselves.
+            # cachePushProgress is always None (SSH push retired; client-pull
+            # is the sole cache path). Kept in the response for API schema
+            # backward compat; callers may see null here.
             "cachePushProgress": getattr(client, "cachePushProgress", None),
             "expectedSegments": _expected_segments_for_client(client),
             "propagationPercent": _propagation_percent_for_client(client),
@@ -265,10 +263,11 @@ async def api_discovery_stats(request):
     total = cache_stats['hits'] + cache_stats['misses']
 
     # Per-display-group cache propagation: counts each lighttpd-
-    # localhost iPad in the group as one of {fullyCached, pushing,
-    # stalled, idle}. Empty for groups without a renderedToken or
-    # without renderable SEGMENT items -- the bar is meaningless
-    # there and the admin UI uses absence to hide the widget.
+    # localhost iPad in the group as one of {fullyCached, idle} (or pushing/
+    # stalled if cachePushProgress is set, though those buckets are always 0
+    # now that the SSH push has been retired). Empty for groups without a
+    # renderedToken or without renderable SEGMENT items -- the bar is
+    # meaningless there and the admin UI uses absence to hide the widget.
     # T3.5: bucket clients by displayID ONCE rather than rescanning the whole
     # client dict for every display group (was O(G×N)).
     _by_group = {}
@@ -328,13 +327,8 @@ async def api_discovery_configure(request):
         clear measuredPerimeter (force a re-calibrate at the new orientation)
       - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
         "none", "lighttpd-localhost", or "service-worker"
-      - {"action": "force_push", "displayID"} -> re-trigger cache-push
-        scps for the named display's CURRENT renderedToken to every
-        lighttpd-localhost iPad in that group, without re-running
-        ffmpeg. Recovery path for when an earlier render's push fan-out
-        failed (e.g. WiFi saturated, network blip, server crashed
-        mid-push). Pushes are still throttled via _PUSH_CONCURRENCY,
-        so this is safe to call without re-saturating the AP.
+      - {"action": "force_push", ...} -> RETIRED (410): SSH segment-push was
+        removed; client-pull (PRECACHE) is the sole cache path.
 
     (The action-based forms preserve the contract that discovery.html uses.)
     """
@@ -419,59 +413,15 @@ async def api_discovery_configure(request):
         return web.json_response({"success": True, "cleared": cleared})
 
     if action == "force_push":
-        # Recovery path: replay the post-render push hook for an
-        # already-rendered display, without paying the ffmpeg cost
-        # again. Walks the current display's mediaElements, finds
-        # SEGMENT items, and queues _push_segment_to_cached_clients
-        # for each (lighttpd-localhost iPad, segment_index) pair that
-        # ISN'T already in client.cachedSegments. Returns the count of
-        # pushes queued; actual completion is logged via the existing
-        # cache-push: INFO lines.
-        display_id = data.get("displayID")
-        if not display_id:
-            return web.json_response(
-                {"success": False, "error": "displayID required"}, status=400)
-        display = server.settings.displays.get(display_id)
-        if not display:
-            return web.json_response(
-                {"success": False, "error": "display not found"}, status=404)
-        token = getattr(display, "renderedToken", "") or ""
-        if not token:
-            return web.json_response(
-                {"success": False,
-                 "error": "no renderedToken yet -- run RENDER first"},
-                status=409)
-        # Identify segment items by enumerated position (matches what
-        # render_group_async + _per_client_items use as the index).
-        seg_indices = [i for i, me in enumerate(display.mediaElements)
-                       if _is_renderable(me) and isVideoItem(me.file)
-                       and me.playmode == PlayMode.SEGMENT]
-        queued = 0
-        skipped_cached = 0
-        skipped_no_perim = 0
-        for key, c in _group_clients(display_id):
-            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
-                continue
-            if c.measuredPerimeter is None:
-                skipped_no_perim += 1
-                continue
-            cached = getattr(c, "cachedSegments", set()) or set()
-            for n in seg_indices:
-                seg_key = "%s_%d" % (token, n)
-                if seg_key in cached:
-                    skipped_cached += 1
-                    continue
-                asyncio.ensure_future(
-                    server._push_segment_to_cached_clients(key, token, n))
-                queued += 1
-        logging.info("force_push: display=%r token=%s queued=%d "
-                     "skipped_cached=%d skipped_no_perim=%d",
-                     display_id, token, queued, skipped_cached,
-                     skipped_no_perim)
-        return web.json_response({"success": True, "queued": queued,
-                                  "skipped_cached": skipped_cached,
-                                  "skipped_no_perim": skipped_no_perim,
-                                  "token": token})
+        # The SSH segment-push has been retired (refactor/cache, 2026-07-09).
+        # Client-pull (PRECACHE) is now the sole cache path. force_push is a
+        # no-op; returning 410 so callers know the action is gone rather than
+        # silently doing nothing.
+        return web.json_response(
+            {"success": False,
+             "error": "force_push retired: SSH segment-push removed; "
+                      "client-pull (PRECACHE) is the sole cache path"},
+            status=410)
 
     client_key = data.get("clientKey")
     if not client_key:

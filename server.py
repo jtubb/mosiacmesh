@@ -58,7 +58,7 @@ from mosaicmesh.calibration import (
 )
 from mosaicmesh.render import (
     _keyframe_grid_args, _video_input_args, _video_encoder_args,
-    _get_push_sem, render_token, compute_render_token, _broadcast_render_status,
+    render_token, compute_render_token, _broadcast_render_status,
     _is_renderable, _normalize_effect, _resolve_effect_filters,
     _run_ffmpeg, render_group_async,
     _per_client_items, _broadcast_per_client_play, _broadcast_per_client_preload,
@@ -69,7 +69,7 @@ from mosaicmesh.render import (
     _resolve_media_url, _build_media_elements,
     _apply_playlist, _start_group_playback, _stop_group_playback,
     _group_online_keys, _begin_prepare, _prepare_unsynced_clients,
-    _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL, _PUSH_CONCURRENCY,
+    _VIDEO_ENCODER, _RENDER_CONCURRENCY, _VIDEO_HWACCEL,
     KEYFRAME_GRID_SEC, _VIDEO_EXTS, _SEG_FILE_RE,
     revalidate_renders_on_boot,
     sweep_orphan_render_assets,
@@ -198,25 +198,6 @@ def start_precache(group, token, client_urls, n=3):
     for k in win.start(time.time()):
         _send_precache(k, precache_urls.get(k), precache_segtoken.get(k))
 
-
-# Render pipeline constants + functions live in mosaicmesh.render (imported above).
-# Device lifecycle script constants + functions live in mosaicmesh.device_scripts (imported above).
-# _PUSH_STALL_WINDOW_S and _PUSH_POLL_INTERVAL_S remain here because they are only
-# used by _push_segment_to_cached_clients / _poll_push_progress which stay in server.py.
-#
-# Why STALL-based abort rather than a static timeout: legitimate cache pushes to
-# iPad-1 over WiFi can run for many minutes on a fresh segment; a fixed timeout
-# either over-aborts (kills slow but progressing transfers) or under-aborts (lets
-# zombie SSH sessions hang for hours). Polling the iPad's destination file size
-# every _PUSH_POLL_INTERVAL_S seconds and aborting only when no bytes flow for
-# _PUSH_STALL_WINDOW_S seconds gives us "as long as it takes, but no longer."
-# Empirically tuned: 30s stall window catches genuinely-dead transfers without
-# spurious-aborting healthy-but-slow ones; 5s poll interval is the sweet spot
-# between "responsive to stalls" and "not aggressively over-polling sshd on a
-# resource-constrained iPad-1." Override via MMPUSH_STALL_S / MMPUSH_POLL_S
-# env vars for tuning per-fleet without code changes.
-_PUSH_STALL_WINDOW_S = int(os.environ.get("MMPUSH_STALL_S") or 30)
-_PUSH_POLL_INTERVAL_S = float(os.environ.get("MMPUSH_POLL_S") or 5.0)
 
 _reconcile_inflight = set()     # client IPs with a cache reconcile currently running
 
@@ -352,277 +333,6 @@ async def _get_pooled_vnc(client_key, ip):
     return proxy
 
 
-async def _push_segment_to_cached_clients(client_key, segment_hash, segment_n, kind="seg"):
-    """Scp a freshly-rendered mp4 to the iPad's lighttpd cache directory.
-    Called from the render pipeline's success path for each Client with
-    cacheMode == "lighttpd-localhost". `kind` selects SEGMENT (per-client warp,
-    default) or FULL (the one shared device asset) — see the FULL device-caching
-    spec (2026-06-28). Only src/dst-basename/cache-key differ; the stall/poll/
-    concurrency machinery is identical for both.
-
-    Best-effort: a failed scp leaves the segment hash absent from
-    Client.cachedSegments, which means _resolve_media_url will hand
-    out the central-server URL for the next PLAY of this segment on
-    this iPad. Operator sees the failure in server.err and can re-run.
-
-    Spec: docs/superpowers/specs/2026-06-03-media-cache-design.md
-    section 'Render-complete push hook'."""
-    client = settings.clients.get(client_key)
-    if not client:
-        return
-    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
-        return
-    if not getattr(client, "ip", ""):
-        logging.warning("cache-push %s: no IP, skipping", client_key)
-        return
-    # src + dst basename + cache key differ by asset kind. SEGMENT is the
-    # per-client warp (media/<key>/videos/seg_...); FULL is the ONE shared device
-    # asset (media/server/videos/full_...) pushed identically to every cached
-    # client. The rest of this coroutine is kind-agnostic.
-    if kind == "full":
-        src = "media/server/videos/full_%s_%d.mp4" % (segment_hash, segment_n)
-        dst_name = "full_%s_%d.mp4" % (segment_hash, segment_n)
-        cache_key = "full_%s_%d" % (segment_hash, segment_n)
-    else:
-        src = "media/%s/videos/seg_%s_%d.mp4" % (client_key, segment_hash, segment_n)
-        dst_name = "seg_%s_%d.mp4" % (segment_hash, segment_n)
-        cache_key = "%s_%d" % (segment_hash, segment_n)
-    dst = "%s@%s:/var/mobile/Media/MosaicMeshCache/%s" % (SSH_USER, client.ip, dst_name)
-    cmd = ["scp", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS + [src, dst]
-    try:
-        total_bytes = os.path.getsize(src)
-    except OSError:
-        # Source missing -- scp will fail with a clearer error than
-        # we can produce here, so let it run and surface that via
-        # the existing rc!=0 logging path. Default totalBytes to 0
-        # so cachePushProgress is well-formed; percent will read 0
-        # throughout, which is the truthful signal for a doomed push.
-        total_bytes = 0
-
-    # Throttle: 2026-06-03 production-load discovery -- firing 24
-    # parallel scps over a single AP saturates the WiFi, all of them
-    # crawl at ~100 KB/s, and they all hit a static timeout. We
-    # serialise via _PUSH_CONCURRENCY, AND we now detect stalls by
-    # polling the iPad-side destination file size (see
-    # _poll_push_progress). A push that's making forward progress,
-    # however slowly, runs to completion. Only a transfer that
-    # genuinely stops moving bytes for _PUSH_STALL_WINDOW_S aborts.
-    sem = _get_push_sem()
-    async with sem:
-        now_ms = int(time.time() * 1000)
-        client.cachePushProgress = {
-            "token": segment_hash,
-            "n": segment_n,
-            "prefix": kind,   # poller builds the dst filename from this (seg/full)
-            "bytesSent": 0,
-            "totalBytes": total_bytes,
-            "startedMs": now_ms,
-            "lastChangeMs": now_ms,
-            "status": "pushing",
-            "mbps": 0.0,
-        }
-        _broadcast_cache_progress(client_key, client)
-
-        stall_event = asyncio.Event()
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        poller = asyncio.ensure_future(
-            _poll_push_progress(client_key, client, stall_event, proc))
-        communicate_task = asyncio.ensure_future(proc.communicate())
-        stall_task = asyncio.ensure_future(stall_event.wait())
-        try:
-            done, pending = await asyncio.wait(
-                {communicate_task, stall_task},
-                return_when=asyncio.FIRST_COMPLETED)
-            if stall_task in done and communicate_task not in done:
-                # Stall path: poller signalled, scp hasn't finished.
-                # Kill scp, then await the ORIGINAL communicate task
-                # (now unblocked by SIGKILL on the child). Crucially
-                # we DO NOT call proc.communicate() a second time here
-                # -- asyncio's Process only allows one pending read at
-                # a time, and a second call collides with
-                # communicate_task with "read() called while another
-                # coroutine is already waiting for incoming data".
-                proc.kill()
-                try:
-                    await asyncio.wait_for(communicate_task, timeout=5)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass
-                sent = client.cachePushProgress.get("bytesSent", 0) \
-                    if client.cachePushProgress else 0
-                logging.warning(
-                    "cache-push %s %s: stalled (no progress for %ds, "
-                    "%d/%d bytes)",
-                    client_key, cache_key,
-                    _PUSH_STALL_WINDOW_S, sent, total_bytes)
-                if client.cachePushProgress is not None:
-                    client.cachePushProgress["status"] = "stalled"
-                    _broadcast_cache_progress(client_key, client)
-                return
-            # scp finished first
-            stall_task.cancel()
-            _out, err = await communicate_task
-            if proc.returncode == 0:
-                client.cachedSegments.add(cache_key)
-                if client.cachePushProgress is not None:
-                    client.cachePushProgress["bytesSent"] = total_bytes
-                    client.cachePushProgress["status"] = "cached"
-                    _broadcast_cache_progress(client_key, client)
-                logging.info("cache-push: %s %s -> %s",
-                             client_key, cache_key, client.ip)
-            else:
-                tail = (err or b"").decode("utf-8", "replace").strip().splitlines()[-2:]
-                logging.warning("cache-push rc=%s for %s %s: %s",
-                                proc.returncode, client_key,
-                                cache_key, " | ".join(tail))
-        except Exception as e:  # noqa: BLE001
-            logging.warning("cache-push exception for %s %s: %s",
-                            client_key, cache_key, e)
-        finally:
-            poller.cancel()
-            try:
-                await poller
-            except (asyncio.CancelledError, Exception):
-                pass
-            # Clear transient progress state. The cached-status broadcast
-            # above (if applicable) is what consumers see; the in-memory
-            # dict is reset to None so subsequent /api/discovery/devices
-            # reads show idle.
-            client.cachePushProgress = None
-
-
-async def _poll_push_progress(client_key, client, stall_event, proc):
-    """Sibling coroutine to _push_segment_to_cached_clients. Opens
-    ONE long-running ssh connection that emits the destination
-    file's size every _PUSH_POLL_INTERVAL_S seconds (via a shell
-    loop on the iPad). Reads each line of stdout to update
-    client.cachePushProgress, broadcast CACHE_PROGRESS, and detect
-    stalls. Exits + closes its ssh when the enclosing push coroutine
-    cancels us (success or stall path) or when scp finishes.
-
-    Why one long-lived connection rather than per-poll connections:
-    iPad-1 sshd has a tight concurrent-connection limit. Opening a
-    fresh ssh every poll competes for handshake slots with the scp
-    itself, which can starve the very transfer we're watching --
-    bytes never move, the stall window fires erroneously, the
-    push is aborted by us not by reality. One ssh per push keeps
-    the poller's network footprint trivial relative to the
-    transfer."""
-    prog = client.cachePushProgress
-    if prog is None:
-        return
-    prefix = prog.get("prefix", "seg")
-    seg_path = ("/var/mobile/Media/MosaicMeshCache/%s_%s_%d.mp4"
-                % (prefix, prog["token"], prog["n"]))
-    # The remote shell loop: print size (0 if file missing) every
-    # _PUSH_POLL_INTERVAL_S seconds, forever. We rely on ssh process
-    # cancellation (poller.cancel() in the push coroutine's finally
-    # block) to close this when the push ends. The interval lives
-    # on the iPad side so we don't pay handshake cost per sample.
-    poll_script = (
-        "F=%s; while true; do "
-        "if [ -f $F ]; then stat -c%%s $F; else echo 0; fi; "
-        "sleep %d; "
-        "done"
-    ) % (seg_path, int(_PUSH_POLL_INTERVAL_S))
-    ssh_cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS
-               + ["-T",   # disable TTY allocation; we're just streaming bytes
-                  "%s@%s" % (SSH_USER, client.ip),
-                  poll_script])
-    poll_proc = None
-    last_broadcast_bytes = -1
-    seen_nonzero = False
-    try:
-        poll_proc = await asyncio.create_subprocess_exec(
-            *ssh_cmd, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL)
-        while proc.returncode is None:
-            try:
-                line = await asyncio.wait_for(
-                    poll_proc.stdout.readline(),
-                    timeout=_PUSH_POLL_INTERVAL_S + 5)
-            except asyncio.TimeoutError:
-                line = b""
-            if proc.returncode is not None:
-                return
-            if client.cachePushProgress is None:
-                return
-            try:
-                sz = int((line or b"0").strip() or 0)
-            except ValueError:
-                sz = 0
-            now_ms = int(time.time() * 1000)
-            if sz > client.cachePushProgress["bytesSent"]:
-                if not seen_nonzero and sz > 0:
-                    seen_nonzero = True
-                elapsed_s = max(0.001,
-                                (now_ms - client.cachePushProgress["startedMs"])
-                                / 1000.0)
-                client.cachePushProgress["bytesSent"] = sz
-                client.cachePushProgress["lastChangeMs"] = now_ms
-                client.cachePushProgress["mbps"] = round(
-                    sz / 1024.0 / 1024.0 / elapsed_s, 2)
-                if sz != last_broadcast_bytes:
-                    _broadcast_cache_progress(client_key, client)
-                    last_broadcast_bytes = sz
-            else:
-                # No new bytes since last lastChangeMs update. Only
-                # treat this as a stall AFTER we've observed at least
-                # one non-zero size -- before that, scp is legitimately
-                # in setup (ssh handshake, key exchange, remote file
-                # open). On iPad-1's SHA-1 sshd this can take 30s+ on
-                # contended WiFi. Killing a transfer that hasn't
-                # had a chance to start writing yet is a regression
-                # vs. the static-timeout approach we replaced.
-                if not seen_nonzero:
-                    continue
-                stalled_ms = now_ms - client.cachePushProgress["lastChangeMs"]
-                if stalled_ms >= _PUSH_STALL_WINDOW_S * 1000:
-                    stall_event.set()
-                    return
-    finally:
-        if poll_proc is not None:
-            try:
-                poll_proc.kill()
-                await poll_proc.wait()
-            except Exception:
-                pass
-
-
-def _broadcast_cache_progress(client_key, client):
-    """Emit a SockJS CACHE_PROGRESS message reflecting
-    client.cachePushProgress. Broadcast DEST=ALL; admin.html listens
-    for it, iPads have no handler and silently drop it. Safe to call
-    when cachePushProgress is None (used as a clear/no-op ping)."""
-    prog = client.cachePushProgress or {}
-    total = prog.get("totalBytes", 0) or 0
-    sent = prog.get("bytesSent", 0) or 0
-    percent = (100.0 * sent / total) if total else 0.0
-    payload = {
-        "clientKey": client_key,
-        "ip": getattr(client, "ip", ""),
-        "displayID": getattr(client, "displayID", None),
-        "token": prog.get("token"),
-        "n": prog.get("n"),
-        "bytesSent": sent,
-        "totalBytes": total,
-        "percent": round(percent, 1),
-        "mbps": prog.get("mbps", 0.0),
-        "status": prog.get("status", "cached"),
-    }
-    try:
-        socketmanager.broadcast(jsonpickle.encode({
-            "DEST": "ALL",
-            "REQUEST": "CACHE_PROGRESS",
-            "PAYLOAD": payload,
-        }))
-    except Exception as e:  # noqa: BLE001
-        # SockJS broadcast errors are noisy and non-fatal -- we don't
-        # want a misbehaving consumer to spam logs at poll rate.
-        logging.debug("CACHE_PROGRESS broadcast failed for %s: %s",
-                      client_key, e)
-
-
 async def _run_reconcile_guarded(client, ip):
     """In-flight guard around _reconcile_ipad_cache so process() (every ~5s) never
     stacks a second reconcile for a device whose previous one (slow ssh rm) is still
@@ -650,17 +360,13 @@ async def _reconcile_ipad_cache(client):
     # Build set of seg_HASH_N keys currently referenced by this
     # client's display group's playlist.
     #
-    # The cache key produced by _push_segment_to_cached_clients is
-    # "<renderedToken>_<item_index>" -- so in-use entries derive from
-    # the display's current renderedToken + the enumerated index of
-    # each SEGMENT-mode MediaElement. (Older variants of this code
-    # tried to parse seg_HASH from item.file via regex, but item.file
-    # holds the SOURCE path like '/media/server/videos/<...>.mov'
-    # rather than the rendered seg_HASH_N.mp4 filename -- that's set
-    # per-client by _per_client_items at PRELOAD time, not on the
-    # shared MediaElement. So the regex fallback never matched in
-    # production and was deleting ALL cached segments as 'orphans'
-    # right after every successful push.)
+    # Cache keys are "<renderedToken>_<item_index>" -- in-use entries
+    # derive from the display's current renderedToken + the enumerated
+    # index of each SEGMENT-mode MediaElement. (Older variants tried to
+    # parse seg_HASH from item.file via regex, but item.file holds the
+    # SOURCE path like '/media/server/videos/<...>.mov', not the rendered
+    # seg_HASH_N.mp4 filename -- that's set per-client by _per_client_items
+    # at PRELOAD time. The regex never matched in production.)
     in_use = set()
     did = getattr(client, "displayID", None)
     display = settings.displays.get(did) if did else None

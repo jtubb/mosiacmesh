@@ -153,9 +153,9 @@ def msg_response(msg,session):
     # a client actively communicating IS online, even if a SockJS/ws reconnect resumed
     # without re-REGISTERing. Without this, isOnline is set True ONLY at REGISTER, so a
     # live-but-not-recently-registered client reads offline -> _client_is_push_eligible
-    # False -> empty seg_push_targets -> NO cache push AND NO client-pull PRECACHE. The
-    # REGISTER handler also sets these (here it's a harmless no-op until the client row
-    # exists, then real on every subsequent message).
+    # False -> empty seg_push_targets -> NO client-pull PRECACHE. The REGISTER handler
+    # also sets these (here it's a harmless no-op until the client row exists, then real
+    # on every subsequent message).
     _src = msg.get("SRC") if isinstance(msg, dict) else None
     if _src:
         _c = server.settings.clients.get(_src)
