@@ -190,11 +190,18 @@ function getUDID() {
 		AjaxURL: "/time",
 		WhenSynced: updateData, // Is called for the first sync
 		OnSync: goTimeSync, // Calls on ever sync starting with the second sync
-		SyncInitialTimeouts: [500, 3000, 9000, 15000],
-		// Re-sync every 60s (was 15min) so a lower-RTT sample can ratchet the offset
-		// precision down. The offset itself is HELD (monotonic ratchet, see GoTime
-		// _reviseOffset); ongoing oscillator drift is corrected at the beat by
-		// ProgrammableTimer's median drift loop, which is what keeps displays aligned.
+		// Adaptive cadence: sync fast (~1s, jittered per client) on join until the
+		// offset is precise (getPrecision() <= 40ms for 2 samples) or a 60s cap, then
+		// relax to 30s. Replaces the old fixed SyncInitialTimeouts burst. See
+		// docs/superpowers/specs/2026-07-10-sync-cadence-adaptive-design.md
+		FastSyncInterval: 1000,
+		FastSyncJitterMs: 150,
+		SyncPrecisionTargetMs: 40,
+		SyncPrecisionStreak: 2,
+		FastSyncCapMs: 60000,
+		// Slow/drift cadence once converged. The offset is HELD (monotonic ratchet,
+		// see GoTime _reviseOffset); ongoing oscillator drift is corrected at the beat
+		// by ProgrammableTimer's median drift loop, which keeps displays aligned.
 		SyncInterval: 30000
 	});
 
