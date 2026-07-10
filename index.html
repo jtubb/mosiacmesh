@@ -207,7 +207,34 @@
 				v.style.width = '100%'; v.style.height = '100%';
 				v.style.background = '#000';
 				v.style.zIndex = '1';
-				v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+				v.addEventListener('playing', function () {
+					playback.activated = true; hideTapStart();
+					v._armRetryN = 0;  // armed OK -> forget arm-error retries
+					if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); v._armRetryTimer = null; }
+				});
+				// Arm-phase recovery: the poll watchdog is gated on playback.active, so it
+				// does NOT cover the pre-playback ARM. An arm-time cached-video error fires
+				// this 'error' event -> retry load()+play() a few times so the element can
+				// bless and the group can complete its coordinated start. NEVER falls to
+				// central. Active-playback errors/stalls are left to the poll watchdog.
+				v.addEventListener('error', function () {
+					try {
+						var s = '' + (v.currentSrc || v.src || '');
+						var isLocal = s.indexOf('127.0.0.1') !== -1;
+						if (isLocal && s !== v._armSrc) { v._armSrc = s; v._armRetryN = 0; }
+						var action = mmVideoRecovery.mmArmRetryAction({
+							active: playback.active, isLocal: isLocal, retries: v._armRetryN || 0, maxRetries: ARM_MAX_RETRIES });
+						if (action !== 'retry') { return; }
+						v._armRetryN = (v._armRetryN || 0) + 1;
+						if (typeof dbg === 'function') { dbg('arm-retry'); }
+						if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); }
+						v._armRetryTimer = setTimeout(function () {
+							v._armRetryTimer = null;
+							try { v.load(); } catch (e2) {}
+							try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e3) {}
+						}, ARM_RETRY_BACKOFF_MS);
+					} catch (e) { /* best-effort */ }
+				});
 				return v;
 			};
 			playback.vbuf = makeVideoBuffer({
@@ -232,6 +259,10 @@
 	var WATCHDOG_MAX_RETRIES = 2;
 	var WATCHDOG_MAX_RECACHES = 1;
 	var WATCHDOG_CT_MIN_ADVANCE_MS = 100;
+	// Arm-phase (pre-playback) cached-video error retry — the poll watchdog above only
+	// covers active playback, so an arm-time error is retried here instead.
+	var ARM_MAX_RETRIES = 3;
+	var ARM_RETRY_BACKOFF_MS = 500;
 	var KEYFRAME_GRID_MS = 250;  // MUST match server KEYFRAME_GRID_SEC (0.25s): drift
 	                             // re-aligns by seeking to this keyframe grid so iOS-5
 	                             // (keyframe-accurate seek) and modern clients land on
