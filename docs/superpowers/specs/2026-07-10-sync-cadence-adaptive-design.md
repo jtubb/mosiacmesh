@@ -49,7 +49,8 @@ Defaults (all overridable via `setOptions`):
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `FastSyncInterval` | `1000` ms | delay between syncs while converging |
+| `FastSyncInterval` | `1000` ms | base delay between syncs while converging |
+| `FastSyncJitterMs` | `150` ms | per-sample uniform jitter added to the fast interval (herd de-sync) |
 | `SyncPrecisionTargetMs` | `40` ms | precision at/below which a sample counts as "good" |
 | `SyncPrecisionStreak` | `2` | consecutive good samples required to transition |
 | `FastSyncCapMs` | `60000` ms | hard cap: after this much fast-syncing, go slow regardless |
@@ -111,6 +112,13 @@ The scheduler is a thin wrapper: it owns the mutable `phase`/`streak`/`fastStart
 state and the `setTimeout` handle, reads `getPrecision()` and the current time, calls
 `_nextSyncDelay`, stores the returned `phase`/`streak`, and arms the timer.
 
+**Jitter is applied in the wrapper, not in the pure helper** — `_nextSyncDelay` stays
+deterministic (no `Math.random`, node-testable). When the returned `phase === 'fast'`,
+the wrapper arms `setTimeout(_sync, delayMs + Math.floor(Math.random() * FastSyncJitterMs))`
+so a synchronized fleet reboot smears the 24 panels' fast samples across the second
+instead of stacking on one tick. The slow phase (30 s) gets no jitter — one probe per
+30 s per panel needs no de-herding.
+
 ### Boot / first sample
 
 `_setupSync` starts the fast phase: `phase='fast'`, `streak=0`, `fastStartMs` unset,
@@ -142,7 +150,10 @@ Node `--test` (`tests/unit/js/gotime-cadence.test.js`), pure `_nextSyncDelay`:
 - slow phase → always `{ SyncInterval, 'slow' }` regardless of precision
 
 Plus a scheduler-level test with a mocked `setTimeout` + stubbed `getPrecision()`
-verifying the sequence fast×N → slow and that exactly one timer is armed at a time.
+verifying the sequence fast×N → slow, that exactly one timer is armed at a time, and
+that a stubbed `Math.random` puts the fast delay in `[FastSyncInterval,
+FastSyncInterval + FastSyncJitterMs)` while the slow delay is exactly `SyncInterval`
+(no jitter).
 
 ## Deploy
 
