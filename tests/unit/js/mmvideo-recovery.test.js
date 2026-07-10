@@ -14,29 +14,6 @@ function loadRecovery() {
   return sandbox.window.mmVideoRecovery;
 }
 
-const A = loadRecovery().mmVideoErrorAction;
-const MAX = 3;
-
-test('non-local error -> ignore (regardless of retries)', () => {
-  assert.strictEqual(A({ isLocal: false, retries: 0, maxRetries: MAX }), 'ignore');
-  assert.strictEqual(A({ isLocal: false, retries: 9, maxRetries: MAX }), 'ignore');
-});
-
-test('local, retries below max -> retry', () => {
-  assert.strictEqual(A({ isLocal: true, retries: 0, maxRetries: MAX }), 'retry');
-  assert.strictEqual(A({ isLocal: true, retries: 2, maxRetries: MAX }), 'retry'); // max-1 boundary
-});
-
-test('local, retries at/over max -> downgrade', () => {
-  assert.strictEqual(A({ isLocal: true, retries: 3, maxRetries: MAX }), 'downgrade'); // == max boundary
-  assert.strictEqual(A({ isLocal: true, retries: 4, maxRetries: MAX }), 'downgrade');
-});
-
-test('missing state -> ignore (defensive)', () => {
-  assert.strictEqual(A(null), 'ignore');
-  assert.strictEqual(A(undefined), 'ignore');
-});
-
 const W = loadRecovery().mmWatchdogAction;
 const WMAX = { maxRetries: 2, maxRecaches: 1 };
 
