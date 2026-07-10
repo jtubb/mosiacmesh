@@ -37,6 +37,39 @@ test('evict-on-supersede: new token for a group drops the old file', function ()
   assert.strictEqual(mmCache._tokens['T1'], undefined); // old forgotten
 });
 
+test('_renderTokenOf strips seg_/full_ prefix + _N suffix; passthrough otherwise', function () {
+  const mmCache = loadMmCache();
+  assert.strictEqual(mmCache._renderTokenOf('seg_5ad20e2c98c3_0'), '5ad20e2c98c3');
+  assert.strictEqual(mmCache._renderTokenOf('seg_5ad20e2c98c3_1'), '5ad20e2c98c3');
+  assert.strictEqual(mmCache._renderTokenOf('full_9c303e784e6c_2'), '9c303e784e6c');
+  assert.strictEqual(mmCache._renderTokenOf('T1'), 'T1');
+});
+
+test('supersede KEEPS sibling segments of the same render (no evict of seg_0 by seg_1)', function () {
+  const mmCache = loadMmCache();
+  mmCache._reset();
+  const b = mockBackend();
+  mmCache.registerBackend(b);
+  b.store['seg_5ad20e2c98c3_0'] = 'u0';
+  mmCache._recordToken('seg_5ad20e2c98c3_0', 'G1');
+  mmCache._supersede('G1', 'seg_5ad20e2c98c3_1');       // sibling seg, SAME render token
+  assert.deepStrictEqual(b.evicted, []);                 // seg_0 must NOT be evicted
+  assert.ok(mmCache._tokens['seg_5ad20e2c98c3_0']);      // seg_0 still tracked
+  assert.ok(mmCache._tokens['seg_5ad20e2c98c3_1']);      // seg_1 recorded
+});
+
+test('supersede DOES evict a DIFFERENT render token in the group', function () {
+  const mmCache = loadMmCache();
+  mmCache._reset();
+  const b = mockBackend();
+  mmCache.registerBackend(b);
+  b.store['seg_oldtoken1234_0'] = 'u';
+  mmCache._recordToken('seg_oldtoken1234_0', 'G1');
+  mmCache._supersede('G1', 'seg_5ad20e2c98c3_0');       // NEW render supersedes the old
+  assert.deepStrictEqual(b.evicted, ['seg_oldtoken1234_0']);
+  assert.strictEqual(mmCache._tokens['seg_oldtoken1234_0'], undefined);
+});
+
 test('size-cap: evicts oldest until under cap', function () {
   const mmCache = loadMmCache();
   mmCache._reset();

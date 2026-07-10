@@ -30,10 +30,20 @@
     if (i >= 0) { mmCache._order.splice(i, 1); }
   };
 
+  // A PRECACHE token is a SEGMENT name ("seg_<rt>_<n>" / "full_<rt>_<n>"). Sibling
+  // segments of ONE render share <rt>. Supersede must key on <rt>, NOT the full
+  // segment name — else caching seg_1 evicts seg_0 of the SAME render, leaving the
+  // device a segment short -> verr=3 decode-miss on the wall. Non-segment tokens
+  // map to themselves. ES5 (runs on iPad-1).
+  mmCache._renderTokenOf = function (token) {
+    return String(token).replace(/^seg_/, '').replace(/^full_/, '').replace(/_\d+$/, '');
+  };
+
   mmCache._supersede = function (group, newToken) {
-    var t, tok;
+    var tok, newRT = mmCache._renderTokenOf(newToken);
     for (tok in mmCache._tokens) {
-      if (mmCache._tokens.hasOwnProperty(tok) && mmCache._tokens[tok].group === group && tok !== newToken) {
+      if (mmCache._tokens.hasOwnProperty(tok) && mmCache._tokens[tok].group === group
+          && mmCache._renderTokenOf(tok) !== newRT) {
         if (mmCache.backend) { mmCache.backend.evict(tok); }
         mmCache._forget(tok);
       }
