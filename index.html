@@ -25,6 +25,7 @@
   <script src="/js/mesh-viewport.js"></script>
   <script src="/js/video-buffer.js"></script>
   <script src="/js/mmCache.js"></script>
+  <script src="/js/mmVideoRecovery.js"></script>
   <script src="/js/mmCacheBackendMmvideo.js"></script>
   <script src="/js/mmCacheBackendModern.js"></script>
   <script>
@@ -206,11 +207,39 @@
 				v.style.width = '100%'; v.style.height = '100%';
 				v.style.background = '#000';
 				v.style.zIndex = '1';
-				v.addEventListener('playing', function () { playback.activated = true; hideTapStart(); });
+				v.addEventListener('playing', function () {
+					playback.activated = true; hideTapStart();
+					// Recovered: forget this clip's failures + cancel any pending retry.
+					v._mmRetryN = 0; v._mmDowngraded = false;
+					if (v._mmRetryTimer) { clearTimeout(v._mmRetryTimer); v._mmRetryTimer = null; }
+				});
 				v.addEventListener('error', function () {
 					try {
 						var s = '' + (v.currentSrc || v.src || '');
-						if (s.indexOf('127.0.0.1') !== -1 && typeof sock !== 'undefined' && sock !== null) {
+						var isLocal = s.indexOf('127.0.0.1') !== -1;
+						// New clip -> fresh retry budget; cancel a stale pending retry.
+						if (isLocal && s !== v._mmRetrySrc) {
+							v._mmRetrySrc = s; v._mmRetryN = 0; v._mmDowngraded = false;
+							if (v._mmRetryTimer) { clearTimeout(v._mmRetryTimer); v._mmRetryTimer = null; }
+						}
+						var action = mmVideoRecovery.mmVideoErrorAction({
+							isLocal: isLocal, retries: v._mmRetryN || 0, maxRetries: MM_VIDEO_MAX_RETRIES });
+						if (action === 'ignore') { return; }
+						if (action === 'retry') {
+							v._mmRetryN = (v._mmRetryN || 0) + 1;
+							if (typeof dbg === 'function') { dbg('cache-local-retry'); }
+							if (v._mmRetryTimer) { clearTimeout(v._mmRetryTimer); }
+							v._mmRetryTimer = setTimeout(function () {
+								v._mmRetryTimer = null;
+								// iOS-5 needs load()+play() together to restart a held/errored element.
+								try { v.load(); } catch (e2) {}
+								try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e3) {}
+							}, MM_VIDEO_RETRY_BACKOFF_MS);
+							return;
+						}
+						// action === 'downgrade': retry budget exhausted -> genuine local failure.
+						if (!v._mmDowngraded && typeof sock !== 'undefined' && sock !== null) {
+							v._mmDowngraded = true;
 							sock.send(generateMessage("SRV", "ANNOUNCE_CACHE_MODE", {"mode": "none"}));
 							if (typeof dbg === 'function') { dbg("cache-local-fail"); }
 						}
@@ -230,6 +259,12 @@
 	}
 	var HARD_SEEK_MS = 750; // drift beyond this is corrected with a seek, not a rate nudge
 	                        // (must exceed typical seek+rebuffer latency or playback chases its own tail)
+	// Cached-video verr=3 recovery: retry the local load this many times (with backoff)
+	// before downgrading to cacheMode:none. mmvideo emits spurious verr=3 on healthy
+	// cached files; a single flake must NOT downgrade a good device. See
+	// docs/superpowers/specs/2026-07-10-mmvideo-recovery-design.md
+	var MM_VIDEO_MAX_RETRIES = 3;
+	var MM_VIDEO_RETRY_BACKOFF_MS = 500;
 	var KEYFRAME_GRID_MS = 250;  // MUST match server KEYFRAME_GRID_SEC (0.25s): drift
 	                             // re-aligns by seeking to this keyframe grid so iOS-5
 	                             // (keyframe-accurate seek) and modern clients land on
