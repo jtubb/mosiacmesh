@@ -98,10 +98,38 @@ static void mm_download(void *p) {
     dlctx *c = (dlctx *)p;
     id url = ((id (*)(id, SEL, id))objc_msgSend)(
         (id)objc_getClass("NSURL"), sel_registerName("URLWithString:"), nsstr(c->url));
-    id data = url ? ((id (*)(id, SEL, id))objc_msgSend)(
-        (id)objc_getClass("NSData"), sel_registerName("dataWithContentsOfURL:"), url) : (id)0;
+    if (!url) { mmclog("[mmcache] bad url token=%s\n", c->token);
+                dispatch_fail(c->token, "url"); free(c); return; }
+    /* iOS-5 has NO NSURLSession. dataWithContentsOfURL: hides the response, so a
+       truncated transfer returns partial data (non-nil, no error) that we used to cache
+       + ack CACHED -> verr=3 on playback. sendSynchronousRequest gives us the response
+       (Content-Length) so we can verify completeness BEFORE writing. */
+    id req = ((id (*)(id, SEL, id))objc_msgSend)(
+        (id)objc_getClass("NSURLRequest"), sel_registerName("requestWithURL:"), url);
+    id resp = (id)0, err = (id)0;
+    id data = req ? ((id (*)(id, SEL, id, id *, id *))objc_msgSend)(
+        (id)objc_getClass("NSURLConnection"),
+        sel_registerName("sendSynchronousRequest:returningResponse:error:"),
+        req, &resp, &err) : (id)0;
     if (!data) { mmclog("[mmcache] download FAILED token=%s\n", c->token);
                  dispatch_fail(c->token, "net"); free(c); return; }
+    /* HTTP status must be 200 (reject 206 partial / 4xx / 5xx). */
+    int status = 0;
+    if (resp && ((int (*)(id, SEL, id))objc_msgSend)(
+            resp, sel_registerName("isKindOfClass:"), (id)objc_getClass("NSHTTPURLResponse")))
+        status = ((int (*)(id, SEL))objc_msgSend)(resp, sel_registerName("statusCode"));
+    if (status != 200) { mmclog("[mmcache] bad status=%d token=%s\n", status, c->token);
+                         dispatch_fail(c->token, "http"); free(c); return; }
+    /* Completeness: downloaded length must equal the response's Content-Length. */
+    long long expect = ((long long (*)(id, SEL))objc_msgSend)(
+        resp, sel_registerName("expectedContentLength"));
+    unsigned long got = ((unsigned long (*)(id, SEL))objc_msgSend)(
+        data, sel_registerName("length"));
+    if (expect <= 0 || (long long)got != expect) {
+        mmclog("[mmcache] TRUNCATED token=%s got=%lu expect=%lld\n", c->token, got, expect);
+        dispatch_fail(c->token, "len"); free(c); return;
+    }
+    /* Verified complete -> write + ack CACHED. */
     id fm = ((id (*)(id, SEL))objc_msgSend)(
         (id)objc_getClass("NSFileManager"), sel_registerName("defaultManager"));
     ((int (*)(id, SEL, id, int, id, id))objc_msgSend)(
@@ -111,10 +139,8 @@ static void mm_download(void *p) {
     snprintf(pathc, sizeof pathc, "%s/%s.mp4", MM_CACHE_DIR, c->token);
     int ok = ((int (*)(id, SEL, id, int))objc_msgSend)(
         data, sel_registerName("writeToFile:atomically:"), nsstr(pathc), 1);
-    unsigned long bytes = ok ? ((unsigned long (*)(id, SEL))objc_msgSend)(
-        data, sel_registerName("length")) : 0UL;
-    mmclog("[mmcache] %s token=%s bytes=%lu -> %s\n", ok ? "OK" : "WRITEFAIL", c->token, bytes, pathc);
-    if (ok) dispatch_done(c->token, (long)bytes); else dispatch_fail(c->token, "write");
+    mmclog("[mmcache] %s token=%s bytes=%lu -> %s\n", ok ? "OK" : "WRITEFAIL", c->token, got, pathc);
+    if (ok) dispatch_done(c->token, (long)got); else dispatch_fail(c->token, "write");
     free(c);
 }
 
