@@ -125,8 +125,17 @@ var GoTime = (function f() {
         _precision: 2e308,
         _lastAcceptTime: null,   // when the offset was last locked (for ?tdbg age only)
         _history: [],
-        _syncInitialTimeouts: [0, 3000, 9000, 18000, 45000],
         _syncInterval: 900000,
+        _fastSyncInterval: 1000,
+        _fastSyncJitterMs: 150,
+        _syncPrecisionTargetMs: 40,
+        _syncPrecisionStreak: 2,
+        _fastSyncCapMs: 60000,
+        _syncPhase: 'fast',
+        _syncStreak: 0,
+        _fastStartMs: null,
+        _syncSampleReturned: false,
+        _syncTimer: null,
         _synchronizing: false,
         _lastSyncTime: null,
         _lastSyncMethod: null,
@@ -171,21 +180,46 @@ var GoTime = (function f() {
     };
 
     _sync = function() {
-        var success;
+        var success = false;
 		if (options._wsCall != null) {
 			options._wsRequestTime = Date.now();
-			success = options._wsCall();
-			if (success) {
-				options._syncCount++;
-				return;
-			}
+			if (options._wsCall()) { options._syncCount++; success = true; }
 		}
-		if (options._ajaxURL != null) {
-			success = _ajaxSample();
-			if (success) {
-				options._syncCount++;
-			}
+		if (!success && options._ajaxURL != null) {
+			if (_ajaxSample()) { options._syncCount++; }
 		}
+		_scheduleAdaptiveSync();
+    };
+
+    // Arm the next _sync. Reads the last cycle's sample precision (a large sentinel
+    // if no sample returned, so a dropped/coarse sample keeps us fast), asks the
+    // pure _nextSyncDelay for the next delay+phase, and applies per-client jitter in
+    // the fast phase only. clearTimeout-before-arm keeps exactly one timer live even
+    // when resync() fires overlapping _sync calls.
+    _scheduleAdaptiveSync = function() {
+        var nowMs = Date.now();
+        if (options._fastStartMs == null) { options._fastStartMs = nowMs; }
+        var effPrec = options._syncSampleReturned ? options._precision : 2e308;
+        var d = _nextSyncDelay({
+            phase: options._syncPhase,
+            precision: effPrec,
+            streak: options._syncStreak,
+            fastElapsedMs: nowMs - options._fastStartMs,
+            opts: {
+                SyncInterval: options._syncInterval,
+                FastSyncInterval: options._fastSyncInterval,
+                SyncPrecisionTargetMs: options._syncPrecisionTargetMs,
+                SyncPrecisionStreak: options._syncPrecisionStreak,
+                FastSyncCapMs: options._fastSyncCapMs
+            }
+        });
+        options._syncPhase = d.phase;
+        options._syncStreak = d.streak;
+        options._syncSampleReturned = false;
+        var delay = d.delayMs;
+        if (d.phase === 'fast') { delay += Math.floor(Math.random() * options._fastSyncJitterMs); }
+        if (options._syncTimer != null) { clearTimeout(options._syncTimer); }
+        options._syncTimer = setTimeout(_sync, delay);
     };
 
     _calculateOffset = function(requestTime, responseTime, serverTime) {
@@ -272,6 +306,7 @@ var GoTime = (function f() {
         if (isNaN(sample.offset) || isNaN(sample.precision)) {
             return;
         }
+        options._syncSampleReturned = true;
         timestamp = GoTime.now();
         options._lastSyncTime = timestamp;
         options._lastSyncMethod = method;
@@ -311,17 +346,15 @@ var GoTime = (function f() {
     };
 	
     _setupSync = function() {
-        var i, len, ref, time;
         if (options._synchronizing === false) {
             options._synchronizing = true;
-            ref = options._syncInitialTimeouts;
-            for (i = 0, len = ref.length; i < len; i++) {
-                time = ref[i];
-                // Initial syncs
-                setTimeout(_sync, time);
-            }
-            // Sync repetitively
-            setInterval(_sync, options._syncInterval);
+            options._syncPhase = 'fast';
+            options._syncStreak = 0;
+            options._fastStartMs = null;
+            options._syncSampleReturned = false;
+            // Initial short kick (preserves the old 500ms first-sample latency); every
+            // sample after this is scheduled adaptively by _sync -> _scheduleAdaptiveSync.
+            options._syncTimer = setTimeout(_sync, 500);
         }
     };
 
@@ -376,12 +409,14 @@ var GoTime = (function f() {
 			if (opts.AjaxURL != null) {
 				options._ajaxURL = opts.AjaxURL;
 			}
-			if (opts.SyncInitialTimeouts != null) {
-				options._syncInitialTimeouts = opts.SyncInitialTimeouts;
-			}
 			if (opts.SyncInterval != null) {
 				options._syncInterval = opts.SyncInterval;
 			}
+			if (opts.FastSyncInterval != null) { options._fastSyncInterval = opts.FastSyncInterval; }
+			if (opts.FastSyncJitterMs != null) { options._fastSyncJitterMs = opts.FastSyncJitterMs; }
+			if (opts.SyncPrecisionTargetMs != null) { options._syncPrecisionTargetMs = opts.SyncPrecisionTargetMs; }
+			if (opts.SyncPrecisionStreak != null) { options._syncPrecisionStreak = opts.SyncPrecisionStreak; }
+			if (opts.FastSyncCapMs != null) { options._fastSyncCapMs = opts.FastSyncCapMs; }
             if (opts.SteerDeadbandMs != null) { options._steerDeadbandMs = opts.SteerDeadbandMs; }
             if (opts.SteerSnapMs != null) { options._steerSnapMs = opts.SteerSnapMs; }
             if (opts.SteerCapMsPerSec != null) { options._steerCapMsPerSec = opts.SteerCapMsPerSec; }
