@@ -368,61 +368,6 @@
 		// samples, not just at item boundaries). Only under ?tdbg.
 		setInterval(function () { if (playback.active) { dbg('hb'); } }, 1000);
 
-		// ---- Playback watchdog (poll-based) --------------------------------------
-		// The single detector for BOTH failure modes: verr AND the silent rs=0 stall
-		// (which fires no 'error' event). A stalled cached clip escalates
-		// retry -> recache(self-pull) -> black; it NEVER falls to central (central is
-		// a fleet-scale black hole). See docs/superpowers/specs/2026-07-10-mmvideo-watchdog-design.md
-		var _wdSrc = null, _wdLastCt = -1, _wdRetries = 0, _wdRecaches = 0,
-		    _wdClipStart = 0, _wdRecachePending = null, _wdDead = false;
-		function _wdReset(src) {
-			_wdSrc = src; _wdRetries = 0; _wdRecaches = 0; _wdLastCt = -1;
-			_wdRecachePending = null; _wdDead = false; _wdClipStart = Date.now();
-		}
-		function _wdKick(v) {
-			try { v.load(); } catch (e) {}
-			try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e2) {}
-		}
-		function _wdRecache(v, src) {
-			if (!window.mmCache || src.indexOf('127.0.0.1') === -1) { return; }  // no local URL -> can't self-pull
-			var m = src.match(/seg_[a-f0-9]+_\d+/);
-			if (!m) { return; }
-			var token = m[0];
-			var central = 'http://' + window.location.host + '/media/' + udid + '/videos/' + token + '.mp4';
-			_wdRecachePending = token;
-			mmCache.handlePrecache({ group: (window._mmDisplayID || 'self'), url: central, token: token });
-		}
-		function _watchdogTick() {
-			var v = playback.pvid;
-			var src = (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')) : null;
-			var shouldPlay = !!(playback.active && v && src && v.style.display !== 'none');
-			if (!shouldPlay) { if (_wdSrc !== null) { _wdReset(null); } return; }
-			if (src !== _wdSrc) { _wdReset(src); }
-			if ((Date.now() - _wdClipStart) < WATCHDOG_START_GRACE_MS) {
-				_wdLastCt = v.currentTime ? Math.round(v.currentTime * 1000) : 0; return;
-			}
-			if (_wdRecachePending) {
-				var st = window.mmCache ? mmCache.state(_wdRecachePending) : 'none';
-				if (st === 'cached') { _wdRecachePending = null; _wdClipStart = Date.now(); _wdKick(v); return; }
-				if (st === 'failed') { _wdRecachePending = null; }
-				else { return; }  // still pulling
-			}
-			var ct = v.currentTime ? Math.round(v.currentTime * 1000) : 0;
-			var verr = v.error ? v.error.code : null;
-			// abs() so a loop-wrap (currentTime resets to 0) still counts as advancing.
-			var decoding = (verr == null || verr === 0) && v.readyState >= 2
-			    && Math.abs(ct - _wdLastCt) > WATCHDOG_CT_MIN_ADVANCE_MS;
-			_wdLastCt = ct;
-			var action = mmVideoRecovery.mmWatchdogAction({
-				shouldPlay: true, decoding: decoding, retries: _wdRetries, recaches: _wdRecaches,
-				maxRetries: WATCHDOG_MAX_RETRIES, maxRecaches: WATCHDOG_MAX_RECACHES });
-			if (action === 'ok') { _wdRetries = 0; _wdRecaches = 0; _wdDead = false; return; }
-			if (action === 'retry') { _wdRetries++; if (typeof dbg === 'function') { dbg('wd-retry'); } _wdKick(v); return; }
-			if (action === 'recache') { _wdRecaches++; if (typeof dbg === 'function') { dbg('wd-recache'); } _wdRecache(v, src); return; }
-			if (!_wdDead) { _wdDead = true; if (typeof dbg === 'function') { dbg('wd-dead'); } }
-		}
-		setInterval(_watchdogTick, WATCHDOG_INTERVAL_MS);
-
 		// Catch EVERY uncaught error on the device (not just the one wrapped in
 		// runScriptLoop's draw try/catch). Routes to the server -v log as a
 		// CLIENTLOG 'jserror' line. ES5 / iOS 5 safe (5-arg window.onerror).
@@ -460,6 +405,61 @@
 				ua: ('' + navigator.userAgent).slice(0, 40) });
 		}, 500);
 	}
+
+	// ---- Playback watchdog (poll-based) --------------------------------------
+	// The single detector for BOTH failure modes: verr AND the silent rs=0 stall
+	// (which fires no 'error' event). A stalled cached clip escalates
+	// retry -> recache(self-pull) -> black; it NEVER falls to central (central is
+	// a fleet-scale black hole). See docs/superpowers/specs/2026-07-10-mmvideo-watchdog-design.md
+	var _wdSrc = null, _wdLastCt = -1, _wdRetries = 0, _wdRecaches = 0,
+	    _wdClipStart = 0, _wdRecachePending = null, _wdDead = false;
+	function _wdReset(src) {
+		_wdSrc = src; _wdRetries = 0; _wdRecaches = 0; _wdLastCt = -1;
+		_wdRecachePending = null; _wdDead = false; _wdClipStart = Date.now();
+	}
+	function _wdKick(v) {
+		try { v.load(); } catch (e) {}
+		try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e2) {}
+	}
+	function _wdRecache(v, src) {
+		if (!window.mmCache || src.indexOf('127.0.0.1') === -1) { return; }  // no local URL -> can't self-pull
+		var m = src.match(/seg_[a-f0-9]+_\d+/);
+		if (!m) { return; }
+		var token = m[0];
+		var central = 'http://' + window.location.host + '/media/' + udid + '/videos/' + token + '.mp4';
+		_wdRecachePending = token;
+		mmCache.handlePrecache({ group: (window._mmDisplayID || 'self'), url: central, token: token });
+	}
+	function _watchdogTick() {
+		var v = playback.pvid;
+		var src = (v && v.getAttribute('src')) ? ('' + v.getAttribute('src')) : null;
+		var shouldPlay = !!(playback.active && v && src && v.style.display !== 'none');
+		if (!shouldPlay) { if (_wdSrc !== null) { _wdReset(null); } return; }
+		if (src !== _wdSrc) { _wdReset(src); }
+		if ((Date.now() - _wdClipStart) < WATCHDOG_START_GRACE_MS) {
+			_wdLastCt = v.currentTime ? Math.round(v.currentTime * 1000) : 0; return;
+		}
+		if (_wdRecachePending) {
+			var st = window.mmCache ? mmCache.state(_wdRecachePending) : 'none';
+			if (st === 'cached') { _wdRecachePending = null; _wdClipStart = Date.now(); _wdKick(v); return; }
+			if (st === 'failed') { _wdRecachePending = null; }
+			else { return; }  // still pulling
+		}
+		var ct = v.currentTime ? Math.round(v.currentTime * 1000) : 0;
+		var verr = v.error ? v.error.code : null;
+		// abs() so a loop-wrap (currentTime resets to 0) still counts as advancing.
+		var decoding = (verr == null || verr === 0) && v.readyState >= 2
+		    && Math.abs(ct - _wdLastCt) > WATCHDOG_CT_MIN_ADVANCE_MS;
+		_wdLastCt = ct;
+		var action = mmVideoRecovery.mmWatchdogAction({
+			shouldPlay: true, decoding: decoding, retries: _wdRetries, recaches: _wdRecaches,
+			maxRetries: WATCHDOG_MAX_RETRIES, maxRecaches: WATCHDOG_MAX_RECACHES });
+		if (action === 'ok') { _wdRetries = 0; _wdRecaches = 0; _wdDead = false; return; }
+		if (action === 'retry') { _wdRetries++; if (typeof dbg === 'function') { dbg('wd-retry'); } _wdKick(v); return; }
+		if (action === 'recache') { _wdRecaches++; if (typeof dbg === 'function') { dbg('wd-recache'); } _wdRecache(v, src); return; }
+		if (!_wdDead) { _wdDead = true; if (typeof dbg === 'function') { dbg('wd-dead'); } }
+	}
+	if (!window._mmWatchdogStarted) { window._mmWatchdogStarted = true; setInterval(_watchdogTick, WATCHDOG_INTERVAL_MS); }
 
 	// JS mirror of server.playlist_index — keep the two in sync.
 	function playlistIndex(elapsedMs, durations, loop) {
