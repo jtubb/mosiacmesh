@@ -325,6 +325,26 @@ var GoTime = (function f() {
         }
     };
 
+    // Pure fast->slow cadence decision. Given the current phase, the effective
+    // precision of the last cycle's sample (a large sentinel when none returned),
+    // the good-sample streak so far, and ms elapsed in the fast phase, return the
+    // next {delayMs, phase, streak}. No Date / Math.random / timers here — the
+    // scheduler wrapper owns those. See docs/superpowers/specs/2026-07-10-sync-cadence-adaptive-design.md
+    _nextSyncDelay = function(state) {
+        var o = state.opts;
+        if (state.phase === 'slow') {
+            return { delayMs: o.SyncInterval, phase: 'slow', streak: state.streak };
+        }
+        var nextStreak = (state.precision <= o.SyncPrecisionTargetMs) ? (state.streak + 1) : 0;
+        if (nextStreak >= o.SyncPrecisionStreak) {
+            return { delayMs: o.SyncInterval, phase: 'slow', streak: nextStreak };
+        }
+        if (state.fastElapsedMs >= o.FastSyncCapMs) {
+            return { delayMs: o.SyncInterval, phase: 'slow', streak: nextStreak };
+        }
+        return { delayMs: o.FastSyncInterval, phase: 'fast', streak: nextStreak };
+    };
+
 	return {
 		// Public Getters
 		now: function() {
@@ -445,7 +465,8 @@ var GoTime = (function f() {
 
 		steerTick: function() { return _steerTick(); },
 		_steerStep: _steerStep,
-		_robustTarget: _robustTarget
+		_robustTarget: _robustTarget,
+		_nextSyncDelay: _nextSyncDelay
 	}
-    
+
 })();
