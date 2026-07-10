@@ -251,7 +251,14 @@ def reconcile_group_cache(display_id):
 def _reconcile_all_group_caches():
     """Run the per-group cache fill-reconcile for every display group. Called
     once per process() cycle. Per-group errors are isolated so one bad group
-    never stalls the loop."""
+    never stalls the loop.
+
+    PAUSED BY DEFAULT: gated behind MM_CACHE_RECONCILE because the client-pull
+    cache-write can produce unplayable local copies on iPad-1 at scale (verr=3
+    decode errors) that the reconcile then propagates fleet-wide. Set
+    MM_CACHE_RECONCILE=1 to re-enable once the pull/cache-write is verified reliable."""
+    if os.environ.get("MM_CACHE_RECONCILE") not in ("1", "on", "true", "yes"):
+        return
     for _did in list(settings.displays.keys()):
         try:
             reconcile_group_cache(_did)

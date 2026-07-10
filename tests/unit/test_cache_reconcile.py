@@ -110,6 +110,7 @@ def test_reconcile_noop_when_nothing_missing(fresh_settings, monkeypatch):
     assert called == []
 
 def test_reconcile_all_calls_each_group_and_isolates_errors(fresh_settings, monkeypatch):
+    monkeypatch.setenv("MM_CACHE_RECONCILE", "1")   # enable the gated reconcile
     fresh_settings.displays["G1"] = Display()
     fresh_settings.displays["G2"] = Display()
     seen = []
@@ -120,3 +121,12 @@ def test_reconcile_all_calls_each_group_and_isolates_errors(fresh_settings, monk
     monkeypatch.setattr(server, "reconcile_group_cache", _fake)
     server._reconcile_all_group_caches()   # must not raise
     assert set(seen) == {"G1", "G2"}
+
+
+def test_reconcile_all_is_off_by_default(fresh_settings, monkeypatch):
+    monkeypatch.delenv("MM_CACHE_RECONCILE", raising=False)   # unset -> paused
+    fresh_settings.displays["G1"] = Display()
+    called = []
+    monkeypatch.setattr(server, "reconcile_group_cache", lambda did: called.append(did))
+    server._reconcile_all_group_caches()
+    assert called == []   # gated off; no reconcile runs
