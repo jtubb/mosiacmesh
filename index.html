@@ -209,7 +209,7 @@
 				v.style.zIndex = '1';
 				v.addEventListener('playing', function () {
 					playback.activated = true; hideTapStart();
-					v._armRetryN = 0;  // armed OK -> forget arm-error retries
+					v._armRetryN = 0; v._armRecacheN = 0;  // armed OK -> forget arm-error retries/recaches
 					if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); v._armRetryTimer = null; }
 				});
 				// Arm-phase recovery: the poll watchdog is gated on playback.active, so it
@@ -221,18 +221,31 @@
 					try {
 						var s = '' + (v.currentSrc || v.src || '');
 						var isLocal = s.indexOf('127.0.0.1') !== -1;
-						if (isLocal && s !== v._armSrc) { v._armSrc = s; v._armRetryN = 0; }
+						if (isLocal && s !== v._armSrc) { v._armSrc = s; v._armRetryN = 0; v._armRecacheN = 0; }
 						var action = mmVideoRecovery.mmArmRetryAction({
-							active: playback.active, isLocal: isLocal, retries: v._armRetryN || 0, maxRetries: ARM_MAX_RETRIES });
-						if (action !== 'retry') { return; }
-						v._armRetryN = (v._armRetryN || 0) + 1;
-						if (typeof dbg === 'function') { dbg('arm-retry'); }
+							active: playback.active, isLocal: isLocal,
+							retries: v._armRetryN || 0, recaches: v._armRecacheN || 0,
+							maxRetries: ARM_MAX_RETRIES, maxRecaches: ARM_MAX_RECACHES });
+						if (action === 'skip') { return; }
+						var delay;
+						if (action === 'recache') {
+							// retry budget exhausted -> the seg is likely genuinely missing: re-pull it.
+							v._armRecacheN = (v._armRecacheN || 0) + 1;
+							if (typeof dbg === 'function') { dbg('arm-recache'); }
+							_mmSelfPull(v, s);
+							delay = ARM_RECACHE_RELOAD_MS;   // longer settle so the pull lands before the re-attempt
+						} else {  // 'retry'
+							v._armRetryN = (v._armRetryN || 0) + 1;
+							if (typeof dbg === 'function') { dbg('arm-retry'); }
+							delay = ARM_RETRY_BACKOFF_MS;
+						}
 						if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); }
 						v._armRetryTimer = setTimeout(function () {
 							v._armRetryTimer = null;
+							// iOS-5 needs load()+play() together to (re)start a held/errored element.
 							try { v.load(); } catch (e2) {}
 							try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e3) {}
-						}, ARM_RETRY_BACKOFF_MS);
+						}, delay);
 					} catch (e) { /* best-effort */ }
 				});
 				return v;
@@ -263,6 +276,10 @@
 	// covers active playback, so an arm-time error is retried here instead.
 	var ARM_MAX_RETRIES = 3;
 	var ARM_RETRY_BACKOFF_MS = 500;
+	// Arm-phase recache: after the retry budget, re-pull a genuinely-missing seg (self-pull)
+	// this many times, then reload after a longer settle so the pull lands. Then NEEDS_ARM.
+	var ARM_MAX_RECACHES = 1;
+	var ARM_RECACHE_RELOAD_MS = 2500;
 	var KEYFRAME_GRID_MS = 250;  // MUST match server KEYFRAME_GRID_SEC (0.25s): drift
 	                             // re-aligns by seeking to this keyframe grid so iOS-5
 	                             // (keyframe-accurate seek) and modern clients land on
@@ -452,14 +469,21 @@
 		try { v.load(); } catch (e) {}
 		try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e2) {}
 	}
-	function _wdRecache(v, src) {
-		if (!window.mmCache || src.indexOf('127.0.0.1') === -1) { return; }  // no local URL -> can't self-pull
+	// Shared client self-pull: re-fetch a cached seg from central into the local cache.
+	// Returns the seg token (or null if the src isn't a parseable 127.0.0.1 cached URL).
+	// Used by the poll watchdog's recache AND the arm-phase recache.
+	function _mmSelfPull(v, src) {
+		if (!window.mmCache || src.indexOf('127.0.0.1') === -1) { return null; }
 		var m = src.match(/seg_[a-f0-9]+_\d+/);
-		if (!m) { return; }
+		if (!m) { return null; }
 		var token = m[0];
 		var central = 'http://' + window.location.host + '/media/' + udid + '/videos/' + token + '.mp4';
-		_wdRecachePending = token;
 		mmCache.handlePrecache({ group: (window._mmDisplayID || 'self'), url: central, token: token });
+		return token;
+	}
+	function _wdRecache(v, src) {
+		var t = _mmSelfPull(v, src);
+		if (t) { _wdRecachePending = t; }
 	}
 	function _watchdogTick() {
 		var v = playback.pvid;
