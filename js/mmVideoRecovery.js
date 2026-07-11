@@ -17,18 +17,21 @@
     return 'dead';
   };
 
-  // state = { active, isLocal, retries, maxRetries }
+  // state = { active, isLocal, retries, recaches, maxRetries, maxRecaches }
   // Arm-phase (pre-playback) <video> error recovery. The poll watchdog above is gated
   // on playback.active, so it does NOT cover ARM; an arm-time error fires the 'error'
-  // event and is handled here. Retry the local load a few times; when exhausted, skip
-  // (the client's existing NEEDS_ARM / tap-to-start path takes over — NEVER central).
-  //   active true                 -> 'skip'  (active playback: the poll watchdog owns it)
-  //   not local                   -> 'skip'  (central/other error: not our concern)
-  //   local, retries < maxRetries -> 'retry'
-  //   otherwise                   -> 'skip'
+  // event and is handled here. Retry the local load a few times; when retries exhausted,
+  // try self-pull (recache); when both exhausted, skip (the client's existing NEEDS_ARM /
+  // tap-to-start path takes over — NEVER central).
+  //   active true                   -> 'skip'  (active playback: the poll watchdog owns it)
+  //   not local                     -> 'skip'  (central/other error: not our concern)
+  //   local, retries < maxRetries   -> 'retry'
+  //   local, recaches < maxRecaches -> 'recache'
+  //   otherwise                     -> 'skip'
   mmVideoRecovery.mmArmRetryAction = function (state) {
     if (!state || state.active || !state.isLocal) { return 'skip'; }
     if (state.retries < state.maxRetries) { return 'retry'; }
+    if (state.recaches < state.maxRecaches) { return 'recache'; }
     return 'skip';
   };
 

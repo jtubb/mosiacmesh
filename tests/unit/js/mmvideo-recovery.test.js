@@ -45,23 +45,27 @@ test('watchdog: missing state -> ok (defensive)', () => {
 // --- arm-phase error recovery (the poll watchdog is gated on playback.active, so it
 // does NOT cover the pre-playback ARM phase; an arm-time <video> error is handled here) ---
 const AR = loadRecovery().mmArmRetryAction;
-const ARMAX = { maxRetries: 3 };
+const ARMAX = { maxRetries: 3, maxRecaches: 1 };
 
 test('arm: active -> skip (poll watchdog owns active playback)', () => {
-  assert.strictEqual(AR({ active: true, isLocal: true, retries: 0, ...ARMAX }), 'skip');
+  assert.strictEqual(AR({ active: true, isLocal: true, retries: 0, recaches: 0, ...ARMAX }), 'skip');
 });
 
 test('arm: non-local src -> skip', () => {
-  assert.strictEqual(AR({ active: false, isLocal: false, retries: 0, ...ARMAX }), 'skip');
+  assert.strictEqual(AR({ active: false, isLocal: false, retries: 0, recaches: 0, ...ARMAX }), 'skip');
 });
 
 test('arm: arming (not active) + local + retries below max -> retry', () => {
-  assert.strictEqual(AR({ active: false, isLocal: true, retries: 0, ...ARMAX }), 'retry');
-  assert.strictEqual(AR({ active: false, isLocal: true, retries: 2, ...ARMAX }), 'retry'); // max-1
+  assert.strictEqual(AR({ active: false, isLocal: true, retries: 0, recaches: 0, ...ARMAX }), 'retry');
+  assert.strictEqual(AR({ active: false, isLocal: true, retries: 2, recaches: 0, ...ARMAX }), 'retry'); // max-1
 });
 
-test('arm: retries exhausted -> skip (NEEDS_ARM/black takes over, never central)', () => {
-  assert.strictEqual(AR({ active: false, isLocal: true, retries: 3, ...ARMAX }), 'skip'); // ==max
+test('arm: retries exhausted, recaches below max -> recache', () => {
+  assert.strictEqual(AR({ active: false, isLocal: true, retries: 3, recaches: 0, ...ARMAX }), 'recache'); // ==maxRetries
+});
+
+test('arm: retries + recaches exhausted -> skip (NEEDS_ARM, never central)', () => {
+  assert.strictEqual(AR({ active: false, isLocal: true, retries: 3, recaches: 1, ...ARMAX }), 'skip'); // ==both
 });
 
 test('arm: missing state -> skip (defensive)', () => {
