@@ -95,9 +95,13 @@ def handle_cache_ack(msg):
     src = msg.get("SRC")
     token = (msg.get("PAYLOAD") or {}).get("token")
     group = getattr(_server, "precache_group", {}).get(src)
-    if msg["REQUEST"] == "CACHED":
-        # Mark the segment cached on the Client so _per_client_items rewrites its item to
-        # the local http://127.0.0.1:8080/<segname>.mp4 URL (the play-from-local path).
+    req = msg["REQUEST"]
+    if req in ("CACHED", "CACHE_FAILED"):
+        # Keep cachedSegments honest. CACHED -> the device holds the seg, so
+        # _per_client_items can rewrite its item to the local
+        # http://127.0.0.1:8080/<segname>.mp4 URL. CACHE_FAILED -> the (re)pull failed,
+        # so the seg is NOT cached: remove it (a device that lost a local file was
+        # previously stuck 'cached' forever, which mis-routed serves to a 404).
         # cachedSegments holds seg keys: 'seg_<rt>_<i>' -> '<rt>_<i>' (strip 'seg_');
         # 'full_<rt>_<i>' stays verbatim (that's the key _per_client_items checks).
         settings = getattr(_server, "settings", None)
@@ -108,7 +112,10 @@ def handle_cache_ack(msg):
             if not isinstance(cs, set):
                 cs = set(cs) if cs else set()
                 client.cachedSegments = cs
-            cs.add(segkey)
+            if req == "CACHED":
+                cs.add(segkey)
+            else:
+                cs.discard(segkey)   # discard of an absent key is a safe no-op
     win = getattr(_server, "precache_windows", {}).get(group)
     if win is not None:
         nxt = win.advance(src, time.time())

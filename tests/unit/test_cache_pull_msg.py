@@ -36,3 +36,14 @@ def test_cache_failed_advances_window_without_marking(monkeypatch):
     legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_FAILED", "PAYLOAD": {"token": "seg_T1_0"}})
     assert "T1_0" not in srv.settings.clients["a"].cachedSegments   # failed -> not cached
     assert sent[0][0] == "b"                          # still advances to the next client
+
+def test_cache_failed_removes_present_segment(monkeypatch):
+    sent = []
+    srv = _make_server(sent)
+    # Seed the STALE state: the record claims "a" holds T1_0, but the device lost it.
+    srv.settings.clients["a"].cachedSegments = {"T1_0"}
+    monkeypatch.setattr(legacy, "server", srv, raising=False)
+    srv.precache_windows["G1"].start()               # a active
+    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_FAILED", "PAYLOAD": {"token": "seg_T1_0"}})
+    assert "T1_0" not in srv.settings.clients["a"].cachedSegments   # failed pull -> record corrected
+    assert sent[0][0] == "b"                                        # still advances the window
