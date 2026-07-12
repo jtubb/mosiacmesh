@@ -49,6 +49,7 @@ const MODULES = [
   'js/timeline/modals/calibration.js',
   'js/timeline/track-header-context-menu.js',
   'js/timeline/modals/fleet-confirm.js',
+  'js/timeline/modals/confirm-modal.js',
   'js/timeline/modals/play-now.js',
   'js/timeline/now-summary.js',
   'js/timeline/shell/router.js',
