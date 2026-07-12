@@ -71,3 +71,29 @@ test('arm: retries + recaches exhausted -> skip (NEEDS_ARM, never central)', () 
 test('arm: missing state -> skip (defensive)', () => {
   assert.strictEqual(AR(null), 'skip');
 });
+
+// --- arm recache poll decision: poll mmCache.state until the self-pull terminates.
+// 'cached' -> re-arm the arming element; 'failed' -> give up (NEEDS_ARM, never central);
+// 'pending'/'none'/unknown -> keep waiting (no wall-clock bound -> any seg size). ---
+const RP = loadRecovery().mmRecachePollAction;
+
+test('recache-poll: cached -> rearm', () => {
+  assert.strictEqual(RP('cached'), 'rearm');
+});
+
+test('recache-poll: failed -> giveup', () => {
+  assert.strictEqual(RP('failed'), 'giveup');
+});
+
+test('recache-poll: pending -> wait (download in progress)', () => {
+  assert.strictEqual(RP('pending'), 'wait');
+});
+
+test('recache-poll: none -> wait', () => {
+  assert.strictEqual(RP('none'), 'wait');
+});
+
+test('recache-poll: unknown/undefined -> wait (defensive)', () => {
+  assert.strictEqual(RP(undefined), 'wait');
+  assert.strictEqual(RP('weird'), 'wait');
+});

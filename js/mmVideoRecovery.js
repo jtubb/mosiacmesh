@@ -35,6 +35,17 @@
     return 'skip';
   };
 
+  // cacheState = 'none' | 'pending' | 'cached' | 'failed'  (from mmCache.state)
+  // Poll decision for a pending arm-phase recache self-pull:
+  //   'cached' -> 'rearm'  (seg landed; the arm listener does load()+play())
+  //   'failed' -> 'giveup' (pull errored; fall to NEEDS_ARM/tap — NEVER central)
+  //   else     -> 'wait'   ('pending' download in progress, or 'none'; keep polling — no time bound)
+  mmVideoRecovery.mmRecachePollAction = function (cacheState) {
+    if (cacheState === 'cached') { return 'rearm'; }
+    if (cacheState === 'failed') { return 'giveup'; }
+    return 'wait';
+  };
+
   root.mmVideoRecovery = mmVideoRecovery;
   if (typeof module !== 'undefined' && module.exports) { module.exports = mmVideoRecovery; }
 })(typeof window !== 'undefined' ? window : global);
