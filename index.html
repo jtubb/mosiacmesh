@@ -1805,6 +1805,15 @@
 				// evict-on-supersede scopes per group inside mmCache.handlePrecache.
 				mmCache.handlePrecache({ group: (window._mmDisplayID || 'self'), url: data_obj.PAYLOAD.url, token: data_obj.PAYLOAD.token });
 			}
+			else if (data_obj.REQUEST === 'CLEAR_CACHE' && window.mmCache) {
+				// Admin cleared this group's cache: wipe the local cache (backend.clear)
+				// + reset mmCache bookkeeping. Segments re-pull on next play (auto-render
+				// + reconcile + arm-recache). Best-effort log for the server.
+				mmCache.clear();
+				if (sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN) {
+					sock.send(generateMessage('SRV', 'CLIENTLOG', { msg: 'mmcache-cleared' }));
+				}
+			}
 		}
 	}
 

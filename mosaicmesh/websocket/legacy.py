@@ -559,6 +559,32 @@ def msg_response(msg,session):
                 {"DEST": "ALL", "REQUEST": "RELOAD", "PAYLOAD": "NONE"}))
         response["PAYLOAD"] = "SUCCESS"
 
+    elif(msg["REQUEST"] == "CLEAR_CACHE"):
+        # Admin command: wipe the cached render segments on a group's devices AND clear
+        # the server's per-client cachedSegments record (so _resolve_media_url stops
+        # routing to a now-deleted localhost seg). Scopes mirror RELOAD:
+        #   PAYLOAD.clientKey -> one device; PAYLOAD.displayID -> that group; else -> all.
+        payload = msg.get("PAYLOAD") or {}
+        client_key = payload.get("clientKey") if isinstance(payload, dict) else None
+        display_id = payload.get("displayID") if isinstance(payload, dict) else None
+        if client_key:
+            keys = [client_key] if client_key in server.settings.clients else []
+        elif display_id:
+            keys = [k for k, c in server.settings.clients.items()
+                    if getattr(c, "displayID", None) == display_id]
+        else:
+            keys = list(server.settings.clients.keys())
+        for k in keys:
+            broadcast_to_client(k, {"REQUEST": "CLEAR_CACHE", "PAYLOAD": "NONE"})
+            c = server.settings.clients.get(k)
+            cs = getattr(c, "cachedSegments", None) if c is not None else None
+            if isinstance(cs, set):
+                cs.clear()
+            elif c is not None:
+                c.cachedSegments = set()
+        logging.warning("CLEAR_CACHE -> %d device(s)", len(keys))
+        response["PAYLOAD"] = {"status": "SUCCESS", "count": len(keys)}
+
     elif(msg["REQUEST"] == "RUN_SCRIPT"):
         # Admin command: run a device lifecycle script over SSH. PAYLOAD =
         # {script: "login"|"start"|"stop"|"reboot"} plus a target: {clientKey} for
