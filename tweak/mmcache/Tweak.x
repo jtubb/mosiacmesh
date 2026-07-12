@@ -159,9 +159,9 @@ static void handle_mmcache(const char *url) {
             (id)objc_getClass("NSFileManager"), sel_registerName("defaultManager"));
         ((int (*)(id, SEL, id, id *))objc_msgSend)(
             fm, sel_registerName("removeItemAtPath:error:"), nsstr(MM_CACHE_DIR), (id *)0);
-        ((int (*)(id, SEL, id, int, id, id))objc_msgSend)(
+        ((int (*)(id, SEL, id, int, id, id *))objc_msgSend)(
             fm, sel_registerName("createDirectoryAtPath:withIntermediateDirectories:attributes:error:"),
-            nsstr(MM_CACHE_DIR), 1, (id)0, (id)0);
+            nsstr(MM_CACHE_DIR), 1, (id)0, (id *)0);
         mmclog("[mmcache] clearall -> wiped %s\n", MM_CACHE_DIR);
         return;
     }
