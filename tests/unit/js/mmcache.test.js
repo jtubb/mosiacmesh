@@ -133,6 +133,7 @@ test('clear: delegates to backend.clear and resets token bookkeeping', function 
   assert.strictEqual(doneCalled, true);
   assert.strictEqual(mmCache._order.length, 0);
   assert.strictEqual(Object.keys(mmCache._tokens).length, 0);
+  assert.strictEqual(mmCache.state('seg_T1_0'), 'none');  // _tokens truly reset (was 'pending')
 });
 
 test('clear: no backend (or backend without clear) just resets + calls onDone', function () {
@@ -143,4 +144,5 @@ test('clear: no backend (or backend without clear) just resets + calls onDone', 
   mmCache.clear(function () { doneCalled = true; });   // backend is null
   assert.strictEqual(doneCalled, true);
   assert.strictEqual(mmCache._order.length, 0);
+  assert.strictEqual(mmCache.state('seg_T1_0'), 'none');  // _tokens truly reset (was 'pending')
 });
