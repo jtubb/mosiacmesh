@@ -118,3 +118,29 @@ test('handlePrecache: success acks CACHED; failure acks CACHE_FAILED', function 
   assert.deepStrictEqual(acks, [['CACHE_FAILED', 'T2']]);
   assert.strictEqual(mmCache.state('T2'), 'failed');
 });
+
+test('clear: delegates to backend.clear and resets token bookkeeping', function () {
+  const mmCache = loadMmCache();
+  mmCache._reset();
+  let cleared = false;
+  const b = mockBackend();
+  b.clear = function (onDone) { cleared = true; if (onDone) onDone(); };
+  mmCache.registerBackend(b);
+  mmCache._recordToken('seg_T1_0', 'G1');           // seed state
+  let doneCalled = false;
+  mmCache.clear(function () { doneCalled = true; });
+  assert.strictEqual(cleared, true);
+  assert.strictEqual(doneCalled, true);
+  assert.strictEqual(mmCache._order.length, 0);
+  assert.strictEqual(Object.keys(mmCache._tokens).length, 0);
+});
+
+test('clear: no backend (or backend without clear) just resets + calls onDone', function () {
+  const mmCache = loadMmCache();
+  mmCache._reset();
+  mmCache._recordToken('seg_T1_0', 'G1');
+  let doneCalled = false;
+  mmCache.clear(function () { doneCalled = true; });   // backend is null
+  assert.strictEqual(doneCalled, true);
+  assert.strictEqual(mmCache._order.length, 0);
+});

@@ -44,6 +44,11 @@
       delete _present[token];
       _nav('mmcache://evict?token=' + encodeURIComponent(token));
     },
+    clear: function (onDone, onFail) {
+      _present = {};
+      _nav('mmcache://clearall');       // native wipes the MosaicMeshCache dir; fire-and-forget
+      if (onDone) { onDone(); }
+    },
     has: function (token) { return _present.hasOwnProperty(token); },
     size: function (token) { return _present[token] || 0; }
   };

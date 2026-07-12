@@ -26,6 +26,12 @@
       var cs = _caches();
       if (cs && url) { cs.open(CACHE_NAME).then(function (c) { c['delete'](url); })['catch'](function () {}); }
     },
+    clear: function (onDone, onFail) {
+      var cs = _caches();
+      if (!cs) { if (onFail) { onFail('no-cache-api'); } return; }
+      cs['delete'](CACHE_NAME).then(function () { _present = {}; if (onDone) { onDone(); } })
+        ['catch'](function () { if (onFail) { onFail('delete-failed'); } });
+    },
     has: function (token) { return _present.hasOwnProperty(token); },
     size: function (token) { return _present.hasOwnProperty(token) ? 1 : 0; }
   };

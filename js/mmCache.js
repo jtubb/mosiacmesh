@@ -73,6 +73,21 @@
     return null;
   };
 
+  // Clear the ENTIRE device cache: delegate to the backend's complete wipe (Modern:
+  // caches.delete; mmvideo: native mmcache://clearall), then reset the coordinator's
+  // token bookkeeping so mmCache.state() reports 'none' for every prior token. A backend
+  // without clear() (old build) still resets the JS state. Fire-and-forget-friendly.
+  mmCache.clear = function (onDone, onFail) {
+    var b = mmCache.backend;
+    function done() {
+      mmCache._tokens = {};
+      mmCache._order.length = 0;
+      if (onDone) { onDone(); }
+    }
+    if (!b || !b.clear) { done(); return; }
+    b.clear(done, function (reason) { if (onFail) { onFail(reason); } });
+  };
+
   mmCache.onAck = null;   // client wires this to sendMsg("SRV", req, payload)
 
   mmCache.handlePrecache = function (msg) {

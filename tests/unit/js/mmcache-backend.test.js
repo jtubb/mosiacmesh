@@ -57,3 +57,16 @@ test('fetchToCache rejects on __mmCacheFail; evict clears + navigates', function
   assert.strictEqual(b.has('T5'), false);
   assert.ok(navs.some(function (u) { return u.indexOf('mmcache://evict?token=T5') === 0; }));
 });
+
+test('mmvideo backend: clear() navigates mmcache://clearall + resets _present', function () {
+  const { w, navs } = loadBackend();
+  const b = w._mmCacheBackendMmvideo;
+  b.fetchToCache('http://c/seg-a.mp4', 'T1', function () {}, function () {});
+  w.__mmCacheDone('T1', 999);
+  assert.strictEqual(b.has('T1'), true);
+  let done = false;
+  b.clear(function () { done = true; }, function () {});
+  assert.ok(navs.indexOf('mmcache://clearall') !== -1);
+  assert.strictEqual(done, true);
+  assert.strictEqual(b.has('T1'), false);
+});
