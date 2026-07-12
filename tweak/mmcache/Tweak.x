@@ -152,6 +152,19 @@ static void handle_mmcache(const char *url) {
     while (*p && *p != '?' && oi < 15) op[oi++] = *p++;
     op[oi] = 0;
     const char *query = (*p == '?') ? p + 1 : "";
+    if (strncmp(op, "clearall", 8) == 0) {
+        /* Wipe the whole cache dir (no token). Remove the dir, then recreate it empty so
+           lighttpd on :8080 still has a docroot. Foundation-only, runtime messaging. */
+        id fm = ((id (*)(id, SEL))objc_msgSend)(
+            (id)objc_getClass("NSFileManager"), sel_registerName("defaultManager"));
+        ((int (*)(id, SEL, id, id *))objc_msgSend)(
+            fm, sel_registerName("removeItemAtPath:error:"), nsstr(MM_CACHE_DIR), (id *)0);
+        ((int (*)(id, SEL, id, int, id, id))objc_msgSend)(
+            fm, sel_registerName("createDirectoryAtPath:withIntermediateDirectories:attributes:error:"),
+            nsstr(MM_CACHE_DIR), 1, (id)0, (id)0);
+        mmclog("[mmcache] clearall -> wiped %s\n", MM_CACHE_DIR);
+        return;
+    }
     char token[128]; token[0] = 0;
     { const char *a = strstr(query, "token="); if (a) { a += 6; const char *e = strchr(a, '&');
         size_t l = e ? (size_t)(e - a) : strlen(a); pct_decode(a, l, token, sizeof token); } }
