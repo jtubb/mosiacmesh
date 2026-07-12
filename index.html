@@ -490,10 +490,14 @@
 		try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e2) {}
 	}
 	// Shared client self-pull: re-fetch a cached seg from central into the local cache.
-	// Returns the seg token (or null if the src isn't a parseable 127.0.0.1 cached URL).
+	// Returns the seg token (or null if the src isn't a parseable 127.0.0.1 cached URL,
+	// or there's no cache backend to pull into). The !mmCache.backend guard mirrors
+	// handlePrecache's own early-out: with no backend the pull can never cache, so return
+	// null (poll's first tick no-ops -> NEEDS_ARM) instead of recording nothing and
+	// leaving mmCache.state at 'none' forever (a benign but unbounded arm poll).
 	// Used by the poll watchdog's recache AND the arm-phase recache.
 	function _mmSelfPull(v, src) {
-		if (!window.mmCache || src.indexOf('127.0.0.1') === -1) { return null; }
+		if (!window.mmCache || !mmCache.backend || src.indexOf('127.0.0.1') === -1) { return null; }
 		var m = src.match(/seg_[a-f0-9]+_\d+/);
 		if (!m) { return null; }
 		var token = m[0];
