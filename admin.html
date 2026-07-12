@@ -1049,6 +1049,7 @@ body.mm-dragging .mm-clip { opacity: 0.85; }
                       <button class="btn btn-primary" @click="playNow()">▶ Play now</button>
                       <button class="btn" @click="stopNow()">⏹ Stop</button>
                       <button class="btn" @click="reloadGroup()" title="Reload the display page on every device in this group">↻ Reload</button>
+                      <button class="btn" @click="clearCache()" title="Wipe cached video on every device in this group; they re-pull on next play">↯ Clear cache</button>
                     </div>
                   </div>
                   <div class="mm-fleet-card mm-fleet-render-readiness" x-show="selectedGroupId">

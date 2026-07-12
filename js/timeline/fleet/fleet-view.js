@@ -11,6 +11,7 @@
 import { groupStatusLine, deviceRowsForGroup, calibrationSummary, playlistReadinessForGroup, deviceCacheStatus } from './fleet-status.js';
 import { openPlayNowModal, fireStopNow } from '../modals/play-now.js';
 import { fireFleetAction } from '../modals/fleet-confirm.js';
+import { confirmModal } from '../modals/confirm-modal.js';
 import { openCalibrationModal } from '../modals/calibration.js';
 import { openProfileEditor } from '../modals/profile-editor.js';
 
@@ -83,6 +84,29 @@ export function mmFleetComponent() {
       } catch (e) {
         this.$store.mm.toast(`Failed to send reload: ${e?.message || e}`, 'error');
       }
+    },
+    clearCache() {
+      const id = this.selectedGroupId;
+      if (!id) return;
+      const count = (this.$store.mm.displays || []).filter(d => d.displayID === id).length;
+      confirmModal({
+        title: `Clear cache (group "${id}")`,
+        message: `Clear cached video on ${count} device${count === 1 ? '' : 's'} in "${id}"? They'll re-pull on next play.`,
+        confirmLabel: `Clear ${count} device${count === 1 ? '' : 's'}`,
+        danger: true,
+        onConfirm: () => {
+          if (typeof window.sock === 'undefined' || typeof window.generateMessage !== 'function') {
+            this.$store.mm.toast('SockJS not available; reload the page.', 'error');
+            return;
+          }
+          try {
+            window.sock.send(window.generateMessage('SRV', 'CLEAR_CACHE', { displayID: id }));
+            this.$store.mm.toast(`Cache clear sent to "${id}" (${count} device${count === 1 ? '' : 's'}).`, 'info');
+          } catch (e) {
+            this.$store.mm.toast(`Failed to send clear: ${e?.message || e}`, 'error');
+          }
+        },
+      });
     },
     calibrate() { if (this.selectedGroupId) openCalibrationModal(this.$store.mm, this.selectedGroupId); },
     runScript(which) { if (this.selectedGroupId) fireFleetAction(this.$store.mm, which, this.selectedGroupId); },
