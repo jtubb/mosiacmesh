@@ -209,7 +209,7 @@
 				v.style.zIndex = '1';
 				v.addEventListener('playing', function () {
 					playback.activated = true; hideTapStart();
-					v._armRetryN = 0; v._armRecacheN = 0;  // armed OK -> forget arm-error retries/recaches
+					v._armRetryN = 0; v._armRecacheN = 0; v._armRecachePending = null;  // armed OK -> forget arm-error retries/recaches/poll
 					if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); v._armRetryTimer = null; }
 				});
 				// Arm-phase recovery: the poll watchdog is gated on playback.active, so it
@@ -221,31 +221,50 @@
 					try {
 						var s = '' + (v.currentSrc || v.src || '');
 						var isLocal = s.indexOf('127.0.0.1') !== -1;
-						if (isLocal && s !== v._armSrc) { v._armSrc = s; v._armRetryN = 0; v._armRecacheN = 0; }
+						if (isLocal && s !== v._armSrc) { v._armSrc = s; v._armRetryN = 0; v._armRecacheN = 0; v._armRecachePending = null; }
 						var action = mmVideoRecovery.mmArmRetryAction({
 							active: playback.active, isLocal: isLocal,
 							retries: v._armRetryN || 0, recaches: v._armRecacheN || 0,
 							maxRetries: ARM_MAX_RETRIES, maxRecaches: ARM_MAX_RECACHES });
 						if (action === 'skip') { return; }
-						var delay;
 						if (action === 'recache') {
-							// retry budget exhausted -> the seg is likely genuinely missing: re-pull it.
+							// retry budget exhausted -> the seg is likely genuinely missing: re-pull it,
+							// then POLL mmCache.state until the download terminates. Re-arm on 'cached',
+							// give up (NEEDS_ARM) on 'failed'. No wall-clock bound -> any seg size. The
+							// single _armRetryTimer carries the self-rescheduling poll. NEVER central.
 							v._armRecacheN = (v._armRecacheN || 0) + 1;
 							if (typeof dbg === 'function') { dbg('arm-recache'); }
-							_mmSelfPull(v, s);
-							delay = ARM_RECACHE_RELOAD_MS;   // longer settle so the pull lands before the re-attempt
-						} else {  // 'retry'
-							v._armRetryN = (v._armRetryN || 0) + 1;
-							if (typeof dbg === 'function') { dbg('arm-retry'); }
-							delay = ARM_RETRY_BACKOFF_MS;
+							v._armRecachePending = _mmSelfPull(v, s);   // seg token, or null if not a 127.0.0.1 cached URL
+							var armPoll = function () {
+								v._armRetryTimer = null;
+								if (!v._armRecachePending) { return; }   // superseded / reset -> stop polling
+								var cs = window.mmCache ? mmCache.state(v._armRecachePending) : 'none';
+								var pa = mmVideoRecovery.mmRecachePollAction(cs);
+								if (pa === 'rearm') {
+									v._armRecachePending = null;
+									if (typeof dbg === 'function') { dbg('arm-rearm'); }
+									// iOS-5 needs load()+play() together to (re)start a held/errored element.
+									try { v.load(); } catch (e2) {}
+									try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e3) {}
+									return;
+								}
+								if (pa === 'giveup') { v._armRecachePending = null; return; }  // NEEDS_ARM/tap owns it
+								v._armRetryTimer = setTimeout(armPoll, ARM_RECACHE_POLL_MS);   // 'wait' -> keep polling
+							};
+							if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); }
+							v._armRetryTimer = setTimeout(armPoll, ARM_RECACHE_POLL_MS);
+							return;
 						}
+						// 'retry': single fixed-backoff reload through the same timer slot.
+						v._armRetryN = (v._armRetryN || 0) + 1;
+						if (typeof dbg === 'function') { dbg('arm-retry'); }
 						if (v._armRetryTimer) { clearTimeout(v._armRetryTimer); }
 						v._armRetryTimer = setTimeout(function () {
 							v._armRetryTimer = null;
 							// iOS-5 needs load()+play() together to (re)start a held/errored element.
 							try { v.load(); } catch (e2) {}
 							try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e3) {}
-						}, delay);
+						}, ARM_RETRY_BACKOFF_MS);
 					} catch (e) { /* best-effort */ }
 				});
 				return v;
@@ -277,9 +296,10 @@
 	var ARM_MAX_RETRIES = 3;
 	var ARM_RETRY_BACKOFF_MS = 500;
 	// Arm-phase recache: after the retry budget, re-pull a genuinely-missing seg (self-pull)
-	// this many times, then reload after a longer settle so the pull lands. Then NEEDS_ARM.
+	// once, then POLL mmCache.state until the download terminates — re-arm on 'cached', give
+	// up (NEEDS_ARM) on 'failed'. No wall-clock bound, so any seg size self-heals. Never central.
 	var ARM_MAX_RECACHES = 1;
-	var ARM_RECACHE_RELOAD_MS = 2500;
+	var ARM_RECACHE_POLL_MS = 500;
 	var KEYFRAME_GRID_MS = 250;  // MUST match server KEYFRAME_GRID_SEC (0.25s): drift
 	                             // re-aligns by seeking to this keyframe grid so iOS-5
 	                             // (keyframe-accurate seek) and modern clients land on
