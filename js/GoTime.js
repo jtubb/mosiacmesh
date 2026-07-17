@@ -361,9 +361,24 @@ var GoTime = (function f() {
         var opts = {
             deadbandMs: options._steerDeadbandMs, snapMs: options._steerSnapMs,
             capMsPerSec: options._steerCapMsPerSec, windowMs: options._steerWindowMs,
-            minSamples: options._steerMinSamples, precisionFloorMs: options._steerPrecisionFloorMs
+            minSamples: options._steerMinSamples, precisionFloorMs: options._steerPrecisionFloorMs,
+            skewMinSamples: options._skewMinSamples, skewMinSpanMs: options._skewMinSpanMs
         };
-        var target = _robustTarget(options._steerSamples, GoTime.now(), opts);
+        // Frequency discipline: re-fit skew once the offset has locked; fold on meaningful change.
+        if (options._steering) {
+            var newSkew = _skewFit(options._steerSamples, GoTime.now(), opts);
+            if (newSkew !== null) {
+                var dead = (options._skewDeadbandPpm != null) ? options._skewDeadbandPpm : 2e-6;
+                if (Math.abs(newSkew - options._skew) > dead) {
+                    var m = _applySkew({ offset: options._offset, skew: options._skew, skewRef: options._skewRef },
+                                       newSkew, nowLocal);
+                    options._offset = m.offset; options._skew = m.skew; options._skewRef = m.skewRef;
+                }
+            }
+        }
+        // Offset steer chases the DE-SKEWED residual (skew owns rate, steer owns offset).
+        var target = _robustTarget(_deskewSamples(options._steerSamples, options._skew, options._skewRef),
+                                   GoTime.now(), opts);
         if (target === null) { return; }
         options._steering = true;
         options._lastSteerTarget = target;
@@ -542,7 +557,8 @@ var GoTime = (function f() {
 
 		getSteerState: function() {
             return { steering: options._steering, samples: options._steerSamples.length,
-                     offset: options._offset, target: options._lastSteerTarget };
+                     offset: options._offset, target: options._lastSteerTarget,
+                     skew: options._skew };
         },
 
 		// DIAGNOSTIC (?tdbg): why is steering engaged or not? Distinguishes
