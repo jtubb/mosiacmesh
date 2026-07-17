@@ -279,6 +279,46 @@ var GoTime = (function f() {
         return (kept.length % 2) ? kept[h] : (kept[h - 1] + kept[h]) / 2;
     };
 
+    // Robust oscillator-skew estimate: the Theil-Sen slope (median of pairwise slopes) of
+    // offset-vs-time over the recent precision-gated samples. Median-of-slopes rejects PSM
+    // jitter outliers (mirrors _robustTarget's robust-median philosophy). Returns the slope
+    // (ppm fraction, e.g. 22e-6) or null unless >=skewMinSamples gated samples span
+    // >=skewMinSpanMs of time (a slope over a short baseline is noise). Pure.
+    _skewFit = function(samples, nowMs, opts) {
+        var windowMs = (opts && opts.windowMs != null) ? opts.windowMs : 120000;
+        var minS = (opts && opts.skewMinSamples != null) ? opts.skewMinSamples : 6;
+        var minSpan = (opts && opts.skewMinSpanMs != null) ? opts.skewMinSpanMs : 60000;
+        var floor = (opts && opts.precisionFloorMs != null) ? opts.precisionFloorMs : 60;
+        var i, j, recent = [];
+        for (i = 0; i < samples.length; i++) {
+            if (samples[i].t >= nowMs - windowMs) { recent.push(samples[i]); }
+        }
+        if (recent.length === 0) { return null; }
+        var best = recent[0].precision;
+        for (i = 1; i < recent.length; i++) { if (recent[i].precision < best) { best = recent[i].precision; } }
+        var gate = 2 * best; if (gate < floor) { gate = floor; }
+        var kept = [];
+        for (i = 0; i < recent.length; i++) { if (recent[i].precision <= gate) { kept.push(recent[i]); } }
+        if (kept.length < minS) { return null; }
+        var tmin = kept[0].t, tmax = kept[0].t;
+        for (i = 1; i < kept.length; i++) {
+            if (kept[i].t < tmin) { tmin = kept[i].t; }
+            if (kept[i].t > tmax) { tmax = kept[i].t; }
+        }
+        if (tmax - tmin < minSpan) { return null; }
+        var slopes = [];
+        for (i = 0; i < kept.length; i++) {
+            for (j = i + 1; j < kept.length; j++) {
+                var dt = kept[j].t - kept[i].t;
+                if (dt !== 0) { slopes.push((kept[j].offset - kept[i].offset) / dt); }
+            }
+        }
+        if (slopes.length === 0) { return null; }
+        slopes.sort(function(a, b) { return a - b; });
+        var h = Math.floor(slopes.length / 2);
+        return (slopes.length % 2) ? slopes[h] : (slopes[h - 1] + slopes[h]) / 2;
+    };
+
     // One maintenance iteration: pull _offset toward the robust target via _steerStep.
     // Flips _steering true the first time a target is available, transferring offset
     // ownership from the ratchet to the slew. dtMs is real local elapsed time, so a
@@ -501,6 +541,7 @@ var GoTime = (function f() {
 		steerTick: function() { return _steerTick(); },
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget,
+		_skewFit: _skewFit,
 		_nextSyncDelay: _nextSyncDelay
 	}
 
