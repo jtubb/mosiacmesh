@@ -641,6 +641,9 @@
 			// DIAGNOSTIC (temporary): steering sample/gate state — is the drift
 			// steerer being fed (recent>0) and engaging (steering), or starved?
 			steer: (typeof GoTime.steerDebug === 'function') ? GoTime.steerDebug() : null,
+			// DIAGNOSTIC: locked oscillator frequency error (ppm). Task 5 added skew to
+			// GoTime.getSteerState(); surface it here for per-screen convergence watch.
+			skew: (function () { var _ss = (typeof GoTime !== 'undefined' && typeof GoTime.getSteerState === 'function') ? GoTime.getSteerState() : null; return _ss ? Math.round(_ss.skew * 1e6) : null; })(),
 			// Scatter perf telemetry (?tdbg): animation-loop fps + last scatter draw
 			// stats + active tuning knobs, so frame rate is readable from the server
 			// log remotely (no need to eyeball the device HUD).
