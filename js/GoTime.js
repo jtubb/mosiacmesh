@@ -122,6 +122,11 @@ var GoTime = (function f() {
     var options = {
         _syncCount: 0,
         _offset: 0,
+        _skew: 0,             // oscillator skew (ppm fraction); 0 => now() identical to today
+        _skewRef: 0,          // raw-local anchor for the skew rate term
+        _skewMinSamples: 6,
+        _skewMinSpanMs: 60000,
+        _skewDeadbandPpm: 2e-6,
         _precision: 2e308,
         _lastAcceptTime: null,   // when the offset was last locked (for ?tdbg age only)
         _history: [],
@@ -445,7 +450,8 @@ var GoTime = (function f() {
 	return {
 		// Public Getters
 		now: function() {
-			return getAccurateTimestamp() + options._offset;
+			var raw = getAccurateTimestamp();
+			return raw + options._offset + options._skew * (raw - options._skewRef);
 		},
 
 		getOffset: function() {
@@ -568,6 +574,11 @@ var GoTime = (function f() {
 		_skewFit: _skewFit,
 		_applySkew: _applySkew,
 		_deskewSamples: _deskewSamples,
+		_steerTick: function() { return _steerTick(); },
+		_reviseOffset: function(sample, method) { return _reviseOffset(sample, method); },
+		_applyModelForTest: function(offset, skew, ref) {
+			options._offset = offset; options._skew = skew; options._skewRef = ref;
+		},
 		_nextSyncDelay: _nextSyncDelay
 	}
 
