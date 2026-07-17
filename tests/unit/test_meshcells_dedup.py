@@ -74,3 +74,34 @@ def test_payload_size_is_O_one_grid(monkeypatch):
     # legitimately reuse some of the same coordinate values as the mesh grid.
     assert blob.count(json.dumps(grid)) == 1
     assert json.dumps(items).count("meshCells") == 0
+
+
+def test_meshcells_payload_survives_jsonpickle_no_backref(monkeypatch):
+    """Payload-level meshCells must survive jsonpickle encode→decode WITHOUT a
+    py/id back-reference. If meshCells is a shared Python object that gets
+    back-referenced, the iPad's JSON.parse would see {"py/id": N} instead of
+    the nested-float grid, causing a JSON read error downstream."""
+    import jsonpickle
+    import json
+    monkeypatch.setattr(calibration, "MESH_RECTIFY", True)
+    d, c = _mesh_display_and_client()
+    items = render._per_client_items(d, "k", c)
+    meshCells = render._mesh_cells_payload(d)
+    payload = {"items": items, "meshCells": meshCells}
+
+    # Encode as the server does (broadcast).
+    encoded = jsonpickle.encode(payload)
+    assert "py/id" not in encoded, "meshCells must not serialize as a back-reference"
+
+    # Decode as plain JSON (iPad client receives this, not jsonpickle).
+    decoded = json.loads(encoded)
+    mc = decoded["meshCells"]
+
+    # Verify structure: nested-float grid, not a py/id object.
+    assert isinstance(mc, list), "meshCells must be a list"
+    assert len(mc) == 2, "fixture has 2 cells"
+    for cell in mc:
+        assert isinstance(cell, list) and len(cell) == 4, "each cell is a 4-point quad"
+        for pt in cell:
+            assert isinstance(pt, list) and len(pt) == 2, "each point is [x, y]"
+            assert all(isinstance(v, (int, float)) for v in pt), "coords must be numbers"
