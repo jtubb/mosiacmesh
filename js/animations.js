@@ -70,9 +70,11 @@
 
   // One pure Conway step (toroidal edges). prev/next are Uint8Array(GW*GH) of
   // 0/1. Live survives on 2-3 neighbours; dead is born on exactly 3.
-  function mmLifeStep(prev, GW, GH) {
+  function mmLifeStep(prev, GW, GH, out) {
     var cells = GW * GH;
-    var next = new Uint8Array(cells);
+    // `out`, when given, is the destination slot (reused buffer) — no per-step
+    // allocation. Callers that omit it get the old allocate-and-return behaviour.
+    var next = out || new Uint8Array(cells);
     var x, y, dx, dy;
     for (y = 0; y < GH; y++) {
       for (x = 0; x < GW; x++) {
@@ -583,7 +585,12 @@
       grid: { cols: 48, rows: 36 },
       smooth: false,
       shade: (function () {
-        var GW = 48, GH = 36, G = 300, STEP_PER_FRAME = 12;
+        // Warm up at a gentler rate (4 gens/frame, was 12): the display only advances
+        // ~10 gens/sec so 4/frame still keeps `computed` well ahead of the shown gen (no
+        // visual warmup regression), while spreading the precompute over more frames lets
+        // GC keep pace so the heap doesn't balloon on effect init. G (300) is unchanged so
+        // the gen-wrap period stays G*100ms.
+        var GW = 48, GH = 36, G = 300, STEP_PER_FRAME = 4;
         // Live #7CFC00 = (124,252,0); dead = black; noise tint #3a5a3a = (58,90,58).
         var cache = { seed: null, boards: null, computed: 0, done: false };
         return function (data, cols, rows, tMs, nowMs, seed) {
@@ -600,7 +607,12 @@
             var budget = STEP_PER_FRAME;
             while (cache.computed < G && budget-- > 0) {
               var prev = cache.boards.subarray((cache.computed - 1) * cells, cache.computed * cells);
-              cache.boards.set(mmLifeStep(prev, GW, GH), cache.computed * cells);
+              // Compute the next generation straight into its slot in cache.boards (a view,
+              // non-overlapping with prev) — no temp Uint8Array per step and no .set() copy.
+              // Eliminating this warmup allocation churn (300 short-lived arrays in a burst)
+              // is what keeps gameOfLife's heap spike under the iPad-1 jetsam ceiling.
+              var next = cache.boards.subarray(cache.computed * cells, (cache.computed + 1) * cells);
+              mmLifeStep(prev, GW, GH, next);
               cache.computed++;
             }
             if (cache.computed >= G) { cache.done = true; }

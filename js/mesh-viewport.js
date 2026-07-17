@@ -62,6 +62,20 @@
     return true;
   }
 
+  // Re-attach the de-duplicated mesh warp grid (sent ONCE at the PLAY/PREPARE/PRELOAD
+  // payload level) onto each playlist item, so the per-item render sites reading
+  // it.meshCells stay unchanged. The server stopped sending meshCells per-item because
+  // a per-item copy blew the per-client message past the mmws 128KB ws rx buffer. The
+  // shared reference is safe: meshCells is read-only in the render path. No-op when the
+  // payload carries no grid (non-mesh playlists). Returns items.
+  function mmHydrateMeshCells(items, meshCells) {
+    if (items && meshCells) {
+      for (var i = 0; i < items.length; i++) { items[i].meshCells = meshCells; }
+    }
+    return items;
+  }
+
   root.mmStampSprite = mmStampSprite;
   root.mmMeshViewport = mmMeshViewport;
+  root.mmHydrateMeshCells = mmHydrateMeshCells;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

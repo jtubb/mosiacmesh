@@ -14,7 +14,7 @@ import time
 from aiohttp import web
 
 from mosaicmesh.state import Display, PlayState, PlayMode
-from mosaicmesh.render import _is_renderable, isVideoItem, _per_client_items
+from mosaicmesh.render import _is_renderable, isVideoItem, _per_client_items, _mesh_cells_payload
 from mosaicmesh.broadcast import broadcast_to_client
 from mosaicmesh.persistence import saveSettings
 from mosaicmesh.cache import cache_stats, file_cache
@@ -233,11 +233,14 @@ def sync_new_client_to_group(client_key, client):
     # Per-client URLs (this client's rendered segment), not the generic source —
     # else a reconnecting renderable client gets the undecodable full source.
     items = _per_client_items(display, client_key, client)
-    broadcast_to_client(client_key, {"REQUEST": "PRELOAD", "PAYLOAD": {"items": items}})
+    mesh_cells = _mesh_cells_payload(display)
+    broadcast_to_client(client_key, {"REQUEST": "PRELOAD",
+                                     "PAYLOAD": {"items": items, "meshCells": mesh_cells}})
     broadcast_to_client(client_key, {
         "REQUEST": "PLAY",
         "PAYLOAD": {"startEpoch": display.playStartEpoch, "items": items, "loop": display.loop,
-                    "seed": getattr(display, "playSeed", 0)}
+                    "seed": getattr(display, "playSeed", 0),
+                    "meshCells": mesh_cells}
     })
 
 

@@ -1634,7 +1634,9 @@
 		{
 			if(data_obj.REQUEST == "PRELOAD")
 			{
-				mediaSequence = data_obj.PAYLOAD.items || [];
+				mediaSequence = (typeof mmHydrateMeshCells === 'function')
+					? mmHydrateMeshCells(data_obj.PAYLOAD.items || [], data_obj.PAYLOAD.meshCells)
+					: (data_obj.PAYLOAD.items || []);
 				mediaReady = false;
 				var total = mediaSequence.length, settled = 0, j;
 				if(total === 0) { mediaReady = true; updateHeartbeat(); }
@@ -1733,7 +1735,9 @@
 				blink = false;
 				exitCalibrateView();
 				hideBlackout();
-				playback.items = data_obj.PAYLOAD.items || [];
+				playback.items = (typeof mmHydrateMeshCells === 'function')
+					? mmHydrateMeshCells(data_obj.PAYLOAD.items || [], data_obj.PAYLOAD.meshCells)
+					: (data_obj.PAYLOAD.items || []);
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.seed = data_obj.PAYLOAD.seed || 0;
 				playback.active = false;
@@ -1748,7 +1752,9 @@
 				blink = false;
 				exitCalibrateView();   // undo calibrate <html> framing + white page
 				hideBlackout();        // lift the 'stopped' cover from a prior keep-alive
-				playback.items = data_obj.PAYLOAD.items || [];
+				playback.items = (typeof mmHydrateMeshCells === 'function')
+					? mmHydrateMeshCells(data_obj.PAYLOAD.items || [], data_obj.PAYLOAD.meshCells)
+					: (data_obj.PAYLOAD.items || []);
 				playback.startEpoch = data_obj.PAYLOAD.startEpoch;
 				playback.loop = !!data_obj.PAYLOAD.loop;
 				playback.seed = data_obj.PAYLOAD.seed || 0;

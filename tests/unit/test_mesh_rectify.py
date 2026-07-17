@@ -208,8 +208,11 @@ def test_per_client_items_uses_rectified_when_flag_on(fresh_settings):
     assert items[0]["meshGlobal"] == [2000, 1000]
     assert items[0]["meshQuad"] == [[0.1, 0.1], [0.4, 0.1], [0.4, 0.9], [0.1, 0.9]]
     assert items[0]["meshGrid"] == [3, 2]   # [cols, rows] threaded for grid-aware anims
-    assert items[0]["meshCells"] == [[[0.05, 0.05], [0.30, 0.05], [0.30, 0.45], [0.05, 0.45]],
-                                      [[0.40, 0.05], [0.65, 0.05], [0.65, 0.45], [0.40, 0.45]]]
+    # meshCells moved to the payload level (Task 2, ws-meshcells-dedup): no longer
+    # duplicated onto every item -- see render._mesh_cells_payload.
+    assert "meshCells" not in items[0]
+    assert R._mesh_cells_payload(d) == [[[0.05, 0.05], [0.30, 0.05], [0.30, 0.45], [0.05, 0.45]],
+                                         [[0.40, 0.05], [0.65, 0.05], [0.65, 0.45], [0.40, 0.45]]]
     json.dumps(items)
 
 

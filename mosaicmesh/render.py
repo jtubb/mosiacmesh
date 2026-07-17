@@ -1368,6 +1368,18 @@ def _build_media_elements(items):
 # Per-client item resolution (touches server.settings via display state)
 # ---------------------------------------------------------------------------
 
+def _mesh_cells_payload(display):
+    """The display's mesh warp grid as a FRESH nested float list, or None. Sent ONCE at
+    the PLAY/PREPARE/PRELOAD payload level (de-duplicated) instead of on every item: a
+    per-item copy made the per-client message ~83KB -> ~166KB SockJS-framed, overflowing
+    the mmws 128KB ws rx buffer and dropping the fleet back to XHR. Fresh list so
+    jsonpickle can't emit a {"py/id"} back-ref the iPad JSON.parse can't read."""
+    mc = getattr(display, "meshCells", None)
+    if not mc:
+        return None
+    return [[[float(pt[0]), float(pt[1])] for pt in cell] for cell in mc]
+
+
 def _per_client_items(display, key, c):
     """Per-client playlist items: renderable items (SEGMENT/INDIVIDUAL) resolve to
     THIS client's warped file when calibrated, else the plain source. Shared by
@@ -1440,9 +1452,6 @@ def _per_client_items(display, key, c):
                 item["meshGlobal"] = list(display.meshGlobalRect)
                 if getattr(display, "meshGrid", None):
                     item["meshGrid"] = [int(display.meshGrid[0]), int(display.meshGrid[1])]
-                if getattr(display, "meshCells", None):
-                    item["meshCells"] = [[[float(pt[0]), float(pt[1])] for pt in cell]
-                                         for cell in display.meshCells]
             elif (c.measuredPerimeter is not None
                     and display.boundingBox and getattr(display, "meshGlobal", None)):
                 item["meshGlobal"] = list(display.meshGlobal)
@@ -1456,11 +1465,13 @@ def _per_client_items(display, key, c):
 
 def _broadcast_per_client_play(display_id, display):
     """Send each client its own PLAY with its per-client (warped) media URLs."""
+    mesh_cells = _mesh_cells_payload(display)
     for key, c in _group_clients(display_id):
         broadcast_to_client(key, {"REQUEST": "PLAY",
             "PAYLOAD": {"startEpoch": display.playStartEpoch,
                         "items": _per_client_items(display, key, c), "loop": display.loop,
-                        "seed": getattr(display, "playSeed", 0)}})
+                        "seed": getattr(display, "playSeed", 0),
+                        "meshCells": mesh_cells}})
 
 
 def _broadcast_per_client_preload(display_id, media_elements=None):
@@ -1475,10 +1486,11 @@ def _broadcast_per_client_preload(display_id, media_elements=None):
     display = server.settings.displays.get(display_id)
     if not display:
         return
+    mesh_cells = _mesh_cells_payload(display)
     for key, c in _group_clients(display_id):
         items = _per_client_items(display, key, c)
         broadcast_to_client(key, {"REQUEST": "PRELOAD",
-                                  "PAYLOAD": {"items": items}})
+                                  "PAYLOAD": {"items": items, "meshCells": mesh_cells}})
 
 
 # ---------------------------------------------------------------------------
@@ -1597,7 +1609,8 @@ def _begin_prepare(display_id):
             "REQUEST": "PREPARE",
             "PAYLOAD": {"prepareId": display.prepareId,
                         "items": _per_client_items(display, key, c), "loop": display.loop,
-                        "seed": getattr(display, "playSeed", 0)}})
+                        "seed": getattr(display, "playSeed", 0),
+                        "meshCells": _mesh_cells_payload(display)}})
         n_sent += 1
     if n_skipped:
         logging.info("_begin_prepare %s: PREPARE sent to %d synced; %d un-synced "
@@ -1643,6 +1656,7 @@ async def _prepare_unsynced_clients(display_id, prepare_id):
                 "PAYLOAD": {"prepareId": prepare_id,
                             "items": _per_client_items(display, key, c),
                             "loop": display.loop,
-                            "seed": getattr(display, "playSeed", 0)}})
+                            "seed": getattr(display, "playSeed", 0),
+                            "meshCells": _mesh_cells_payload(display)}})
             sent.add(key)
             logging.info("_prepare_unsynced: late PREPARE sent to %s", key)
