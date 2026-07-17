@@ -331,6 +331,18 @@ var GoTime = (function f() {
         return { offset: newOffset, skew: s, skewRef: rawNow };
     };
 
+    // Remove the skew trend from offset samples so the offset steer chases the residual, not the
+    // drift the skew term already corrects (else the two double-correct and the error accumulates).
+    // Fresh array; input untouched. Pure.
+    _deskewSamples = function(samples, skew, skewRef) {
+        var out = [], i;
+        for (i = 0; i < samples.length; i++) {
+            out.push({ offset: samples[i].offset - skew * (samples[i].t - skewRef),
+                       precision: samples[i].precision, t: samples[i].t });
+        }
+        return out;
+    };
+
     // One maintenance iteration: pull _offset toward the robust target via _steerStep.
     // Flips _steering true the first time a target is available, transferring offset
     // ownership from the ratchet to the slew. dtMs is real local elapsed time, so a
@@ -555,6 +567,7 @@ var GoTime = (function f() {
 		_robustTarget: _robustTarget,
 		_skewFit: _skewFit,
 		_applySkew: _applySkew,
+		_deskewSamples: _deskewSamples,
 		_nextSyncDelay: _nextSyncDelay
 	}
 
