@@ -319,6 +319,18 @@ var GoTime = (function f() {
         return (slopes.length % 2) ? slopes[h] : (slopes[h - 1] + slopes[h]) / 2;
     };
 
+    // Update the clock model {offset, skew, skewRef} for a new skew estimate WITHOUT jumping
+    // now(). At the update instant rawNow, fold the accumulated old rate term into offset and
+    // re-anchor skewRef to rawNow, so now(rawNow) is unchanged and thereafter advances at the
+    // new (clamped) rate. Pure. maxPpm guards a bad fit from running the clock away.
+    _applySkew = function(model, newSkew, rawNow) {
+        var maxPpm = 300e-6;
+        var s = newSkew;
+        if (s > maxPpm) { s = maxPpm; } else if (s < -maxPpm) { s = -maxPpm; }
+        var newOffset = model.offset + model.skew * (rawNow - model.skewRef);
+        return { offset: newOffset, skew: s, skewRef: rawNow };
+    };
+
     // One maintenance iteration: pull _offset toward the robust target via _steerStep.
     // Flips _steering true the first time a target is available, transferring offset
     // ownership from the ratchet to the slew. dtMs is real local elapsed time, so a
@@ -542,6 +554,7 @@ var GoTime = (function f() {
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget,
 		_skewFit: _skewFit,
+		_applySkew: _applySkew,
 		_nextSyncDelay: _nextSyncDelay
 	}
 
