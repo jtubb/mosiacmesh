@@ -623,14 +623,14 @@ async def _run_ffmpeg(cmd, label, semaphore):
 
 def _client_is_push_eligible(c):
     """True iff a client is cache-capable and reachable: exists, is in a
-    cache-capable cacheMode (lighttpd-localhost mmvideo OR service-worker
-    modern), is online, and has an IP. Used to build seg_push_targets /
-    full_push_targets lists (which the client-pull PRECACHE path consumes).
-    Both backends need a PRECACHE: the mmvideo tweak pulls into its local
-    MosaicMeshCache dir, and the modern SW pulls the SAME /media/ URL into its
-    Cache-API (its SW is cache-first; nothing else fills the cache). This gate
-    is intentionally WIDER than the URL-rewrite gate in _per_client_items /
-    _resolve_media_url, which stays mmvideo-only. Pure — unit-tested."""
+    cache-capable cacheMode (mmvideo OR service-worker), is online, and has an IP.
+    Used to build seg_push_targets / full_push_targets lists (which the
+    client-pull PRECACHE path consumes). Both backends need a PRECACHE: the
+    mmvideo tweak pulls into its local MosaicMeshCache dir, and the modern SW
+    pulls the SAME /media/ URL into its Cache-API (its SW is cache-first; nothing
+    else fills the cache). This gate is intentionally WIDER than the URL-rewrite
+    gate in _per_client_items / _resolve_media_url, which stays mmvideo-only.
+    Pure — unit-tested."""
     return bool(c is not None
                 and getattr(c, "cacheMode", "none") in ("mmvideo", "service-worker")
                 and getattr(c, "isOnline", False)
@@ -1295,10 +1295,10 @@ def _media_item_payload(me):
 
 # Per-client URL routing for media-cache-aware clients. See spec
 # 2026-06-03-media-cache-design.md. For SEGMENT items on an iPad in
-# lighttpd-localhost cache mode that has the segment cached, returns
-# the localhost URL so mmvideo serves from its local MosaicMeshCache dir
-# (zero LAN bandwidth). For every other case -- non-SEGMENT items, cache
-# miss, different cache mode -- returns the central-server URL.
+# mmvideo cache mode that has the segment cached, returns the localhost URL
+# so mmvideo serves from its local MosaicMeshCache dir (zero LAN bandwidth).
+# For every other case -- non-SEGMENT items, cache miss, different cache mode
+# -- returns the central-server URL.
 #
 # Accepts both real `MediaElement` instances (whose .playmode is a
 # `PlayMode` enum) and dict-like / stub items (whose .playmode may
@@ -1386,7 +1386,7 @@ def _per_client_items(display, key, c):
     the PLAY (GO) and PREPARE paths so both hand a client the same playable URL.
 
     Media-cache aware (2026-06-03): when this client is in
-    cacheMode='lighttpd-localhost' AND has the segment cached locally
+    cacheMode='mmvideo' AND has the segment cached locally
     (seg_<token>_<i> in client.cachedSegments), the per-iPad URL is
     rewritten to http://127.0.0.1:8080/seg_<token>_<i>.mp4 so
     mmvideo serves it from the local MosaicMeshCache dir, bypassing
@@ -1477,7 +1477,7 @@ def _broadcast_per_client_play(display_id, display):
 def _broadcast_per_client_preload(display_id, media_elements=None):
     """Send each client in a display group its own PRELOAD with per-client
     media URLs computed by _per_client_items -- the same function PLAY uses,
-    so PRELOAD and PLAY are consistent. iPad-1 devices in lighttpd-localhost
+    so PRELOAD and PLAY are consistent. iPad-1 devices in mmvideo
     cacheMode + cached segment get localhost URLs; everyone else gets the
     central-server per-client URL (matching legacy behavior). The legacy
     `media_elements` parameter is accepted for backward compatibility but

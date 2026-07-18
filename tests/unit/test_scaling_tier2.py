@@ -25,7 +25,7 @@ from mosaicmesh.state import Settings, Display, Client, Playlist, MediaElement, 
 
 def _client(**kw):
     c = Client()
-    c.cacheMode = kw.get("cacheMode", "lighttpd-localhost")
+    c.cacheMode = kw.get("cacheMode", "mmvideo")
     c.isOnline = kw.get("isOnline", True)
     c.ip = kw.get("ip", "192.168.1.5")
     return c

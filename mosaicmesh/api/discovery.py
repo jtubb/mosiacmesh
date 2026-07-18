@@ -126,7 +126,7 @@ def auto_configure_client(client_key, client):
 
 def _expected_seg_keys_for_display(display):
     """Set of seg_KEY strings (token_n) the display CURRENTLY expects
-    to be cached on any lighttpd-localhost iPad in its group. Driven
+    to be cached on any mmvideo-capable iPad in its group. Driven
     by the display's renderedToken (so a stale cache for a previous
     render isn't counted as 'have'). Empty set if the display has no
     renderedToken or no renderable SEGMENT items."""
@@ -276,8 +276,8 @@ async def api_discovery_stats(request):
         display_groups[gid] = display_groups.get(gid, 0) + 1
     total = cache_stats['hits'] + cache_stats['misses']
 
-    # Per-display-group cache propagation: counts each lighttpd-
-    # localhost iPad in the group as one of {fullyCached, idle} (or pushing/
+    # Per-display-group cache propagation: counts each mmvideo-capable
+    # iPad in the group as one of {fullyCached, idle} (or pushing/
     # stalled if cachePushProgress is set, though those buckets are always 0
     # now that the SSH push has been retired). Empty for groups without a
     # renderedToken or without renderable SEGMENT items -- the bar is
@@ -340,7 +340,7 @@ async def api_discovery_configure(request):
       - {"action": "swap_orientation", "clientKey"}        -> swap canvas dims +
         clear measuredPerimeter (force a re-calibrate at the new orientation)
       - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
-        "none", "mmvideo" (or legacy "lighttpd-localhost"), or "service-worker"
+        "none", "mmvideo", or "service-worker" (legacy input "lighttpd-localhost" normalizes to "mmvideo")
       - {"action": "force_push", ...} -> RETIRED (410): SSH segment-push was
         removed; client-pull (PRECACHE) is the sole cache path.
 
@@ -405,7 +405,7 @@ async def api_discovery_configure(request):
         # device re-pull the segments. Doesn't touch the actual files
         # already on the iPad (the device keeps serving its local copy
         # until a newer pull lands). With no clientKey, clears all
-        # cache-capable (lighttpd-localhost marker) clients (handy for
+        # cache-capable (mmvideo or service-worker) clients (handy for
         # re-running an acceptance test from scratch).
         ck = data.get("clientKey")
         cleared = 0

@@ -6,7 +6,7 @@ def test_cacheCapable_true_upgrades_default_none():
     """Legacy client sending only cacheCapable (no cacheBackend) -> mmvideo path."""
     c = types.SimpleNamespace(cacheMode="none")
     apply_cache_capability(c, {"cacheCapable": True})
-    assert c.cacheMode == "lighttpd-localhost"
+    assert c.cacheMode == "mmvideo"
 
 
 def test_cacheCapable_false_leaves_none():
@@ -22,10 +22,10 @@ def test_does_not_override_a_non_default_mode():
     assert c.cacheMode == "something-else"        # only upgrades from the default 'none'
 
 
-def test_cacheBackend_mmvideo_maps_to_lighttpd_localhost():
+def test_cacheBackend_mmvideo_maps_to_mmvideo():
     c = types.SimpleNamespace(cacheMode="none")
     apply_cache_capability(c, {"cacheCapable": True, "cacheBackend": "mmvideo"})
-    assert c.cacheMode == "lighttpd-localhost"
+    assert c.cacheMode == "mmvideo"
 
 
 def test_cacheBackend_modern_maps_to_service_worker():
@@ -36,6 +36,6 @@ def test_cacheBackend_modern_maps_to_service_worker():
 
 def test_cacheBackend_modern_upgrade_only_from_none():
     """The modern mapping still respects the upgrade-only-from-none invariant."""
-    c = types.SimpleNamespace(cacheMode="lighttpd-localhost")
+    c = types.SimpleNamespace(cacheMode="mmvideo")
     apply_cache_capability(c, {"cacheCapable": True, "cacheBackend": "modern"})
-    assert c.cacheMode == "lighttpd-localhost"   # not overwritten
+    assert c.cacheMode == "mmvideo"   # not overwritten
