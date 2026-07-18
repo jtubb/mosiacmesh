@@ -306,6 +306,12 @@ def migrate_client_objects():
             client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
         if not hasattr(client, 'cacheMode'):
             client.cacheMode = "none"
+        # 2026-07-18 rename: the mmvideo cache mode was "lighttpd-localhost"
+        # (misnomer — lighttpd is vestigial). Rewrite persisted old values so
+        # guards (which now compare == "mmvideo") keep treating the device as
+        # cache-capable.
+        if getattr(client, 'cacheMode', 'none') == 'lighttpd-localhost':
+            client.cacheMode = 'mmvideo'
         if not hasattr(client, 'cachedSegments'):
             client.cachedSegments = set()
         if not hasattr(client, 'cacheProbedMs'):

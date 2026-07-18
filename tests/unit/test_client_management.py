@@ -287,6 +287,22 @@ class TestClientCacheFields:
         assert after.cacheMode == "none"
         assert after.cachedSegments == set()
 
+    def test_migrate_rewrites_legacy_cache_mode(self, mock_settings):
+        """Clients loaded from older settings.dat with cacheMode='lighttpd-localhost'
+        should be rewritten to 'mmvideo' so the renamed guards keep treating them as
+        cache-capable."""
+        server.settings = mock_settings
+        c_old = server.Client()
+        c_old.cacheMode = "lighttpd-localhost"
+        c_sw = server.Client()
+        c_sw.cacheMode = "service-worker"
+        c_none = server.Client()  # default "none"
+        server.settings.clients = {"old": c_old, "sw": c_sw, "n": c_none}
+        server.migrate_client_objects()
+        assert server.settings.clients["old"].cacheMode == "mmvideo"
+        assert server.settings.clients["sw"].cacheMode == "service-worker"
+        assert server.settings.clients["n"].cacheMode == "none"
+
 
 class TestAnnounceCacheMode:
     """Test ANNOUNCE_CACHE_MODE SockJS message handler"""
