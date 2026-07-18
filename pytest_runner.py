@@ -21,9 +21,10 @@ def main():
     if len(sys.argv) > 1:
         if '--js' in sys.argv:
             import glob
-            files = sorted(glob.glob('tests/unit/js/test_*.js'))
+            files = sorted(set(glob.glob('tests/unit/js/test_*.js')) |
+                            set(glob.glob('tests/unit/js/*.test.js')))
             if not files:
-                print('No JS tests found at tests/unit/js/test_*.js')
+                print('No JS tests found at tests/unit/js/test_*.js or tests/unit/js/*.test.js')
                 sys.exit(0)
             print(f'Running {len(files)} JS test files via node --test...')
             rc = subprocess.call(['node', '--test'] + files)

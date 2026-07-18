@@ -38,3 +38,26 @@ test('_steerTick locks a skew near the true drift and stops offset drift', () =>
   var serverNow = 210000 + trueOffset + trueSkew * 210000;
   assert.ok(Math.abs(GT.now() - serverNow) < 40, 'now() off by ' + (GT.now() - serverNow) + 'ms');
 });
+
+// M1 regression guard: with trueOffset == 0 (the test above), now-space `t` and raw-space
+// `skewRef` coincide, so a reference-frame mismatch between them is invisible. Repeat the drive
+// with a large, non-zero trueOffset (1hr) so the mismatch (order skew*offset) is large enough to
+// be unmissable if the skew fit / de-trend ever mix the two frames again. Before the M1 fix this
+// failed with now() off by ~144ms (skew(40e-6) * offset(3600000ms) drift); after the fix the error
+// collapses back to the same sub-2ms baseline as the offset==0 case above.
+test('_steerTick tracks true server time under a large non-zero offset (M1 reference-frame guard)', () => {
+  const { GT, setNow } = load();
+  var trueSkew = 40e-6, trueOffset = 3600000, i;
+  for (i = 0; i <= 20; i++) {
+    var t = i * 10000; setNow(t);
+    var off = trueOffset + trueSkew * t;
+    GT._reviseOffset({ offset: off, precision: 10 }, 'test');
+    GT._steerTick();
+  }
+  var st = GT.getSteerState();
+  assert.ok(Math.abs(st.skew - trueSkew) < 8e-6, 'locked skew ' + st.skew + ' vs ' + trueSkew);
+  setNow(210000);
+  var serverNow = 210000 + trueOffset + trueSkew * 210000;
+  assert.ok(Math.abs(GT.now() - serverNow) < 25,
+    'now() off by ' + (GT.now() - serverNow) + 'ms under a ' + trueOffset + 'ms offset');
+});

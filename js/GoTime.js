@@ -284,6 +284,21 @@ var GoTime = (function f() {
         return (kept.length % 2) ? kept[h] : (kept[h - 1] + kept[h]) / 2;
     };
 
+    // Reference-frame note (M1 follow-up): `t` on a sample is now-space (GoTime.now() at revise
+    // time, i.e. skew-corrected server-clock space), while `_skewRef` is anchored in RAW-local
+    // space (getAccurateTimestamp()) -- see _applySkew/_steerTick. Mixing now-space `t` with
+    // raw-space `skewRef` in the skew fit/de-trend produces a bounded residual of order
+    // skew*offset (sub-ms normally; can reach tens of ms only when the locked offset itself is
+    // very large, e.g. an hour-scale clock error -- not expected on this fleet). `tRaw` (added to
+    // samples in _reviseOffset) is the raw-local capture of the SAME sample, so the slope fit and
+    // de-trend below use it instead of `t` to stay consistent with `skewRef`'s frame. Falls back
+    // to `t` when a sample has no `tRaw` (older/hand-built sample objects, e.g. existing unit
+    // tests) so behavior for those is unchanged. `t` itself is NEVER modified -- _robustTarget's
+    // windowing/recency logic still reads `t` in now-space, unchanged.
+    _sampleRawT = function(sample) {
+        return (sample.tRaw != null) ? sample.tRaw : sample.t;
+    };
+
     // Robust oscillator-skew estimate: the Theil-Sen slope (median of pairwise slopes) of
     // offset-vs-time over the recent precision-gated samples. Median-of-slopes rejects PSM
     // jitter outliers (mirrors _robustTarget's robust-median philosophy). Returns the slope
@@ -314,7 +329,10 @@ var GoTime = (function f() {
         var slopes = [];
         for (i = 0; i < kept.length; i++) {
             for (j = i + 1; j < kept.length; j++) {
-                var dt = kept[j].t - kept[i].t;
+                // Slope denominator uses tRaw (raw-local space, matching _skewRef) -- see the
+                // reference-frame note above _sampleRawT. The window/span checks above stay on
+                // `t` unchanged.
+                var dt = _sampleRawT(kept[j]) - _sampleRawT(kept[i]);
                 if (dt !== 0) { slopes.push((kept[j].offset - kept[i].offset) / dt); }
             }
         }
@@ -338,11 +356,14 @@ var GoTime = (function f() {
 
     // Remove the skew trend from offset samples so the offset steer chases the residual, not the
     // drift the skew term already corrects (else the two double-correct and the error accumulates).
+    // De-trends using tRaw (raw-local space, matching skewRef -- see the reference-frame note
+    // above _sampleRawT); falls back to `t` for samples without a tRaw. `t` itself is passed
+    // through unchanged on the output (still now-space; _robustTarget needs it for windowing).
     // Fresh array; input untouched. Pure.
     _deskewSamples = function(samples, skew, skewRef) {
         var out = [], i;
         for (i = 0; i < samples.length; i++) {
-            out.push({ offset: samples[i].offset - skew * (samples[i].t - skewRef),
+            out.push({ offset: samples[i].offset - skew * (_sampleRawT(samples[i]) - skewRef),
                        precision: samples[i].precision, t: samples[i].t });
         }
         return out;
@@ -368,8 +389,16 @@ var GoTime = (function f() {
         if (options._steering) {
             var newSkew = _skewFit(options._steerSamples, GoTime.now(), opts);
             if (newSkew !== null) {
+                // Clamp BEFORE the deadband compare, matching the clamp _applySkew applies to the
+                // stored skew -- otherwise a (theoretically-possible) >300ppm fit would keep
+                // re-folding every beat forever (harmless -- each fold preserves now() continuity --
+                // but wasted work + needless skewRef re-anchoring).
+                var maxSkewPpm = 300e-6;
+                var clampedSkew = newSkew;
+                if (clampedSkew > maxSkewPpm) { clampedSkew = maxSkewPpm; }
+                else if (clampedSkew < -maxSkewPpm) { clampedSkew = -maxSkewPpm; }
                 var dead = (options._skewDeadbandPpm != null) ? options._skewDeadbandPpm : 2e-6;
-                if (Math.abs(newSkew - options._skew) > dead) {
+                if (Math.abs(clampedSkew - options._skew) > dead) {
                     var m = _applySkew({ offset: options._offset, skew: options._skew, skewRef: options._skewRef },
                                        newSkew, nowLocal);
                     options._offset = m.offset; options._skew = m.skew; options._skewRef = m.skewRef;
@@ -386,15 +415,19 @@ var GoTime = (function f() {
     };
 
     _reviseOffset = function(sample, method) {
-        var timestamp;
+        var timestamp, rawNow;
         if (isNaN(sample.offset) || isNaN(sample.precision)) {
             return;
         }
         options._syncSampleReturned = true;
         timestamp = GoTime.now();
+        // rawNow is the RAW-local (offset-free) capture of this sample's arrival, in the same
+        // space as _skewRef (see _skewFit/_deskewSamples). `t` (now-space) is kept unchanged --
+        // _robustTarget's windowing/recency logic depends on it -- tRaw only feeds the skew fit.
+        rawNow = getAccurateTimestamp();
         options._lastSyncTime = timestamp;
         options._lastSyncMethod = method;
-        options._steerSamples.push({ offset: sample.offset, precision: sample.precision, t: timestamp });
+        options._steerSamples.push({ offset: sample.offset, precision: sample.precision, t: timestamp, tRaw: rawNow });
         while (options._steerSamples.length > 64) { options._steerSamples.shift(); }
         // Add to history
         /*options._history.push({
