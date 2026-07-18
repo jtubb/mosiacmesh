@@ -630,9 +630,9 @@ def _client_is_push_eligible(c):
     MosaicMeshCache dir, and the modern SW pulls the SAME /media/ URL into its
     Cache-API (its SW is cache-first; nothing else fills the cache). This gate
     is intentionally WIDER than the URL-rewrite gate in _per_client_items /
-    _resolve_media_url, which stays lighttpd-localhost-only. Pure — unit-tested."""
+    _resolve_media_url, which stays mmvideo-only. Pure — unit-tested."""
     return bool(c is not None
-                and getattr(c, "cacheMode", "none") in ("lighttpd-localhost", "service-worker")
+                and getattr(c, "cacheMode", "none") in ("mmvideo", "service-worker")
                 and getattr(c, "isOnline", False)
                 and getattr(c, "ip", ""))
 
@@ -1331,7 +1331,7 @@ def _resolve_media_url(client, item):
         # can't be cached. Return the original file path.
         return getattr(item, "file", "")
     seg_key = f"{seg_hash}_{seg_n}"
-    if (getattr(client, "cacheMode", "none") == "lighttpd-localhost"
+    if (getattr(client, "cacheMode", "none") == "mmvideo"
             and seg_key in getattr(client, "cachedSegments", set())):
         return f"http://127.0.0.1:8080/seg_{seg_key}.mp4"
     # Central-server URL. clientKey is set on the Client by REGISTER;
@@ -1396,7 +1396,7 @@ def _per_client_items(display, key, c):
     docs/superpowers/specs/2026-06-03-media-cache-design.md."""
     token = display.renderedToken
     items = []
-    cache_on = (getattr(c, "cacheMode", "none") == "lighttpd-localhost")
+    cache_on = (getattr(c, "cacheMode", "none") == "mmvideo")
     cached = getattr(c, "cachedSegments", set()) if cache_on else set()
     for i, me in enumerate(display.mediaElements):
         if me.playmode == PlayMode.FULL:

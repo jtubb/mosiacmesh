@@ -35,7 +35,7 @@ def test_migrate_backfills_cacheProbedMs():
 def test_resolve_media_url_returns_localhost_for_cached_ipad1():
     client = server.Client()
     client.clientKey = "abc"
-    client.cacheMode = "lighttpd-localhost"
+    client.cacheMode = "mmvideo"
     client.cachedSegments = {"f00d_1"}
     item = _Item(file="ignored", seg_hash="f00d", seg_n=1)
     url = server._resolve_media_url(client, item)
@@ -45,7 +45,7 @@ def test_resolve_media_url_returns_localhost_for_cached_ipad1():
 def test_resolve_media_url_falls_back_to_central_for_uncached_ipad1():
     client = server.Client()
     client.clientKey = "abc"
-    client.cacheMode = "lighttpd-localhost"
+    client.cacheMode = "mmvideo"
     client.cachedSegments = set()  # not yet pushed
     item = _Item(file="ignored", seg_hash="f00d", seg_n=1)
     url = server._resolve_media_url(client, item)
@@ -70,7 +70,7 @@ def test_resolve_media_url_passthrough_for_non_segment_items():
     """SCRIPT, IMAGE, etc. items pass their .file through unchanged."""
     client = server.Client()
     client.clientKey = "abc"
-    client.cacheMode = "lighttpd-localhost"
+    client.cacheMode = "mmvideo"
     item = _Item(file="bouncingBalls", playmode="SCRIPT")
     assert server._resolve_media_url(client, item) == "bouncingBalls"
 
@@ -97,7 +97,7 @@ def test_resolve_media_url_parses_seg_from_file_with_enum_playmode():
     emit a localhost URL when the segment is cached."""
     client = server.Client()
     client.clientKey = "abc"
-    client.cacheMode = "lighttpd-localhost"
+    client.cacheMode = "mmvideo"
     client.cachedSegments = {"9a27f533acb6_1"}
     me = server.MediaElement()
     me.playmode = server.PlayMode.SEGMENT
@@ -111,7 +111,7 @@ def test_resolve_media_url_enum_segment_uncached_returns_central():
     hash yet -> central-server URL."""
     client = server.Client()
     client.clientKey = "abc"
-    client.cacheMode = "lighttpd-localhost"
+    client.cacheMode = "mmvideo"
     client.cachedSegments = set()
     me = server.MediaElement()
     me.playmode = server.PlayMode.SEGMENT
@@ -125,7 +125,7 @@ def test_resolve_media_url_enum_non_segment_passthrough():
     """Real MediaElement with PlayMode.SCRIPT passes through .file."""
     client = server.Client()
     client.clientKey = "abc"
-    client.cacheMode = "lighttpd-localhost"
+    client.cacheMode = "mmvideo"
     me = server.MediaElement()
     me.playmode = server.PlayMode.SCRIPT
     me.file = "bouncingBalls"
@@ -150,7 +150,7 @@ def test_reconcile_removes_orphan_hashes_from_cachedSegments():
     swept out (and a delete-ssh fires)."""
     server.settings = server.Settings()
     c = server.Client(); c.clientKey="ipad1"; c.ip="192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"; c.displayID="G1"
+    c.cacheMode = "mmvideo"; c.displayID="G1"
     c.cachedSegments = {"keep_1", "orphan_3"}
     server.settings.clients["ipad1"] = c
     d = server.Display(); d.displayID="G1"
@@ -184,7 +184,7 @@ def test_reconcile_preserves_cached_segment_when_token_matches():
     server.settings = server.Settings()
     c = server.Client()
     c.clientKey = "ipad1"; c.ip = "192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"; c.displayID = "Test Group"
+    c.cacheMode = "mmvideo"; c.displayID = "Test Group"
     c.cachedSegments = {"9a27f533acb6_1"}  # just-pushed segment
     server.settings.clients["ipad1"] = c
 
@@ -212,7 +212,7 @@ def test_reconcile_preserves_cached_full_asset():
     discarded every full_ key every ~5s, killing FULL caching."""
     server.settings = server.Settings()
     c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"; c.displayID = "G"
+    c.cacheMode = "mmvideo"; c.displayID = "G"
     c.cachedSegments = {"full_tok_1"}
     server.settings.clients["ipad1"] = c
     d = server.Display(); d.displayID = "G"; d.renderedToken = "tok"
@@ -231,7 +231,7 @@ def test_reconcile_evicts_stale_full_with_correct_filename():
     device file (not a malformed 'seg_full_*.mp4')."""
     server.settings = server.Settings()
     c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"; c.displayID = "G"
+    c.cacheMode = "mmvideo"; c.displayID = "G"
     c.cachedSegments = {"full_OLDTOK_0"}
     server.settings.clients["ipad1"] = c
     d = server.Display(); d.displayID = "G"; d.renderedToken = "NEWTOK"
@@ -258,7 +258,7 @@ def test_reconcile_preserves_segments_for_all_ready_renders():
     (propagation stuck at 0%). A genuine orphan (no READY render) is still swept."""
     server.settings = server.Settings()
     c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"; c.displayID = "G1"
+    c.cacheMode = "mmvideo"; c.displayID = "G1"
     c.cachedSegments = {"vid_0", "vid_1", "orphan_5"}
     server.settings.clients["ipad1"] = c
     d = server.Display(); d.displayID = "G1"; d.renderedToken = "plasmatok"
@@ -287,7 +287,7 @@ def test_reconcile_evicts_when_token_changes():
     server.settings = server.Settings()
     c = server.Client()
     c.clientKey = "ipad1"; c.ip = "192.168.1.50"
-    c.cacheMode = "lighttpd-localhost"; c.displayID = "G"
+    c.cacheMode = "mmvideo"; c.displayID = "G"
     c.cachedSegments = {"OLDhash_1", "NEWhash_1"}
     server.settings.clients["ipad1"] = c
 
@@ -346,7 +346,7 @@ def test_per_client_items_emits_localhost_url_for_cached_lighttpd_client():
     d = _build_test_display()
     c = server.Client()
     c.clientKey = "ipad1"
-    c.cacheMode = "lighttpd-localhost"
+    c.cacheMode = "mmvideo"
     c.cachedSegments = {"9a27f533acb6_1"}
     c.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]  # any non-None
     items = server._per_client_items(d, "ipad1", c)
@@ -362,7 +362,7 @@ def test_per_client_items_emits_central_url_for_uncached_segment():
     d = _build_test_display()
     c = server.Client()
     c.clientKey = "ipad1"
-    c.cacheMode = "lighttpd-localhost"
+    c.cacheMode = "mmvideo"
     c.cachedSegments = set()  # not yet pushed
     c.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
     items = server._per_client_items(d, "ipad1", c)
@@ -400,7 +400,7 @@ def test_push_eligible_includes_service_worker():
     clients get a PRECACHE to fill their Cache-API."""
     from mosaicmesh import render
     assert render._client_is_push_eligible(_push_eligible_client("service-worker")) is True
-    assert render._client_is_push_eligible(_push_eligible_client("lighttpd-localhost")) is True
+    assert render._client_is_push_eligible(_push_eligible_client("mmvideo")) is True
     assert render._client_is_push_eligible(_push_eligible_client("none")) is False
 
 
@@ -412,7 +412,7 @@ def test_two_gate_split_service_worker_eligible_but_not_url_rewritten():
     from mosaicmesh import render
     # Gate 1: eligibility
     sw = _push_eligible_client("service-worker")
-    lt = _push_eligible_client("lighttpd-localhost")
+    lt = _push_eligible_client("mmvideo")
     assert render._client_is_push_eligible(sw) is True
     assert render._client_is_push_eligible(lt) is True
 
@@ -429,7 +429,7 @@ def test_two_gate_split_service_worker_eligible_but_not_url_rewritten():
 
     c_lt = server.Client()
     c_lt.clientKey = "ipad1"
-    c_lt.cacheMode = "lighttpd-localhost"
+    c_lt.cacheMode = "mmvideo"
     c_lt.cachedSegments = {"9a27f533acb6_1"}
     c_lt.measuredPerimeter = [[0, 0], [100, 0], [100, 100], [0, 100]]
     lt_items = server._per_client_items(d, "ipad1", c_lt)
@@ -482,7 +482,7 @@ def test_propagation_percent_for_client_partial_cache():
 
     c = server.Client()
     c.clientKey = "ipad1"
-    c.cacheMode = "lighttpd-localhost"
+    c.cacheMode = "mmvideo"
     c.displayID = "G"
     c.cachedSegments = {"abc_0"}  # has item 0 cached, not item 1
     server.settings.clients["ipad1"] = c
@@ -500,7 +500,7 @@ def test_propagation_percent_full_cache_returns_100():
     d.mediaElements = [me]
     server.settings.displays["G"] = d
     c = server.Client()
-    c.clientKey = "ipad1"; c.cacheMode = "lighttpd-localhost"
+    c.clientKey = "ipad1"; c.cacheMode = "mmvideo"
     c.displayID = "G"; c.cachedSegments = {"abc_0"}
     server.settings.clients["ipad1"] = c
     assert server._propagation_percent_for_client(c) == 100.0
@@ -525,7 +525,7 @@ def test_propagation_percent_no_renderedToken_returns_100():
     d.mediaElements = []
     server.settings.displays["G"] = d
     c = server.Client()
-    c.clientKey = "ipad1"; c.cacheMode = "lighttpd-localhost"
+    c.clientKey = "ipad1"; c.cacheMode = "mmvideo"
     c.displayID = "G"; c.cachedSegments = set()
     server.settings.clients["ipad1"] = c
     assert server._propagation_percent_for_client(c) == 100.0
@@ -559,5 +559,45 @@ def test_devices_payload_includes_cacheProbedMs():
     devs = get_discovered_devices()
     d = next(x for x in devs if x["clientKey"] == "ipad1")
     assert d["cacheProbedMs"] == 1234567
+
+
+def test_apply_cache_capability_writes_mmvideo():
+    from mosaicmesh.websocket import legacy
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.cacheMode = "none"
+    legacy.apply_cache_capability(c, {"cacheCapable": True})
+    assert c.cacheMode == "mmvideo"                      # was "lighttpd-localhost"
+
+
+def test_apply_cache_capability_modern_unchanged():
+    from mosaicmesh.websocket import legacy
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.cacheMode = "none"
+    legacy.apply_cache_capability(c, {"cacheBackend": "modern"})
+    assert c.cacheMode == "service-worker"
+
+
+def test_apply_cache_capability_upgrade_only():
+    from mosaicmesh.websocket import legacy
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    c = Client(); c.cacheMode = "service-worker"
+    legacy.apply_cache_capability(c, {"cacheCapable": True})
+    assert c.cacheMode == "service-worker"               # not downgraded/overwritten
+
+
+def test_set_cache_mode_accepts_and_normalizes_legacy():
+    # discovery.set_cache_mode: accepts "mmvideo" and (transitional) "lighttpd-localhost",
+    # storing "mmvideo" for both; rejects unknown.
+    from mosaicmesh.api import discovery
+    from mosaicmesh.state import Client
+    server.settings = server.Settings()
+    server.settings.clients["k"] = Client()
+    assert discovery._normalize_cache_mode("lighttpd-localhost") == "mmvideo"
+    assert discovery._normalize_cache_mode("mmvideo") == "mmvideo"
+    assert discovery._normalize_cache_mode("service-worker") == "service-worker"
+    assert discovery._normalize_cache_mode("bogus") is None
 
 

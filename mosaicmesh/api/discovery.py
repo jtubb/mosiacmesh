@@ -34,6 +34,17 @@ __all__ = [
 ]
 
 
+# Transitional: the mmvideo cache mode was renamed "lighttpd-localhost" -> "mmvideo"
+# (2026-07-18; lighttpd is vestigial). Accept the old string as INPUT and normalize
+# it to the new one so all guards compare against "mmvideo" alone. Returns None for
+# an unknown mode.
+_VALID_CACHE_MODES = ("none", "mmvideo", "service-worker")
+def _normalize_cache_mode(mode):
+    if mode == "lighttpd-localhost":
+        return "mmvideo"
+    return mode if mode in _VALID_CACHE_MODES else None
+
+
 def auto_match_profile(client, settings):
     """Return the name of the first profile whose matchDeviceType equals
     client.deviceType (case-insensitive), or None if no profile matches.
@@ -149,10 +160,10 @@ def _propagation_percent_for_client(client):
     in cachedSegments. Returns 100.0 for clients in displays with no
     renderable segments (vacuously cached -- nothing to propagate).
     Returns 100.0 for non-iPad / cacheMode=none clients too: the bar
-    is meaningful only for lighttpd-localhost iPads, but we don't want
+    is meaningful only for mmvideo iPads, but we don't want
     a noisy 0% to drag down aggregates."""
     import server
-    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
+    if getattr(client, "cacheMode", "none") != "mmvideo":
         return 100.0
     did = getattr(client, "displayID", None)
     if not did:
@@ -284,7 +295,7 @@ async def api_discovery_stats(request):
         total_g = 0
         full = pushing = stalled = idle = 0
         for c in _by_group.get(did, ()):
-            if getattr(c, "cacheMode", "none") != "lighttpd-localhost":
+            if getattr(c, "cacheMode", "none") != "mmvideo":
                 continue
             total_g += 1
             cached = getattr(c, "cachedSegments", set()) or set()
@@ -329,7 +340,7 @@ async def api_discovery_configure(request):
       - {"action": "swap_orientation", "clientKey"}        -> swap canvas dims +
         clear measuredPerimeter (force a re-calibrate at the new orientation)
       - {"action": "set_cache_mode", "clientKey", "mode"} -> set cacheMode to
-        "none", "lighttpd-localhost", or "service-worker"
+        "none", "mmvideo" (or legacy "lighttpd-localhost"), or "service-worker"
       - {"action": "force_push", ...} -> RETIRED (410): SSH segment-push was
         removed; client-pull (PRECACHE) is the sole cache path.
 
@@ -407,7 +418,7 @@ async def api_discovery_configure(request):
             cleared = 1
         else:
             for c in server.settings.clients.values():
-                if getattr(c, "cacheMode", "none") == "lighttpd-localhost":
+                if getattr(c, "cacheMode", "none") == "mmvideo":
                     c.cachedSegments = set()
                     cleared += 1
         saveSettings()
@@ -450,10 +461,10 @@ async def api_discovery_configure(request):
         logging.info("swap_orientation: %s canvas %sx%s -> %sx%s",
                      client_key, cw, ch, ch, cw)
     elif action == "set_cache_mode":
-        mode = data.get("mode")
-        if mode not in ("none", "lighttpd-localhost", "service-worker"):
+        mode = _normalize_cache_mode(data.get("mode"))
+        if mode is None:
             return web.json_response({"success": False,
-                                      "error": f"invalid mode {mode!r}"},
+                                      "error": f"invalid mode {data.get('mode')!r}"},
                                      status=400)
         client.cacheMode = mode
         logging.info("set_cache_mode: %s -> %s", client_key, mode)

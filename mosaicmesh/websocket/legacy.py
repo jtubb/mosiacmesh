@@ -148,7 +148,7 @@ def apply_cache_capability(client, payload):
         central /media/ URL and its Service Worker serves it from the Cache-API.
         (It does NOT serve at 127.0.0.1:8080 — only the mmvideo tweak does.)
       - else if cacheCapable truthy (mmvideo tweak, or a legacy client that reports
-        only cacheCapable) -> "lighttpd-localhost": _per_client_items rewrites its
+        only cacheCapable) -> "mmvideo": _per_client_items rewrites its
         play URL to http://127.0.0.1:8080/<name>, which the mmvideo tweak maps to
         the pulled local file.
     Only upgrades from the default 'none'; a later ANNOUNCE_CACHE_MODE 'none'
@@ -159,7 +159,7 @@ def apply_cache_capability(client, payload):
     if p.get("cacheBackend") == "modern":
         client.cacheMode = "service-worker"
     elif p.get("cacheCapable"):
-        client.cacheMode = "lighttpd-localhost"
+        client.cacheMode = "mmvideo"
 
 
 def msg_response(msg,session):
@@ -244,14 +244,14 @@ def msg_response(msg,session):
 
     elif(msg["REQUEST"] == "ANNOUNCE_CACHE_MODE"):
         # Client-announced cache capability. The client side knows whether
-        # it has a working Service Worker, lighttpd, or neither; it tells
-        # us so we can route PLAY payload URLs correctly. The whitelist
-        # below prevents a malicious or bug-induced client from setting
-        # an arbitrary string (which would break _resolve_media_url's
-        # logic in subtle ways).
+        # it has a working Service Worker, mmvideo, or neither; it tells
+        # us so we can route PLAY payload URLs correctly. The normalizer
+        # below accepts the legacy "lighttpd-localhost" string and normalizes
+        # it to "mmvideo", then validates the result.
         client = server.settings.clients.get(msg["SRC"])
-        mode = (msg.get("PAYLOAD") or {}).get("mode")
-        if client and mode in ("none", "lighttpd-localhost", "service-worker"):
+        from mosaicmesh.api.discovery import _normalize_cache_mode
+        mode = _normalize_cache_mode((msg.get("PAYLOAD") or {}).get("mode"))
+        if client and mode is not None:
             client.cacheMode = mode
         response["PAYLOAD"] = {"cacheMode": getattr(client, "cacheMode", "none")}
 
