@@ -16,6 +16,13 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, minimum-scale=1, maximum-scale=1">
+  <!-- Operator diagnostic toggle. tdbgflag.js is a static file served from
+       disk by the /js/ handler (mtime-cached, no server restart); flipping it
+       to on + a fleet RELOAD streams per-screen clock telemetry (off/prec/skew)
+       to the server CLIENTLOG without needing ?tdbg in the webclip URL. Loaded
+       FIRST so window._mmForceTdbg is set before the ?tdbg gate below runs.
+       Off by default (identical behavior). -->
+  <script src="/js/tdbgflag.js"></script>
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script>
@@ -350,7 +357,7 @@
 		// frost-creep live knob: ?frostblocks=N sets the noise-grid density (cost lever).
 		if ((m = /[?&]frostblocks=(\d+)/.exec(h))) { window._mmFrostDbg = { blocks: parseInt(m[1], 10) }; }
 	})();
-	if (/tdbg/.test(location.href)) {
+	if (/tdbg/.test(location.href) || window._mmForceTdbg) {
 		window._mmDbg = true;   // also stream debug to the server log (CLIENTLOG)
 		window._tdbg = function(pos, v, errorMs) {
 			var el = document.getElementById('tdbg');
@@ -641,6 +648,9 @@
 			// DIAGNOSTIC (temporary): steering sample/gate state — is the drift
 			// steerer being fed (recent>0) and engaging (steering), or starved?
 			steer: (typeof GoTime.steerDebug === 'function') ? GoTime.steerDebug() : null,
+			// DIAGNOSTIC: locked oscillator frequency error (ppm). Task 5 added skew to
+			// GoTime.getSteerState(); surface it here for per-screen convergence watch.
+			skew: (function () { var _ss = (typeof GoTime !== 'undefined' && typeof GoTime.getSteerState === 'function') ? GoTime.getSteerState() : null; return _ss ? Math.round(_ss.skew * 1e6) : null; })(),
 			// Scatter perf telemetry (?tdbg): animation-loop fps + last scatter draw
 			// stats + active tuning knobs, so frame rate is readable from the server
 			// log remotely (no need to eyeball the device HUD).
