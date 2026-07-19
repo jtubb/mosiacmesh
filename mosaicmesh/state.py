@@ -226,9 +226,10 @@ class Client():
         self.autoConfigured = False
         self.discoverySource = "manual"  # manual, websocket, network
         # Cache-state model (2026-06-03). cacheMode = "none" by default;
-        # set to "lighttpd-localhost" by onboarding when the iPad has
-        # lighttpd installed and a writable /var/mobile/Media/
-        # MosaicMeshCache/ dir. Set to "service-worker" by the client's
+        # set to "mmvideo" when the client reports its mmvideo cache backend
+        # on REGISTER (apply_cache_capability). lighttpd is not involved — the
+        # mmvideo tweak serves the local file from /var/mobile/Media/
+        # MosaicMeshCache/. Set to "service-worker" by the client's
         # ANNOUNCE_CACHE_MODE message when SW registration succeeds.
         # See docs/superpowers/specs/2026-06-03-media-cache-design.md.
         self.cacheMode = "none"
@@ -306,6 +307,12 @@ def migrate_client_objects():
             client.nameIsCustom = bool(fn) and not fn.endswith('_' + client_key[:8])
         if not hasattr(client, 'cacheMode'):
             client.cacheMode = "none"
+        # 2026-07-18 rename: the mmvideo cache mode was "lighttpd-localhost"
+        # (misnomer — lighttpd is vestigial). Rewrite persisted old values so
+        # guards (which now compare == "mmvideo") keep treating the device as
+        # cache-capable.
+        if getattr(client, 'cacheMode', 'none') == 'lighttpd-localhost':
+            client.cacheMode = 'mmvideo'
         if not hasattr(client, 'cachedSegments'):
             client.cachedSegments = set()
         if not hasattr(client, 'cacheProbedMs'):

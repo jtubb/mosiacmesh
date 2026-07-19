@@ -94,7 +94,7 @@ def test_per_client_items_full_cached_uses_localhost():
 
         # cache-capable client WITHOUT the FULL asset cached -> central URL
         c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
-        c.cacheMode = "lighttpd-localhost"; c.cachedSegments = set()
+        c.cacheMode = "mmvideo"; c.cachedSegments = set()
         server.settings.clients["c1"] = c
         assert R._per_client_items(d, "c1", c)[0]["file"] == \
             "/media/server/videos/full_tokF_0.mp4"

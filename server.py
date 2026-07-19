@@ -418,9 +418,9 @@ async def _reconcile_ipad_cache(client):
     display group. Best-effort -- ssh failures just leave orphans
     on disk (cosmetic concern, recovered next reconciliation).
 
-    Skips non-lighttpd-localhost clients (they have no on-device
+    Skips non-mmvideo clients (they have no on-device
     cache for us to clean)."""
-    if getattr(client, "cacheMode", "none") != "lighttpd-localhost":
+    if getattr(client, "cacheMode", "none") != "mmvideo":
         return
     if not getattr(client, "ip", ""):
         return
@@ -2163,7 +2163,7 @@ async def process():
     # the current playlist (the common case), so the cost is just a
     # set difference per cached client.
     for _c in list(settings.clients.values()):
-        if getattr(_c, "cacheMode", "none") == "lighttpd-localhost" and getattr(_c, "isOnline", False):
+        if getattr(_c, "cacheMode", "none") == "mmvideo" and getattr(_c, "isOnline", False):
             _rip = getattr(_c, "ip", "")
             if _rip and _rip not in _reconcile_inflight:   # skip if a reconcile is still running
                 asyncio.ensure_future(_run_reconcile_guarded(_c, _rip))

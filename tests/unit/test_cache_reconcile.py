@@ -33,7 +33,7 @@ def fresh_settings():
     yield server.settings
     server.settings = prev
 
-def _mk_client(did, mode="lighttpd-localhost", online=True, ip="1.2.3.4", cached=None):
+def _mk_client(did, mode="mmvideo", online=True, ip="1.2.3.4", cached=None):
     c = Client(); c.displayID = did; c.cacheMode = mode; c.isOnline = online
     c.ip = ip; c.cachedSegments = set(cached or [])
     return c
