@@ -273,7 +273,7 @@ def test_api_discovery_importable():
 def test_propagation_percent_short_circuits():
     """Behavior smoke check for the two early-exit paths in
     _propagation_percent_for_client:
-      - cacheMode != 'lighttpd-localhost' -> 100.0 (vacuously caught up)
+      - cacheMode != 'mmvideo' -> 100.0 (vacuously caught up)
       - displayID is None / empty       -> 100.0 (no group, nothing expected)
     Catches a future regression that would silently drag aggregate
     propagation stats down when non-caching clients are present."""
@@ -283,9 +283,9 @@ def test_propagation_percent_short_circuits():
     c1 = SimpleNamespace(cacheMode="none", displayID="Group1")
     assert _propagation_percent_for_client(c1) == 100.0
     # Caching client but no displayID
-    c2 = SimpleNamespace(cacheMode="lighttpd-localhost", displayID=None)
+    c2 = SimpleNamespace(cacheMode="mmvideo", displayID=None)
     assert _propagation_percent_for_client(c2) == 100.0
-    c3 = SimpleNamespace(cacheMode="lighttpd-localhost", displayID="")
+    c3 = SimpleNamespace(cacheMode="mmvideo", displayID="")
     assert _propagation_percent_for_client(c3) == 100.0
 
 def test_websocket_legacy_importable():
