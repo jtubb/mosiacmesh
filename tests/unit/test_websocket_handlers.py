@@ -312,6 +312,46 @@ class TestWebSocketConnectionManagement:
         assert 'offline' not in mock_settings.clients
         assert 'online' in mock_settings.clients
 
+    @patch('server.saveSettings')
+    def test_grouped_client_never_pruned(self, mock_save, mock_settings):
+        """A client that belongs to a display group is NEVER pruned, no matter how
+        long it has been offline. Regression: the calibrated 'OEB Sign 1' wall lost
+        all 24 iPads when they were pruned after >24h maintenance downtime. An
+        ungrouped/orphaned stale client is still eligible."""
+        if not hasattr(server, 'cleanup_old_clients'):
+            pytest.skip("cleanup_old_clients not implemented")
+
+        if getattr(mock_settings, 'displays', None) is None:
+            mock_settings.displays = {}
+        mock_settings.displays['OEB Sign 1'] = MagicMock()   # group exists
+
+        grouped = server.Client()
+        grouped.lastSeen = time.time() - (100 * 3600)   # offline 100 hours
+        grouped.isOnline = False
+        grouped.displayID = 'OEB Sign 1'
+
+        orphan = server.Client()
+        orphan.lastSeen = time.time() - (100 * 3600)
+        orphan.isOnline = False
+        orphan.displayID = None                          # not in any group
+
+        # also exercise: displayID naming a group that no longer exists -> not protected
+        ghost = server.Client()
+        ghost.lastSeen = time.time() - (100 * 3600)
+        ghost.isOnline = False
+        ghost.displayID = 'Deleted Group'
+
+        mock_settings.clients['grouped'] = grouped
+        mock_settings.clients['orphan'] = orphan
+        mock_settings.clients['ghost'] = ghost
+        server.settings = mock_settings
+
+        removed = server.cleanup_old_clients()
+
+        assert 'grouped' in mock_settings.clients, "a grouped client must survive maintenance downtime"
+        assert 'orphan' not in mock_settings.clients, "an ungrouped stale client is still pruned"
+        assert 'ghost' not in mock_settings.clients, "a client naming a non-existent group is not protected"
+
     def test_sanitize_display_groups_merges_html_key(self, mock_settings):
         """An HTML-corrupted group key is removed, merged into the clean name,
         and any client referencing it is repointed."""
