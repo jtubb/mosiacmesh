@@ -170,14 +170,29 @@ def saveSettings():
     save_settings_incremental()
 
 
+def _client_in_display_group(client, groups):
+    """True if this client is a member of an existing display group (a non-empty
+    displayID naming a group in settings.displays). Such a client is a deliberate,
+    often calibrated installation member and must NEVER be pruned."""
+    did = getattr(client, "displayID", None)
+    return bool(did) and did in (groups or {})
+
+
 def cleanup_old_clients(max_age_seconds=24 * 3600):
-    """Remove clients that have been offline longer than max_age_seconds.
+    """Remove clients that have been offline longer than max_age_seconds — EXCEPT
+    clients that belong to a display group, which are never pruned no matter how long
+    they've been offline. A calibrated wall (e.g. "OEB Sign 1") must survive extended
+    maintenance downtime without losing its group membership + per-client calibration;
+    only truly ungrouped/orphaned clients are eligible for cleanup.
     Persists only when something was actually removed. Returns the count."""
     import server
     current_time = time.time()
+    groups = server.settings.displays
     stale_keys = [
         key for key, client in server.settings.clients.items()
-        if not client.isOnline and (current_time - client.lastSeen) > max_age_seconds
+        if not client.isOnline
+        and (current_time - client.lastSeen) > max_age_seconds
+        and not _client_in_display_group(client, groups)
     ]
     for key in stale_keys:
         del server.settings.clients[key]
