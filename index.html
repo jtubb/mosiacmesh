@@ -30,6 +30,7 @@
   <script src="/js/animations.js"></script>
   <script src="/js/transitions.js"></script>
   <script src="/js/mesh-viewport.js"></script>
+  <script src="/js/drift-steer.js"></script>
   <script src="/js/video-buffer.js"></script>
   <script src="/js/mmCache.js"></script>
   <script src="/js/mmVideoRecovery.js"></script>
@@ -317,16 +318,13 @@
 	// jitter doesn't trigger needless re-seeks once converged (each seek stalls the
 	// iPad), low enough to re-align on real drift. iOS-5 IGNORES playbackRate (verified:
 	// set 1.15 but currentTime advances 1.0x), so a seek is the only lever there.
-	var DRIFT_SEEK_MS = 30;   // 2026-06-15: lowered from 100. iOS-5 ignores playbackRate, so the
-	                          // in-band rate-nudge is a no-op; a seek-landing residual below the
-	                          // threshold was trapped (the lead-tuner only runs on a seek). 30 lets
-	                          // sub-100ms residuals re-seek -> the lead converges -> seeks land near
-	                          // 0. Fleet-validated: drift median 37->11ms, max 100->25ms, modest
-	                          // extra seeks (cheap now that segments are cached on-device). NOTE: a
-	                          // capability-aware two-strategy variant (direct exact seek for modern)
-	                          // was tried + reverted -- direct seeks fail on iOS-5 (keyframe-snap +
-	                          // uncompensated seek latency), and the boundary-aligned keyframe seek
-	                          // below works on iOS-5 AND modern, so one path is correct for both.
+	// Drift-steer tuning (js/drift-steer.js). Coarse = boundary seek; fine = damped
+	// rate PLL on median-filtered err with a deadband. Replaces the old fixed
+	// 30ms seek threshold + rate=1-err/2000 (±15%) that oscillated on mmvideo's live rate.
+	var DRIFT_OPTS = {
+		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.035, RATE_GAIN: 0.0002,
+		ERR_FILTER_N: 5, LIVENESS_EPS: 0.02, LIVENESS_K: 4, PROBE_TICKS: 8, PROBE_DELTA: 0.03
+	};
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
 	                             // time to settle + establish playback before another,
 	                             // else a slow/stalled element gets re-seeked every tick
@@ -1088,25 +1086,20 @@
 		var nowMs = GoTime.now();
 		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
 		var didSeek = false;
-		// Off the shared clock by more than the tolerance? Re-align with a BOUNDARY-
-		// ALIGNED seek so the residual is CONSISTENT (no random keyframe snap). Seeking
-		// NOW lands at an arbitrary phase -> +-grid/2 snap that freezes at a different
-		// value every startup (and differs across iPads). Instead schedule the seek to
-		// SETTLE exactly when the clock reaches a grid keyframe: seek to the next grid
-		// keyframe G (just past offset+lead) at the wall-instant when offset == G - lead,
-		// so after ~lead of settle it lands as the clock arrives at G -> currentTime ==
-		// clock target. Residual collapses to the (converging) lead error + timer jitter,
-		// and is the SAME across the fleet (all land on the same keyframe at the same
-		// clock instant). One seek per re-align; the lead converges in 1-2 startup seeks.
-		if (canSeek && (errorMs < -DRIFT_SEEK_MS || errorMs > DRIFT_SEEK_MS)) {
+		var cmd = mmDriftCommand(playback.driftState, errorMs,
+			{ rateGot: v.playbackRate, canSeek: canSeek }, DRIFT_OPTS);
+		if (cmd.action === 'seek') {
+			// BOUNDARY-ALIGNED seek: schedule the seek to SETTLE exactly as the clock
+			// reaches the next grid keyframe, so the residual is CONSISTENT across the
+			// fleet (no random keyframe snap). Unchanged from the pre-PLL steer.
 			var lead = playback.seekAheadMs;
 			var maxMs = ((v.duration || (durations[pos.index] / 1000)) * 1000) - 50;
 			var G = Math.ceil((pos.offsetMs + lead + 40) / KEYFRAME_GRID_MS) * KEYFRAME_GRID_MS;
-			var issueDelay = G - pos.offsetMs - lead;   // wall-ms until we fire the seek
+			var issueDelay = G - pos.offsetMs - lead;
 			if (issueDelay < 0) { issueDelay = 0; }
 			if (G > maxMs) { G = maxMs; }
 			if (G < 0) { G = 0; }
-			playback.lastSeekAt = nowMs;                 // cooldown starts now so we don't re-schedule
+			playback.lastSeekAt = nowMs;
 			didSeek = true;
 			if (playback.boundaryTimer) { clearTimeout(playback.boundaryTimer); }
 			playback.boundaryTimer = setTimeout(function () {
@@ -1115,20 +1108,16 @@
 				if (!playback.active || playback.paused || !vv) { return; }
 				try { vv.currentTime = G / 1000; } catch (e) {}
 				vv.playbackRate = 1;
-				playback.seekPending = true;             // tune the lead from the residual next tick
+				playback.seekPending = true;
 				playback.lastSeekAt = GoTime.now();
-				// SEEK-LANDING instrumentation: remember WHERE we asked it to go
-				// (G), WHEN we issued it, and the lead, so the next settled tick
-				// reports target-vs-actual landing + settle latency.
 				playback.seekTargetMs = G;
 				playback.seekIssuedAt = playback.lastSeekAt;
 				playback.seekIssueLead = lead;
 			}, issueDelay);
+		} else if (cmd.action === 'rate') {
+			v.playbackRate = cmd.rate;
 		} else {
-			var rate = 1 - errorMs / 2000;
-			if (rate < 0.85) { rate = 0.85; }
-			if (rate > 1.15) { rate = 1.15; }
-			v.playbackRate = rate;
+			v.playbackRate = 1;   // hold: within deadband, don't chase noise
 		}
 		if (window._tdbg) { window._tdbg(pos, v, errorMs); }
 		// Throttled drift trace (~1/s): err is ms off the shared clock; rateSet is what
@@ -1136,12 +1125,15 @@
 		// rate fine-correction is a no-op and only seeks move us). sk=1 if we seeked.
 		if (!playback._lastTrace || (nowMs - playback._lastTrace) > 1000) {
 			playback._lastTrace = nowMs;
-			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (didSeek ? 1 : 0), lead: Math.round(playback.seekAheadMs) });
+			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (didSeek ? 1 : 0),
+				lead: Math.round(playback.seekAheadMs),
+				ferr: Math.round(cmd.filteredErr), rlive: (cmd.rateLive ? 1 : 0) });
 		}
 	}
 
 	function startDriftLoop() {
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); }
+		playback.driftState = mmDriftState();
 		playback.driftTimer = setInterval(driftTick, 500);
 	}
 
