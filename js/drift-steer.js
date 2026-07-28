@@ -38,6 +38,21 @@
     var N = opt(opts, 'ERR_FILTER_N');
     var canSeek = !!(obs && obs.canSeek);
 
+    var EPS = opt(opts, 'LIVENESS_EPS');
+    var K = opt(opts, 'LIVENESS_K');
+    var rateGot = (obs && typeof obs.rateGot === 'number') ? obs.rateGot : 1;
+
+    // liveness: did LAST tick's non-unity rate command take effect this tick?
+    if (state.lastRateCmd !== 1) {
+      if (Math.abs(rateGot - state.lastRateCmd) > EPS) {
+        state.inertCount += 1;
+        if (state.inertCount >= K) { state.rateLive = false; }
+      } else {
+        state.inertCount = 0;
+        state.rateLive = true;
+      }
+    }
+
     // median filter
     state.ring.push(err);
     while (state.ring.length > N) { state.ring.shift(); }
@@ -47,6 +62,20 @@
     if (Math.abs(err) > COARSE && canSeek) {
       state.lastRateCmd = 1;   // rate resets to 1 after a seek
       return { action: 'seek', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
+    }
+
+    // rate inert (stock Safari pins playbackRate to 1): can't fine-steer via rate.
+    // Hold, but emit a periodic probe so recovery is observable.
+    if (!state.rateLive) {
+      state.probeCountdown -= 1;
+      if (state.probeCountdown <= 0) {
+        state.probeCountdown = opt(opts, 'PROBE_TICKS');
+        var probe = 1 + opt(opts, 'PROBE_DELTA');
+        state.lastRateCmd = probe;
+        return { action: 'rate', rate: probe, filteredErr: fErr, rateLive: false };
+      }
+      state.lastRateCmd = 1;
+      return { action: 'hold', rate: 1, filteredErr: fErr, rateLive: false };
     }
 
     // fine regime: deadband, then damped rate on FILTERED err

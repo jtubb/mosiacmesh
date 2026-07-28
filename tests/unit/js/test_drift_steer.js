@@ -53,3 +53,33 @@ test('closed-loop: clean -100ms err converges into deadband without overshoot', 
   assert.ok(Math.abs(err) < 25, 'converged, err=' + err);
   assert.ok(!overshoot, 'no overshoot past zero');
 });
+
+test('liveness: rateGot ignores commands for K ticks -> rateLive false', () => {
+  const s = g.mmDriftState();
+  for (let i = 0; i < 6; i++) g.mmDriftCommand(s, -100, { rateGot: 1, canSeek: false });
+  assert.equal(s.rateLive, false);
+});
+
+test('liveness: honored rate keeps rateLive true', () => {
+  const s = g.mmDriftState();
+  let last = 1;
+  for (let i = 0; i < 6; i++) {
+    const c = g.mmDriftCommand(s, -100, { rateGot: last, canSeek: false });
+    last = c.rate;   // element honors the command
+  }
+  assert.equal(s.rateLive, true);
+});
+
+test('liveness: inert screen emits periodic probe and recovers when honored', () => {
+  const s = g.mmDriftState();
+  for (let i = 0; i < 6; i++) g.mmDriftCommand(s, -100, { rateGot: 1, canSeek: false });
+  assert.equal(s.rateLive, false);
+  let probe = null;
+  for (let i = 0; i < 12 && probe === null; i++) {
+    const c = g.mmDriftCommand(s, -100, { rateGot: 1, canSeek: false });
+    if (c.action === 'rate') probe = c.rate;
+  }
+  assert.ok(probe !== null, 'a probe rate was emitted while inert');
+  g.mmDriftCommand(s, -100, { rateGot: probe, canSeek: false }); // probe honored next tick
+  assert.equal(s.rateLive, true);
+});
