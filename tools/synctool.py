@@ -58,10 +58,16 @@ def main():
                       "ct_at": sc.eval_fit(fit, now), "slope": fit["slope"]}
 
     names = {k: roster[k] for k in fresh}
-    positions = [v["ct_at"] for v in fresh.values()]
-    order = list(fresh.keys())
-    if len(positions) < 2:
-        print("not enough playing screens (%d)" % len(positions)); return
+    # steady = in normal ~1x playback; not_steady = stalled/seeking/otherwise off-rate.
+    # Only steady screens count toward the spread/corrections/attribution — a stalled or
+    # seeking screen isn't visually desynced from the others, it's just not comparable.
+    steady = {k: v for k, v in fresh.items() if abs(v["slope"] - 1.0) <= sc.SLOPE_TOL}
+    not_steady = {k: v for k, v in fresh.items() if k not in steady}
+
+    positions = [steady[k]["ct_at"] for k in steady]
+    order = list(steady.keys())
+    if len(order) < 2:
+        print("only %d screens in steady playback — nothing to measure yet" % len(order)); return
 
     spread = sc.circular_spread(positions, a.loop_ms)
     center, corr = sc.corrections(positions, a.loop_ms)
@@ -77,27 +83,32 @@ def main():
         return ps
     early = sc.circular_spread(half_positions(False), a.loop_ms)
     late = sc.circular_spread(half_positions(True), a.loop_ms)
-    state, reason = sc.settled_verdict(early, late, [fresh[k]["slope"] for k in order])
+    state, reason = sc.settled_verdict(early, late, [steady[k]["slope"] for k in order])
 
     # attribution: video-offset = spread of err; clock ~ headline - video
-    errvals = [fresh[k]["err"] for k in order if fresh[k]["err"] is not None]
+    errvals = [steady[k]["err"] for k in order if steady[k]["err"] is not None]
     video_off = (max(errvals) - min(errvals)) if len(errvals) >= 2 else 0
     clock = max(0.0, spread - video_off)
 
     if a.json:
         print(json.dumps({"group": a.group, "state": state, "spread_ms": spread,
             "video_offset_ms": video_off, "clock_ms": clock, "center": center,
-            "screens": {names[k]: {"ct_at": fresh[k]["ct_at"], "correction": corr[i],
-                        "slope": fresh[k]["slope"]} for i, k in enumerate(order)},
+            "screens": {names[k]: {"ct_at": steady[k]["ct_at"], "correction": corr[i],
+                        "slope": steady[k]["slope"]} for i, k in enumerate(order)},
+            "not_steady": [{"name": names[k], "slope": v["slope"]} for k, v in not_steady.items()],
             "stale": stale, "insufficient": insufficient})); return
 
     print("%s  cross-screen sync   [%s: %s]" % (a.group, state, reason))
     print("  HEADLINE visual desync (circular spread of ct@T): %.0f ms" % spread)
     print("  attribution: video-offset %.0f ms | clock-disagreement ~%.0f ms" % (video_off, clock))
-    print("  playing %d | stale %d | insufficient %d" % (len(fresh), len(stale), len(insufficient)))
+    print("  playing %d (steady) | not-steady %d | stale %d | insufficient %d" %
+          (len(steady), len(not_steady), len(stale), len(insufficient)))
     print("  %-15s %10s %10s %8s" % ("screen", "corr(ms)", "err", "slope"))
     for i, k in sorted(enumerate(order), key=lambda ik: corr[ik[0]]):
-        print("  %-15s %+10.0f %10s %8.3f" % (names[k], corr[i], fresh[k]["err"], fresh[k]["slope"]))
+        print("  %-15s %+10.0f %10s %8.3f" % (names[k], corr[i], steady[k]["err"], steady[k]["slope"]))
+    if not_steady:
+        print("  not-steady (stalled/seeking): %s" % ", ".join(
+            "%s (%.2f)" % (names[k], not_steady[k]["slope"]) for k in sorted(not_steady, key=lambda k: names[k])))
     if stale: print("  stale/absent: %s" % ", ".join(sorted(stale)))
 
 
