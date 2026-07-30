@@ -28,3 +28,10 @@ def test_corrections_center_and_offsets():
     center, corr = sc.corrections([9950, 10000, 10050], 30000)
     assert abs(center - 10000) < 1
     assert abs(corr[0] - 50) < 1 and abs(corr[1]) < 1 and abs(corr[2] + 50) < 1
+
+
+def test_circular_center_single_and_empty():
+    assert sc.circular_center([500], 30000) == 500
+    assert sc.circular_center([], 30000) == 0.0
+    center, corr = sc.corrections([500], 30000)
+    assert center == 500 and corr == [0.0]

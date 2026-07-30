@@ -32,6 +32,10 @@ def circular_spread(positions, loop_len):
 
 def circular_center(positions, loop_len):
     """Midpoint of the minimal enclosing arc (the arc opposite the largest empty gap)."""
+    if not positions:
+        return 0.0
+    if len(positions) == 1:
+        return positions[0] % loop_len
     xs = sorted(p % loop_len for p in positions)
     n = len(xs)
     gaps = [(xs[(i + 1) % n] - xs[i]) % loop_len for i in range(n)]
