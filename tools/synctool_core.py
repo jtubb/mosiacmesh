@@ -49,3 +49,46 @@ def corrections(positions, loop_len):
     """Returns (center, [signed distance from each position to center])."""
     c = circular_center(positions, loop_len)
     return c, [signed_circ_dist(p % loop_len, c, loop_len) for p in positions]
+
+
+def _linfit(pts):
+    """Least-squares (slope, intercept) for [(x, y), ...]. slope 0 if degenerate."""
+    n = len(pts)
+    sx = sum(x for x, _ in pts); sy = sum(y for _, y in pts)
+    sxx = sum(x * x for x, _ in pts); sxy = sum(x * y for x, y in pts)
+    denom = n * sxx - sx * sx
+    if denom == 0:
+        return 0.0, (sy / n if n else 0.0)
+    slope = (n * sxy - sx * sy) / denom
+    intercept = (sy - slope * sx) / n
+    return slope, intercept
+
+
+def fit_ct(samples, outlier_ms=OUTLIER_MS, min_samples=MIN_SAMPLES):
+    """Fit ct(t)=ct0+slope*(t-t0) over the longest wrap-free run of samples, rejecting
+    outliers. samples=[(t_ms, ct)]. Returns a fit dict or None if too few kept."""
+    if len(samples) < 2:
+        return None
+    s = sorted(samples)
+    runs = [[s[0]]]
+    for i in range(1, len(s)):
+        if s[i][1] < runs[-1][-1][1] - 1000:   # ct dropped >1s => loop wrap
+            runs.append([s[i]])
+        else:
+            runs[-1].append(s[i])
+    run = max(runs, key=len)
+    if len(run) < min_samples:
+        return None
+    t0 = run[0][0]
+    pts = [(t - t0, ct) for t, ct in run]
+    slope, ct0 = _linfit(pts)
+    kept = [(x, y) for x, y in pts if abs(y - (ct0 + slope * x)) <= outlier_ms]
+    rejected = len(pts) - len(kept)
+    if len(kept) < min_samples:
+        kept = pts; rejected = 0        # don't over-reject on a noisy screen
+    slope, ct0 = _linfit(kept)
+    return {'ct0': ct0, 'slope': slope, 't0': t0, 'n': len(kept), 'rejected': rejected}
+
+
+def eval_fit(fit, T):
+    return fit['ct0'] + fit['slope'] * (T - fit['t0'])
