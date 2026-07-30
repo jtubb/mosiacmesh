@@ -1283,10 +1283,18 @@
 			// blackout cover, defeating the "stopped" UX.
 			v.muted = true; v.volume = 0;
 			try { v.pause(); } catch (e) {}
+			// FIRM STOP for mmvideo: pause() + the DOM blackout can't reliably stop the
+			// transplant -- its <video> renders via a NATIVE AVPlayerLayer slotted ABOVE the
+			// WebKit DOM (so the blackout div can't cover it) and its near-end loop-seek can
+			// keep re-playing. Tearing down the source (removeAttribute+load) forces the WebCore
+			// media element to re-run its load algorithm with no URL, destroying the mmvideo
+			// engine/AVPlayer stack -> the native video actually stops, not just the client state.
+			try { v.removeAttribute('src'); v.load(); } catch (e) {}
 			v.style.display = 'block';
 			showBlackout();
 		} else if (v) {
 			try { v.pause(); } catch (e) {}
+			try { v.removeAttribute('src'); v.load(); } catch (e) {}
 			v.style.display = 'none';
 			showBlackout();
 		}
