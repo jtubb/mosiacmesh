@@ -80,3 +80,22 @@ def test_converging_when_spread_moves():
 def test_converging_when_slope_off_1x():
     st, _ = sc.settled_verdict(40, 42, [1.0, 1.2])   # a screen still seeking/arming
     assert st == 'CONVERGING'
+
+
+def test_parse_clientlog_line():
+    line = ("2026-07-30 15:39:21,220 WARNING CLIENTLOG ei49puuugjznz5mi "
+            "{'tag': 'drift', 'ct': 12043, 'err': -18, 'off': -112725, 'rateGot': 1.02}")
+    r = sc.parse_clientlog_line(line)
+    assert r['key'] == 'ei49puuugjznz5mi'
+    assert r['tag'] == 'drift' and r['ct'] == 12043 and r['err'] == -18
+    assert abs(r['rate'] - 1.02) < 1e-9
+    # 15:39:21.220 -> ms of day
+    assert r['t_ms'] == ((15 * 3600 + 39 * 60 + 21) * 1000 + 220)
+
+
+def test_parse_ignores_non_drift_and_garbage():
+    assert sc.parse_clientlog_line("2026-07-30 15:39:21,220 INFO something else") is None
+    assert sc.parse_clientlog_line("garbage") is None
+    # clock-sync (idle) has no ct -> still parses but ct is None (caller filters)
+    cs = sc.parse_clientlog_line("2026-07-30 15:39:21,220 WARNING CLIENTLOG k {'tag': 'clock-sync'}")
+    assert cs is not None and cs['ct'] is None

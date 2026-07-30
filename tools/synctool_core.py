@@ -1,6 +1,9 @@
 """Pure functions for cross-screen sync measurement (no I/O). Unit-tested in
 tests/unit/test_synctool.py. See docs/superpowers/specs/2026-07-30-synctool-*-design.md."""
 
+import re
+import ast
+
 WINDOW_MS = 18000
 FRESH_MS = 20000
 MIN_SAMPLES = 5
@@ -103,3 +106,24 @@ def settled_verdict(early_spread, late_spread, slopes, settle_tol=SETTLE_TOL_MS,
     if off:
         return 'CONVERGING', '%d screen(s) not at 1x (seeking/arming)' % len(off)
     return 'SETTLED', 'stable'
+
+
+_LINE_RE = re.compile(r'(\d\d):(\d\d):(\d\d),(\d\d\d) WARNING CLIENTLOG (\S+) (\{.*\})\s*$')
+
+
+def parse_clientlog_line(line):
+    """Parse one CLIENTLOG line -> dict (or None). t_ms = ms-of-day from the timestamp."""
+    m = _LINE_RE.search(line)
+    if not m:
+        return None
+    hh, mm, ss, ms, key, payload = m.groups()
+    try:
+        p = ast.literal_eval(payload)
+    except Exception:
+        return None
+    if not isinstance(p, dict):
+        return None
+    t_ms = ((int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms))
+    return {'t_ms': t_ms, 'key': key, 'tag': p.get('tag'),
+            'ct': p.get('ct'), 'err': p.get('err'), 'off': p.get('off'),
+            'rate': p.get('rateGot')}
