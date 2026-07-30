@@ -65,3 +65,18 @@ def test_fit_ct_rejects_outlier_spike():
 
 def test_fit_ct_insufficient_returns_none():
     assert sc.fit_ct([(1000, 5000), (1500, 5500)]) is None
+
+
+def test_settled_when_stable_and_1x():
+    st, _ = sc.settled_verdict(40, 42, [1.0, 1.01, 0.99])
+    assert st == 'SETTLED'
+
+
+def test_converging_when_spread_moves():
+    st, _ = sc.settled_verdict(120, 40, [1.0, 1.0])
+    assert st == 'CONVERGING'
+
+
+def test_converging_when_slope_off_1x():
+    st, _ = sc.settled_verdict(40, 42, [1.0, 1.2])   # a screen still seeking/arming
+    assert st == 'CONVERGING'

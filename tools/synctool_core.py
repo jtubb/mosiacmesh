@@ -92,3 +92,14 @@ def fit_ct(samples, outlier_ms=OUTLIER_MS, min_samples=MIN_SAMPLES):
 
 def eval_fit(fit, T):
     return fit['ct0'] + fit['slope'] * (T - fit['t0'])
+
+
+def settled_verdict(early_spread, late_spread, slopes, settle_tol=SETTLE_TOL_MS, slope_tol=SLOPE_TOL):
+    """SETTLED only if the spread is stable across the two sub-windows AND every screen is
+    playing at ~1x (not seeking/arming). Otherwise CONVERGING with the reason."""
+    if abs(early_spread - late_spread) > settle_tol:
+        return 'CONVERGING', 'spread moved %.0f->%.0f ms' % (early_spread, late_spread)
+    off = [s for s in slopes if abs(s - 1.0) > slope_tol]
+    if off:
+        return 'CONVERGING', '%d screen(s) not at 1x (seeking/arming)' % len(off)
+    return 'SETTLED', 'stable'
