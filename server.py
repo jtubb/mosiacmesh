@@ -130,10 +130,15 @@ PREPARE_TIMEOUT_MS = 45000  # Safety-net timeout. Lengthened (was 25000) so PSM-
                             # resync burst before the best-effort release (sync-gated
                             # play). Covers SILENT/stuck clients too. A client that
                             # reported NEEDS_ARM (iOS-5 awaiting a human tap) is waited
-                            # on indefinitely (_release_expired_prepares holds the GO
-                            # while any online client is arm-pending), so the whole wall
-                            # starts together once all are armed. This timeout only
-                            # releases past clients that never responded.
+                            # on for a bounded ARM_HARD_GRACE_MS beyond this (so the wall
+                            # starts together once all are armed) -- but NOT indefinitely:
+                            # a permanently un-armable screen is dropped past the hard cap
+                            # (see _release_expired_prepares). This timeout also releases
+                            # past clients that never responded.
+ARM_HARD_GRACE_MS = 60000   # max EXTRA hold (beyond prepareDeadline) for a client stuck in
+                            # armPending. A verr=3 cold-load screen no tap can fix must NOT
+                            # block the whole wall forever; past prepareDeadline +
+                            # ARM_HARD_GRACE_MS the group releases without it (~105s total).
 AUTO_ARM = True             # server fires a Veency tap to arm un-armed iOS devices
 VEENCY_PORT = 5900
 # MUST match the password baked into the fleet's Veency plist by the
@@ -312,11 +317,17 @@ def _release_expired_prepares():
         if display.action != PlayState.PREPARING or not display.prepareDeadline:
             continue
         online = _group_online_keys(display_id)
-        if getattr(display, "armPending", set()) & online:
-            continue   # someone still needs a tap -> keep holding the GO
+        arm_holding = getattr(display, "armPending", set()) & online
+        # A client awaiting an arm (NEEDS_ARM) holds the GO so the wall starts together
+        # once every screen is tapped in -- but ONLY up to a HARD cap. A permanently
+        # un-armable screen (e.g. a verr=3 mmvideo cold-load decode failure that no tap
+        # can fix) must NOT block the whole wall indefinitely: past prepareDeadline +
+        # ARM_HARD_GRACE_MS we release without it and leave it behind to keep retrying.
+        if arm_holding and now <= display.prepareDeadline + ARM_HARD_GRACE_MS:
+            continue   # within the arm grace -> keep holding the GO for the (human) tap
         if now > display.prepareDeadline:
-            logging.warning("PREPARE timeout for %s; releasing without %s",
-                            display_id, online - display.readyClients)
+            logging.warning("PREPARE timeout for %s; releasing without %s (arm-stuck dropped: %s)",
+                            display_id, online - display.readyClients, (arm_holding or "none"))
             _release_group(display_id)
 
 

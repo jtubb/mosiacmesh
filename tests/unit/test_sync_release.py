@@ -63,6 +63,20 @@ def test_expired_prepare_waits_for_arm_tap(fresh_settings, monkeypatch):
     released = []
     monkeypatch.setattr(server, "_release_group", lambda did: released.append(did))
     d.armPending.add("c1")                # still needs a human tap
-    d.prepareDeadline = int(time.time() * 1000) - 1
+    d.prepareDeadline = int(time.time() * 1000) - 1   # just past soft deadline (within arm grace)
     server._release_expired_prepares()
-    assert released == []                  # NEEDS_ARM hold preserved
+    assert released == []                  # NEEDS_ARM hold preserved WITHIN the grace window
+
+
+def test_expired_prepare_arm_hard_cap(fresh_settings, monkeypatch):
+    """A permanently un-armable screen (e.g. a verr=3 mmvideo cold-load that no tap can
+    fix) must NOT block the whole wall forever: past the HARD cap the group releases
+    without it, so one broken screen can't take down all the others."""
+    d = _preparing_group(fresh_settings)
+    released = []
+    monkeypatch.setattr(server, "_release_group", lambda did: released.append(did))
+    d.armPending.add("c1")                # stuck awaiting arm, un-tappable
+    # past prepareDeadline + ARM_HARD_GRACE_MS -> hard cap elapsed
+    d.prepareDeadline = int(time.time() * 1000) - server.ARM_HARD_GRACE_MS - 5000
+    server._release_expired_prepares()
+    assert released == ["G1"]             # released despite armPending -> wall starts without it
