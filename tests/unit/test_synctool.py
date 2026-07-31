@@ -82,6 +82,26 @@ def test_converging_when_slope_off_1x():
     assert st == 'CONVERGING'
 
 
+def test_playback_stale_when_ct_lags_telemetry():
+    # newest video ct is far behind the newest (clock-sync) telemetry -> stale snapshot
+    stale, age = sc.playback_stale(1000, 1000 + sc.FRESH_MS + 1)
+    assert stale is True
+    assert age == sc.FRESH_MS + 1
+
+
+def test_playback_live_when_ct_current():
+    # newest line IS a ct line (gap 0), and a small gap within the window -> both live
+    assert sc.playback_stale(5000, 5000) == (False, 0)
+    stale, _ = sc.playback_stale(5000, 5000 + sc.FRESH_MS - 1)
+    assert stale is False
+
+
+def test_playback_stale_respects_threshold_boundary():
+    # exactly FRESH_MS is still live; one past it is stale
+    assert sc.playback_stale(0, sc.FRESH_MS)[0] is False
+    assert sc.playback_stale(0, sc.FRESH_MS + 1)[0] is True
+
+
 def test_parse_clientlog_line():
     line = ("2026-07-30 15:39:21,220 WARNING CLIENTLOG ei49puuugjznz5mi "
             "{'tag': 'drift', 'ct': 12043, 'err': -18, 'off': -112725, 'rateGot': 1.02}")
