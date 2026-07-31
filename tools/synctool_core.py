@@ -108,6 +108,20 @@ def settled_verdict(early_spread, late_spread, slopes, settle_tol=SETTLE_TOL_MS,
     return 'SETTLED', 'stable'
 
 
+def playback_stale(newest_ct_ms, newest_any_ms, fresh_ms=FRESH_MS):
+    """Guard against measuring a frozen pre-stop snapshot. During live playback the newest
+    video-ct line and the newest telemetry line of any kind are seconds apart; when playback
+    stops, the group keeps emitting clock-sync (ct:None) lines that pull newest_any ahead of
+    the frozen newest_ct. Returns (is_stale, age_ms) where age = newest_any - newest_ct. Stale
+    means no video is playing now, so any ct-based spread would be an old snapshot.
+
+    Note: catches playback-stopped-while-group-still-reporting (the common case). It does NOT
+    catch a fully-frozen log/server (newest_any == newest_ct, both old) — that needs a
+    wall-clock reference, tracked separately."""
+    age = newest_any_ms - newest_ct_ms
+    return age > fresh_ms, age
+
+
 _LINE_RE = re.compile(r'(\d\d):(\d\d):(\d\d),(\d\d\d) WARNING CLIENTLOG (\S+) (\{.*\})\s*$')
 
 

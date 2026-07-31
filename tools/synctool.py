@@ -17,17 +17,25 @@ def load_roster(group, base):
 
 
 def collect(logpath, keys):
-    """Per-key list of (t_ms, ct, err, off, rate) from drift/hb lines with a ct."""
+    """Per-key list of (t_ms, ct, err, off, rate) from drift/hb lines with a ct, plus the
+    newest timestamp among the group's telemetry of ANY tag (drift/hb/clock-sync). The latter
+    is the liveness reference: if the newest ct lags it, the group is reporting but not playing.
+    Returns (per, latest_any_ms)."""
     per = {}
+    latest_any = 0
     with open(logpath, encoding="utf-8", errors="replace") as f:
         for line in f:
             if "CLIENTLOG" not in line:
                 continue
             r = sc.parse_clientlog_line(line)
-            if not r or r["key"] not in keys or r["tag"] not in ("drift", "hb") or r["ct"] is None:
+            if not r or r["key"] not in keys:
+                continue
+            if r["t_ms"] > latest_any:
+                latest_any = r["t_ms"]
+            if r["tag"] not in ("drift", "hb") or r["ct"] is None:
                 continue
             per.setdefault(r["key"], []).append(r)
-    return per
+    return per, latest_any
 
 
 def main():
@@ -40,10 +48,22 @@ def main():
     a = ap.parse_args()
 
     roster = load_roster(a.group, a.base)
-    per = collect(a.log, set(roster))
+    per, latest_any = collect(a.log, set(roster))
     if not per:
         print("no telemetry for %s" % a.group); return
     now = max(r["t_ms"] for rows in per.values() for r in rows)
+
+    # Liveness guard: if the newest ct lags the group's newest telemetry, no video is playing
+    # now — the ct window is a frozen pre-stop snapshot. Refuse to report a stale number.
+    stale_pb, age_ms = sc.playback_stale(now, latest_any)
+    if stale_pb:
+        if a.json:
+            print(json.dumps({"group": a.group, "state": "NO_LIVE_PLAYBACK",
+                              "newest_ct_age_ms": age_ms})); return
+        print("%s  NO LIVE PLAYBACK - newest video ct is %.0fs old "
+              "(group telemetry is current; no video is playing on this group)"
+              % (a.group, age_ms / 1000.0))
+        return
 
     fresh, stale, insufficient = {}, [], []
     for key, rows in per.items():
