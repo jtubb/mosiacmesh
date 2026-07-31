@@ -168,6 +168,28 @@ void mm_engine_set_rate(MMEngine *e, float rate) {
     if (r > 0.0f) e->desiredRate = r;      // remember nonzero rate so play() resumes at it
     PL(e).rate = r;
     e->playing = (r != 0.0f);
+
+    // EXPERIMENT (2026-07-31): on-wall diagnosis proved iOS 5.1 AVPlayer.rate ignores small
+    // fractional rates (~7% effective), so the drift steer's fine correction is inert. Try
+    // driving the AVPlayerItem CMTimebase directly, which MAY honor fractions AVPlayer.rate
+    // ignores. Logs selector reachability + set status; the canary reveals if it holds (the
+    // player may override it on its next update). Guarded so a bad selector can't crash.
+    if (r > 0.0f) {
+        AVPlayerItem *it = IT(e);
+        CMTimebaseRef tb = NULL;
+        if ([it respondsToSelector:@selector(timebase)]) {
+            CMTimebaseRef (*msg)(id, SEL) = (CMTimebaseRef (*)(id, SEL))objc_msgSend;
+            tb = msg((id)it, @selector(timebase));
+        }
+        FILE *_f = fopen("/tmp/mmvideo.log", "a");
+        if (tb) {
+            OSStatus st = CMTimebaseSetRate(tb, (Float64)r);
+            if (_f) fprintf(_f, "[rate-exp] CMTimebaseSetRate r=%.4f tb=%p st=%ld%c", r, (void *)tb, (long)st, 10);
+        } else if (_f) {
+            fprintf(_f, "[rate-exp] no timebase selector; r=%.4f (AVPlayer.rate only)%c", r, 10);
+        }
+        if (_f) fclose(_f);
+    }
 }
 
 // currentTime is the value cached by the observer block (avoids the stret
