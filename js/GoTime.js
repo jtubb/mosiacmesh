@@ -188,6 +188,18 @@ var GoTime = (function f() {
     };
 
     _sync = function() {
+        // Beat suppression: when the server's broadcast clock beat is enabled and
+        // fresh, the beat already feeds the steer via beatReceived -- skip the
+        // /time (ws/ajax) round-trip entirely so it doesn't re-dilute the
+        // _steerSamples ring with a coarser sample, and just re-arm a staleness
+        // re-check so /time resumes automatically if beats stop. window is absent
+        // in node (tests), so this is inert there and existing cadence is unchanged.
+        var beatOn = (typeof window !== 'undefined' && window._mmClockBeat);
+        if (_beatSuppressesPoll(!!beatOn, options._lastBeatMs, getAccurateTimestamp(), options._beatStaleMs)) {
+            if (options._syncTimer != null) { clearTimeout(options._syncTimer); }
+            options._syncTimer = setTimeout(_sync, options._beatStaleMs);
+            return;
+        }
         var success = false;
 		if (options._wsCall != null) {
 			options._wsRequestTime = Date.now();
@@ -226,14 +238,6 @@ var GoTime = (function f() {
         options._syncSampleReturned = false;
         var delay = d.delayMs;
         if (d.phase === 'fast') { delay += Math.floor(Math.random() * options._fastSyncJitterMs); }
-        // Beat suppression: when the server's broadcast clock beat is enabled and
-        // fresh, skip this cycle's /time poll -- but still re-arm at _beatStaleMs so
-        // the failsafe re-checks staleness even if beats stop (never simply skip
-        // arming). window is absent in node (tests) so this is inert there.
-        var beatEnabled = (typeof window !== 'undefined' && window._mmClockBeat);
-        if (_beatSuppressesPoll(!!beatEnabled, options._lastBeatMs, getAccurateTimestamp(), options._beatStaleMs)) {
-            delay = options._beatStaleMs;
-        }
         if (options._syncTimer != null) { clearTimeout(options._syncTimer); }
         options._syncTimer = setTimeout(_sync, delay);
     };
