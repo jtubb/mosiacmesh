@@ -160,7 +160,10 @@ var GoTime = (function f() {
         _steerCapMsPerSec: 15,
         _steerWindowMs: 120000,
         _steerMinSamples: 3,
-        _steerPrecisionFloorMs: 60
+        _steerPrecisionFloorMs: 60,
+        _lastBeatMs: null,
+        _beatPrecisionMs: 12,
+        _beatStaleMs: 6000
     };
     
 	// Private Methods
@@ -223,6 +226,14 @@ var GoTime = (function f() {
         options._syncSampleReturned = false;
         var delay = d.delayMs;
         if (d.phase === 'fast') { delay += Math.floor(Math.random() * options._fastSyncJitterMs); }
+        // Beat suppression: when the server's broadcast clock beat is enabled and
+        // fresh, skip this cycle's /time poll -- but still re-arm at _beatStaleMs so
+        // the failsafe re-checks staleness even if beats stop (never simply skip
+        // arming). window is absent in node (tests) so this is inert there.
+        var beatEnabled = (typeof window !== 'undefined' && window._mmClockBeat);
+        if (_beatSuppressesPoll(!!beatEnabled, options._lastBeatMs, getAccurateTimestamp(), options._beatStaleMs)) {
+            delay = options._beatStaleMs;
+        }
         if (options._syncTimer != null) { clearTimeout(options._syncTimer); }
         options._syncTimer = setTimeout(_sync, delay);
     };
@@ -235,6 +246,20 @@ var GoTime = (function f() {
             offset: serverTime - requestTime - oneway,
             precision: oneway
         };
+    };
+
+    // Naive one-way offset from a broadcast beat: NO per-screen ToF correction
+    // (that asymmetry error is exactly what we're eliminating). Transit stays a
+    // common-mode lag. precision is a fixed nominal (broadcast transit is low +
+    // common-mode), since a one-way beat has no RTT to measure.
+    _beatSample = function (serverSendMs, localRecv, precisionMs) {
+        return { offset: serverSendMs - localRecv, precision: precisionMs };
+    };
+    // Should the /time poll be suppressed this cycle? Yes only when beat mode is
+    // enabled AND a beat arrived within staleMs (else fall back to /time).
+    _beatSuppressesPoll = function (enabled, lastBeatMs, nowMs, staleMs) {
+        if (!enabled || lastBeatMs === null || lastBeatMs === undefined) { return false; }
+        return (nowMs - lastBeatMs) < staleMs;
     };
 
     // Pure hybrid correction step: deadband (ignore tiny error) / bounded slew /
@@ -563,6 +588,16 @@ var GoTime = (function f() {
 			return _reviseOffset(sample, "websocket");
 		},
 
+		// Server broadcast clock beat: {REQUEST:"TIMEBEAT", PAYLOAD:{t:<serverMs>}}.
+		// Message routing that calls this is a separate task; this just consumes
+		// the server-send timestamp once handed to it.
+		beatReceived: function (serverSendMs) {
+			var localRecv = getAccurateTimestamp();   // SAME clock fn now() uses
+			options._lastBeatMs = localRecv;
+			var sample = _beatSample(serverSendMs, localRecv, options._beatPrecisionMs);
+			return _reviseOffset(sample, "beat");
+		},
+
 		// Force fresh clock samples now (used on PREPARE so the offset isn't
 		// up-to-15-min stale). Fires n _sync() calls spaced spacingMs apart.
 		resync: function(n, spacingMs) {
@@ -628,7 +663,9 @@ var GoTime = (function f() {
 		_applyModelForTest: function(offset, skew, ref) {
 			options._offset = offset; options._skew = skew; options._skewRef = ref;
 		},
-		_nextSyncDelay: _nextSyncDelay
+		_nextSyncDelay: _nextSyncDelay,
+		_beatSample: _beatSample,
+		_beatSuppressesPoll: _beatSuppressesPoll
 	}
 
 })();
