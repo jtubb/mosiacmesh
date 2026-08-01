@@ -21,6 +21,7 @@ void mm_hook_controller(void *backend);
 int    mm_engine_paused(MMEngine *e);
 void   mm_engine_seek(MMEngine *e, double seconds);    // frame-accurate (zero tolerance)
 void   mm_engine_set_rate(MMEngine *e, float rate);    // mm_clamp_rate -> AVPlayer.rate
+void   mm_set_scale(float v);                          // live CMTimebase scale (mmvideo://scale/<v>)
 double mm_engine_current_time(MMEngine *e);
 double mm_engine_duration(MMEngine *e);
 int    mm_engine_network_state(MMEngine *e);           // WebCore NetworkState int

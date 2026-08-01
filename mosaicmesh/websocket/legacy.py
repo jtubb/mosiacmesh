@@ -559,6 +559,25 @@ def msg_response(msg,session):
                 {"DEST": "ALL", "REQUEST": "RELOAD", "PAYLOAD": "NONE"}))
         response["PAYLOAD"] = "SUCCESS"
 
+    elif(msg["REQUEST"] == "SET_SCALE"):
+        # Admin command: live-tune the mmvideo CMTimebase rate scale on display clients
+        # (no reload). PAYLOAD.value is forwarded; the client navs to mmvideo://scale/<v>,
+        # which the mmvideo tweak's shouldStartLoadWithRequest hook intercepts -> mm_set_scale.
+        # Scopes mirror RELOAD (clientKey / displayID / all).
+        payload = msg.get("PAYLOAD")
+        value = payload.get("value") if isinstance(payload, dict) else None
+        client_key = payload.get("clientKey") if isinstance(payload, dict) else None
+        display_id = payload.get("displayID") if isinstance(payload, dict) else None
+        if value is not None:
+            body = {"REQUEST": "SET_SCALE", "PAYLOAD": {"value": value}}
+            if client_key:
+                broadcast_to_client(client_key, body)
+            elif display_id:
+                broadcast_to_display_group(display_id, body)
+            else:
+                server.socketmanager.broadcast(jsonpickle.encode(dict(body, DEST="ALL")))
+        response["PAYLOAD"] = "SUCCESS"
+
     elif(msg["REQUEST"] == "CLEAR_CACHE"):
         # Admin command: wipe the cached render segments on a group's devices AND clear
         # the server's per-client cachedSegments record (so _resolve_media_url stops

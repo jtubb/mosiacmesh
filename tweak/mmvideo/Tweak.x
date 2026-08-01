@@ -9,6 +9,8 @@
 #import "MMTransplantEngine.h"
 #import <dispatch/dispatch.h>
 #import <stdio.h>
+#import <stdlib.h>
+#import <string.h>
 #import <unistd.h>
 
 static void mmlog(const char *m){ FILE*f=fopen("/tmp/mmvideo.log","a"); if(f){fprintf(f,"%s\n",m);fclose(f);} }
@@ -131,6 +133,28 @@ static void mm_install(void){
 // just makes SockJS commit to websocket and fail ("cannot connect") in BOTH Safari and the
 // webclip. The whole iOS-5.1 fleet correctly runs SockJS over XHR; enabling ws is a dead end
 // (only a native RFC-6455 transplant behind window.WebSocket would work — not worth it).
+
+/* ---- mmvideo:// URL command (JS -> native), mirrors the mmcache/mmws navigation hook.
+   mmvideo://scale/<v> sets the live CMTimebase scale so it can be swept on-wall without a
+   redeploy. %orig chains with mmcache's/mmws's hook on the same delegate method. ------------ */
+static void handle_mmvideo_url(const char *url) {
+    if (!url || strncmp(url, "mmvideo://scale/", 16) != 0) return;
+    float v = (float)atof(url + 16);
+    mm_set_scale(v);
+    { char b[64]; snprintf(b, sizeof b, "[mmvideo] scale -> %.3f", v); mmlog(b); }
+}
+
+%hook WebAppController
+- (BOOL)webView:(id)wv shouldStartLoadWithRequest:(NSURLRequest *)req navigationType:(int)nt {
+    NSURL *u = [req URL];
+    NSString *scheme = [u scheme];
+    if (scheme && [scheme caseInsensitiveCompare:@"mmvideo"] == NSOrderedSame) {
+        handle_mmvideo_url([[u absoluteString] UTF8String]);
+        return NO;
+    }
+    return %orig;
+}
+%end
 
 %ctor {
     // Deferred install (off the launch path), but on the MAIN queue — NOT a background
