@@ -58,8 +58,11 @@
     while (state.ring.length > N) { state.ring.shift(); }
     var fErr = median(state.ring);
 
-    // coarse regime keys on RAW err (fast reaction to a big jump / startup)
-    if (Math.abs(err) > COARSE && canSeek) {
+    // coarse regime keys on FILTERED err (median rejects the single-tick bimodal
+    // currentTime readback spike that otherwise fires a spurious seek; a genuine
+    // persistent jump still crosses COARSE within a few ticks, and a fresh ring's
+    // median equals the lone sample so real startup jumps still react fast).
+    if (Math.abs(fErr) > COARSE && canSeek) {
       state.lastRateCmd = 1;   // rate resets to 1 after a seek
       return { action: 'seek', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
     }

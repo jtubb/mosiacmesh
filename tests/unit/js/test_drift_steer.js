@@ -54,6 +54,32 @@ test('closed-loop: clean -100ms err converges into deadband without overshoot', 
   assert.ok(!overshoot, 'no overshoot past zero');
 });
 
+test('coarse: single bimodal spike past COARSE does NOT seek (median rejects it)', () => {
+  const s = g.mmDriftState();
+  // Steady bimodal readback: true err ~-160, alternating +50 artifact. None should seek.
+  const seq = [-160, 50, -160, 50, -160];
+  let c;
+  seq.forEach(function (e) { c = g.mmDriftCommand(s, e, { rateGot: 1, canSeek: true }); });
+  assert.notEqual(c.action, 'seek', 'steady bimodal must not seek');
+  // Now a single-tick readback spike to -395 (raw > 350) while the ring's median stays ~-160.
+  c = g.mmDriftCommand(s, -395, { rateGot: 1, canSeek: true });
+  assert.notEqual(c.action, 'seek', 'lone -395 spike must not fire a seek');
+  assert.ok(Math.abs(c.filteredErr) < 350, 'filtered err stayed sub-threshold: ' + c.filteredErr);
+});
+
+test('coarse: persistent err past COARSE DOES seek (genuine drift)', () => {
+  const s = g.mmDriftState();
+  let c;
+  [-400, -400, -400].forEach(function (e) { c = g.mmDriftCommand(s, e, { rateGot: 1, canSeek: true }); });
+  assert.equal(c.action, 'seek', 'sustained -400 must seek');
+});
+
+test('coarse: fresh-state large err still seeks immediately (startup jump)', () => {
+  // Empty ring -> median of one sample = that sample -> preserves fast reaction on a real jump.
+  const c = g.mmDriftCommand(g.mmDriftState(), -500, { rateGot: 1, canSeek: true });
+  assert.equal(c.action, 'seek');
+});
+
 test('liveness: rateGot ignores commands for K ticks -> rateLive false', () => {
   const s = g.mmDriftState();
   for (let i = 0; i < 6; i++) g.mmDriftCommand(s, -100, { rateGot: 1, canSeek: false });
