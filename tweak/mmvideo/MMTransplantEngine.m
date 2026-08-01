@@ -15,6 +15,11 @@
 
 typedef void (*MMVoidFn)(void *);
 
+// CMTimebase fractional-rate scale (see mm_engine_set_rate). Raw CMTimebase was ~2.2x
+// over-responsive on-canary; ~0.45 lands the effective rate response near 1x. Tune on-wall
+// against the cross-screen synctool spread.
+#define MM_CM_SCALE 0.45f
+
 struct MMEngine {
     void *mp;          // WebCore MediaPlayer* (callback receiver; not owned)
     void *backend;     // MediaPlayerPrivateiPhone* self — for ivar mirroring (Option A; not owned)
@@ -168,6 +173,22 @@ void mm_engine_set_rate(MMEngine *e, float rate) {
     if (r > 0.0f) e->desiredRate = r;      // remember nonzero rate so play() resumes at it
     PL(e).rate = r;
     e->playing = (r != 0.0f);
+
+    // CMTimebase rate drive (2026-08-01): iOS 5.1 AVPlayer.rate ignores small fractional rates
+    // (~7% effective on-wall), so the drift steer's fine correction was inert. Driving the
+    // AVPlayerItem CMTimebase directly HONORS fractional rates (proven on canary). The raw
+    // CMTimebase response was over-responsive (~2.2x closed-loop), so SCALE the fractional delta
+    // by MM_CM_SCALE so the effective response ~= 1x (what the steer's RATE_GAIN expects).
+    // MM_CM_SCALE is tuned on-wall against the cross-screen synctool metric. Guarded so a bad
+    // selector can't crash; no per-call logging (this build goes to the fleet).
+    if (r > 0.0f) {
+        AVPlayerItem *it = IT(e);
+        if ([it respondsToSelector:@selector(timebase)]) {
+            CMTimebaseRef (*msg)(id, SEL) = (CMTimebaseRef (*)(id, SEL))objc_msgSend;
+            CMTimebaseRef tb = msg((id)it, @selector(timebase));
+            if (tb) { CMTimebaseSetRate(tb, (Float64)(1.0f + (r - 1.0f) * MM_CM_SCALE)); }
+        }
+    }
 }
 
 // currentTime is the value cached by the observer block (avoids the stret
