@@ -46,7 +46,7 @@ from mosaicmesh.cache import (
 )
 from mosaicmesh.broadcast import (
     _send_to_session, _deliver,
-    broadcast_to_client, broadcast_to_display_group,
+    broadcast_to_client, broadcast_to_display_group, broadcast_all,
 )
 from mosaicmesh.calibration import (
     order_points, _draw_fitted_label, group_bounding_box,
@@ -122,6 +122,8 @@ from mosaicmesh import cache_pull
 # and this re-export becomes optional.
 from mosaicmesh.websocket.typed import handle_websocket_message
 from mosaicmesh.websocket.dispatch import ws_handler, handle_client_disconnect
+
+BEAT_INTERVAL_S = 2   # master-clock TIMEBEAT cadence (see master-clock-beat design)
 
 # Coordinated-start constants
 RELEASE_LEAD_MS = 750       # ms in the future the GO start epoch is set to
@@ -2081,6 +2083,19 @@ def evaluate_schedules(now=None):
             logging.error("evaluate_schedules: group %s failed: %s", display_id, e)
 
 
+async def _time_beat():
+    """Broadcast a server-time beat every BEAT_INTERVAL_S. server_ms is stamped
+    immediately before the fan-out (never staged) so server-side scheduling
+    can't skew it; clients phase-lock to it via a naive common-mode offset."""
+    while True:
+        try:
+            server_ms = int(time.time() * 1000)
+            broadcast_all({"REQUEST": "TIMEBEAT", "PAYLOAD": {"t": server_ms}})
+        except Exception:
+            logging.exception("time beat failed")
+        await asyncio.sleep(BEAT_INTERVAL_S)
+
+
 async def process():
     """Enhanced periodic processing with device health monitoring"""
     current_time = time.time()
@@ -2296,6 +2311,8 @@ if __name__ == '__main__':
                 oneshot = True
                 save_counter = 0
                 memwatch_counter = 0
+
+                asyncio.ensure_future(_time_beat())
 
                 try:
                     while True:

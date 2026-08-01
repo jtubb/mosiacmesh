@@ -59,6 +59,21 @@ def _deliver(client_id, encoded_message, client):
         server.socketmanager.broadcast(encoded_message)
 
 
+def broadcast_all(response_dict):
+    """Fleet-wide broadcast: encode ONCE and hand the same bytes to every
+    session via socketmanager.broadcast. Used by the TIMEBEAT clock beat,
+    where the payload is identical for every client (no per-client DEST) —
+    a single serialization + fan-out is both cheapest and maximally
+    common-mode (every screen aligns to the identical bytes)."""
+    import server
+    import jsonpickle
+    if server.socketmanager is None:
+        return
+    response_dict["DEST"] = "ALL"
+    encoded = jsonpickle.encode(response_dict)
+    server.socketmanager.broadcast(encoded)
+
+
 def broadcast_to_client(client_id, response_dict):
     """Send a message to a single client (identified by its clientKey, i.e.
     the cookie-based UDID). Routes to the iPad's specific sockjs session
