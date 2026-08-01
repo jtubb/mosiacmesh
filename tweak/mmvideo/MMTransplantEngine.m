@@ -15,6 +15,11 @@
 
 typedef void (*MMVoidFn)(void *);
 
+// CMTimebase fractional-rate scale (see mm_engine_set_rate). Raw CMTimebase was ~2.2x
+// over-responsive on-canary; ~0.45 lands the effective rate response near 1x. Tune on-wall
+// against the cross-screen synctool spread.
+#define MM_CM_SCALE 0.45f
+
 struct MMEngine {
     void *mp;          // WebCore MediaPlayer* (callback receiver; not owned)
     void *backend;     // MediaPlayerPrivateiPhone* self — for ivar mirroring (Option A; not owned)
@@ -169,26 +174,20 @@ void mm_engine_set_rate(MMEngine *e, float rate) {
     PL(e).rate = r;
     e->playing = (r != 0.0f);
 
-    // EXPERIMENT (2026-07-31): on-wall diagnosis proved iOS 5.1 AVPlayer.rate ignores small
-    // fractional rates (~7% effective), so the drift steer's fine correction is inert. Try
-    // driving the AVPlayerItem CMTimebase directly, which MAY honor fractions AVPlayer.rate
-    // ignores. Logs selector reachability + set status; the canary reveals if it holds (the
-    // player may override it on its next update). Guarded so a bad selector can't crash.
+    // CMTimebase rate drive (2026-08-01): iOS 5.1 AVPlayer.rate ignores small fractional rates
+    // (~7% effective on-wall), so the drift steer's fine correction was inert. Driving the
+    // AVPlayerItem CMTimebase directly HONORS fractional rates (proven on canary). The raw
+    // CMTimebase response was over-responsive (~2.2x closed-loop), so SCALE the fractional delta
+    // by MM_CM_SCALE so the effective response ~= 1x (what the steer's RATE_GAIN expects).
+    // MM_CM_SCALE is tuned on-wall against the cross-screen synctool metric. Guarded so a bad
+    // selector can't crash; no per-call logging (this build goes to the fleet).
     if (r > 0.0f) {
         AVPlayerItem *it = IT(e);
-        CMTimebaseRef tb = NULL;
         if ([it respondsToSelector:@selector(timebase)]) {
             CMTimebaseRef (*msg)(id, SEL) = (CMTimebaseRef (*)(id, SEL))objc_msgSend;
-            tb = msg((id)it, @selector(timebase));
+            CMTimebaseRef tb = msg((id)it, @selector(timebase));
+            if (tb) { CMTimebaseSetRate(tb, (Float64)(1.0f + (r - 1.0f) * MM_CM_SCALE)); }
         }
-        FILE *_f = fopen("/tmp/mmvideo.log", "a");
-        if (tb) {
-            OSStatus st = CMTimebaseSetRate(tb, (Float64)r);
-            if (_f) fprintf(_f, "[rate-exp] CMTimebaseSetRate r=%.4f tb=%p st=%ld%c", r, (void *)tb, (long)st, 10);
-        } else if (_f) {
-            fprintf(_f, "[rate-exp] no timebase selector; r=%.4f (AVPlayer.rate only)%c", r, 10);
-        }
-        if (_f) fclose(_f);
     }
 }
 
