@@ -1160,9 +1160,14 @@ foreach ($h in $targets) {
     #       Self-contained: two-level-namespace linked with statically-provided
     #       compiler-rt builtins, so NO extra device packages are required.
     #       Source lives in tweak/mmvideo/ (build via tweak/mmvideo/_build_milestone.sh,
-    #       then copy the built .dylib to tools/mmvideo.dylib). Current build = vtfixA7
-    #       (commit ef7c7a8 WebThreadLock crash fix + _currentTime feedback with mesh
-    #       sync; 9h crash-free on-device, dead getter code pruned). Same scp-from-local
+    #       then copy the built .dylib to tools/mmvideo.dylib; current build was made
+    #       via WSL theos + the scratchpad build_mm.sh CRLF-strip wrapper). Current
+    #       build = CMTimebase rate-drive (main merge b7c400b): drives the AVPlayerItem
+    #       CMTimebase directly so iOS-5 HONORS fractional playbackRate (stock
+    #       AVPlayer.rate ignores small fractions ~7%, which left the drift steer's fine
+    #       correction inert), scaled by MM_CM_SCALE (0.45) to tame the response --
+    #       on-wall this dropped cross-screen video-offset 330 -> ~215ms across the OEB
+    #       group. md5 d067bfe85f57741eaf1c2438953a080c. Same scp-from-local
     #       idiom as the lighttpd/insomnia steps to dodge the heredoc quote-loss bug.
     #
     #       NOTE: with this installed, the iPad autoplays video without the
