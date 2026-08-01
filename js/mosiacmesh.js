@@ -167,6 +167,19 @@ function getUDID() {
 		    {
 				location.reload(true);
 			}
+			// SET_SCALE: live-tune the mmvideo CMTimebase rate scale (no reload). A hidden
+			// iframe nav to mmvideo://scale/<v> is intercepted by the mmvideo tweak's
+			// shouldStartLoadWithRequest hook -> mm_set_scale. No-op if the tweak is absent.
+			if(data_obj.REQUEST == "SET_SCALE" && data_obj.PAYLOAD != null &&
+			   data_obj.PAYLOAD.value != null)
+			{
+				var _sf = document.createElement('iframe');
+				_sf.style.display = 'none';
+				_sf.src = 'mmvideo://scale/' + data_obj.PAYLOAD.value;
+				document.documentElement.appendChild(_sf);
+				setTimeout(function(){ if(_sf.parentNode){ _sf.parentNode.removeChild(_sf); } }, 0);
+				log('SET_SCALE -> ' + data_obj.PAYLOAD.value);
+			}
 			if(sock_callback != null)
 			{
 				sock_callback(data_obj);

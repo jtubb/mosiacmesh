@@ -20,6 +20,13 @@ typedef void (*MMVoidFn)(void *);
 // against the cross-screen synctool spread.
 #define MM_CM_SCALE 0.45f
 
+// Runtime-tunable scale, set live via the mmvideo://scale/<v> URL command (Tweak.x hook ->
+// mm_set_scale), so MM_CM_SCALE can be swept on-wall against the synctool spread WITHOUT a
+// redeploy/relaunch. Defaults to MM_CM_SCALE. (A file-poll approach was tried first but the
+// Web.app sandbox blocks reads outside its container; the URL command works from inside it.)
+static float g_cmScale = MM_CM_SCALE;
+void mm_set_scale(float v) { if (v >= 0.0f && v <= 2.0f) { g_cmScale = v; } }
+
 struct MMEngine {
     void *mp;          // WebCore MediaPlayer* (callback receiver; not owned)
     void *backend;     // MediaPlayerPrivateiPhone* self — for ivar mirroring (Option A; not owned)
@@ -186,7 +193,7 @@ void mm_engine_set_rate(MMEngine *e, float rate) {
         if ([it respondsToSelector:@selector(timebase)]) {
             CMTimebaseRef (*msg)(id, SEL) = (CMTimebaseRef (*)(id, SEL))objc_msgSend;
             CMTimebaseRef tb = msg((id)it, @selector(timebase));
-            if (tb) { CMTimebaseSetRate(tb, (Float64)(1.0f + (r - 1.0f) * MM_CM_SCALE)); }
+            if (tb) { CMTimebaseSetRate(tb, (Float64)(1.0f + (r - 1.0f) * g_cmScale)); }
         }
     }
 }
