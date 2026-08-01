@@ -114,7 +114,8 @@ def _edit_springboard(d, brightness, als):
     return changes
 
 
-def _edit_celestial(d):
+def _edit_celestial(d, vol):
+    """Set the media volume (volumes.Speaker.Audio/Video) to vol (0.0..1.0)."""
     vols = d.get("volumes")
     if not isinstance(vols, dict):
         vols = {}
@@ -122,15 +123,15 @@ def _edit_celestial(d):
     if not isinstance(spk, dict):
         spk = {}
     cur = spk.get("Audio/Video")
-    if cur == 1.0:
+    if cur == vol:
         return []
-    spk["Audio/Video"] = 1.0
+    spk["Audio/Video"] = vol
     vols["Speaker"] = spk
     d["volumes"] = vols
-    return [f"volumes.Speaker.Audio/Video: {cur!r} -> 1.0"]
+    return [f"volumes.Speaker.Audio/Video: {cur!r} -> {vol}"]
 
 
-def process_host(host, dry_run, respring, brightness, als, volume_max):
+def process_host(host, dry_run, respring, brightness, als, volume):
     print(f"\n[{host}]")
     if brightness is not None or als is not None:
         ok1, s1 = _pull_edit_push(
@@ -138,17 +139,24 @@ def process_host(host, dry_run, respring, brightness, als, volume_max):
         print(f"  springboard: {s1}")
         if not ok1:
             return False
-    if volume_max:
-        ok2, s2 = _pull_edit_push(host, CEL_PLIST, _edit_celestial, dry_run)
+    if volume is not None:
+        ok2, s2 = _pull_edit_push(host, CEL_PLIST, lambda d: _edit_celestial(d, volume), dry_run)
         print(f"  celestial:   {s2}")
         if not ok2:
             return False
     if not dry_run and respring:
-        # SpringBoard re-reads brightness + ALS at launch; mediaserverd re-reads the
-        # per-route volume at launch. Both own their plist at runtime, so the file
-        # edit only takes effect once they relaunch.
-        r = _ssh(host, "killall SpringBoard; killall mediaserverd")
-        print(f"  respring:    killall SpringBoard + mediaserverd ({'ok' if r.returncode == 0 else (r.stderr.strip() or 'best-effort')})")
+        # SpringBoard owns brightness + ALS; mediaserverd owns the per-route volume.
+        # Each re-reads its plist at launch, so only relaunch the daemon(s) that own a
+        # changed key. Volume-only changes skip the SpringBoard respring so the wall's
+        # webclips keep playing (no reload).
+        cmds = []
+        if brightness is not None or als is not None:
+            cmds.append("killall SpringBoard")
+        if volume is not None:
+            cmds.append("killall mediaserverd")
+        if cmds:
+            r = _ssh(host, "; ".join(cmds))
+            print(f"  respring:    {' + '.join(cmds)} ({'ok' if r.returncode == 0 else (r.stderr.strip() or 'best-effort')})")
     return True
 
 
@@ -193,8 +201,10 @@ def main():
                     help="SBBacklightLevel2 target, 0..1 (e.g. 0.7); omit to leave brightness as-is")
     ap.add_argument("--als", choices=["on", "off"], default=None,
                     help="auto-brightness (SBEnableALS): on=True, off=False; omit to leave as-is")
+    ap.add_argument("--volume", type=float, default=None,
+                    help="set media volume (celestial volumes.Speaker.Audio/Video), 0..1 (0 = mute)")
     ap.add_argument("--volume-max", action="store_true",
-                    help="also set media volume to max (celestial); off by default")
+                    help="shorthand for --volume 1.0 (media volume max)")
     ap.add_argument("--dry-run", action="store_true", help="read + show planned changes, write nothing")
     ap.add_argument("--no-respring", action="store_true", help="skip killall SpringBoard")
     ap.add_argument("--verify-only", action="store_true", help="just read back the three values")
@@ -202,6 +212,11 @@ def main():
 
     if args.brightness is not None and not (0.0 <= args.brightness <= 1.0):
         ap.error("--brightness must be in 0..1")
+
+    # Resolve target volume: --volume wins; --volume-max is shorthand for 1.0.
+    volume = args.volume if args.volume is not None else (1.0 if args.volume_max else None)
+    if volume is not None and not (0.0 <= volume <= 1.0):
+        ap.error("--volume must be in 0..1")
 
     hosts = load_hosts(args)
     if not hosts:
@@ -213,13 +228,13 @@ def main():
         return
 
     als = {"on": True, "off": False}.get(args.als)   # None if unset
-    if args.brightness is None and als is None and not args.volume_max:
-        ap.error("nothing to do: pass --brightness, --als, and/or --volume-max")
+    if args.brightness is None and als is None and volume is None:
+        ap.error("nothing to do: pass --brightness, --als, --volume, and/or --volume-max")
 
     ok = bad = 0
     for h in hosts:
         if process_host(h, args.dry_run, not args.no_respring,
-                        args.brightness, als, args.volume_max):
+                        args.brightness, als, volume):
             ok += 1
         else:
             bad += 1
