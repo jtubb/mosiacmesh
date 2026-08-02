@@ -159,6 +159,12 @@ function getUDID() {
 			{
 				GoTime.wsReceived(data_obj.PAYLOAD);
 			}
+			if(data_obj.REQUEST == "TIMEBEAT")
+			{
+				if (typeof GoTime !== 'undefined' && GoTime.beatReceived && window._mmClockBeat) {
+					GoTime.beatReceived(data_obj.PAYLOAD.t);
+				}
+			}
 			// Honor DEST so RELOAD can target one display group (per-client DEST)
 			// or every client (DEST "ALL"); without this it fired on any message.
 			// _mmNoReload lets a non-display page (the admin console) opt out.

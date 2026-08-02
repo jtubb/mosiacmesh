@@ -23,6 +23,11 @@
        FIRST so window._mmForceTdbg is set before the ?tdbg gate below runs.
        Off by default (identical behavior). -->
   <script src="/js/tdbgflag.js"></script>
+  <!-- A/B toggle for the master-clock TIMEBEAT phase-lock. Static file, no
+       server restart to flip; must load before the clock-sync library below
+       so the flag exists when it initializes. Off by default (identical
+       behavior). -->
+  <script src="/js/beatflag.js"></script>
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script>
