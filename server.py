@@ -875,6 +875,14 @@ async def index_handler(request):
     if(fileName == "time"):
         return web.Response(body=str(int(time.time()*1000)), content_type='text/html')
 
+    # NTP round-trip probe for the clock-qualification diagnostic (clocktest.html).
+    # Stamps server-receive (t2) and server-send (t3); echoes the client's t1.
+    if(fileName == "clockprobe"):
+        t2 = int(time.time() * 1000)
+        t1 = request.query.get('t1', '0')
+        t3 = int(time.time() * 1000)
+        return web.json_response({"t1": t1, "t2": t2, "t3": t3})
+
     root, ext = os.path.splitext(fileName)
     if not ext:
         fileName = fileName+'.html'

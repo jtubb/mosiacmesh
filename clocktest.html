@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Clock qualification</title>
+  <!-- ES5 ONLY (must run in iPad-1 Safari 5.1). Ground-truth ladder v1: XHR. -->
+  <script src="/js/clockdiag/analysis.js"></script>
+  <script src="/js/clockdiag/probe-xhr.js"></script>
+  <script src="/js/clockdiag/render.js"></script>
+</head>
+<body style="margin:0;background:#f6f6f6">
+  <div id="out" style="font:16px -apple-system,Helvetica,Arial,sans-serif;padding:20px;text-align:center;color:#666">
+    starting clock qualification…
+  </div>
+  <script>
+  (function () {
+    var URL = '/clockprobe';
+    var TOTAL = 300;          // number of probes
+    var INTERVAL = 200;       // ms between probes  -> ~60s run
+    var RENDER_EVERY = 10;
+
+    var out = document.getElementById('out');
+    var samples = [];
+    var sent = 0, failed = 0;
+
+    // --- clock source (report only; probes use Date for epoch compatibility) ---
+    var clockSource = (window.performance && typeof window.performance.now === 'function')
+      ? 'performance.now (monotonic)' : 'Date.getTime (wall-clock)';
+
+    // --- main-thread timer jitter: fixed 100ms interval, measure firing error ---
+    var TJ_PERIOD = 100, tjExpected = null, tjErrs = [];
+    function nowHi() { return (window.performance && performance.now) ? performance.now() : (new Date()).getTime(); }
+    var tjTimer = setInterval(function () {
+      var t = nowHi();
+      if (tjExpected !== null) { tjErrs.push(t - tjExpected); }
+      tjExpected = t + TJ_PERIOD;
+    }, TJ_PERIOD);
+    function timerJitter() {
+      if (tjErrs.length < 3) { return null; }
+      return window._mmClockHelpers.pstdev(tjErrs);
+    }
+
+    function draw(done) {
+      var stats = window.mmClockStats(samples);
+      var verdicts = window.mmClockVerdicts(stats);
+      var tj = timerJitter();
+      var tjV = (tj === null) ? null
+        : { value: tj, unit: 'ms std', verdict: (tj < 20 ? 'PASS' : (tj < 60 ? 'WARN' : 'FAIL')) };
+      window.mmClockRender(out, stats, verdicts, {
+        progress: samples.length, total: TOTAL, failed: failed, done: done,
+        timerJitterMs: tj, timerVerdict: tjV, clockSource: clockSource
+      });
+    }
+
+    function step() {
+      if (sent >= TOTAL) {
+        clearInterval(tjTimer);
+        draw(true);
+        return;
+      }
+      sent++;
+      window.mmXhrProbe(URL, function (s) {
+        if (s) { samples.push(s); } else { failed++; }
+        if ((samples.length + failed) % RENDER_EVERY === 0) { draw(false); }
+      });
+      setTimeout(step, INTERVAL);
+    }
+
+    // kick off (small delay so the first render shows)
+    setTimeout(step, 300);
+  })();
+  </script>
+</body>
+</html>
