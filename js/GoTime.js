@@ -196,6 +196,10 @@ var GoTime = (function f() {
         // in node (tests), so this is inert there and existing cadence is unchanged.
         var beatOn = (typeof window !== 'undefined' && window._mmClockBeat);
         if (_beatSuppressesPoll(!!beatOn, options._lastBeatMs, getAccurateTimestamp(), options._beatStaleMs)) {
+            // Worst-case resume latency from "beats stop" to "first /time poll" is up
+            // to ~2x _beatStaleMs (this re-arm is phase-independent of when beats
+            // actually stopped). Acceptable: the clock is carried by offset+skew in
+            // the interim and isSynced() is unaffected -- it never freezes.
             if (options._syncTimer != null) { clearTimeout(options._syncTimer); }
             options._syncTimer = setTimeout(_sync, options._beatStaleMs);
             return;
@@ -479,6 +483,13 @@ var GoTime = (function f() {
             // sample must NOT step it (would defeat the smooth slew).
             if (!options._steering) { options._offset = Math.round(sample.offset); }
         }
+        // Beat samples carry a fixed 12ms precision that may never beat a /time
+        // sample's precision ratchet, so the branch above can skip them forever --
+        // freezing _lastAcceptTime (and therefore msSinceAccept()/?tdbg accAge) at
+        // minutes-old even while beats keep arriving every ~2s. Refresh the accept
+        // time for every accepted beat regardless, WITHOUT touching options._precision
+        // (that ratchet still governs _robustTarget weighting + readyVerdict).
+        if (method === "beat") { options._lastAcceptTime = timestamp; }
         if (!options._firstSyncCallbackRan && (options._firstSyncCallback != null)) {
             options._firstSyncCallbackRan = true;
             return options._firstSyncCallback(timestamp, method, sample.offset, sample.precision);
@@ -604,6 +615,9 @@ var GoTime = (function f() {
 
 		// Force fresh clock samples now (used on PREPARE so the offset isn't
 		// up-to-15-min stale). Fires n _sync() calls spaced spacingMs apart.
+		// Under window._mmClockBeat these _sync calls suppress (see _sync) while a
+		// beat is fresh -- PREPARE then relies on the ~2s beat cadence to keep the
+		// offset fresh rather than this /time burst. Intended, not a regression.
 		resync: function(n, spacingMs) {
 			n = n || 4; spacingMs = spacingMs || 400;
 			for (var i = 0; i < n; i++) { setTimeout(_sync, i * spacingMs); }

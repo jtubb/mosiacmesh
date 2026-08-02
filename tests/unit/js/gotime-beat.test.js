@@ -24,6 +24,7 @@ function loadGoTime(opts) {
   function FakeDate() {}
   FakeDate.now = function () { return now; };
   FakeDate.prototype.getTime = function () { return now; };
+  FakeDate.prototype.valueOf = function () { return now; };   // so `date - number` works in _calculateOffset
   const sandbox = {
     Date: FakeDate,
     setTimeout: opts.setTimeout || function (fn, d) { timers.push({ fn: fn, delay: d }); return timers.length; },
@@ -113,4 +114,27 @@ test('_sync: beat mode OFF (window._mmClockBeat falsy) -> always polls even with
   s.__setNow(1000000 + 1000);       // would be "fresh" if beat mode were on
   s._sync();
   assert.equal(wsCalls, 1, 'beat mode must be opt-in via window._mmClockBeat');
+});
+
+// --- accAge (?tdbg) freshness: a beat sample's fixed 12ms precision can never
+// beat an already-tighter /time lock's precision ratchet, so the ratchet branch
+// in _reviseOffset (which normally stamps _lastAcceptTime) gets skipped for
+// every subsequent beat -- freezing msSinceAccept()/accAge at minutes-old even
+// though beats keep arriving every ~2s. beatReceived must refresh
+// _lastAcceptTime unconditionally, WITHOUT touching the precision ratchet
+// itself (that still governs _robustTarget weighting + readyVerdict). ---
+
+test('beatReceived: refreshes accAge (_lastAcceptTime) even though beat precision cannot beat a tighter /time lock', () => {
+  const s = loadGoTime();
+  s.GoTime.wsSend(function () { return true; });
+  s._sync();                              // stamps options._wsRequestTime at "now" (1000000)
+  s.GoTime.wsReceived(String(1000000));   // 0-RTT sample -> precision 0, locks the ratchet + _lastAcceptTime
+  assert.equal(s.GoTime.getPrecision(), 0);
+
+  s.__setNow(1000000 + 5000);             // 5s pass with no further /time samples
+  assert.ok(s.GoTime.msSinceAccept() >= 4900, 'sanity: accAge should read stale before any beat arrives');
+
+  s.GoTime.beatReceived(1005000);         // beat's fixed 12ms precision can never beat the 0ms /time lock
+  assert.equal(s.GoTime.getPrecision(), 0, 'precision ratchet must stay at the tighter /time lock, untouched by the beat');
+  assert.ok(s.GoTime.msSinceAccept() < 1000, 'accAge must refresh on beat acceptance regardless of the precision ratchet');
 });
