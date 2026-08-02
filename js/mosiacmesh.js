@@ -162,7 +162,7 @@ function getUDID() {
 			if(data_obj.REQUEST == "TIMEBEAT")
 			{
 				if (typeof GoTime !== 'undefined' && GoTime.beatReceived && window._mmClockBeat) {
-					GoTime.beatReceived(data_obj.PAYLOAD.t);
+					GoTime.beatReceived(data_obj.PAYLOAD.t, window.__mmwsRecvTs);
 				}
 			}
 			// Honor DEST so RELOAD can target one display group (per-client DEST)
