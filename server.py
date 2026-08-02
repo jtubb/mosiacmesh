@@ -883,6 +883,17 @@ async def index_handler(request):
         t3 = int(time.time() * 1000)
         return web.json_response({"t1": t1, "t2": t2, "t3": t3})
 
+    # Fleet-wide collection for the clock diagnostic: each device reports its
+    # final stats here; we log them keyed by client IP so a whole-fleet uiopen
+    # run can be read from the server log (grep 'CLOCKRESULT').
+    if(fileName == "clockresult"):
+        try:
+            ip = _client_ip(request)
+        except Exception:
+            ip = request.remote
+        logging.warning("CLOCKRESULT %s %s", ip, request.query.get('d', '{}'))
+        return web.Response(body="ok", content_type='text/plain')
+
     root, ext = os.path.splitext(fileName)
     if not ext:
         fileName = fileName+'.html'

@@ -53,10 +53,26 @@
       });
     }
 
+    function report() {
+      // fire-and-forget: send the final stats back so the server can collect
+      // results from a whole fleet at once (keyed by request IP server-side).
+      try {
+        var stats = window.mmClockStats(samples);
+        var dump = { n: stats.n, rtt: stats.rtt, offset: stats.offset,
+          offsetJitter: stats.offsetJitter, skewPpm: stats.skewPpm,
+          jitter: stats.jitter, timerJitterMs: timerJitter(),
+          clockSource: clockSource, failed: failed };
+        var x = new XMLHttpRequest();
+        x.open('GET', '/clockresult?d=' + encodeURIComponent((function(){try{return JSON.stringify(dump);}catch(e){return '{}';}})()), true);
+        x.send();
+      } catch (e) {}
+    }
+
     function step() {
       if (sent >= TOTAL) {
         clearInterval(tjTimer);
         draw(true);
+        report();
         return;
       }
       sent++;
