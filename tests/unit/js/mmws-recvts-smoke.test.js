@@ -5,7 +5,9 @@ const src = readFileSync(new URL('../../../tweak/mmws/mmws.js', import.meta.url)
 test('mmws __mmwsDispatch takes recvTs and sets window.__mmwsRecvTs before onmessage', () => {
   assert.match(src, /__mmwsDispatch\s*=\s*function\s*\([^)]*recvTs/);
   const msgIdx = src.indexOf("=== 'message'");
-  const setIdx = src.indexOf('__mmwsRecvTs');
+  // anchor on the actual ASSIGNMENT, not the header-comment mention, so this would
+  // catch the assignment being (wrongly) moved after ws.onmessage.
+  const setIdx = src.indexOf('__mmwsRecvTs =');
   const onmsgIdx = src.indexOf('ws.onmessage', msgIdx);
-  assert.ok(setIdx > -1 && setIdx < onmsgIdx, '__mmwsRecvTs set before ws.onmessage');
+  assert.ok(setIdx > -1 && setIdx < onmsgIdx, '__mmwsRecvTs assignment set before ws.onmessage');
 });

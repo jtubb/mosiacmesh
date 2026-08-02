@@ -161,8 +161,13 @@ function getUDID() {
 			}
 			if(data_obj.REQUEST == "TIMEBEAT")
 			{
+				// Consume the native receipt stamp: capture then clear it, so a stale
+				// value can't survive to a later beat delivered on another transport
+				// (e.g. after an mmws teardown + SockJS XHR fallback, which doesn't set it).
+				var _rts = window.__mmwsRecvTs;
+				window.__mmwsRecvTs = undefined;
 				if (typeof GoTime !== 'undefined' && GoTime.beatReceived && window._mmClockBeat) {
-					GoTime.beatReceived(data_obj.PAYLOAD.t, window.__mmwsRecvTs);
+					GoTime.beatReceived(data_obj.PAYLOAD.t, _rts);
 				}
 			}
 			// Honor DEST so RELOAD can target one display group (per-client DEST)
