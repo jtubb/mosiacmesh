@@ -112,34 +112,28 @@ static void cb_msg  (MMWSConn *c, uint8_t op, const uint8_t *d, size_t n, void *
     (void)c; (void)op; bc("msg", (unsigned)n); dispatch_js((int)(intptr_t)ud, "message", d, n, 0, 0);
 }
 /* g_conns[] is touched ONLY on the main thread (handle_mmws runs there). Since mmwsconn now
- * services the socket on its own I/O thread, cb_close/cb_error fire OFF main — so the slot
- * clear + free must be marshalled to the main queue in one deferred step (never NULL g_conns
- * from the io thread). Box carries the sid so the block clears the right slot. */
-typedef struct { int sid; MMWSConn *c; } mmws_closebox;
+ * services the socket on its own I/O thread, cb_close/cb_error fire OFF main — so the slot clear
+ * + free must be marshalled to the main queue (never NULL g_conns from the io thread). We pass the
+ * conn pointer directly (no per-close allocation, hence no OOM path that could leave a dangling
+ * slot) and locate its slot by scanning: the scan clears ONLY the slot that still points at THIS
+ * conn, so a reused sid (already reassigned to a new conn) is left intact. mmwsconn.c's term_claim
+ * gate guarantees exactly one terminal cb per conn, so this runs once -> a single mmwsconn_free. */
 static void close_on_main(void *ctx) {
-    mmws_closebox *b = (mmws_closebox *)ctx;
-    if (!b) return;
-    /* only clear if the slot still points at this conn — a reused sid must not be clobbered */
-    if (b->sid >= 0 && b->sid < MMWS_MAXID && g_conns[b->sid] == b->c) g_conns[b->sid] = NULL;
-    mmwsconn_free(b->c);   /* single-fire per conn: mmwsconn.c's dead-gate emits one close/error */
-    free(b);
-}
-static void defer_close(int sid, MMWSConn *c) {
-    mmws_closebox *b = (mmws_closebox *)malloc(sizeof *b);
-    if (b) { b->sid = sid; b->c = c; dispatch_async_f(dispatch_get_main_queue(), b, close_on_main); }
-    else   { dispatch_async_f(dispatch_get_main_queue(), c, (dispatch_function_t)mmwsconn_free); }  /* OOM: at least free */
+    MMWSConn *c = (MMWSConn *)ctx;
+    for (int i = 0; i < MMWS_MAXID; i++) { if (g_conns[i] == c) { g_conns[i] = NULL; break; } }
+    mmwsconn_free(c);
 }
 static void cb_close(MMWSConn *c, uint16_t code, void *ud) {
     int sid = (int)(intptr_t)ud;
     mmlog("[mmws] CLOSE sid=%d code=%d\n", sid, code);
     dispatch_js(sid, "close", NULL, 0, code, 1);
-    defer_close(sid, c);   /* clear g_conns[sid] + free on the MAIN queue */
+    dispatch_async_f(dispatch_get_main_queue(), c, close_on_main);   /* clear slot + free on MAIN */
 }
 static void cb_error(MMWSConn *c, const char *msg, void *ud) {
     int sid = (int)(intptr_t)ud;
     mmlog("[mmws] ERROR sid=%d msg=%s\n", sid, msg ? msg : "?");
     dispatch_js(sid, "error", (const uint8_t *)(msg ? msg : "error"), msg ? strlen(msg) : 5, 0, 0);
-    defer_close(sid, c);
+    dispatch_async_f(dispatch_get_main_queue(), c, close_on_main);
 }
 
 /* ---- mmws:// URL scheme parsing (JS -> native) ------------------------------------------- */

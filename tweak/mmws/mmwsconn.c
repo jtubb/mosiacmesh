@@ -47,6 +47,7 @@ struct MMWSConn {
     int                rl_ready;     /* setup finished — mmwsconn_open may return */
     int                setup_ok;     /* streams created + scheduled + mmws_sm_start succeeded */
     int                thr_started;  /* pthread_create succeeded */
+    int                term_fired;   /* a terminal (close/error) cb already delivered — fire once */
 };
 
 /* open params handed to the io thread; valid only until 'ready' is signalled (open() blocks). */
@@ -68,6 +69,20 @@ static void rand_bytes(uint8_t *p, size_t n) {
 
 /* Unschedule + close the streams (idempotent via `dead`). Runs on the I/O thread only, so
  * CFRunLoopGetCurrent() is the io runloop the streams were scheduled on. */
+/* Terminal (close/error) delivery must fire AT MOST ONCE per conn: the state machine can emit a
+ * second EV_CLOSE/EV_ERROR in the same on_recv loop (e.g. a tx-overflow on_error during a PING
+ * auto-pong, then a buffered CLOSE frame), and Tweak.x turns each terminal cb into a defer_close
+ * -> mmwsconn_free, so a double delivery = double free + double join = UAF. term_claim() is the
+ * check-and-set gate wrapping EVERY on_close/on_error site. Returns 1 for the first terminal only.
+ * Check+set under lk, release, THEN call the cb (never hold lk across the callback). */
+static int term_claim(MMWSConn *c) {
+    pthread_mutex_lock(&c->lk);
+    int first = !c->term_fired;
+    c->term_fired = 1;
+    pthread_mutex_unlock(&c->lk);
+    return first;
+}
+
 static void conn_teardown(MMWSConn *c) {
     if (!c) return;
     pthread_mutex_lock(&c->lk);
@@ -97,7 +112,7 @@ static void conn_send(void *ud, const uint8_t *b, size_t n) {
         c->tx_len -= c->tx_off; c->tx_off = 0;
     }
     if (c->tx_len + n > MMWSCONN_TXCAP) {
-        if (c->cb.on_error) c->cb.on_error(c, "tx overflow", c->cb.ud);
+        if (term_claim(c) && c->cb.on_error) c->cb.on_error(c, "tx overflow", c->cb.ud);
         conn_teardown(c); return;
     }
     memcpy(c->tx + c->tx_len, b, n);
@@ -121,10 +136,10 @@ static void conn_event(void *ud, int ev, uint8_t op, const uint8_t *d, size_t n)
         }
     } else if (ev == MMWS_EV_CLOSE) {
         uint16_t code = (n >= 2 && d) ? (uint16_t)((d[0] << 8) | d[1]) : 1005;
-        if (c->cb.on_close) c->cb.on_close(c, code, c->cb.ud);
+        if (term_claim(c) && c->cb.on_close) c->cb.on_close(c, code, c->cb.ud);
         conn_teardown(c);
     } else if (ev == MMWS_EV_ERROR) {
-        if (c->cb.on_error) c->cb.on_error(c, d ? (const char *)d : "error", c->cb.ud);
+        if (term_claim(c) && c->cb.on_error) c->cb.on_error(c, d ? (const char *)d : "error", c->cb.ud);
         conn_teardown(c);
     }
 }
@@ -137,13 +152,13 @@ static void read_cb(CFReadStreamRef s, CFStreamEventType ev, void *info) {
         CFIndex n = CFReadStreamRead(s, buf, (CFIndex)sizeof buf);
         cbc("R", (long)n);
         if (n > 0) mmws_sm_on_recv(&c->sm, buf, (size_t)n);
-        else if (n < 0) { if (c->cb.on_error) c->cb.on_error(c, "read error", c->cb.ud); conn_teardown(c); }
+        else if (n < 0) { if (term_claim(c) && c->cb.on_error) c->cb.on_error(c, "read error", c->cb.ud); conn_teardown(c); }
     } else if (ev == kCFStreamEventErrorOccurred) {
         cbc("Rerr", 0);
-        if (c->cb.on_error) c->cb.on_error(c, "read stream error", c->cb.ud); conn_teardown(c);
+        if (term_claim(c) && c->cb.on_error) c->cb.on_error(c, "read stream error", c->cb.ud); conn_teardown(c);
     } else if (ev == kCFStreamEventEndEncountered) {
         cbc("Reof", 0);
-        if (c->cb.on_close) c->cb.on_close(c, 1006, c->cb.ud); conn_teardown(c);
+        if (term_claim(c) && c->cb.on_close) c->cb.on_close(c, 1006, c->cb.ud); conn_teardown(c);
     } else { cbc("Rev", (long)ev); }
 }
 
@@ -155,7 +170,7 @@ static void write_cb(CFWriteStreamRef s, CFStreamEventType ev, void *info) {
     else if (ev == kCFStreamEventOpenCompleted) { cbc("Wopen", 0); }
     else if (ev == kCFStreamEventErrorOccurred) {
         cbc("Werr", 0);
-        if (c->cb.on_error) c->cb.on_error(c, "write stream error", c->cb.ud); conn_teardown(c);
+        if (term_claim(c) && c->cb.on_error) c->cb.on_error(c, "write stream error", c->cb.ud); conn_teardown(c);
     }
 }
 
