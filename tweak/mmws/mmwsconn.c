@@ -249,6 +249,7 @@ static void *io_thread_main(void *arg) {
 static void conn_destroy(MMWSConn *c) {
     if (c->rs) { CFRelease(c->rs); c->rs = NULL; }
     if (c->ws) { CFRelease(c->ws); c->ws = NULL; }
+    if (c->keepalive) { CFRelease(c->keepalive); c->keepalive = NULL; }  /* degraded early-exit path */
     pthread_mutex_destroy(&c->lk);
     pthread_cond_destroy(&c->ready);
     free(c);
