@@ -160,7 +160,10 @@ var GoTime = (function f() {
         _steerCapMsPerSec: 15,
         _steerWindowMs: 120000,
         _steerMinSamples: 3,
-        _steerPrecisionFloorMs: 60
+        _steerPrecisionFloorMs: 60,
+        _lastBeatMs: null,
+        _beatPrecisionMs: 12,
+        _beatStaleMs: 6000
     };
     
 	// Private Methods
@@ -185,6 +188,22 @@ var GoTime = (function f() {
     };
 
     _sync = function() {
+        // Beat suppression: when the server's broadcast clock beat is enabled and
+        // fresh, the beat already feeds the steer via beatReceived -- skip the
+        // /time (ws/ajax) round-trip entirely so it doesn't re-dilute the
+        // _steerSamples ring with a coarser sample, and just re-arm a staleness
+        // re-check so /time resumes automatically if beats stop. window is absent
+        // in node (tests), so this is inert there and existing cadence is unchanged.
+        var beatOn = (typeof window !== 'undefined' && window._mmClockBeat);
+        if (_beatSuppressesPoll(!!beatOn, options._lastBeatMs, getAccurateTimestamp(), options._beatStaleMs)) {
+            // Worst-case resume latency from "beats stop" to "first /time poll" is up
+            // to ~2x _beatStaleMs (this re-arm is phase-independent of when beats
+            // actually stopped). Acceptable: the clock is carried by offset+skew in
+            // the interim and isSynced() is unaffected -- it never freezes.
+            if (options._syncTimer != null) { clearTimeout(options._syncTimer); }
+            options._syncTimer = setTimeout(_sync, options._beatStaleMs);
+            return;
+        }
         var success = false;
 		if (options._wsCall != null) {
 			options._wsRequestTime = Date.now();
@@ -235,6 +254,20 @@ var GoTime = (function f() {
             offset: serverTime - requestTime - oneway,
             precision: oneway
         };
+    };
+
+    // Naive one-way offset from a broadcast beat: NO per-screen ToF correction
+    // (that asymmetry error is exactly what we're eliminating). Transit stays a
+    // common-mode lag. precision is a fixed nominal (broadcast transit is low +
+    // common-mode), since a one-way beat has no RTT to measure.
+    _beatSample = function (serverSendMs, localRecv, precisionMs) {
+        return { offset: serverSendMs - localRecv, precision: precisionMs };
+    };
+    // Should the /time poll be suppressed this cycle? Yes only when beat mode is
+    // enabled AND a beat arrived within staleMs (else fall back to /time).
+    _beatSuppressesPoll = function (enabled, lastBeatMs, nowMs, staleMs) {
+        if (!enabled || lastBeatMs === null || lastBeatMs === undefined) { return false; }
+        return (nowMs - lastBeatMs) < staleMs;
     };
 
     // Pure hybrid correction step: deadband (ignore tiny error) / bounded slew /
@@ -450,6 +483,13 @@ var GoTime = (function f() {
             // sample must NOT step it (would defeat the smooth slew).
             if (!options._steering) { options._offset = Math.round(sample.offset); }
         }
+        // Beat samples carry a fixed 12ms precision that may never beat a /time
+        // sample's precision ratchet, so the branch above can skip them forever --
+        // freezing _lastAcceptTime (and therefore msSinceAccept()/?tdbg accAge) at
+        // minutes-old even while beats keep arriving every ~2s. Refresh the accept
+        // time for every accepted beat regardless, WITHOUT touching options._precision
+        // (that ratchet still governs _robustTarget weighting + readyVerdict).
+        if (method === "beat") { options._lastAcceptTime = timestamp; }
         if (!options._firstSyncCallbackRan && (options._firstSyncCallback != null)) {
             options._firstSyncCallbackRan = true;
             return options._firstSyncCallback(timestamp, method, sample.offset, sample.precision);
@@ -563,8 +603,21 @@ var GoTime = (function f() {
 			return _reviseOffset(sample, "websocket");
 		},
 
+		// Server broadcast clock beat: {REQUEST:"TIMEBEAT", PAYLOAD:{t:<serverMs>}}.
+		// Message routing that calls this is a separate task; this just consumes
+		// the server-send timestamp once handed to it.
+		beatReceived: function (serverSendMs) {
+			var localRecv = getAccurateTimestamp();   // SAME clock fn now() uses
+			options._lastBeatMs = localRecv;
+			var sample = _beatSample(serverSendMs, localRecv, options._beatPrecisionMs);
+			return _reviseOffset(sample, "beat");
+		},
+
 		// Force fresh clock samples now (used on PREPARE so the offset isn't
 		// up-to-15-min stale). Fires n _sync() calls spaced spacingMs apart.
+		// Under window._mmClockBeat these _sync calls suppress (see _sync) while a
+		// beat is fresh -- PREPARE then relies on the ~2s beat cadence to keep the
+		// offset fresh rather than this /time burst. Intended, not a regression.
 		resync: function(n, spacingMs) {
 			n = n || 4; spacingMs = spacingMs || 400;
 			for (var i = 0; i < n; i++) { setTimeout(_sync, i * spacingMs); }
@@ -628,7 +681,9 @@ var GoTime = (function f() {
 		_applyModelForTest: function(offset, skew, ref) {
 			options._offset = offset; options._skew = skew; options._skewRef = ref;
 		},
-		_nextSyncDelay: _nextSyncDelay
+		_nextSyncDelay: _nextSyncDelay,
+		_beatSample: _beatSample,
+		_beatSuppressesPoll: _beatSuppressesPoll
 	}
 
 })();
