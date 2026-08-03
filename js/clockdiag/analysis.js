@@ -171,9 +171,28 @@
     };
   }
 
+  // v3 (GoTime rung): how much error GoTime's steered clock adds ON TOP of the
+  // path floor. rows: [{ gto, off, rtt }] where gto = GoTime's server-local
+  // estimate (GoTime.now() - localNow), off = the parallel probe's raw NTP
+  // offset, rtt = that probe's RTT. Ground truth = the offset of the MIN-RTT
+  // probe (best instantaneous estimate). GoTime error = gto - groundTruth per
+  // row; report its bias (mean) + wander (std). ~0/small => GoTime is optimal
+  // (path-bound); large => the algorithm (droop/ratchet-staleness/steer) adds error.
+  function mmGoTimeError(rows) {
+    var n = rows.length, i;
+    if (n < 3) { return { n: n }; }
+    var minRtt = Infinity, gt = 0;
+    for (i = 0; i < n; i++) { if (rows[i].rtt < minRtt) { minRtt = rows[i].rtt; gt = rows[i].off; } }
+    var errs = [];
+    for (i = 0; i < n; i++) { errs.push(rows[i].gto - gt); }
+    return { n: n, groundTruth: gt, errMean: mean(errs), errStd: pstdev(errs),
+             errP90: percentile(errs.map(Math.abs), 0.9) };
+  }
+
   root.mmClockStats = mmClockStats;
   root.mmClockVerdicts = mmClockVerdicts;
   root.mmSkewFit = mmSkewFit;
+  root.mmGoTimeError = mmGoTimeError;
   root._mmClockHelpers = { median: median, percentile: percentile, mean: mean, pstdev: pstdev, slope: slope, rttOf: rttOf, offsetOf: offsetOf };
 
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

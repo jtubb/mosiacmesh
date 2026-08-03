@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>GoTime rung (v3)</title>
+  <!-- ES5. Ladder v3: measures GoTime's ACHIEVED offset vs a parallel ground-truth
+       probe -> the error GoTime adds on top of the path floor. -->
+  <script src="/js/GoTime.js"></script>
+  <script src="/js/clockdiag/analysis.js"></script>
+  <script src="/js/clockdiag/probe-xhr.js"></script>
+</head>
+<body style="margin:0;background:#f6f6f6">
+  <div id="out" style="font:16px -apple-system,Helvetica,Arial,sans-serif;padding:20px;text-align:center;color:#666">
+    starting GoTime + warming up sync…
+  </div>
+  <script>
+  (function () {
+    function qp(name, dflt) {
+      var m = new RegExp('[?&]' + name + '=([0-9]+)').exec(location.search || '');
+      return m ? parseInt(m[1], 10) : dflt;
+    }
+    var TOTAL = qp('probes', 300), INTERVAL = qp('interval', 200), WARMUP = qp('warmup', 15000);
+    var out = document.getElementById('out');
+    var H = window._mmClockHelpers;
+
+    // 1) start GoTime's own sync (its ajax /time round-trip + steer)
+    GoTime.setOptions({ AjaxURL: '/time', SyncInterval: 30000, FastSyncInterval: 1000 });
+
+    var samples = [], rows = [], sent = 0, failed = 0, started = false;
+
+    function draw(done) {
+      var e = window.mmGoTimeError(rows);
+      var pathJit = samples.length >= 3 ? window.mmClockStats(samples).rtt.std : 0;
+      var html = '<div style="font:16px/1.5 -apple-system,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:14px">';
+      html += '<h2>GoTime rung (v3)</h2>';
+      html += '<div style="color:#666;font-size:13px">probes ' + rows.length + '/' + TOTAL +
+              (failed ? (' · failed ' + failed) : '') + (done ? ' · DONE' : ' · running…') + '</div>';
+      if (e && e.n >= 3) {
+        var bad = Math.abs(e.errMean) > 40 || e.errStd > 60;
+        html += '<div style="margin:12px 0;padding:10px;border-radius:6px;font-weight:bold;font-size:18px;text-align:center;color:#fff;background:' +
+                (bad ? '#cf222e' : '#1a7f37') + '">GoTime error vs ground truth</div>';
+        html += '<table style="width:100%;border-collapse:collapse" border="0" cellpadding="6">';
+        html += '<tr><td>error bias (mean)</td><td align="right"><b>' + Math.round(e.errMean) + ' ms</b></td></tr>';
+        html += '<tr><td>error wander (std)</td><td align="right"><b>' + Math.round(e.errStd) + ' ms</b></td></tr>';
+        html += '<tr><td>error p90 (|abs|)</td><td align="right">' + Math.round(e.errP90) + ' ms</td></tr>';
+        html += '<tr><td>ground-truth offset (min-RTT)</td><td align="right">' + Math.round(e.groundTruth) + ' ms</td></tr>';
+        html += '<tr><td>path RTT jitter (context)</td><td align="right">' + Math.round(pathJit) + ' ms</td></tr>';
+        html += '</table>';
+        html += '<div style="font-size:11px;color:#888;margin-top:6px">error ~0 => GoTime is optimal (path-bound); large => algorithm adds error on top of the path.</div>';
+      }
+      html += '</div>';
+      out.innerHTML = html;
+    }
+
+    function report() {
+      try {
+        var e = window.mmGoTimeError(rows);
+        var ps = window.mmClockStats(samples);
+        var d = { mode: 'gotime', n: rows.length, gtErr: e,
+                  pathRttStd: ps.rtt ? ps.rtt.std : null, pathOffset: ps.offset, failed: failed };
+        var x = new XMLHttpRequest();
+        x.open('GET', '/clockresult?d=' + encodeURIComponent(JSON.stringify(d)), true); x.send();
+      } catch (er) {}
+    }
+
+    function step() {
+      if (sent >= TOTAL) { draw(true); report(); return; }
+      sent++;
+      window.mmXhrProbe('/clockprobe', function (s) {
+        if (s) {
+          samples.push(s);
+          // GoTime's server-local estimate at this instant vs the probe's ground truth
+          rows.push({ gto: GoTime.now() - (new Date()).getTime(), off: H.offsetOf(s), rtt: H.rttOf(s) });
+        } else { failed++; }
+        if ((rows.length + failed) % 10 === 0) { draw(false); }
+      });
+      setTimeout(step, INTERVAL);
+    }
+
+    // 2) warm up GoTime's sync, THEN start the compare train
+    setTimeout(function () { started = true; out.innerHTML = 'measuring…'; step(); }, WARMUP);
+  })();
+  </script>
+</body>
+</html>

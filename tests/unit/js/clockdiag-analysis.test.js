@@ -104,6 +104,31 @@ test('verdicts band correctly (PASS/WARN/FAIL), skew gated on confidence', () =>
   assert.equal(v.skew.verdict, 'N/A');
 });
 
+test('mmGoTimeError: ground truth = min-RTT offset; error = GoTime vs truth', () => {
+  // min-RTT row has rtt=10, off=100 -> ground truth 100.
+  // GoTime is a steady 40ms high (gto = 140) -> errMean 40, errStd 0.
+  const rows = [
+    { gto: 140, off: 180, rtt: 90 },   // high-RTT probe (noisy off), ignored for GT
+    { gto: 140, off: 100, rtt: 10 },   // min-RTT -> GT = 100
+    { gto: 140, off: 60,  rtt: 85 }
+  ];
+  const e = g.mmGoTimeError(rows);
+  assert.equal(e.groundTruth, 100);
+  close(e.errMean, 40);
+  close(e.errStd, 0);
+});
+
+test('mmGoTimeError: zero error when GoTime tracks the min-RTT truth', () => {
+  const rows = [
+    { gto: 100, off: 100, rtt: 12 },
+    { gto: 101, off: 250, rtt: 120 },
+    { gto:  99, off: -40, rtt: 140 }
+  ];
+  const e = g.mmGoTimeError(rows);
+  assert.equal(e.groundTruth, 100);   // min-RTT row
+  assert.ok(Math.abs(e.errMean) <= 1);
+});
+
 test('empty input is safe', () => {
   assert.equal(g.mmClockStats([]).n, 0);
   assert.deepEqual(g.mmClockVerdicts({ n: 0 }), {});
