@@ -67,7 +67,7 @@
       try {
         var stats = window.mmClockStats(samples);
         var dump = { n: stats.n, rtt: stats.rtt, offset: stats.offset,
-          offsetJitter: stats.offsetJitter, skewPpm: stats.skewPpm,
+          offsetJitter: stats.offsetJitter, skew: stats.skew,
           jitter: stats.jitter, timerJitterMs: timerJitter(),
           clockSource: clockSource, failed: failed };
         var x = new XMLHttpRequest();
