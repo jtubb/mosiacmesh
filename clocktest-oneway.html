@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>One-way downlink rung (v4a)</title>
+  <!-- ES5 ONLY (iPad-1 Safari 5.1). Ladder v4a: extracts the one-way DOWNLINK-floor
+       offset estimator from the same /clockprobe round-trips and reports how sharp/stable
+       that floor is (dlStabilityMs) -> the go/no-go for the v4b cross-screen rung. -->
+  <script src="/js/clockdiag/analysis.js"></script>
+  <script src="/js/clockdiag/probe-xhr.js"></script>
+</head>
+<body style="margin:0;background:#f6f6f6">
+  <div id="out" style="font:16px -apple-system,Helvetica,Arial,sans-serif;padding:20px;text-align:center;color:#666">
+    starting one-way rung…
+  </div>
+  <script>
+  (function () {
+    var COLOR = { PASS: '#1a7f37', WARN: '#9a6700', FAIL: '#cf222e' };
+    function qp(name, dflt) {
+      var m = new RegExp('[?&]' + name + '=([0-9]+)').exec(location.search || '');
+      return m ? parseInt(m[1], 10) : dflt;
+    }
+    var TOTAL = qp('probes', 400), INTERVAL = qp('interval', 200);
+    var out = document.getElementById('out');
+    var samples = [], sent = 0, failed = 0;
+
+    function r1(x) { return (typeof x === 'number') ? (Math.round(x * 10) / 10) : x; }
+    // dlStabilityMs band: sharp floor PASS < 15ms, WARN < 40ms, else FAIL (provisional;
+    // recalibrate from the first fleet run, same discipline as the v1 verdicts).
+    function stabilityBand(v) { return v < 15 ? 'PASS' : (v < 40 ? 'WARN' : 'FAIL'); }
+
+    function draw(done) {
+      var e = window.mmOneWayEstimates(samples);
+      var st = samples.length >= 3 ? window.mmClockStats(samples) : null;
+      var html = '<div style="font:16px/1.5 -apple-system,Helvetica,Arial,sans-serif;max-width:560px;margin:0 auto;padding:14px">';
+      html += '<h2>One-way downlink rung (v4a)</h2>';
+      html += '<div style="color:#666;font-size:13px">probes ' + samples.length + '/' + TOTAL +
+              (failed ? (' · failed ' + failed) : '') + (done ? ' · DONE' : ' · running…') + '</div>';
+      if (e && e.n >= 3) {
+        var band = stabilityBand(e.dlStabilityMs);
+        html += '<div style="margin:12px 0;padding:10px;border-radius:6px;font-weight:bold;font-size:18px;text-align:center;color:#fff;background:' +
+                COLOR[band] + '">downlink floor stability: ' + r1(e.dlStabilityMs) + ' ms — ' + band + '</div>';
+        html += '<table style="width:100%;border-collapse:collapse" border="0" cellpadding="6">';
+        html += '<tr><td>round-trip offset</td><td align="right">' + r1(e.roundTrip) + ' ms</td></tr>';
+        html += '<tr><td><b>downlink offset (p95)</b></td><td align="right"><b>' + r1(e.downlink) + ' ms</b></td></tr>';
+        html += '<tr><td>uplink offset (p05)</td><td align="right">' + r1(e.uplink) + ' ms</td></tr>';
+        html += '<tr><td>min RTT</td><td align="right">' + r1(e.minRtt) + ' ms</td></tr>';
+        html += '<tr><td>downlink floor sharpness (p95−p50)</td><td align="right">' + r1(e.dlSharpnessMs) + ' ms</td></tr>';
+        if (st) {
+          html += '<tr><td>one-way jitter up / down</td><td align="right">' +
+                  r1(st.jitter.up) + ' / ' + r1(st.jitter.down) + ' ms</td></tr>';
+        }
+        html += '</table>';
+        html += '<div style="font-size:11px;color:#888;margin-top:6px">Sharp, low, stable downlink floor across the fleet => the one-way lock is viable => build v4b.</div>';
+      }
+      html += '</div>';
+      out.innerHTML = html;
+    }
+
+    function report() {
+      try {
+        var e = window.mmOneWayEstimates(samples);
+        var st = window.mmClockStats(samples);
+        var d = { mode: 'oneway', n: e.n, roundTrip: e.roundTrip, downlink: e.downlink,
+                  uplink: e.uplink, minRtt: e.minRtt, dlStabilityMs: e.dlStabilityMs,
+                  dlSharpnessMs: e.dlSharpnessMs, jitter: st.jitter, failed: failed };
+        var x = new XMLHttpRequest();
+        x.open('GET', '/clockresult?d=' + encodeURIComponent(JSON.stringify(d)), true);
+        x.send();
+      } catch (er) {}
+    }
+
+    function step() {
+      if (sent >= TOTAL) { draw(true); report(); return; }
+      sent++;
+      window.mmXhrProbe('/clockprobe', function (s) {
+        if (s) { samples.push(s); } else { failed++; }
+        if ((samples.length + failed) % 10 === 0) { draw(false); }
+      });
+      setTimeout(step, INTERVAL);
+    }
+
+    setTimeout(step, 300);
+  })();
+  </script>
+</body>
+</html>

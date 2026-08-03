@@ -189,10 +189,59 @@
              errP90: percentile(errs.map(Math.abs), 0.9) };
   }
 
+  // v4a (one-way rung): extract the DOWNLINK-floor offset estimator from the same
+  // round-trip stream. Queueing/MAC/PSM delay is strictly additive -> it only makes
+  // t4 later, i.e. down=(t3-t4) smaller. So the MAX (high percentile) of `down` lands
+  // on the least-delayed sample = offset - Dd_floor, asymmetry-free. Min-RTT can't do
+  // this: it minimizes Du+Dd (the sum), leaving (Du-Dd)/2. See the v4 design doc.
+  // opts: { pct=0.95, subWindows=5 }
+  function mmOneWayEstimates(samples, opts) {
+    opts = opts || {};
+    var pct = opts.pct != null ? opts.pct : 0.95;
+    var subWindows = opts.subWindows != null ? opts.subWindows : 5;
+    var n = samples.length, i;
+    if (n === 0) { return { n: 0 }; }
+
+    var up = [], down = [], rtts = [];
+    for (i = 0; i < n; i++) {
+      up.push(samples[i].t2 - samples[i].t1);      // offset + Du
+      down.push(samples[i].t3 - samples[i].t4);    // offset - Dd
+      rtts.push(rttOf(samples[i]));
+    }
+
+    // round-trip best offset = the min-RTT sample's offset (least queueing noise)
+    var minRtt = Infinity, minIdx = 0;
+    for (i = 0; i < n; i++) { if (rtts[i] < minRtt) { minRtt = rtts[i]; minIdx = i; } }
+
+    var downlink = percentile(down, pct);          // robust MAX  -> offset - Dd_floor
+    var uplink   = percentile(up, 1 - pct);        // robust MIN  -> offset + Du_floor
+    var dlSharpnessMs = downlink - percentile(down, 0.5);   // floor above the typical (median) sample
+
+    // stability: split the (time-ordered) down stream into subWindows contiguous chunks,
+    // recompute the downlink estimate in each, and take the std across chunks. Small std
+    // = a sharp, repeatable floor (the go/no-go signal for building v4b).
+    var chunkEsts = [], w, lo, hi, chunk, j;
+    var nw = subWindows < n ? subWindows : n;
+    for (w = 0; w < nw; w++) {
+      lo = Math.floor(w * n / nw);
+      hi = Math.floor((w + 1) * n / nw);
+      chunk = [];
+      for (j = lo; j < hi; j++) { chunk.push(down[j]); }
+      if (chunk.length) { chunkEsts.push(percentile(chunk, pct)); }
+    }
+    var dlStabilityMs = pstdev(chunkEsts);
+
+    return {
+      n: n, roundTrip: offsetOf(samples[minIdx]), downlink: downlink, uplink: uplink,
+      minRtt: minRtt, dlStabilityMs: dlStabilityMs, dlSharpnessMs: dlSharpnessMs
+    };
+  }
+
   root.mmClockStats = mmClockStats;
   root.mmClockVerdicts = mmClockVerdicts;
   root.mmSkewFit = mmSkewFit;
   root.mmGoTimeError = mmGoTimeError;
+  root.mmOneWayEstimates = mmOneWayEstimates;
   root._mmClockHelpers = { median: median, percentile: percentile, mean: mean, pstdev: pstdev, slope: slope, rttOf: rttOf, offsetOf: offsetOf };
 
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
