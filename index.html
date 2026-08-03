@@ -28,6 +28,7 @@
        so the flag exists when it initializes. Off by default (identical
        behavior). -->
   <script src="/js/beatflag.js"></script>
+  <script src="/js/dllockflag.js"></script>
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script>
@@ -654,6 +655,11 @@
 			// DIAGNOSTIC: locked oscillator frequency error (ppm). Task 5 added skew to
 			// GoTime.getSteerState(); surface it here for per-screen convergence watch.
 			skew: (function () { var _ss = (typeof GoTime !== 'undefined' && typeof GoTime.getSteerState === 'function') ? GoTime.getSteerState() : null; return _ss ? Math.round(_ss.skew * 1e6) : null; })(),
+			// DIAGNOSTIC (v4b): is the one-way downlink clock lock engaged, and what
+			// windowed-max target is it currently feeding the steer (null when the
+			// flag is off or too few in-window beat samples)?
+			dl: (typeof window !== 'undefined' && window._mmDownlinkLock) ? 1 : 0,
+			dlt: (function () { var _ss = (typeof GoTime !== 'undefined' && typeof GoTime.getSteerState === 'function') ? GoTime.getSteerState() : null; return (_ss && _ss.dlTarget != null) ? Math.round(_ss.dlTarget) : null; })(),
 			// Scatter perf telemetry (?tdbg): animation-loop fps + last scatter draw
 			// stats + active tuning knobs, so frame rate is readable from the server
 			// log remotely (no need to eyeball the device HUD).

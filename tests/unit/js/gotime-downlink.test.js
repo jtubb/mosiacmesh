@@ -61,3 +61,25 @@ test('_downlinkTarget: empty ring -> null', () => {
   const s = loadGoTime();
   assert.equal(s.GoTime._downlinkTarget([], 1000000, {}), null);
 });
+
+test('steer integration: _mmDownlinkLock routes _steerTick to the p90 max, off = median', () => {
+  // Seed 12 beats: ten at offset 445, two at 490. Median (robustTarget) = 445; p90 = 490.
+  function seed(s) {
+    s.__setNow(2000000);
+    var offs = [445,445,445,445,445,445,445,445,445,445,490,490], i;
+    for (i = 0; i < offs.length; i++) { s.GoTime.beatReceived(2000000 + offs[i]); }
+  }
+  // flag ON -> downlink max target
+  var on = loadGoTime();
+  on.window._mmDownlinkLock = true;
+  seed(on);
+  on.GoTime._steerTick();
+  close(on.GoTime.getSteerState().target, 490, 1);   // p90 max, NOT the 445 median
+
+  // flag OFF -> today's median target (byte-identical path)
+  var off = loadGoTime();
+  off.window._mmDownlinkLock = false;
+  seed(off);
+  off.GoTime._steerTick();
+  close(off.GoTime.getSteerState().target, 445, 1);   // median
+});
