@@ -142,3 +142,60 @@ test('helpers: median, percentile, pstdev, slope', () => {
   close(h.pstdev([2, 2, 2]), 0);
   close(h.slope([0, 1, 2, 3], [0, 2, 4, 6]), 2);   // dy/dx = 2
 });
+
+test('mmOneWayEstimates: symmetric path -> down/up/roundTrip exact, gap = minRtt/2', () => {
+  const s = [];
+  for (let i = 0; i < 30; i++) { s.push(mk(i * 1000, 100, 20, 20)); }
+  const e = g.mmOneWayEstimates(s);
+  close(e.downlink, 80);            // t3-t4 = offset - Dd = 100 - 20
+  close(e.uplink, 120);            // t2-t1 = offset + Du = 100 + 20
+  close(e.roundTrip, 100);         // min-RTT best offset
+  close(e.minRtt, 40);
+  close(e.roundTrip - e.downlink, e.minRtt / 2);   // the identity: gap is half min-RTT
+});
+
+test('mmOneWayEstimates: asymmetry -> roundTrip false, downlink carries only Dd_floor', () => {
+  // Du=50, Dd=10, OFF=0: roundTrip = (Du-Dd)/2 = 20 (false); downlink = offset - Dd = -10.
+  const s = [];
+  for (let i = 0; i < 30; i++) { s.push(mk(i * 1000, 0, 50, 10)); }
+  const e = g.mmOneWayEstimates(s);
+  close(e.roundTrip, 20);          // the false offset round-trip cannot escape
+  close(e.downlink, -10);          // offset - Dd_floor, asymmetry-free
+  close(e.roundTrip - e.downlink, e.minRtt / 2);   // 20 - (-10) = 30 = 60/2
+});
+
+test('mmOneWayEstimates: additive queueing -> MAX of down recovers the floor', () => {
+  // offset=100; Dd walks 10 (floor) up to 100 (queued). down = 100 - Dd.
+  // Queueing only LOWERS down, so the high percentile lands on the least-queued sample.
+  const dds = [10, 10, 10, 10, 10, 10, 25, 40, 60, 80, 100, 100];
+  const s = dds.map((dd, i) => mk(i * 1000, 100, 15, dd));
+  const e = g.mmOneWayEstimates(s);
+  close(e.downlink, 90, 1);        // offset - Dd_floor = 100 - 10
+});
+
+test('mmOneWayEstimates: p95 (not literal max) rejects a single glitched t4', () => {
+  const s = [];
+  for (let i = 0; i < 20; i++) { s.push(mk(i * 1000, 100, 15, 12)); } // clean: down = 88
+  s.push(mk(20000, 100, 15, -500));                                   // glitch: t4 wild-early -> down = 600
+  const e = g.mmOneWayEstimates(s);
+  close(e.downlink, 88, 1);        // the glitch (single max) is above p95 -> excluded
+});
+
+test('mmOneWayEstimates: dlStabilityMs small for a stable floor, large for a wandering one', () => {
+  const stable = [];
+  for (let i = 0; i < 40; i++) { stable.push(mk(i * 1000, 100, 15, 12)); } // floor flat -> down=88
+  const es = g.mmOneWayEstimates(stable);
+  assert.ok(es.dlStabilityMs < 2, 'stable floor: ' + es.dlStabilityMs);
+
+  const wander = [];
+  for (let i = 0; i < 40; i++) {
+    const dd = i < 20 ? 12 : 60;   // floor shifts halfway through -> down drops 88 -> 40
+    wander.push(mk(i * 1000, 100, 15, dd));
+  }
+  const ew = g.mmOneWayEstimates(wander);
+  assert.ok(ew.dlStabilityMs > 10, 'wandering floor: ' + ew.dlStabilityMs);
+});
+
+test('mmOneWayEstimates: empty input is safe', () => {
+  assert.deepEqual(g.mmOneWayEstimates([]), { n: 0 });
+});
