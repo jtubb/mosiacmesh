@@ -18,7 +18,7 @@ test('symmetric constant path: offset exact, rtt = Du+Dd, zero jitter/skew', () 
   close(st.offset, 100);
   close(st.rtt.min, 40); close(st.rtt.std, 0);
   close(st.jitter.up, 0); close(st.jitter.down, 0);
-  close(st.skewPpm, 0);
+  close(st.skew.ppm, 0);   // constant offset -> zero slope
 });
 
 test('CONSTANT asymmetry is absorbed into offset (the NTP limit) and invisible to jitter', () => {
@@ -41,12 +41,35 @@ test('per-direction jitter: a noisy uplink shows in upJitter, not downJitter', (
   assert.ok(st.jitter.imbalance > 10);
 });
 
-test('skew: a linearly drifting offset yields the right ppm', () => {
-  // offset grows 2ms every 1000ms sample => 2ms/1000ms = 2000 ppm
+test('mmSkewFit: clean linear drift -> correct ppm + CONFIDENT (long-enough window)', () => {
+  // offset = 100 + 50ppm*t1 ; 200 samples 2s apart = 398s window, clean (Du=Dd=10)
+  const ppm = 50, s = [];
+  for (let i = 0; i < 200; i++) { const t1 = i * 2000; s.push(mk(t1, 100 + ppm * 1e-6 * t1, 10, 10)); }
+  const f = g.mmSkewFit(s);
+  close(f.ppm, 50, 0.5);
+  assert.equal(f.confident, true);
+  assert.ok(f.driftMs >= 2 * f.residMs, 'drift beats residual noise');
+});
+
+test('mmSkewFit: too-short window -> NOT confident (never a garbage number)', () => {
   const s = [];
-  for (let i = 0; i < 30; i++) { s.push(mk(i * 1000, 100 + i * 2, 20, 20)); }
-  const st = g.mmClockStats(s);
-  close(st.skewPpm, 2000, 1);
+  for (let i = 0; i < 30; i++) { s.push(mk(i * 1000, 100 + 50 * 1e-6 * (i * 1000), 10, 10)); }
+  const f = g.mmSkewFit(s);            // 29s window < 180s min
+  assert.equal(f.confident, false);
+});
+
+test('mmSkewFit: min-RTT filter drops high-RTT noisy samples from the fit', () => {
+  // half the samples are clean (RTT=20), half heavily/variably queued (RTT ~200-400)
+  const s = [];
+  for (let i = 0; i < 200; i++) {
+    const t1 = i * 2000, off = 100 + 50 * 1e-6 * t1;
+    if (i % 2 === 0) { s.push(mk(t1, off, 10, 10)); }                       // clean
+    else { const q = 100 + (i % 7) * 40; s.push(mk(t1, off, q, q + (i % 5) * 30)); } // queued/noisy
+  }
+  const f = g.mmSkewFit(s);
+  assert.ok(f.cleanN <= 105 && f.cleanN >= 95, 'kept ~the 100 clean samples: ' + f.cleanN);
+  close(f.ppm, 50, 1);               // still recovers the true skew despite the noisy half
+  assert.equal(f.confident, true);
 });
 
 test('best offset comes from the minimum-RTT sample', () => {
@@ -60,19 +83,25 @@ test('best offset comes from the minimum-RTT sample', () => {
   close(st.offset, 100);             // the clean sample's offset, not the queued ones'
 });
 
-test('verdicts band correctly (PASS/WARN/FAIL)', () => {
-  const stats = { n: 10, rtt: { std: 5 }, offsetJitter: 10, skewPpm: 15,
+test('verdicts band correctly (PASS/WARN/FAIL), skew gated on confidence', () => {
+  const stats = { n: 10, rtt: { std: 5 }, offsetJitter: 10,
+                  skew: { ppm: 15, confident: true },
                   jitter: { up: 5, down: 5, imbalance: 5 } };
   let v = g.mmClockVerdicts(stats);
   assert.equal(v.rttJitter.verdict, 'PASS');
   assert.equal(v.skew.verdict, 'PASS');
   assert.equal(v.jitterImbalance.verdict, 'PASS');
 
-  stats.rtt.std = 50; stats.skewPpm = 90; stats.jitter.imbalance = 45;
+  stats.rtt.std = 50; stats.skew = { ppm: 90, confident: true }; stats.jitter.imbalance = 45;
   v = g.mmClockVerdicts(stats);
   assert.equal(v.rttJitter.verdict, 'WARN');   // 30<=50<80
   assert.equal(v.skew.verdict, 'FAIL');        // >=80
   assert.equal(v.jitterImbalance.verdict, 'WARN'); // 20<=45<60
+
+  // low confidence -> N/A regardless of the ppm value
+  stats.skew = { ppm: 5, confident: false };
+  v = g.mmClockVerdicts(stats);
+  assert.equal(v.skew.verdict, 'N/A');
 });
 
 test('empty input is safe', () => {

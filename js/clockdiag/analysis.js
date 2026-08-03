@@ -49,16 +49,69 @@
   function rttOf(s)    { return (s.t4 - s.t1) - (s.t3 - s.t2); }
   function offsetOf(s) { return ((s.t2 - s.t1) + (s.t3 - s.t4)) / 2; }
 
+  // Trustworthy oscillator-skew fit. Naive least-squares over 60s is pure noise
+  // (a 50ppm crystal drifts 3ms in 60s, far below the ~100ms offset jitter). So:
+  //  (1) keep only MIN-RTT samples (within rttMargin of the min) -> cleanest offsets;
+  //  (2) Theil-Sen slope (median of pairwise slopes) over pairs >= minSpanMs apart
+  //      -> robust to remaining outliers and needs a real time baseline;
+  //  (3) a CONFIDENCE gate: report skew only when the predicted drift over the
+  //      window exceeds ~2x the detrended residual noise AND the window is long
+  //      enough. Otherwise confident=false ("insufficient window") -- never a
+  //      garbage number.
+  // opts: { rttMargin=15, minSpanMs=30000, minWindowMs=180000, minClean=8 }
+  function mmSkewFit(samples, opts) {
+    opts = opts || {};
+    var rttMargin  = opts.rttMargin  != null ? opts.rttMargin  : 15;
+    var minSpanMs  = opts.minSpanMs  != null ? opts.minSpanMs  : 30000;
+    var minWindowMs= opts.minWindowMs!= null ? opts.minWindowMs: 180000;
+    var minClean   = opts.minClean   != null ? opts.minClean   : 8;
+    var n = samples.length, i, j;
+    var out = { ppm: 0, cleanN: 0, windowMs: 0, residMs: 0, driftMs: 0, confident: false };
+    if (n < minClean) { return out; }
+
+    var minRtt = Infinity;
+    for (i = 0; i < n; i++) { var r = rttOf(samples[i]); if (r < minRtt) { minRtt = r; } }
+    var clean = [];
+    for (i = 0; i < n; i++) {
+      if (rttOf(samples[i]) <= minRtt + rttMargin) {
+        clean.push({ t: samples[i].t1, off: offsetOf(samples[i]) });
+      }
+    }
+    out.cleanN = clean.length;
+    if (clean.length < minClean) { return out; }
+    out.windowMs = clean[clean.length - 1].t - clean[0].t;
+
+    var slopes = [], dt;
+    for (i = 0; i < clean.length; i++) {
+      for (j = i + 1; j < clean.length; j++) {
+        dt = clean[j].t - clean[i].t;
+        if (dt >= minSpanMs) { slopes.push((clean[j].off - clean[i].off) / dt); }
+      }
+    }
+    if (slopes.length < 3) { return out; }             // not enough long-baseline pairs
+    var mSlope = median(slopes);                        // ms-offset per ms-time
+    out.ppm = mSlope * 1e6;
+
+    // detrended residual noise of the clean offsets, and the drift the slope predicts
+    var t0 = clean[0].t, resid = [];
+    for (i = 0; i < clean.length; i++) { resid.push(clean[i].off - mSlope * (clean[i].t - t0)); }
+    out.residMs = pstdev(resid);
+    out.driftMs = Math.abs(mSlope) * out.windowMs;
+    out.confident = (out.windowMs >= minWindowMs) && (clean.length >= minClean) &&
+                    (out.driftMs >= 2 * out.residMs);
+    return out;
+  }
+
   // Main analysis. `samples` = array of {t1,t2,t3,t4}. Returns a stats object.
-  function mmClockStats(samples) {
+  function mmClockStats(samples, opts) {
     var n = samples.length, i;
     if (n === 0) { return { n: 0 }; }
 
-    var rtts = [], offs = [], xs = [];
+    var rtts = [], offs = [];
     var minRttIdx = 0, minRtt = Infinity, r;
     for (i = 0; i < n; i++) {
       r = rttOf(samples[i]);
-      rtts.push(r); offs.push(offsetOf(samples[i])); xs.push(samples[i].t1);
+      rtts.push(r); offs.push(offsetOf(samples[i]));
       if (r < minRtt) { minRtt = r; minRttIdx = i; }
     }
 
@@ -83,11 +136,9 @@
     }
     var upJitter = pstdev(upRaw), downJitter = pstdev(downRaw);
 
-    // Skew: slope of offset vs local time, in ppm. Anchor xs to the first t1
-    // so the magnitudes are small; slope is ms-offset per ms-elapsed => *1e6 ppm.
-    var x0 = xs[0], xr = [];
-    for (i = 0; i < n; i++) { xr.push(xs[i] - x0); }
-    var skewPpm = slope(xr, offs) * 1e6;
+    // Skew: robust min-RTT + Theil-Sen fit with a confidence gate (naive
+    // least-squares over a short window is noise -- see mmSkewFit).
+    var skew = mmSkewFit(samples, opts && opts.skew);
 
     return {
       n: n,
@@ -97,7 +148,7 @@
       },
       offset: bestOffset,
       offsetJitter: pstdev(offs),
-      skewPpm: skewPpm,
+      skew: skew,
       jitter: { up: upJitter, down: downJitter, imbalance: Math.abs(upJitter - downJitter) }
     };
   }
@@ -113,13 +164,16 @@
     return {
       rttJitter:     { value: stats.rtt.std,            verdict: band(stats.rtt.std, 30, 80),        unit: 'ms std' },
       offsetJitter:  { value: stats.offsetJitter,       verdict: band(stats.offsetJitter, 20, 60),   unit: 'ms std' },
-      skew:          { value: stats.skewPpm,            verdict: band(stats.skewPpm, 30, 80),         unit: 'ppm' },
+      skew:          stats.skew.confident
+                       ? { value: stats.skew.ppm, verdict: band(stats.skew.ppm, 30, 80), unit: 'ppm' }
+                       : { value: stats.skew.ppm, verdict: 'N/A', unit: 'ppm (insufficient window — run longer)' },
       jitterImbalance: { value: stats.jitter.imbalance, verdict: band(stats.jitter.imbalance, 20, 60), unit: 'ms up-vs-down' }
     };
   }
 
   root.mmClockStats = mmClockStats;
   root.mmClockVerdicts = mmClockVerdicts;
+  root.mmSkewFit = mmSkewFit;
   root._mmClockHelpers = { median: median, percentile: percentile, mean: mean, pstdev: pstdev, slope: slope, rttOf: rttOf, offsetOf: offsetOf };
 
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));

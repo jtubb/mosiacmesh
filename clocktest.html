@@ -16,8 +16,16 @@
   <script>
   (function () {
     var URL = '/clockprobe';
-    var TOTAL = 300;          // number of probes
-    var INTERVAL = 200;       // ms between probes  -> ~60s run
+    // URL-configurable window (ES5; no URLSearchParams on Safari 5.1). Default
+    // ~60s (RTT/jitter/path). For a TRUSTED oscillator-skew number the drift must
+    // beat the offset noise -> run several minutes, e.g. ?probes=1500&interval=400
+    // (~10 min); the skew reports "run longer" until confident.
+    function qp(name, dflt) {
+      var m = new RegExp('[?&]' + name + '=([0-9]+)').exec(location.search || '');
+      return m ? parseInt(m[1], 10) : dflt;
+    }
+    var TOTAL = qp('probes', 300);
+    var INTERVAL = qp('interval', 200);
     var RENDER_EVERY = 10;
 
     var out = document.getElementById('out');

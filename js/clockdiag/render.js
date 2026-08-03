@@ -2,7 +2,7 @@
  * stats into a big, readable, color-coded panel. DOM only, no analysis logic. */
 (function (root) {
 
-  var COLOR = { PASS: '#1a7f37', WARN: '#9a6700', FAIL: '#cf222e' };
+  var COLOR = { PASS: '#1a7f37', WARN: '#9a6700', FAIL: '#cf222e', 'N/A': '#888' };
 
   function r1(x) { return (typeof x === 'number') ? (Math.round(x * 10) / 10) : x; }
 
@@ -52,6 +52,12 @@
                      r1(stats.rtt.min) + ' / ' + r1(stats.rtt.median) + ' / ' + r1(stats.rtt.p90) + ' / ' + r1(stats.rtt.max) + ' ms');
       html += rawRow('offset (best, min-RTT)', r1(stats.offset) + ' ms');
       html += rawRow('one-way jitter up / down', r1(stats.jitter.up) + ' / ' + r1(stats.jitter.down) + ' ms');
+      if (stats.skew) {
+        html += rawRow('skew fit: window / clean / drift vs noise',
+          r1(stats.skew.windowMs / 1000) + 's / ' + stats.skew.cleanN + ' pts / ' +
+          r1(stats.skew.driftMs) + ' vs ' + r1(stats.skew.residMs) + ' ms' +
+          (stats.skew.confident ? ' (trusted)' : ' (run longer)'));
+      }
       html += rawRow('clock source', extra.clockSource || '?');
       html += '</table>';
       html += '<div style="margin-top:6px;font-size:11px;color:#888">Note: steady one-way path asymmetry is absorbed into the offset and is not measurable from round-trips.</div>';
