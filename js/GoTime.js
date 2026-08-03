@@ -163,7 +163,12 @@ var GoTime = (function f() {
         _steerPrecisionFloorMs: 60,
         _lastBeatMs: null,
         _beatPrecisionMs: 12,
-        _beatStaleMs: 6000
+        _beatStaleMs: 6000,
+        _beatRing: [],
+        _dlWindowMs: 90000,
+        _dlPct: 0.90,
+        _dlMinSamples: 12,
+        _lastDlTarget: null
     };
     
 	// Private Methods
@@ -317,6 +322,29 @@ var GoTime = (function f() {
         return (kept.length % 2) ? kept[h] : (kept[h - 1] + kept[h]) / 2;
     };
 
+    // Downlink-lock target (v4b): the windowed high-percentile (robust MAX) of recent
+    // one-way beat offsets. Each beat offset = serverSendMs - localRecv = trueOffset - Dd;
+    // queueing only lowers it, so the MAX recovers trueOffset - Dd_floor (asymmetry-free).
+    // Returns null when too few in-window samples -> _steerTick falls back to _robustTarget.
+    // opts: { dlWindowMs=90000, dlPct=0.90, dlMinSamples=12 }. NOT deskewed: drift over the
+    // window (~1.7ms at -19ppm) is negligible vs the ~45ms downlink jitter the max spans.
+    _downlinkTarget = function (beatRing, nowMs, opts) {
+        opts = opts || {};
+        var windowMs = (opts.dlWindowMs   != null) ? opts.dlWindowMs   : 90000;
+        var pct      = (opts.dlPct        != null) ? opts.dlPct        : 0.90;
+        var minS     = (opts.dlMinSamples != null) ? opts.dlMinSamples : 12;
+        var i, offs = [];
+        for (i = 0; i < beatRing.length; i++) {
+            if (beatRing[i].t >= nowMs - windowMs) { offs.push(beatRing[i].offset); }
+        }
+        if (offs.length < minS) { return null; }
+        offs.sort(function (a, b) { return a - b; });
+        var idx = Math.ceil(pct * offs.length) - 1;   // nearest-rank
+        if (idx < 0) { idx = 0; }
+        if (idx >= offs.length) { idx = offs.length - 1; }
+        return offs[idx];
+    };
+
     // Reference-frame note (M1 follow-up): `t` on a sample is now-space (GoTime.now() at revise
     // time, i.e. skew-corrected server-clock space), while `_skewRef` is anchored in RAW-local
     // space (getAccurateTimestamp()) -- see _applySkew/_steerTick. Mixing now-space `t` with
@@ -417,6 +445,7 @@ var GoTime = (function f() {
             capMsPerSec: options._steerCapMsPerSec, windowMs: options._steerWindowMs,
             minSamples: options._steerMinSamples, precisionFloorMs: options._steerPrecisionFloorMs,
             skewMinSamples: options._skewMinSamples, skewMinSpanMs: options._skewMinSpanMs
+            , dlWindowMs: options._dlWindowMs, dlPct: options._dlPct, dlMinSamples: options._dlMinSamples
         };
         // Frequency discipline: re-fit skew once the offset has locked; fold on meaningful change.
         if (options._steering) {
@@ -441,6 +470,12 @@ var GoTime = (function f() {
         // Offset steer chases the DE-SKEWED residual (skew owns rate, steer owns offset).
         var target = _robustTarget(_deskewSamples(options._steerSamples, options._skew, options._skewRef),
                                    GoTime.now(), opts);
+        options._lastDlTarget = null;
+        if (typeof window !== 'undefined' && window._mmDownlinkLock) {
+            var dlt = _downlinkTarget(options._beatRing, GoTime.now(), opts);
+            options._lastDlTarget = dlt;
+            if (dlt !== null) { target = dlt; }   // else fall back to the median target
+        }
         if (target === null) { return; }
         options._steering = true;
         options._lastSteerTarget = target;
@@ -581,6 +616,9 @@ var GoTime = (function f() {
             if (opts.SteerWindowMs != null) { options._steerWindowMs = opts.SteerWindowMs; }
             if (opts.SteerMinSamples != null) { options._steerMinSamples = opts.SteerMinSamples; }
             if (opts.SteerPrecisionFloorMs != null) { options._steerPrecisionFloorMs = opts.SteerPrecisionFloorMs; }
+            if (opts.DlWindowMs != null) { options._dlWindowMs = opts.DlWindowMs; }
+            if (opts.DlPct != null) { options._dlPct = opts.DlPct; }
+            if (opts.DlMinSamples != null) { options._dlMinSamples = opts.DlMinSamples; }
 			if (opts.OnSync != null) {
 				options._onSyncCallback = opts.OnSync;
 			}
@@ -610,7 +648,10 @@ var GoTime = (function f() {
 			var localRecv = getAccurateTimestamp();   // SAME clock fn now() uses
 			options._lastBeatMs = localRecv;
 			var sample = _beatSample(serverSendMs, localRecv, options._beatPrecisionMs);
-			return _reviseOffset(sample, "beat");
+			var revised = _reviseOffset(sample, "beat");
+			options._beatRing.push({ offset: sample.offset, t: GoTime.now() });   // v4b: pure one-way ring
+			while (options._beatRing.length > 64) { options._beatRing.shift(); }
+			return revised;
 		},
 
 		// Force fresh clock samples now (used on PREPARE so the offset isn't
@@ -644,7 +685,8 @@ var GoTime = (function f() {
 		getSteerState: function() {
             return { steering: options._steering, samples: options._steerSamples.length,
                      offset: options._offset, target: options._lastSteerTarget,
-                     skew: options._skew };
+                     skew: options._skew
+                     , dlTarget: options._lastDlTarget };
         },
 
 		// DIAGNOSTIC (?tdbg): why is steering engaged or not? Distinguishes
@@ -673,6 +715,7 @@ var GoTime = (function f() {
 		steerTick: function() { return _steerTick(); },
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget,
+		_downlinkTarget: _downlinkTarget,
 		_skewFit: _skewFit,
 		_applySkew: _applySkew,
 		_deskewSamples: _deskewSamples,
