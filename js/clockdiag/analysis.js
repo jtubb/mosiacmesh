@@ -215,7 +215,7 @@
 
     var downlink = percentile(down, pct);          // robust MAX  -> offset - Dd_floor
     var uplink   = percentile(up, 1 - pct);        // robust MIN  -> offset + Du_floor
-    var dlSharpnessMs = percentile(down, pct) - percentile(down, 0.5);
+    var dlSharpnessMs = downlink - percentile(down, 0.5);   // floor above the typical (median) sample
 
     // stability: split the (time-ordered) down stream into subWindows contiguous chunks,
     // recompute the downlink estimate in each, and take the std across chunks. Small std

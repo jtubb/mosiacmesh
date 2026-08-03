@@ -171,6 +171,8 @@ test('mmOneWayEstimates: additive queueing -> MAX of down recovers the floor', (
   const s = dds.map((dd, i) => mk(i * 1000, 100, 15, dd));
   const e = g.mmOneWayEstimates(s);
   close(e.downlink, 90, 1);        // offset - Dd_floor = 100 - 10
+  // down sorted = [0,0,20,40,60,75,90,90,90,90,90,90]: p95 (idx 11) = 90, p50 (idx 5) = 75
+  close(e.dlSharpnessMs, 15, 1);   // floor (90) sits 15ms above the median (75) queued sample
 });
 
 test('mmOneWayEstimates: p95 (not literal max) rejects a single glitched t4', () => {
