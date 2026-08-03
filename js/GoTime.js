@@ -317,6 +317,29 @@ var GoTime = (function f() {
         return (kept.length % 2) ? kept[h] : (kept[h - 1] + kept[h]) / 2;
     };
 
+    // Downlink-lock target (v4b): the windowed high-percentile (robust MAX) of recent
+    // one-way beat offsets. Each beat offset = serverSendMs - localRecv = trueOffset - Dd;
+    // queueing only lowers it, so the MAX recovers trueOffset - Dd_floor (asymmetry-free).
+    // Returns null when too few in-window samples -> _steerTick falls back to _robustTarget.
+    // opts: { dlWindowMs=90000, dlPct=0.90, dlMinSamples=12 }. NOT deskewed: drift over the
+    // window (~1.7ms at -19ppm) is negligible vs the ~45ms downlink jitter the max spans.
+    _downlinkTarget = function (beatRing, nowMs, opts) {
+        opts = opts || {};
+        var windowMs = (opts.dlWindowMs   != null) ? opts.dlWindowMs   : 90000;
+        var pct      = (opts.dlPct        != null) ? opts.dlPct        : 0.90;
+        var minS     = (opts.dlMinSamples != null) ? opts.dlMinSamples : 12;
+        var i, offs = [];
+        for (i = 0; i < beatRing.length; i++) {
+            if (beatRing[i].t >= nowMs - windowMs) { offs.push(beatRing[i].offset); }
+        }
+        if (offs.length < minS) { return null; }
+        offs.sort(function (a, b) { return a - b; });
+        var idx = Math.ceil(pct * offs.length) - 1;   // nearest-rank
+        if (idx < 0) { idx = 0; }
+        if (idx >= offs.length) { idx = offs.length - 1; }
+        return offs[idx];
+    };
+
     // Reference-frame note (M1 follow-up): `t` on a sample is now-space (GoTime.now() at revise
     // time, i.e. skew-corrected server-clock space), while `_skewRef` is anchored in RAW-local
     // space (getAccurateTimestamp()) -- see _applySkew/_steerTick. Mixing now-space `t` with
@@ -673,6 +696,7 @@ var GoTime = (function f() {
 		steerTick: function() { return _steerTick(); },
 		_steerStep: _steerStep,
 		_robustTarget: _robustTarget,
+		_downlinkTarget: _downlinkTarget,
 		_skewFit: _skewFit,
 		_applySkew: _applySkew,
 		_deskewSamples: _deskewSamples,
