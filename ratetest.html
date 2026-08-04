@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>mmvideo rate test</title>
+  <!-- ES5 ONLY (iPad-1 Safari 5.1). Standalone OPEN-LOOP rate probe: NO mosiacmesh.js,
+       NO GoTime, NO drift steer. Sets a FIXED playbackRate, measures the video's actual
+       advance (d currentTime / d wallclock) over a long window so mmvideo's ~200ms
+       readback noise averages out. Proves whether rate changes move the video, and by
+       how much (honor ratio). Reports to /clockresult (reused; no server change). -->
+  <script src="/js/ratefit.js"></script>
+</head>
+<body style="margin:0;background:#000">
+  <video id="v" autoplay loop muted playsinline webkit-playsinline
+         style="position:absolute;top:0;left:0;width:100%;height:100%"></video>
+  <div id="out" style="position:absolute;top:0;left:0;right:0;z-index:9;font:13px monospace;color:#0f0;background:rgba(0,0,0,.75);padding:8px;white-space:pre-wrap">rate test starting…</div>
+  <script>
+  (function () {
+    function qp(n, d) { var m = new RegExp('[?&]' + n + '=([^&]+)').exec(location.search || ''); return m ? decodeURIComponent(m[1]) : d; }
+    var SRC = qp('src', 'http://127.0.0.1:8080/seg_3345ca147226_0.mp4');
+    var RATES = qp('rates', '0.5,1.0,1.5,2.0').split(',');
+    var LOOPS = parseInt(qp('loops', '5'), 10);
+    var SETTLE = parseInt(qp('settle', '1500'), 10);
+    var MEAS = parseInt(qp('meas', '8000'), 10);
+    var STEP = 500;
+    var MODE = qp('mode', 'rate');
+    var SEEKS = parseInt(qp('seeks', '20'), 10);
+    var v = document.getElementById('v'), out = document.getElementById('out');
+    var results = [], idx = 0, started = false, loopNum = 0;
+    var seekIdx = 0, seekResults = [];
+    var eloopIdx = 0, eloopResults = [], pendingRestart = false, ELOOPS = parseInt(qp('eloops', '20'), 10);
+
+    function log(s) { out.textContent = s; }   /* textContent (not innerHTML): SRC from ?src= is rendered as literal text, no HTML injection */
+    function report(done) {
+      try {
+        var d = { mode: 'rate', src: SRC, results: results, done: done,
+                  vstate: { ct: v.currentTime, paused: v.paused, rs: v.readyState, ns: v.networkState,
+                            err: (v.error ? v.error.code : null), dur: v.duration } };
+        var x = new XMLHttpRequest();
+        x.open('GET', '/clockresult?d=' + encodeURIComponent(JSON.stringify(d)), true); x.send();
+      } catch (e) {}
+    }
+    function render() {
+      var h = 'mmvideo RATE TEST  src=' + SRC.split('/').pop() + '  ct=' + (v.currentTime).toFixed(2) + '\ncmd -> measured  honor  (method,n,rateGot)\n';
+      for (var i = 0; i < results.length; i++) {
+        var r = results[i];
+        if (r.summary) { h += '\nRESPONSIVENESS d(meas)/d(cmd) = ' + (r.responsiveness == null ? '?' : r.responsiveness.toFixed(2)) + '  (>~0.3 => rate WORKS; ~0 => IGNORED)'; continue; }
+        h += r.R + ' -> ' + (r.measured == null ? '?' : r.measured.toFixed(3)) + '  honor=' + (r.honor == null ? '-' : r.honor.toFixed(2)) + '  (' + r.method + ',n=' + r.n + ',got=' + r.rateGot + ')\n';
+      }
+      log(h);
+    }
+    function measureRate(R, cb) {
+      v.playbackRate = R;
+      setTimeout(function () {
+        var samples = [];
+        var iv = setInterval(function () { samples.push({ w: (new Date()).getTime(), ct: v.currentTime, r: v.playbackRate }); }, STEP);
+        setTimeout(function () {
+          clearInterval(iv);
+          var res = window.mmRateSlope(samples, { period: v.duration });
+          var honor = (R !== 1) ? (res.rate == null ? null : (res.rate - 1) / (R - 1)) : null;
+          results.push({ loop: loopNum, R: R, measured: res.rate, honor: honor, method: res.method, n: res.n,
+                         rateGot: samples.length ? samples[samples.length - 1].r : null });
+          render(); report(false);
+          cb();
+        }, MEAS);
+      }, SETTLE);
+    }
+    function runNext() {
+      if (idx >= RATES.length) {
+        // end of this loop's sweep: responsiveness slope over THIS loop's results
+        var xs = [], ys = [], i, j;
+        for (i = 0; i < results.length; i++) { if (results[i].loop === loopNum && !results[i].summary && results[i].measured != null) { xs.push(results[i].R); ys.push(results[i].measured); } }
+        var sl = null;
+        if (xs.length >= 2) {
+          var mx = 0, my = 0; for (j = 0; j < xs.length; j++) { mx += xs[j]; my += ys[j]; } mx /= xs.length; my /= xs.length;
+          var num = 0, den = 0; for (j = 0; j < xs.length; j++) { num += (xs[j] - mx) * (ys[j] - my); den += (xs[j] - mx) * (xs[j] - mx); }
+          sl = den ? num / den : null;
+        }
+        results.push({ summary: true, loop: loopNum, responsiveness: sl });
+        render(); report(false);
+        loopNum++;
+        if (loopNum >= LOOPS) { report(true); return; }
+        idx = 0;
+        setTimeout(runNext, 500);
+        return;
+      }
+      var R = parseFloat(RATES[idx]); idx++;
+      log('loop ' + (loopNum + 1) + '/' + LOOPS + '  rate ' + R + ' (' + idx + '/' + RATES.length + ')  ct=' + v.currentTime.toFixed(2) + '…');
+      measureRate(R, runNext);
+    }
+    // ---- SEEK-STALL PROBE: does an explicit seek (what the drift steer does) stall the video? ----
+    function reportSeek(done) {
+      try {
+        var d = { mode: 'seek', results: seekResults, done: done,
+                  vstate: { ct: v.currentTime, paused: v.paused, rs: v.readyState, ns: v.networkState, err: (v.error ? v.error.code : null), dur: v.duration } };
+        var x = new XMLHttpRequest(); x.open('GET', '/clockresult?d=' + encodeURIComponent(JSON.stringify(d)), true); x.send();
+      } catch (e) {}
+    }
+    function renderSeek() {
+      var h = 'SEEK-STALL PROBE  dur=' + (v.duration || 0).toFixed(1) + '\nseek#  target -> post-seek rate  (STALL?)\n', st = 0, i;
+      for (i = 0; i < seekResults.length; i++) {
+        var r = seekResults[i]; if (r.stalled) { st++; }
+        h += (i + 1) + '  t=' + r.target + ' -> ' + (r.rate == null ? '?' : r.rate) + (r.stalled ? '   STALL' : '') + '\n';
+      }
+      h += '\nstalled ' + st + '/' + seekResults.length;
+      log(h);
+    }
+    // ensure the video is advancing before a seek trial (recover a prior stall so each trial is independent)
+    function ensurePlaying(cb, tries) {
+      tries = tries || 0;
+      var c0 = v.currentTime;
+      setTimeout(function () {
+        if (v.currentTime > c0 + 0.05) { cb(true); return; }
+        if (tries >= 4) { cb(false); return; }
+        if (v.readyState === 0) { try { v.load(); } catch (e) {} }
+        try { v.play(); } catch (e) {}
+        ensurePlaying(cb, tries + 1);
+      }, 800);
+    }
+    function seekProbe() {
+      if (seekIdx >= SEEKS) { renderSeek(); reportSeek(true); return; }
+      ensurePlaying(function (ok) {
+        seekIdx++;
+        if (!ok) { seekResults.push({ target: null, rate: null, stalled: true, note: 'no-start' }); renderSeek(); reportSeek(false); setTimeout(seekProbe, 300); return; }
+        var dur = v.duration || 30, target = 2 + Math.random() * (dur - 4);
+        try { v.currentTime = target; } catch (e) {}   // the seek — exactly what the drift steer issues
+        log('seek ' + seekIdx + '/' + SEEKS + ' -> t=' + target.toFixed(1) + '…');
+        setTimeout(function () {
+          var samples = [], iv = setInterval(function () { samples.push({ w: (new Date()).getTime(), ct: v.currentTime }); }, 300);
+          setTimeout(function () {
+            clearInterval(iv);
+            var res = window.mmRateSlope(samples, { period: v.duration });
+            var stalled = (res.rate == null || res.rate < 0.3);
+            seekResults.push({ target: Math.round(target * 10) / 10, rate: res.rate == null ? null : Math.round(res.rate * 100) / 100, stalled: stalled });
+            renderSeek(); reportSeek(false);
+            setTimeout(seekProbe, 400);
+          }, 2500);
+        }, 1500);
+      });
+    }
+    // ---- EXPLICIT-LOOP PROBE: the proposed fix. loop=false + on 'ended' do currentTime=0;play().
+    // Drive to end repeatedly and count how often the restart stalls vs the DOM-loop's ~20%. ----
+    function reportEloop(done) {
+      try {
+        var d = { mode: 'eloop', results: eloopResults, done: done,
+                  vstate: { ct: v.currentTime, paused: v.paused, rs: v.readyState, ns: v.networkState, err: (v.error ? v.error.code : null), dur: v.duration } };
+        var x = new XMLHttpRequest(); x.open('GET', '/clockresult?d=' + encodeURIComponent(JSON.stringify(d)), true); x.send();
+      } catch (e) {}
+    }
+    function renderEloop() {
+      var h = 'EXPLICIT-LOOP PROBE (fix: ended->seek0->play)  dur=' + (v.duration || 0).toFixed(1) + '\ncycle  ended?  post-restart rate  (STALL?)\n', st = 0, i;
+      for (i = 0; i < eloopResults.length; i++) {
+        var r = eloopResults[i]; if (r.stalled) { st++; }
+        h += (i + 1) + '  ended=' + (r.ended ? 'y' : 'n') + '  -> ' + (r.rate == null ? '?' : r.rate) + (r.stalled ? '   STALL' : '') + '\n';
+      }
+      h += '\nstalled ' + st + '/' + eloopResults.length + '   (DOM-loop baseline was ~20%)';
+      log(h);
+    }
+    function onEnded() {                        // THE PROPOSED FIX: explicit restart of an ENDED video
+      pendingRestart = true;
+      try { v.currentTime = 0; } catch (e) {}
+      try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e2) {}
+    }
+    function eloopCycle() {
+      if (eloopIdx >= ELOOPS) { renderEloop(); reportEloop(true); return; }
+      eloopIdx++;
+      var dur = v.duration || 30;
+      pendingRestart = false;
+      try { v.currentTime = dur - 1.0; } catch (e) {}   // drive to the end fast -> triggers 'ended'
+      try { var p = v.play(); if (p && p['catch']) { p['catch'](function () {}); } } catch (e2) {}
+      setTimeout(function () {                            // by now: hit end -> onEnded restarted it -> measure resume
+        var s = [], iv = setInterval(function () { s.push({ w: (new Date()).getTime(), ct: v.currentTime }); }, 250);
+        setTimeout(function () {
+          clearInterval(iv);
+          var res = window.mmRateSlope(s, { period: v.duration });
+          var stalled = (res.rate == null || res.rate < 0.3);
+          eloopResults.push({ cycle: eloopIdx, ended: pendingRestart, ct: Math.round(v.currentTime * 10) / 10, rate: res.rate == null ? null : Math.round(res.rate * 100) / 100, stalled: stalled });
+          renderEloop(); reportEloop(false);
+          setTimeout(eloopCycle, 300);
+        }, 2000);
+      }, 3000);
+    }
+    function eloopProbe() { v.loop = false; v.addEventListener('ended', onEnded, false); eloopCycle(); }
+    function begin() {
+      if (started) { return; }
+      started = true;
+      var fn = (MODE === 'seek') ? seekProbe : (MODE === 'eloop') ? eloopProbe : runNext;
+      setTimeout(fn, 1500);
+    }
+
+    v.src = SRC;
+    v.addEventListener('playing', begin, false);
+    v.addEventListener('timeupdate', function () { if (v.currentTime > 0.1) { begin(); } }, false);
+    // Load-retry: mmvideo cold-load is flaky (rs stuck at 0). Re-kick load()/play()
+    // every 4s until the video actually advances, up to MAXKICKS, before giving up.
+    var kicks = 0, MAXKICKS = 8;
+    function kick() {
+      if (started) { return; }
+      if (v.currentTime > 0.1) { begin(); return; }
+      if (kicks >= MAXKICKS) {
+        log('VIDEO NEVER STARTED after ' + kicks + ' kicks (ct=' + v.currentTime + ', rs=' + v.readyState + ', paused=' + v.paused + ')');
+        report(false); return;
+      }
+      kicks++;
+      if (v.readyState === 0) { try { v.load(); } catch (e) {} }   // nothing loaded -> force a fresh load
+      try { v.play(); } catch (e) {}
+      log('load kick ' + kicks + '/' + MAXKICKS + '  rs=' + v.readyState + ' ct=' + v.currentTime.toFixed(2));
+      setTimeout(kick, 4000);
+    }
+    kick();
+  })();
+  </script>
+</body>
+</html>

@@ -29,6 +29,16 @@
        behavior). -->
   <script src="/js/beatflag.js"></script>
   <script src="/js/dllockflag.js"></script>
+  <script src="/js/eloopflag.js"></script>
+  <!-- Rate-test toggle: when on, redirect this webclip to the open-loop rate
+       probe so it runs inside Web.app (mmvideo active). Off by default. Must run
+       BEFORE the wall scripts load so it redirects before playback initializes. -->
+  <script src="/js/ratetestflag.js"></script>
+  <script>
+    if (window._mmRateTest && !/ratetest\.html/.test(location.pathname)) {
+      window.location.replace('/ratetest.html' + (window._mmRateTestQuery || location.search || ''));
+    }
+  </script>
   <script src="/js/jquery.min.js"></script>
   <script src="/js/sockjs.min.js"></script>
   <script src="/js/GoTime.js"></script>
@@ -1148,6 +1158,23 @@
 		playback.driftTimer = setInterval(driftTick, 500);
 	}
 
+	// Explicit-loop restart (flag: window._mmExplicitLoop). Native DOM <video loop>
+	// intermittently STALLS mmvideo at the loop boundary (~20% via ratetest.html); a bare
+	// loop transition freezes at the last frame. Seeking to the clock-correct position and
+	// calling play() (the play() the old loop=false path was missing) restarts cleanly
+	// (0% stall measured). Single-item looping only; multi-item advances via renderPlayback.
+	function onVideoEnded() {
+		if (!window._mmExplicitLoop) { return; }
+		if (!playback.active || !playback.loop || playback.items.length !== 1) { return; }
+		var vv = playback.video;
+		if (!vv) { return; }
+		var durations = [], k;
+		for (k = 0; k < playback.items.length; k++) { durations.push(playback.items[k].duration); }
+		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+		try { vv.currentTime = (pos ? pos.offsetMs : 0) / 1000; } catch (e) {}
+		var p = vv.play(); if (p && p['catch']) { p['catch'](function () {}); }
+	}
+
 	function showItem(i, offsetMs) {
 		clearVideo();
 		clearScript();
@@ -1174,7 +1201,14 @@
 			// So for a single looping item, use native element loop -> it wraps on its own and the
 			// drift-loop seeks keep it clock-synced. Multi-item playlists keep loop off (advance via
 			// renderPlayback).
-			v.loop = (playback.loop && playback.items.length === 1);
+			if (window._mmExplicitLoop && playback.loop && playback.items.length === 1) {
+				// FIX path: no DOM loop; restart explicitly on 'ended' (onVideoEnded) — avoids the
+				// intermittent loop-boundary stall. Listener bound once on the persistent element.
+				v.loop = false;
+				if (!v._mmEndedBound) { v.addEventListener('ended', onVideoEnded, false); v._mmEndedBound = true; }
+			} else {
+				v.loop = (playback.loop && playback.items.length === 1);
+			}
 			v.muted = VIDEO_MUTED;       // muted (kiosk) unless audio wanted; fallback re-mutes if blocked
 			v.volume = 1;                // restore audio (clearVideo set volume=0 for the keep-alive)
 			hideBlackout();              // drop the 'stopped' cover
