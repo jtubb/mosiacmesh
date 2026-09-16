@@ -2,6 +2,7 @@
 global settings via the server module (lazy at call time) so the
 circular import between server.py and mosaicmesh.broadcast resolves
 cleanly."""
+import asyncio
 import logging
 
 
@@ -33,30 +34,67 @@ def _send_to_session(session_id, encoded_message):
         return False
 
 
+# How long a targeted send keeps chasing a reconnecting client before giving up
+# and using the fleet-broadcast last resort. attempts x delay should comfortably
+# cover the observed reconnect gap (100-500ms typical, 1-2s under load).
+_GAP_RETRY_ATTEMPTS = 12
+_GAP_RETRY_DELAY = 0.25
+
+
+def _current_session_id(client_id, client):
+    """Re-read the client's session id: REGISTER swaps it during the gap."""
+    import server
+    settings = getattr(server, "settings", None)
+    fresh = settings.clients.get(client_id) if settings is not None else None
+    return getattr(fresh if fresh is not None else client, "clientID", "")
+
+
+async def _retry_then_fallback(client_id, encoded_message, client):
+    """Chase the reconnecting client with TARGETED sends, then fall back once."""
+    import server
+    for _ in range(_GAP_RETRY_ATTEMPTS):
+        await asyncio.sleep(_GAP_RETRY_DELAY)
+        if _send_to_session(_current_session_id(client_id, client), encoded_message):
+            return
+    if server.socketmanager is not None:
+        logging.warning("_deliver: %s never reappeared; fleet-broadcast fallback",
+                        client_id)
+        server.socketmanager.broadcast(encoded_message)
+
+
 def _deliver(client_id, encoded_message, client):
-    """Try targeted session send; fall back to broadcast on miss.
+    """Try a targeted session send; chase the client across a reconnect gap.
 
-    Why the fallback: after a Safari restart (post-reboot, ?tdbg switch,
-    or crash) the iPad opens a NEW SockJS session with a fresh session.id,
-    but client.clientID still points to the OLD (dead) session until the
-    new connection's REGISTER message arrives and updates it. During that
-    gap (typically 100-500ms but can be 1-2s under load), targeted send
-    drops every message addressed to that iPad. Observed in the field:
-    19 of 22 reconnected iPads missed PREPARE because the broadcast
-    happened within the gap.
+    Why a gap exists: after a Safari restart (post-reboot, ?tdbg switch, or
+    crash) the iPad opens a NEW SockJS session with a fresh session.id, but
+    client.clientID still points at the OLD (dead) session until that
+    connection's REGISTER arrives. During the gap a targeted send drops every
+    message addressed to that iPad -- in the field, 19 of 22 reconnected iPads
+    missed PREPARE this way.
 
-    Fallback: when the targeted lookup fails, call socketmanager.broadcast
-    -- the message goes to all sessions, the iPad's new session receives
-    it, and the client-side DEST filter (matching its UDID) routes it
-    correctly. Worst case is the same N*M fanout we had before, but
-    only for the affected client, not for every group message."""
+    Why we no longer broadcast on the FIRST miss: socketmanager.broadcast sends
+    one client's per-client message to EVERY session. That is tolerable for a
+    single straggler, but a reconnect storm puts many clients in the gap at once,
+    so a single group PLAY/PREPARE becomes K full-fleet blasts and each iPad
+    absorbs K x the payload in a burst. That is precisely the mmws
+    rx-reassembly overflow -> ws teardown -> reconnect-loop path, and it feeds
+    itself: the overflow causes more reconnects (audit 1.2).
+
+    So a miss schedules targeted RETRIES instead, re-reading clientID each time
+    so the send lands as soon as REGISTER swaps the session in. The fleet
+    broadcast remains only as a last resort for a client that never returns.
+    With no running loop (synchronous callers) the original immediate fallback
+    is kept, since there is nothing to schedule a retry onto."""
     import server
     if _send_to_session(getattr(client, "clientID", ""), encoded_message):
         return
-    # Targeted miss -- fall back to broadcast so the message still reaches
-    # the iPad through its new (post-reconnect) session.
-    if server.socketmanager is not None:
-        server.socketmanager.broadcast(encoded_message)
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        if server.socketmanager is not None:
+            server.socketmanager.broadcast(encoded_message)
+        return
+    loop.create_task(_retry_then_fallback(client_id, encoded_message, client))
 
 
 def broadcast_all(response_dict):
