@@ -30,6 +30,7 @@
   <script src="/js/beatflag.js"></script>
   <script src="/js/dllockflag.js"></script>
   <script src="/js/eloopflag.js"></script>
+  <script src="/js/driftprobeflag.js"></script>
   <!-- Rate-test toggle: when on, redirect this webclip to the open-loop rate
        probe so it runs inside Web.app (mmvideo active). Off by default. Must run
        BEFORE the wall scripts load so it redirects before playback initializes. -->
@@ -47,6 +48,7 @@
   <script src="/js/transitions.js"></script>
   <script src="/js/mesh-viewport.js"></script>
   <script src="/js/drift-steer.js"></script>
+  <script src="/js/drift-probe.js"></script>
   <script src="/js/video-buffer.js"></script>
   <script src="/js/mmCache.js"></script>
   <script src="/js/mmVideoRecovery.js"></script>
@@ -1156,6 +1158,66 @@
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); }
 		playback.driftState = mmDriftState();
 		playback.driftTimer = setInterval(driftTick, 500);
+	}
+
+	// ---- Drift MEASUREMENT probe (js/driftprobeflag.js, audit 0.3) ----------
+	// Measurement only: it reads, it never steers. The drift loop samples
+	// currentTime every 500ms and cannot tell a stale sensor from a real lag,
+	// because P-droop and a 250ms zero-order hold predict the SAME -125ms. This
+	// oversamples at 20Hz so the staircase is visible, and reads the error AT a
+	// step edge (staleness ~0, so where the video REALLY is) as well as at
+	// arbitrary moments (what the loop acts on). The difference is the sensor's
+	// lie; the step period confirms or kills the zero-order-hold premise.
+	//
+	// Started once and self-guarding on playback state, like _watchdogTick, so it
+	// needs no teardown at any of the driftTimer stop sites.
+	var PROBE_SAMPLE_MS = 50;      // 20Hz: well under the 250ms observer period
+	var PROBE_EMIT_MS = 15000;     // report a rolling summary this often
+	var _probeState = null;
+	var _probeLastEmit = 0;
+
+	function _probeTick() {
+		if (!window._mmDriftProbe || !window.mmProbeState) { return; }
+		var v = playback.video;
+		if (!v || !playback.active || playback.paused) { return; }
+		// Same gate as driftTick: a seeking / under-buffered element reports
+		// positions that mean nothing.
+		if (v.seeking || v.readyState < 3) { return; }
+		var durations = [], i;
+		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
+		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+		if (pos === null || pos.index !== playback.videoIndex) { return; }
+
+		var tMs = GoTime.now();
+		var ctMs = v.currentTime * 1000;
+		if (!_probeState) { _probeState = mmProbeState(); _probeLastEmit = tMs; }
+		// Identical error definition to driftTick's errorMs, so the two are
+		// directly comparable.
+		mmProbeSample(_probeState, ctMs, tMs, ctMs - pos.offsetMs);
+
+		if ((tMs - _probeLastEmit) < PROBE_EMIT_MS) { return; }
+		_probeLastEmit = tMs;
+		var s = mmProbeSummary(_probeState);
+		if (!s.ready) { return; }
+		dbg('driftprobe', {
+			pTrue: Math.round(s.edgeErrMs),          // err at step edges  ~ where the video IS
+			pLoop: Math.round(s.loopErrMs),          // err the drift loop acts on
+			pStale: Math.round(s.stalenessMs),       // the sensor's lie
+			pStep: (s.stepPeriodMs === null) ? null : Math.round(s.stepPeriodMs),
+			pGap: Math.round(s.pollGapMs),
+			pLive: s.sensorLive ? 1 : 0,
+			pN: s.nSamples, pE: s.nEdges, pRej: s.rejected,
+			pV: s.verdict
+		});
+	}
+
+	// Only ARM the timer when the flag is on. A 20Hz no-op tick would be cheap
+	// but not free, and this fleet is CPU-starved enough that main-queue
+	// starvation is the very thing under investigation -- with the flag off
+	// there is no timer at all.
+	if (!window._mmProbeStarted && window._mmDriftProbe) {
+		window._mmProbeStarted = true;
+		setInterval(_probeTick, PROBE_SAMPLE_MS);
 	}
 
 	// Explicit-loop restart (flag: window._mmExplicitLoop). Native DOM <video loop>
