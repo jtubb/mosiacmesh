@@ -42,6 +42,36 @@ class TestPercentile:
         assert dc.percentile([], 50) is None
 
 
+class TestVerdictSign:
+    """Droop can only ever put a video BEHIND, so the sign of err_true matters.
+
+    First live run: many screens read err_true of +57..+146 (AHEAD of the clock)
+    with ~130ms of staleness, and the original logic called that MIXED purely
+    because |err_true| > 50. But a video running AHEAD cannot be drooping -- droop
+    is the standing lag needed to sustain a rate correction against a deficit. An
+    overshoot is what a NEGATIVE measurement bias produces: the controller reads a
+    phantom lag and over-speeds past the target. That is the bias mechanism, not
+    evidence of droop, and lumping it into MIXED hid the finding.
+    """
+
+    def test_ahead_of_clock_with_staleness_is_bias_not_mixed(self):
+        assert dc_verdict(146, 20) == "BIAS"
+        assert dc_verdict(57, -59) == "BIAS"
+
+    def test_genuinely_behind_with_staleness_is_mixed(self):
+        assert dc_verdict(-125, -250) == "MIXED"
+
+    def test_no_staleness_is_still_droop(self):
+        assert dc_verdict(-125, -125) == "DROOP"
+
+    def test_near_zero_is_bias(self):
+        assert dc_verdict(4, -96) == "BIAS"
+
+
+def dc_verdict(true_ms, loop_ms):
+    return dc.verdict(true_ms, loop_ms)
+
+
 class TestLatestPerKey:
     def test_keeps_the_newest_row_per_screen(self):
         rows = [_row("a", -10, -130, t_ms=100), _row("a", -20, -140, t_ms=900),
@@ -124,3 +154,61 @@ class TestParseProbeLine:
 
     def test_ignores_non_clientlog_noise(self):
         assert dc.parse_probe_line("2026-09-16 07:55:15,123 INFO something else") is None
+
+    def test_parses_the_UNTIMESTAMPED_format_the_server_actually_writes(self):
+        """The live mm_server.err carries no timestamps at all.
+
+        Found on the first real run: every line is `WARNING:root:CLIENTLOG ...`
+        with no time prefix, so the regex inherited from synctool_core matched
+        nothing and the tool reported "no telemetry" while the data was sitting
+        right there. (synctool has the same blind spot against this log.)
+        """
+        line = ("WARNING:root:CLIENTLOG 6c14aqrn5du6jemi "
+                "{'tag': 'driftprobe', 'pTrue': -8, 'pLoop': -131, 'pStale': 123, "
+                "'pStep': 255, 'pGap': 52, 'pLive': 0, 'pN': 1052, 'pE': 221, "
+                "'pRej': 4, 'pV': 'BIAS'}")
+        r = dc.parse_probe_line(line)
+        assert r is not None
+        assert r["key"] == "6c14aqrn5du6jemi"
+        assert r["pTrue"] == -8 and r["pStep"] == 255
+        assert r["t_ms"] is None, "no timestamp available in this format"
+
+    def test_parses_a_line_with_extra_payload_fields(self):
+        """Real lines carry the whole dbg payload, not just the probe fields."""
+        line = ("WARNING:root:CLIENTLOG abc {'tag': 'driftprobe', 'activated': True, "
+                "'rs': 4, 'ct': 339, 'src': 'seg_x_0.mp4', 'settled': False, "
+                "'steer': {'n': 37, 'kept': 4}, 'pTrue': -9, 'pLoop': -134, "
+                "'pStale': 125, 'pStep': 255, 'pV': 'BIAS'}")
+        r = dc.parse_probe_line(line)
+        assert r is not None and r["pStale"] == 125
+
+
+class TestOrderingWithoutTimestamps:
+    def _rows(self):
+        """Two rounds of three screens, newest last, no timestamps."""
+        rows = []
+        for rnd in range(2):
+            for key in ("a", "b", "c"):
+                rows.append({"key": key, "t_ms": None, "seq": len(rows),
+                             "pTrue": -10 * (rnd + 1), "pLoop": -130, "pStale": 120,
+                             "pV": "BIAS", "pStep": 255})
+        return rows
+
+    def test_falls_back_to_file_order(self):
+        latest = dc.latest_per_key(self._rows())
+        assert set(latest) == {"a", "b", "c"}
+        assert all(r["pTrue"] == -20 for r in latest.values()), "took an older round"
+
+    def test_drops_a_screen_that_stopped_reporting(self):
+        rows = self._rows()
+        # 'dead' reported once at the very start and never again; many rounds pass.
+        rows.insert(0, {"key": "dead", "t_ms": None, "seq": -1, "pTrue": -999,
+                        "pLoop": -130, "pStale": 120, "pV": "BIAS", "pStep": 255})
+        for i, r in enumerate(rows):
+            r["seq"] = i
+        for rnd in range(8):
+            for key in ("a", "b", "c"):
+                rows.append({"key": key, "t_ms": None, "seq": len(rows), "pTrue": -30,
+                             "pLoop": -130, "pStale": 120, "pV": "BIAS", "pStep": 255})
+        latest = dc.latest_per_key(rows)
+        assert "dead" not in latest, "a screen that went silent still counted"

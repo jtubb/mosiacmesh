@@ -33,7 +33,8 @@
 (function (root) {
   var DEFAULTS = {
     STEP_MAX_MS: 400,          // above this a "step" is a seek, not an observer tick
-    RING_CAP: 512,             // bounded history (a long run must not grow memory)
+    WINDOW_MS: 30000,          // both readings are medianed over THIS SAME span
+    RING_CAP: 2048,            // memory backstop only; WINDOW_MS does the pruning
     MIN_EDGES: 12,             // withhold a verdict until the sample is meaningful
     VERDICT_STALENESS_MS: 40,  // staleness below this -> the sensor is not the problem
     VERDICT_TRUE_ERR_MS: 50,   // |err_true| below this -> the video is actually fine
@@ -50,18 +51,32 @@
     return (n % 2) ? a[mid] : (a[mid - 1] + a[mid]) / 2;
   }
 
-  function push(ring, v, cap) {
+  /* Rings are pruned by TIME, not by count.
+   *
+   * ON-WALL BUG (2026-09-16, first live run): with both rings capped at 512
+   * entries the loop ring covered ~26s (samples every ~52ms) while the edge ring
+   * covered ~130s (edges every ~255ms). Their medians were taken over different
+   * spans, so pStale -- the whole point of the probe -- subtracted a recent
+   * median from a stale one and came back NEGATIVE on every screen, which a
+   * cached sensor cannot physically produce. The edge median was still carrying
+   * the arm transient the loop median had long since forgotten.
+   *
+   * The two readings are only comparable over the SAME window, so that is what
+   * is enforced; the count cap survives purely as a memory backstop. */
+  function push(ring, times, v, tMs, cap, windowMs) {
     ring.push(v);
-    while (ring.length > cap) { ring.shift(); }
+    times.push(tMs);
+    while (times.length && (tMs - times[0]) > windowMs) { times.shift(); ring.shift(); }
+    while (ring.length > cap) { ring.shift(); times.shift(); }
   }
 
   function mmProbeState() {
     return {
       lastCt: null, lastT: null, lastEdgeT: null,
-      edges: [],    // err read AT a step edge  (~ err_true)
-      loop: [],     // err read at every sample (~ err_measured, the loop's view)
-      steps: [],    // interval between step edges (~ the observer period)
-      gaps: [],     // sampling interval at an edge (the detection-lag scale)
+      edges: [],  edgeT: [],   // err read AT a step edge  (~ err_true)
+      loop: [],   loopT: [],   // err read at every sample (~ err_measured)
+      steps: [],  stepT: [],   // interval between step edges (~ observer period)
+      gaps: [],   gapT: [],    // sampling interval at an edge (detection-lag scale)
       nSamples: 0, rejected: 0
     };
   }
@@ -71,15 +86,20 @@
    * playlist/clock dependency. */
   function mmProbeSample(state, ctMs, tMs, errMs, opts) {
     var CAP = opt(opts, 'RING_CAP');
+    var WIN = opt(opts, 'WINDOW_MS');
     var STEP_MAX = opt(opts, 'STEP_MAX_MS');
     state.nSamples += 1;
-    push(state.loop, errMs, CAP);
+    push(state.loop, state.loopT, errMs, tMs, CAP, WIN);
     if (state.lastCt !== null && ctMs !== state.lastCt) {
       var dct = ctMs - state.lastCt;
       if (dct > 0 && dct < STEP_MAX) {
-        push(state.edges, errMs, CAP);
-        if (state.lastT !== null) { push(state.gaps, tMs - state.lastT, CAP); }
-        if (state.lastEdgeT !== null) { push(state.steps, tMs - state.lastEdgeT, CAP); }
+        push(state.edges, state.edgeT, errMs, tMs, CAP, WIN);
+        if (state.lastT !== null) {
+          push(state.gaps, state.gapT, tMs - state.lastT, tMs, CAP, WIN);
+        }
+        if (state.lastEdgeT !== null) {
+          push(state.steps, state.stepT, tMs - state.lastEdgeT, tMs, CAP, WIN);
+        }
         state.lastEdgeT = tMs;
       } else {
         // A seek or a loop wrap, not an observer tick. Drop it, and forget the
@@ -93,11 +113,20 @@
     return state;
   }
 
-  /* Which mechanism the two readings imply. Pure so it is testable on its own. */
+  /* Which mechanism the two readings imply. Pure so it is testable on its own.
+   *
+   * The SIGN of err_true matters. Droop can only put a video BEHIND -- it is the
+   * standing lag needed to sustain a rate correction against a decode deficit --
+   * so a video measured AHEAD of the clock cannot be drooping, however large the
+   * error. An overshoot is what a negative measurement bias produces: the
+   * controller reads a phantom lag and over-speeds past the target. Only a
+   * genuine LAG alongside a lying sensor is really MIXED. (The first live run
+   * read +57..+146ms AHEAD on many screens with ~130ms of staleness; calling
+   * that MIXED on magnitude alone hid the finding.) */
   function mmProbeVerdict(edgeErrMs, loopErrMs, opts) {
     var stale = edgeErrMs - loopErrMs;
     if (stale < opt(opts, 'VERDICT_STALENESS_MS')) { return 'DROOP'; }
-    if (Math.abs(edgeErrMs) <= opt(opts, 'VERDICT_TRUE_ERR_MS')) { return 'BIAS'; }
+    if (edgeErrMs >= -opt(opts, 'VERDICT_TRUE_ERR_MS')) { return 'BIAS'; }
     return 'MIXED';
   }
 

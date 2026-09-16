@@ -46,11 +46,18 @@ def load_roster(group, base):
 
 
 def collect(logpath, keys):
+    """Parse probe lines, tagging each with its file position so the reader can
+    order them even when the log carries no timestamps (which the live one does
+    not)."""
     rows = []
+    seq = 0
     with open(logpath, encoding="utf-8", errors="replace") as f:
         for line in f:
-            r = dc.parse_probe_line(line)
-            if r and (not keys or r["key"] in keys):
+            r = dc.parse_probe_line(line, seq=seq)
+            if r is None:
+                continue
+            seq += 1
+            if not keys or r["key"] in keys:
                 rows.append(r)
     return rows
 
@@ -95,7 +102,7 @@ def main():
         print("%-22s %8s %8s %8s %7s %6s  %s" % (
             (roster.get(key, key))[:22],
             _fmt(r.get("pTrue")), _fmt(r.get("pLoop")), _fmt(r.get("pStale")),
-            _fmt(r.get("pStep")), r.get("pE"), r.get("pV")))
+            _fmt(r.get("pStep")), r.get("pE"), dc.row_verdict(r)))
 
     print("-" * 76)
     print("screens reporting : %d" % summary["n"])
