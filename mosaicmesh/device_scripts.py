@@ -61,6 +61,34 @@ async def _run_device_script(client_key, which):
     return await run_profile_action(client_key, which)
 
 
+def _sq_escape(value):
+    """Escape a value for substitution INSIDE a single-quoted shell string.
+
+    Every script template wraps its variables in single quotes --
+    `sbdidlaunch '{webclipBundleId}'`, `uiopen '{displayUrl}?tdbg'` -- so a
+    substituted value always lands in a single-quoted context. There the ONLY
+    character that can terminate the quoting (and so the only injection vector)
+    is the single quote itself; $, `, ; and & are all inert inside it. The
+    canonical escape closes the quote, emits an escaped quote, and reopens:
+    ' -> '\\''
+
+    shlex.quote is deliberately NOT used here. Nested inside the template's own
+    quotes its output leaves $(...) and `...` payloads executable and mangles
+    plain apostrophes -- measured against a real shell, it is strictly worse
+    than this for the quoting context these templates actually use. (It would
+    be the right tool only if templates left their variables unquoted, and
+    `'{displayUrl}?tdbg'` shows they don't.)
+    """
+    if value is None:
+        return ""
+    return str(value).replace("'", "'\\''")
+
+
+def _shell_safe(vars_):
+    """Escape every substitution value for the single-quoted template context."""
+    return dict((k, _sq_escape(v)) for k, v in vars_.items())
+
+
 async def _exec_ssh(client, script_template, vars_):
     """Run `script_template` over SSH on `client.ip`, substituting `{tokens}`
     via SafeDict so unknown tokens stay literal. Returns (rc, output). Mirrors
@@ -73,7 +101,11 @@ async def _exec_ssh(client, script_template, vars_):
     if not script_template:
         logging.warning("_exec_ssh %s: empty script template", client.ip)
         return (None, "no-script")
-    script = script_template.format_map(SafeDict(vars_))
+    # Escape before substituting: the rendered string is handed to ssh as the
+    # remote command and re-parsed by the REMOTE shell, so an unescaped quote in
+    # any value breaks the command (a device named "Jon's iPad") or executes as
+    # root (audit 1.11).
+    script = script_template.format_map(SafeDict(_shell_safe(vars_)))
     cmd = (["ssh", "-i", SSH_KEY_PATH] + SSH_LEGACY_OPTS +
            ["%s@%s" % (SSH_USER, client.ip), script])
     proc = None
