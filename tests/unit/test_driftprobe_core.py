@@ -24,6 +24,30 @@ def _row(key, true_ms, loop_ms, verdict="BIAS", step=250, t_ms=1000):
             "pN": 4000, "pE": 300}
 
 
+class TestLiveness:
+    """A frozen log must not read as valid data.
+
+    Burned 2026-09-16: four consecutive reads came back BYTE-IDENTICAL because the
+    wall had stopped and the log was no longer growing. The round-based freshness
+    guard cannot catch this -- it only compares screens against EACH OTHER, so when
+    every screen freezes together they all still look equally recent. Liveness has
+    to be established against something outside the data: whether NEW records are
+    still arriving.
+    """
+
+    def test_new_records_arriving_is_live(self):
+        assert dc.liveness_verdict(100, 108) == "LIVE"
+
+    def test_no_new_records_is_frozen(self):
+        assert dc.liveness_verdict(100, 100) == "FROZEN"
+
+    def test_a_single_new_record_still_counts_as_live(self):
+        assert dc.liveness_verdict(100, 101) == "LIVE"
+
+    def test_shrinking_log_is_treated_as_rotated_not_live(self):
+        assert dc.liveness_verdict(100, 20) == "FROZEN"
+
+
 class TestPercentile:
     def test_endpoints(self):
         vals = list(range(0, 101, 10))       # 0..100, n=11

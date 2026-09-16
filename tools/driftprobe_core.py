@@ -52,6 +52,20 @@ def verdict(true_ms, loop_ms, staleness_ms=_VERDICT_STALENESS_MS,
     return "MIXED"                          # lying sensor AND a genuine lag
 
 
+def liveness_verdict(count_before, count_after):
+    """LIVE only if NEW probe records arrived between two observations.
+
+    The round-based freshness guard compares screens against each other, so it
+    cannot detect the case where every screen stops at once: a frozen log still
+    has all its screens looking equally recent. (Four consecutive reads once came
+    back byte-identical off a stopped wall.) Liveness must be established against
+    something outside the data itself -- here, whether the record count grew.
+    """
+    if count_after > count_before:
+        return "LIVE"
+    return "FROZEN"
+
+
 def row_verdict(r):
     """Verdict for one screen, recomputed from its readings (falls back to the
     client-reported pV only if the readings are missing)."""

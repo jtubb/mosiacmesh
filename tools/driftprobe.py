@@ -29,6 +29,7 @@ wall.
 """
 import argparse
 import json
+import time
 import urllib.request
 
 import driftprobe_core as dc          # same dir (tools/)
@@ -72,10 +73,29 @@ def main():
     ap.add_argument("--log", default="mm_server.err")
     ap.add_argument("--base", default="http://localhost:3000")
     ap.add_argument("--fresh-ms", type=int, default=120000)
+    ap.add_argument("--live-check-s", type=float, default=6.0,
+                    help="seconds to watch for NEW records; 0 disables")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
     roster = load_roster(a.group, a.base) if a.group else {}
+
+    # Liveness FIRST. A stopped wall leaves a frozen log whose screens all still
+    # look equally recent to the round-based guard, so consecutive reads return
+    # identical numbers that look like a beautifully stable measurement. The only
+    # way to tell is whether NEW records are still arriving.
+    if a.live_check_s > 0:
+        before = len(collect(a.log, None))
+        time.sleep(a.live_check_s)
+        after = len(collect(a.log, None))
+        if dc.liveness_verdict(before, after) == "FROZEN":
+            print("REFUSING TO REPORT: no new driftprobe records in %.0fs (%d -> %d)."
+                  % (a.live_check_s, before, after))
+            print("  The log is frozen, so any numbers here would be a stale snapshot.")
+            print("  Is the wall actually PLAYING? A reload leaves screens idle until")
+            print("  a fresh PLAY/START, and telemetry only flows during video playback.")
+            return
+
     rows = collect(a.log, set(roster) if roster else None)
     if not rows:
         print("no driftprobe telemetry in %s" % a.log)
