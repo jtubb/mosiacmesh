@@ -360,3 +360,45 @@ class TestScheduleCRUDExtra:
                         "byweekday":[],"dtstart":"2026-01-01","end":{"type":"never"},"exdates":[],
                         "startTime":"09:00","endTime":"17:00"}}, _make_session()))
         assert "error" in resp["PAYLOAD"]
+
+
+class TestOvernightWindow:
+    """A window whose endTime is before its startTime wraps past midnight.
+
+    Audit 1.9: the comparison was `start <= now <= end`, so 22:00-02:00 asked for
+    `1320 <= now <= 120` -- false at every minute of the day, silently disabling
+    every overnight schedule (the common case for a bar/venue sign).
+    """
+
+    def test_overnight_active_before_midnight(self):
+        s = _schedule(startTime="22:00", endTime="02:00")
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 2, 23, 0)) is True
+
+    def test_overnight_active_after_midnight(self):
+        s = _schedule(startTime="22:00", endTime="02:00")
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 2, 1, 0)) is True
+
+    def test_overnight_inactive_midday(self):
+        s = _schedule(startTime="22:00", endTime="02:00")
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 2, 12, 0)) is False
+
+    def test_same_day_window_unaffected(self):
+        s = _schedule(startTime="09:00", endTime="17:00")
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 2, 12, 0)) is True
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 2, 20, 0)) is False
+
+    def test_weekly_overnight_spills_into_next_day(self):
+        """A Monday 22:00-02:00 window owns Tuesday 00:00-02:00.
+
+        The morning half belongs to the PREVIOUS day's occurrence, so checking
+        only `when`'s own date would wrongly report inactive at Tue 01:00.
+        """
+        s = _schedule(freq="WEEKLY", byweekday=[0], startTime="22:00", endTime="02:00")
+        # 2026-03-02 is a Monday, 2026-03-03 a Tuesday.
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 2, 23, 0)) is True
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 3, 1, 0)) is True
+
+    def test_weekly_overnight_does_not_leak_to_unscheduled_morning(self):
+        """Wednesday 01:00 is NOT covered by a Monday-only overnight window."""
+        s = _schedule(freq="WEEKLY", byweekday=[0], startTime="22:00", endTime="02:00")
+        assert server.schedule_active_at(s, datetime.datetime(2026, 3, 4, 1, 0)) is False

@@ -90,11 +90,28 @@ def schedule_active_at(schedule, when):
             rset.exdate(_parse_date(ex))
         except Exception:
             pass
-    day_start = datetime.datetime(when.year, when.month, when.day)
-    if not rset.between(day_start, day_start, inc=True):   # occurrences sit at midnight of each day
-        return False
-    now_min = when.hour * 60 + when.minute
     try:
-        return _hhmm_to_min(schedule.startTime) <= now_min <= _hhmm_to_min(schedule.endTime)
+        start_min = _hhmm_to_min(schedule.startTime)
+        end_min = _hhmm_to_min(schedule.endTime)
     except Exception:
         return False
+    now_min = when.hour * 60 + when.minute
+    day_start = datetime.datetime(when.year, when.month, when.day)
+
+    def _is_occurrence(day):   # occurrences sit at midnight of each day
+        return bool(rset.between(day, day, inc=True))
+
+    if end_min < start_min:
+        # Window wraps past midnight (e.g. 22:00-02:00). It spans two calendar
+        # days but belongs to ONE occurrence -- the day it STARTS. So the evening
+        # half is owned by today's occurrence and the morning half by yesterday's;
+        # checking only `when`'s own date would drop the morning half entirely
+        # (and the old `start <= now <= end` test matched no minute at all).
+        if now_min >= start_min:
+            return _is_occurrence(day_start)
+        if now_min <= end_min:
+            return _is_occurrence(day_start - datetime.timedelta(days=1))
+        return False
+    if not _is_occurrence(day_start):
+        return False
+    return start_min <= now_min <= end_min
