@@ -4,16 +4,32 @@
 (function (root) {
   var mmVideoRecovery = {};
 
-  // state = { shouldPlay, decoding, retries, recaches, maxRetries, maxRecaches }
+  // state = { shouldPlay, decoding, retries, recaches, recreates,
+  //           maxRetries, maxRecaches, maxRecreates }
   // Poll-watchdog escalation for a video that should be playing:
   //   not should-play OR decoding -> 'ok'   (healthy / n/a)
-  //   stalled, retries < maxRetries  -> 'retry'    (kick load()+play() in place)
-  //   stalled, recaches < maxRecaches -> 'recache' (client self-pull the segment)
+  //   stalled, retries < maxRetries    -> 'retry'    (kick load()+play() in place)
+  //   stalled, recaches < maxRecaches  -> 'recache'  (client self-pull the segment)
+  //   stalled, recreates < maxRecreates-> 'recreate' (rebuild the <video> element)
   //   otherwise -> 'dead'                    (stay black; NEVER central)
+  //
+  // Why 'recreate' exists (root-caused on-wall 2026-09-16): after a fatal
+  // MEDIA_ERR_DECODE the element parks at networkState 0 (NETWORK_EMPTY) and
+  // nothing ever re-attempts the load, so the screen stays dark indefinitely
+  // even once the original cause is gone. Ending the ladder at 'dead' WAS that
+  // latch. Re-load() on the PERSISTENT element does not clear it (this watchdog
+  // once fired 941 times futilely); a FRESH element does -- 8/8 stuck screens
+  // recovered and fleet verr=3 went 8 -> 0. It sits AFTER the cheaper steps
+  // because rebuilding the element is the most disruptive repair, and it is
+  // budgeted so a genuinely dead clip still terminates at 'dead'.
+  //
+  // Back-compat: callers that pass no recreate budget keep the old ladder --
+  // never hand a caller an action it has no code to perform.
   mmVideoRecovery.mmWatchdogAction = function (state) {
     if (!state || !state.shouldPlay || state.decoding) { return 'ok'; }
     if (state.retries < state.maxRetries) { return 'retry'; }
     if (state.recaches < state.maxRecaches) { return 'recache'; }
+    if ((state.recreates || 0) < (state.maxRecreates || 0)) { return 'recreate'; }
     return 'dead';
   };
 

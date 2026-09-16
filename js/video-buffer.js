@@ -30,6 +30,25 @@
         bufferSrc = null;
       },
       active: function () { return activeEl; },
+      // Tear both elements down so setup() can rebuild from scratch. Needed by the
+      // watchdog's 'recreate' step: a <video> latched at NETWORK_EMPTY after a fatal
+      // decode error never re-attempts a load, and only a FRESH element clears it.
+      // Both elements must go -- the hidden buffer is private to this closure, so a
+      // caller that only had active() would orphan it in the DOM on every recreate.
+      // Pausing and dropping the src first releases the iPad-1's single hardware
+      // decoder before the replacement asks for it. Idempotent.
+      destroy: function () {
+        var els = [activeEl, bufferEl], i, el;
+        for (i = 0; i < els.length; i++) {
+          el = els[i];
+          if (!el) { continue; }
+          try { el.pause(); } catch (e) {}
+          try { el.removeAttribute('src'); el.load(); } catch (e2) {}
+          if (deps.unmount) { deps.unmount(el); }
+          else if (el.parentNode) { el.parentNode.removeChild(el); }
+        }
+        activeEl = null; bufferEl = null; bufferSrc = null;
+      },
       warmNext: function (item) {
         if (!warmable || !bufferEl || !item || !deps.isVideo(item.file)) { return; }
         if (bufferSrc === item.file) { return; }          // already warm

@@ -75,3 +75,70 @@ test('flipTo cold (buffer not warm / not warmable) => null', () => {
   var d2 = makeDeps(); var vb2 = makeVideoBuffer(d2); vb2.setup(false);
   assert.strictEqual(vb2.flipTo('b.mp4'), null); // not warmable
 });
+
+/* ---- destroy(): required by the latch breaker -----------------------------
+ * Recovering a latched element means rebuilding it. The buffer keeps BOTH
+ * elements in a closure and only exposes active(), so without destroy() the
+ * hidden buffer element would be orphaned in the DOM on every recreate.
+ */
+function harness(warm) {
+  const made = [], mounted = [], unmounted = [];
+  const mk = () => {
+    const el = { style: {}, paused: false, _src: 'x',
+                 pause() { this.paused = true; },
+                 removeAttribute(a) { if (a === 'src') this._src = null; },
+                 load() { this.loaded = (this.loaded || 0) + 1; } };
+    made.push(el); return el;
+  };
+  const buf = makeVideoBuffer({
+    mkVideo: mk,
+    mount: (el) => mounted.push(el),
+    unmount: (el) => unmounted.push(el),
+    isVideo: () => true,
+  });
+  buf.setup(warm);
+  return { buf, made, mounted, unmounted };
+}
+
+test('destroy — unmounts BOTH elements, not just the active one', () => {
+  const h = harness(true);
+  assert.strictEqual(h.made.length, 2, 'warmable makes two elements');
+  h.buf.destroy();
+  assert.strictEqual(h.unmounted.length, 2, 'the hidden buffer element leaked');
+});
+
+test('destroy — single-element (non-warmable) case', () => {
+  const h = harness(false);
+  h.buf.destroy();
+  assert.strictEqual(h.unmounted.length, 1);
+});
+
+test('destroy — pauses and releases the source so the decoder is freed', () => {
+  const h = harness(true);
+  h.buf.destroy();
+  h.made.forEach((el) => {
+    assert.ok(el.paused, 'element left playing');
+    assert.strictEqual(el._src, null, 'src not released');
+  });
+});
+
+test('destroy — active() is null afterwards, so a stale element cannot be reused', () => {
+  const h = harness(true);
+  h.buf.destroy();
+  assert.strictEqual(h.buf.active(), null);
+});
+
+test('destroy — is safe to call twice', () => {
+  const h = harness(true);
+  h.buf.destroy();
+  h.buf.destroy();
+  assert.strictEqual(h.unmounted.length, 2, 'double destroy re-unmounted');
+});
+
+test('setup after destroy rebuilds fresh elements', () => {
+  const h = harness(true);
+  h.buf.destroy();
+  h.buf.setup(true);
+  assert.strictEqual(h.made.length, 4, 'rebuild did not create new elements');
+  assert.ok(h.buf.active(), 'no active element after rebuild');
+});

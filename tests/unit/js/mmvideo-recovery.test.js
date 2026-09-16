@@ -97,3 +97,45 @@ test('recache-poll: unknown/undefined -> wait (defensive)', () => {
   assert.strictEqual(RP(undefined), 'wait');
   assert.strictEqual(RP('weird'), 'wait');
 });
+
+/* ---- LATCH BREAKER (2026-09-16 on-wall root cause) ------------------------
+ * After a fatal MEDIA_ERR_DECODE the <video> element parks at ns=0
+ * (NETWORK_EMPTY) and NOTHING re-attempts the load, so the screen stays dark
+ * forever. The escalation ladder ended at 'dead' ("stay black"), which IS the
+ * latch: 8 screens walked retry -> recache -> dead and parked there.
+ *
+ * Proven on-wall: re-load() on the PERSISTENT element does not clear it (the
+ * watchdog once fired 941 times futilely), but a FRESH element does -- 8/8
+ * screens recovered, verr=3 went 8 -> 0 fleet-wide. So 'recreate' belongs
+ * between 'recache' and 'dead'.
+ */
+const WMAX3 = { maxRetries: 2, maxRecaches: 1, maxRecreates: 1 };
+
+test('latch: after retries and recaches are spent, RECREATE before giving up', () => {
+  assert.equal(W({ shouldPlay: true, decoding: false, retries: 2, recaches: 1,
+                   recreates: 0, ...WMAX3 }), 'recreate');
+});
+
+test('latch: recreate budget spent -> dead (never loops forever)', () => {
+  assert.equal(W({ shouldPlay: true, decoding: false, retries: 2, recaches: 1,
+                   recreates: 1, ...WMAX3 }), 'dead');
+});
+
+test('latch: recreate does NOT pre-empt the cheaper retry/recache steps', () => {
+  assert.equal(W({ shouldPlay: true, decoding: false, retries: 0, recaches: 0,
+                   recreates: 0, ...WMAX3 }), 'retry');
+  assert.equal(W({ shouldPlay: true, decoding: false, retries: 2, recaches: 0,
+                   recreates: 0, ...WMAX3 }), 'recache');
+});
+
+test('latch: a healthy decoding element is never recreated', () => {
+  assert.equal(W({ shouldPlay: true, decoding: true, retries: 2, recaches: 1,
+                   recreates: 0, ...WMAX3 }), 'ok');
+});
+
+test('latch: callers that omit recreate budget keep the OLD ladder (back-compat)', () => {
+  // Existing call sites pass no recreates/maxRecreates; they must still get 'dead'
+  // rather than an action they cannot perform.
+  assert.equal(W({ shouldPlay: true, decoding: false, retries: 2, recaches: 1,
+                   maxRetries: 2, maxRecaches: 1 }), 'dead');
+});

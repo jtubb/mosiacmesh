@@ -31,6 +31,7 @@
   <script src="/js/dllockflag.js"></script>
   <script src="/js/eloopflag.js"></script>
   <script src="/js/driftprobeflag.js"></script>
+  <script src="/js/latchfixflag.js"></script>
   <script src="/js/ctfreshflag.js"></script>
   <!-- Rate-test toggle: when on, redirect this webclip to the open-loop rate
        probe so it runs inside Web.app (mmvideo active). Off by default. Must run
@@ -318,6 +319,8 @@
 	var WATCHDOG_START_GRACE_MS = 3000;
 	var WATCHDOG_MAX_RETRIES = 2;
 	var WATCHDOG_MAX_RECACHES = 1;
+	var WATCHDOG_MAX_RECREATES = 1;             // per clip; the cooldown below is the real bound
+	var WATCHDOG_RECREATE_COOLDOWN_MS = 60000;  // at most one element rebuild per minute
 	var WATCHDOG_CT_MIN_ADVANCE_MS = 100;
 	// Arm-phase (pre-playback) cached-video error retry — the poll watchdog above only
 	// covers active playback, so an arm-time error is retried here instead.
@@ -505,10 +508,35 @@
 	// retry -> recache(self-pull) -> black; it NEVER falls to central (central is
 	// a fleet-scale black hole). See docs/superpowers/specs/2026-07-10-mmvideo-watchdog-design.md
 	var _wdSrc = null, _wdLastCt = -1, _wdRetries = 0, _wdRecaches = 0,
-	    _wdClipStart = 0, _wdRecachePending = null, _wdDead = false;
+	    _wdClipStart = 0, _wdRecachePending = null, _wdDead = false,
+	    _wdRecreates = 0, _wdLastRecreateAt = 0;
 	function _wdReset(src) {
 		_wdSrc = src; _wdRetries = 0; _wdRecaches = 0; _wdLastCt = -1;
 		_wdRecachePending = null; _wdDead = false; _wdClipStart = Date.now();
+		_wdRecreates = 0;   // per-clip budget; the real bound is _wdLastRecreateAt
+	}
+
+	// Rebuild the <video> element(s) from scratch -- the ONLY thing that clears a
+	// post-decode-error latch. After a fatal MEDIA_ERR_DECODE the element parks at
+	// networkState 0 (NETWORK_EMPTY) and never re-attempts a load; re-load() in place
+	// does not help (this watchdog once fired 941 times futilely), but a fresh element
+	// does: proven 8/8 on-wall, fleet verr=3 8 -> 0.
+	function _wdRecreate() {
+		_wdLastRecreateAt = Date.now();
+		try { if (playback.vbuf && playback.vbuf.destroy) { playback.vbuf.destroy(); } } catch (e) {}
+		playback.vbuf = null; playback.pvid = null; playback.video = null;
+		playback.videoSrc = null; playback.videoIndex = -1;
+		// The fresh element is UNBLESSED -- iOS-5 user activation does not transfer to a
+		// new element. Clearing the flag routes us back through the ARM path, which
+		// autoplays silently under mmvideo and falls back to the existing NEEDS_ARM/tap
+		// prompt on stock Safari. Leaving it true would make play() fail with no prompt.
+		playback.activated = false;
+		getPersistentVideo();
+		// Re-mount the current item NOW: renderPlayback only reschedules itself at the
+		// next ITEM boundary, which for a single looping clip can be ~30s away.
+		playback.shownIndex = -1;
+		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
+		try { renderPlayback(); } catch (e2) {}
 	}
 	function _wdKick(v) {
 		try { v.load(); } catch (e) {}
@@ -555,12 +583,28 @@
 		var decoding = (verr == null || verr === 0) && v.readyState >= 2
 		    && Math.abs(ct - _wdLastCt) > WATCHDOG_CT_MIN_ADVANCE_MS;
 		_wdLastCt = ct;
+		// The recreate budget is gated on a COOLDOWN that survives _wdReset's per-clip
+		// counter clear. Without that, a clip that keeps failing would reset the budget
+		// every cycle and recreate forever -- the storm shape that bled the fleet 24 -> 10
+		// during the cold-load-watchdog arc. Policy lives here; the ladder stays pure.
+		var _recreateOk = !!window._mmLatchFix
+			&& (Date.now() - _wdLastRecreateAt) > WATCHDOG_RECREATE_COOLDOWN_MS;
 		var action = mmVideoRecovery.mmWatchdogAction({
 			shouldPlay: true, decoding: decoding, retries: _wdRetries, recaches: _wdRecaches,
-			maxRetries: WATCHDOG_MAX_RETRIES, maxRecaches: WATCHDOG_MAX_RECACHES });
-		if (action === 'ok') { _wdRetries = 0; _wdRecaches = 0; _wdDead = false; return; }
+			recreates: _wdRecreates,
+			maxRetries: WATCHDOG_MAX_RETRIES, maxRecaches: WATCHDOG_MAX_RECACHES,
+			maxRecreates: _recreateOk ? WATCHDOG_MAX_RECREATES : 0 });
+		if (action === 'ok') { _wdRetries = 0; _wdRecaches = 0; _wdRecreates = 0; _wdDead = false; return; }
 		if (action === 'retry') { _wdRetries++; if (typeof dbg === 'function') { dbg('wd-retry'); } _wdKick(v); return; }
 		if (action === 'recache') { _wdRecaches++; if (typeof dbg === 'function') { dbg('wd-recache'); } _wdRecache(v, src); return; }
+		if (action === 'recreate') {
+			_wdRecreates++;
+			if (typeof dbg === 'function') {
+				dbg('wd-recreate', { verr: verr, ns: v.networkState, rs: v.readyState });
+			}
+			_wdRecreate();
+			return;
+		}
 		if (!_wdDead) { _wdDead = true; if (typeof dbg === 'function') { dbg('wd-dead'); } }
 	}
 	if (!window._mmWatchdogStarted) { window._mmWatchdogStarted = true; setInterval(_watchdogTick, WATCHDOG_INTERVAL_MS); }
