@@ -105,7 +105,7 @@ def parse_probe_line(line, seq=None):
         return None
     out = {"key": key, "t_ms": t_ms, "seq": seq}
     for f in ("pTrue", "pLoop", "pStale", "pStep", "pGap", "pLive", "pN", "pE",
-              "pRej", "pV"):
+              "pRej", "pV", "pFix"):
         out[f] = p.get(f)
     return out
 

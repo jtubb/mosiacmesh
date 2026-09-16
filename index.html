@@ -31,6 +31,7 @@
   <script src="/js/dllockflag.js"></script>
   <script src="/js/eloopflag.js"></script>
   <script src="/js/driftprobeflag.js"></script>
+  <script src="/js/ctfreshflag.js"></script>
   <!-- Rate-test toggle: when on, redirect this webclip to the open-loop rate
        probe so it runs inside Web.app (mmvideo active). Off by default. Must run
        BEFORE the wall scripts load so it redirects before playback initializes. -->
@@ -49,6 +50,7 @@
   <script src="/js/mesh-viewport.js"></script>
   <script src="/js/drift-steer.js"></script>
   <script src="/js/drift-probe.js"></script>
+  <script src="/js/ct-fresh.js"></script>
   <script src="/js/video-buffer.js"></script>
   <script src="/js/mmCache.js"></script>
   <script src="/js/mmVideoRecovery.js"></script>
@@ -1081,9 +1083,21 @@
 		if (v.seeking || v.readyState < 3) { return; }
 		var durations = [], i;
 		for (i = 0; i < playback.items.length; i++) { durations.push(playback.items[i].duration); }
-		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
+		var nowMs = GoTime.now();
+		var pos = playlistIndex(nowMs - playback.startEpoch, durations, playback.loop);
 		if (pos === null || pos.index !== playback.videoIndex) { return; }
-		var errorMs = v.currentTime * 1000 - pos.offsetMs;   // <0 => BEHIND clock, >0 => AHEAD
+		// v.currentTime is a ~256ms zero-order hold (measured on-wall: median
+		// staleness 142ms), so read raw it reports a lag that is not there and the
+		// steer over-speeds to chase it. When the corrector is armed, use its
+		// staleness-corrected position instead; it returns null until it can be
+		// trusted, and we fall back to the raw read then.
+		var ctMs = v.currentTime * 1000;
+		var ctFixed = 0;
+		if (window._mmCtFresh && _ctFreshState) {
+			var ctEst = mmCtFreshEstimate(_ctFreshState, nowMs);
+			if (ctEst !== null) { ctMs = ctEst; ctFixed = 1; }
+		}
+		var errorMs = ctMs - pos.offsetMs;   // <0 = BEHIND clock, >0 = AHEAD
 		// A prior BOUNDARY-aligned seek has settled: tune the seek-ahead lead from its
 		// residual. Boundary-aligned err has NO keyframe snap (the seek is timed to land
 		// as the clock reaches the keyframe), so it's a clean latency-estimate error ->
@@ -1105,8 +1119,8 @@
 			if (playback.seekAheadMs < 0) { playback.seekAheadMs = 0; }
 			if (playback.seekAheadMs > 1200) { playback.seekAheadMs = 1200; }
 		}
-		// Rate-limit hard seeks so each settles before the next.
-		var nowMs = GoTime.now();
+		// Rate-limit hard seeks so each settles before the next. (nowMs is the same
+		// instant pos was derived from, so error and cooldown stay consistent.)
 		var canSeek = (nowMs - playback.lastSeekAt) > SEEK_COOLDOWN_MS;
 		var didSeek = false;
 		var cmd = mmDriftCommand(playback.driftState, errorMs,
@@ -1150,7 +1164,8 @@
 			playback._lastTrace = nowMs;
 			dbg("drift", { err: Math.round(errorMs), rateGot: v.playbackRate, sk: (didSeek ? 1 : 0),
 				lead: Math.round(playback.seekAheadMs),
-				ferr: Math.round(cmd.filteredErr), rlive: (cmd.rateLive ? 1 : 0) });
+				ferr: Math.round(cmd.filteredErr), rlive: (cmd.rateLive ? 1 : 0),
+				ctfix: ctFixed });   // 1 = err came from the corrected position
 		}
 	}
 
@@ -1171,13 +1186,21 @@
 	//
 	// Started once and self-guarding on playback state, like _watchdogTick, so it
 	// needs no teardown at any of the driftTimer stop sites.
-	var PROBE_SAMPLE_MS = 50;      // 20Hz: well under the 250ms observer period
+	// The same 20Hz stream feeds two consumers, so there is only ever ONE timer:
+	//   - the PROBE (measurement; always reads the RAW sensor so it keeps
+	//     measuring the sensor rather than any correction applied on top)
+	//   - the CORRECTOR (control; hands driftTick a staleness-corrected position)
+	// Either flag arms the sampler; neither means no timer at all.
+	var PROBE_SAMPLE_MS = 50;      // 20Hz: well under the ~256ms observer period
 	var PROBE_EMIT_MS = 15000;     // report a rolling summary this often
 	var _probeState = null;
 	var _probeLastEmit = 0;
+	var _ctFreshState = null;
 
 	function _probeTick() {
-		if (!window._mmDriftProbe || !window.mmProbeState) { return; }
+		var wantProbe = window._mmDriftProbe && window.mmProbeState;
+		var wantFresh = window._mmCtFresh && window.mmCtFreshState;
+		if (!wantProbe && !wantFresh) { return; }
 		var v = playback.video;
 		if (!v || !playback.active || playback.paused) { return; }
 		// Same gate as driftTick: a seeking / under-buffered element reports
@@ -1190,9 +1213,18 @@
 
 		var tMs = GoTime.now();
 		var ctMs = v.currentTime * 1000;
+
+		if (wantFresh) {
+			if (!_ctFreshState) { _ctFreshState = mmCtFreshState(); }
+			mmCtFreshSample(_ctFreshState, ctMs, tMs);
+		}
+		if (!wantProbe) { return; }
+
 		if (!_probeState) { _probeState = mmProbeState(); _probeLastEmit = tMs; }
-		// Identical error definition to driftTick's errorMs, so the two are
-		// directly comparable.
+		// RAW ct on purpose: the probe must keep measuring the SENSOR, so pStale
+		// stays a readout of the sensor's lie even when the corrector is on and
+		// the controller is no longer acting on it. Identical error definition to
+		// driftTick's, so the two remain directly comparable.
 		mmProbeSample(_probeState, ctMs, tMs, ctMs - pos.offsetMs);
 
 		if ((tMs - _probeLastEmit) < PROBE_EMIT_MS) { return; }
@@ -1207,7 +1239,8 @@
 			pGap: Math.round(s.pollGapMs),
 			pLive: s.sensorLive ? 1 : 0,
 			pN: s.nSamples, pE: s.nEdges, pRej: s.rejected,
-			pV: s.verdict
+			pV: s.verdict,
+			pFix: window._mmCtFresh ? 1 : 0   // was the corrector steering this run?
 		});
 	}
 
@@ -1215,7 +1248,7 @@
 	// but not free, and this fleet is CPU-starved enough that main-queue
 	// starvation is the very thing under investigation -- with the flag off
 	// there is no timer at all.
-	if (!window._mmProbeStarted && window._mmDriftProbe) {
+	if (!window._mmProbeStarted && (window._mmDriftProbe || window._mmCtFresh)) {
 		window._mmProbeStarted = true;
 		setInterval(_probeTick, PROBE_SAMPLE_MS);
 	}

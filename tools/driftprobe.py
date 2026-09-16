@@ -118,6 +118,14 @@ def main():
     print("  loop (p10-p90)  : %s ms      max-min %s ms"
           % (_fmt(summary["loopSpreadMs"]), _fmt(summary["loopSpreadMaxMs"])))
     print("")
+    fixed = sum(1 for r in latest.values() if r.get("pFix"))
+    if fixed:
+        print("staleness corrector ACTIVE on %d/%d screens (js/ctfreshflag.js)"
+              % (fixed, summary["n"]))
+        print("  note: pStale reads the RAW sensor by design, so it should be")
+        print("        UNCHANGED (~142ms). The corrector's effect shows up in")
+        print("        loop err -> 0, true err -> 0, and a tighter true spread.")
+        print("")
     print("FLEET VERDICT: %s   %s" % (summary["verdict"], summary.get("verdictCounts", {})))
     v = summary["verdict"]
     if v == "BIAS":
