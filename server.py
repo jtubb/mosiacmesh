@@ -2115,6 +2115,57 @@ async def _time_beat():
         await asyncio.sleep(BEAT_INTERVAL_S)
 
 
+CLIENT_OFFLINE_GRACE_SECONDS = 60
+
+
+def _session_is_live(session_id):
+    """True iff the sockjs manager still holds this session id."""
+    if socketmanager is None or not session_id:
+        return False
+    try:
+        return socketmanager.get(session_id, default=None) is not None
+    except Exception:
+        return False
+
+
+def sweep_offline_clients(current_time):
+    """Mark clients offline once their sockjs session is gone AND they have been
+    silent past the grace window. Returns the newly-offline device dicts.
+
+    Liveness keys on the SESSION, not on message recency. With the clock beat
+    enabled GoTime._sync short-circuits before _wsCall, so a converged IDLE client
+    sends the server nothing for minutes (the 1s 'hb' only fires while
+    playback.active) -- keying on message recency alone would mark a healthy idle
+    fleet offline. A live session is direct evidence the device is still attached,
+    so it refreshes lastSeen; only once the session has gone does the silence
+    clock matter, and the grace window covers the reconnect gap.
+
+    Previously this refreshed lastSeen for EVERY online client and then compared
+    against that same instant, so the delta was always 0.0, the 60s check could
+    never fire, and a client that dropped WiFi without a clean FIN stayed
+    isOnline=True forever (audit 1.1).
+    """
+    have_manager = socketmanager is not None
+    stale_clients = []
+    for client_key, client in settings.clients.items():
+        if not client.isOnline:
+            continue
+        if have_manager and _session_is_live(getattr(client, "clientID", "")):
+            client.lastSeen = current_time
+            continue
+        if (current_time - client.lastSeen) <= CLIENT_OFFLINE_GRACE_SECONDS:
+            continue   # reconnect gap / not yet past grace
+        client.isOnline = False
+        stale_clients.append({
+            "clientKey": client_key,
+            "displayID": client.displayID,
+            "friendlyName": client.friendlyName,
+            "isOnline": False,
+            "lastSeen": client.lastSeen,
+        })
+    return stale_clients
+
+
 async def process():
     """Enhanced periodic processing with device health monitoring"""
     current_time = time.time()
@@ -2130,23 +2181,8 @@ async def process():
     except Exception as e:
         logging.error("hostname resolution failed: %s", e)
 
-    # Update last seen times for all active clients
-    for client_key, client in settings.clients.items():
-        if client.isOnline:
-            client.lastSeen = current_time
-
-    # Check for stale clients (no activity for more than 60 seconds)
-    stale_clients = []
-    for client_key, client in settings.clients.items():
-        if (current_time - client.lastSeen) > 60 and client.isOnline:
-            client.isOnline = False
-            stale_clients.append({
-                "clientKey": client_key,
-                "displayID": client.displayID,
-                "friendlyName": client.friendlyName,
-                "isOnline": False,
-                "lastSeen": client.lastSeen,
-            })
+    # Refresh liveness from sockjs session state and collect newly-offline clients.
+    stale_clients = sweep_offline_clients(current_time)
 
     # Notify about stale clients. PR-27 (2026-06-09): wrap the list in
     # a `devices` field so the payload shape matches CLIENTS_CAME_ONLINE
