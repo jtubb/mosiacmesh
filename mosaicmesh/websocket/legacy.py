@@ -224,11 +224,19 @@ def msg_response(msg,session):
                         server.settings.clients[key].displayID = 'Default'
 
     elif(msg["REQUEST"] == "CLIENTS"):
-        logging.debug(msg["PAYLOAD"])
-        if 'PAYLOAD' not in msg:
-            response["PAYLOAD"] = server.settings.clients[msg["PAYLOAD"]]
-        else:
+        # The condition used to be inverted AND its branch dereferenced the key it
+        # had just asserted was absent, so the by-key lookup was unreachable and
+        # every request serialized the whole clients dict (audit 1.10). An absent
+        # or empty PAYLOAD still means "all clients" -- that is the only response
+        # shape any caller has ever seen.
+        _want = msg.get("PAYLOAD")
+        logging.debug(_want)
+        if not _want:
             response["PAYLOAD"] = server.settings.clients
+        elif _want in server.settings.clients:
+            response["PAYLOAD"] = server.settings.clients[_want]
+        else:
+            response["PAYLOAD"] = {"error": "unknown client: " + str(_want)}
 
     elif(msg["REQUEST"] == "SYN"):
         client = server.settings.clients.get(msg["PAYLOAD"])
