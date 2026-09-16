@@ -15,6 +15,7 @@ Both accesses use lazy `import server` as the first body line
 import json
 import logging
 import os
+import re
 
 from aiohttp import web
 
@@ -23,6 +24,34 @@ __all__ = [
     "api_media_delete",
     "upload_handler",
 ]
+
+# Anything the client can put in Content-Disposition that would make a join
+# escape the upload directory: a drive prefix ("C:"), or a path separator.
+_DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _safe_upload_filename(raw):
+    """Reduce a client-supplied upload filename to a bare, contained basename.
+
+    aiohttp returns the filename exactly as the client sent it, so it can carry
+    directory components ("../../server.py"), Windows separators ("..\\..\\x"),
+    or a drive-absolute path ("C:/x") -- and os.path.join would happily follow
+    any of them out of the upload directory (audit 1.8). We normalise separators,
+    drop any drive prefix, then keep only the final path segment, so the result
+    can only ever name a file directly inside the target directory.
+
+    Returns None when nothing usable survives; the caller answers 400.
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    name = _CONTROL_CHARS_RE.sub("", raw)
+    name = name.replace("\\", "/")
+    name = _DRIVE_PREFIX_RE.sub("", name)
+    name = name.rsplit("/", 1)[-1].strip()
+    if not name or name.strip(".") == "":
+        return None   # empty, ".", "..", "...."
+    return name
 
 
 # (path, mtime) -> bool cache for PNG alpha detection (cheap header read)
@@ -190,12 +219,17 @@ async def upload_handler(request):
     # reader.next() will `yield` the fields of your form
     field = await reader.next()
     logging.debug(field.name)
-    filename = field.filename
+    # NEVER join the client's raw Content-Disposition filename -- it can carry
+    # directory components or a drive prefix and walk out of the upload dir.
+    filename = _safe_upload_filename(field.filename)
+    if filename is None:
+        logging.warning("upload rejected: unusable filename %r", field.filename)
+        return web.json_response(
+            {"success": False, "error": "invalid filename"}, status=400)
     # You cannot rely on Content-Length if transfer is chunked.
     size = 0
     path = os.path.join('cache')
-    if not os.path.exists(path):
-        os.mkdir(path)
+    os.makedirs(path, exist_ok=True)
     with open(os.path.join(path, filename), 'wb') as f:
         while True:
             chunk = await field.read_chunk()  # 8192 bytes by default.
