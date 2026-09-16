@@ -17,6 +17,7 @@ _QUEUE_CONCURRENCY = int(os.environ.get("MMRENDER_QUEUE_CONCURRENCY") or 2)
 DEBOUNCE_SECONDS = int(os.environ.get("MMRENDER_DEBOUNCE") or 60)
 
 _pending = {}          # (name, group) -> "QUEUED" | "RENDERING"
+_dirty = set()         # (name, group) re-requested while RENDERING -> re-run once
 _sem = None            # asyncio.Semaphore, lazily bound to the running loop
 _debounce_tasks = {}   # name -> asyncio.Task
 
@@ -34,7 +35,15 @@ def enqueue(playlist_name, display_id):
     non-async caller has nothing to schedule onto). Returns True iff a new job
     was scheduled."""
     key = (playlist_name, display_id)
-    if key in _pending:
+    state = _pending.get(key)
+    if state is not None:
+        if state == "RENDERING":
+            # The in-flight job already snapshotted the OLD inputs, so dropping
+            # this request would strand the entry at READY-with-a-stale-token and
+            # gate PLAY off forever (audit 1.3). Mark it for one re-run on
+            # completion. A key still QUEUED needs nothing -- it has not started,
+            # so it will pick the current inputs up by itself.
+            _dirty.add(key)
         return False
     try:
         loop = asyncio.get_running_loop()
@@ -56,6 +65,12 @@ async def _run(playlist_name, display_id):
             logging.error("render_queue job %s failed: %s", key, e)
         finally:
             _pending.pop(key, None)
+            if key in _dirty:
+                # Inputs changed while this job was running -- re-render with the
+                # current ones. Cleared BEFORE re-enqueueing so the new job starts
+                # with a clean slate and a single edit can only cause one re-run.
+                _dirty.discard(key)
+                enqueue(playlist_name, display_id)
 
 
 def queue_depth():

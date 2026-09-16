@@ -275,3 +275,68 @@ def test_rerender_same_token_keeps_assets(fresh_settings, tmp_path, monkeypatch)
 
     asyncio.run(R.render_playlist_for_group_async("P", "G1"))
     assert f.exists()                       # same token -> not deleted
+
+
+def test_queue_path_still_reclaims_the_superseded_token(fresh_settings, tmp_path, monkeypatch):
+    """Audit 1.7: reclamation never fired on the normal (queued) render path.
+
+    enqueue_playlist_for_eligible_groups sets the entry QUEUED with the NEW
+    token before the job runs, so render_playlist_for_group_async's
+    `prev_token = entry['token']` read back that same new token, the
+    `prev_token != token` guard was False, and the superseded files were never
+    deleted -- disk grew until the next boot sweep.
+    """
+    from mosaicmesh.state import Playlist
+    import asyncio
+    monkeypatch.chdir(tmp_path)
+    d = _calibrated_group(fresh_settings, "G1", "c1")
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+
+    old_tok = "0123456789ab"
+    old = _seed_asset(tmp_path, "c1", "videos", f"seg_{old_tok}_0.mp4")
+    R._set_render_state(d, "P", R.RENDER_READY, token=old_tok)
+
+    async def _fake_encode(elements, did, token, progress_cb=None):
+        if progress_cb: progress_cb(1, 1)
+    monkeypatch.setattr(R, "_encode_group", _fake_encode)
+
+    # Go through the REAL queue path: this pre-writes QUEUED + the new token.
+    R.enqueue_playlist_for_eligible_groups("P")
+    assert d.renders["P"]["state"] == R.RENDER_QUEUED
+
+    asyncio.run(R.render_playlist_for_group_async("P", "G1"))
+
+    new_tok = R.render_token(R._build_media_elements(pl.items), "G1")
+    assert d.renders["P"]["token"] == new_tok
+    assert not old.exists(), "superseded token's assets leaked on the queue path"
+
+
+def test_reclaim_keeps_a_token_another_group_still_references(fresh_settings, tmp_path, monkeypatch):
+    """Shared-token safety must survive the new reclamation path."""
+    from mosaicmesh.state import Playlist, Display
+    import asyncio
+    monkeypatch.chdir(tmp_path)
+    d = _calibrated_group(fresh_settings, "G1", "c1")
+    pl = Playlist(); pl.name = "P"
+    pl.items = [{"id": 0, "file": "/media/server/videos/a.mp4", "playmode": "SEGMENT"}]
+    fresh_settings.playlists["P"] = pl
+
+    shared_tok = "0123456789ab"
+    kept = _seed_asset(tmp_path, "c1", "videos", f"seg_{shared_tok}_0.mp4")
+    R._set_render_state(d, "P", R.RENDER_READY, token=shared_tok)
+
+    # A SECOND group still references that very token.
+    other = Display()
+    fresh_settings.displays["G2"] = other
+    R._set_render_state(other, "P", R.RENDER_READY, token=shared_tok)
+
+    async def _fake_encode(elements, did, token, progress_cb=None):
+        if progress_cb: progress_cb(1, 1)
+    monkeypatch.setattr(R, "_encode_group", _fake_encode)
+
+    R.enqueue_playlist_for_eligible_groups("P")
+    asyncio.run(R.render_playlist_for_group_async("P", "G1"))
+
+    assert kept.exists(), "deleted assets still referenced by another group"

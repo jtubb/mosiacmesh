@@ -21,12 +21,14 @@ from mosaicmesh import render_queue as Q
 @pytest.fixture(autouse=True)
 def clean_queue():
     Q._pending.clear()
+    getattr(Q, "_dirty", set()).clear()
     for t in list(Q._debounce_tasks.values()):
         t.cancel()
     Q._debounce_tasks.clear()
     Q._sem = None
     yield
     Q._pending.clear()
+    getattr(Q, "_dirty", set()).clear()
     Q._sem = None
 
 
@@ -67,6 +69,67 @@ def test_parse_ffmpeg_progress_line():
     assert R._parse_ffmpeg_progress_line("out_time_ms=2000000") == ("out_time_ms", 2000000)
     assert R._parse_ffmpeg_progress_line("progress=end") == ("progress", "end")
     assert R._parse_ffmpeg_progress_line("garbage") is None
+
+
+def test_edit_during_render_triggers_a_rerun(monkeypatch):
+    """Audit 1.3: a playlist edited WHILE its render is in flight was dropped.
+
+    enqueue() returned False because the key was still in _pending, so no new job
+    was scheduled -- but the in-flight render had already snapshotted the OLD
+    token and finished by writing READY with it. is_playlist_ready then compared
+    the current token against that stale one and returned False forever, so the
+    UI showed READY while PLAY stayed gated. Nothing re-enqueued.
+    """
+    runs = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_render(name, did):
+        runs.append((name, did))
+        if len(runs) == 1:
+            started.set()
+            await release.wait()
+
+    monkeypatch.setattr("mosaicmesh.render.render_playlist_for_group_async", _fake_render)
+
+    async def _go():
+        assert Q.enqueue("P", "G1") is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        # The edit lands mid-render: no NEW task right now (one is running)...
+        assert Q.enqueue("P", "G1") is False
+        release.set()
+        await asyncio.sleep(0.1)
+        # ...but the newer token MUST be picked up once the in-flight job ends.
+        assert runs == [("P", "G1"), ("P", "G1")], "mid-flight edit was dropped"
+
+    asyncio.run(_go())
+
+
+def test_rerun_happens_only_once_per_edit(monkeypatch):
+    """The re-run must not loop forever on a single mid-flight edit."""
+    runs = []
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _fake_render(name, did):
+        runs.append((name, did))
+        if len(runs) == 1:
+            started.set()
+            await release.wait()
+
+    monkeypatch.setattr("mosaicmesh.render.render_playlist_for_group_async", _fake_render)
+
+    async def _go():
+        Q.enqueue("P", "G1")
+        await asyncio.wait_for(started.wait(), timeout=1)
+        Q.enqueue("P", "G1")
+        Q.enqueue("P", "G1")   # two edits during the same render coalesce
+        release.set()
+        await asyncio.sleep(0.15)
+        assert len(runs) == 2
+        assert Q._pending == {}
+
+    asyncio.run(_go())
 
 
 def test_debounce_coalesces(monkeypatch):

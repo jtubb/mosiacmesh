@@ -86,6 +86,28 @@ DEFAULT_ITEM_DURATION_S = 20
 # set MMRENDER_ENCODER=h264_nvenc to opt back in to GPU encoding.
 _VIDEO_ENCODER = os.environ.get("MMRENDER_ENCODER") or "libx264"
 _RENDER_CONCURRENCY = int(os.environ.get("MMRENDER_CONCURRENCY") or 6)
+# Wall-clock bound on a single ffmpeg invocation. Without one, a hung encode
+# pins its render entry in RENDERING and holds a concurrency slot for the life
+# of the process (audit 1.5). Generous by default -- a long mesh video encode on
+# a CPU-only box is legitimately slow; this is a deadlock guard, not a QoS knob.
+_FFMPEG_TIMEOUT_SECONDS = int(os.environ.get("MMRENDER_FFMPEG_TIMEOUT") or 3600)
+
+_ffmpeg_sem = None   # process-wide ffmpeg cap, lazily bound to the running loop
+
+
+def _get_ffmpeg_sem():
+    """The ONE semaphore bounding concurrent ffmpeg processes.
+
+    This used to be constructed inside each _encode_group call, so it capped a
+    single render rather than the process: with the render queue running
+    _QUEUE_CONCURRENCY renders at once the real ceiling was that many times
+    _RENDER_CONCURRENCY (2 x 6 = 12 by default), oversubscribing the CPU on a
+    calibrate-all burst (audit 1.6).
+    """
+    global _ffmpeg_sem
+    if _ffmpeg_sem is None:
+        _ffmpeg_sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
+    return _ffmpeg_sem
 
 # Per-playlist render lifecycle states (one entry per playlistName; registry lives on the owning Display).
 RENDER_QUEUED = "QUEUED"        # enqueued, not yet started
@@ -604,6 +626,58 @@ def _parse_ffmpeg_progress_line(line):
     return (k, v)
 
 
+def _kill_proc(proc):
+    """Best-effort terminate of an ffmpeg child that must not outlive us."""
+    try:
+        if proc.returncode is None:
+            proc.kill()
+    except Exception as e:
+        logging.debug("_kill_proc failed: %s", e)
+
+
+async def _run_video_jobs(video_jobs, progress_cb):
+    """Run every ffmpeg job under the process-wide cap, failing fast and clean.
+
+    asyncio.gather(return_exceptions=False) propagates the first exception but
+    leaves its siblings running. The caller marks the render FAILED, then each
+    straggler finishes and its progress_cb calls _set_render_state(...RENDERING),
+    resurrecting the entry into a state nothing will ever finalize -- while the
+    orphaned encodes keep burning CPU and writing output for a render that was
+    already declared dead (audit 1.4).
+
+    So: wait for the FIRST exception, cancel the rest, drain them, then re-raise.
+    Progress is reported only while no job has failed.
+    """
+    if not video_jobs:
+        return
+    sem = _get_ffmpeg_sem()
+    total = len(video_jobs)
+    done = [0]
+    failed = [False]
+
+    async def _run_and_count(cmd, lbl):
+        await _run_ffmpeg(cmd, lbl, sem)
+        done[0] += 1
+        if progress_cb and not failed[0]:
+            try:
+                progress_cb(done[0], total)
+            except Exception as e:
+                logging.debug("render progress_cb failed: %s", e)
+
+    tasks = [asyncio.ensure_future(_run_and_count(cmd, lbl)) for cmd, lbl in video_jobs]
+    completed, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_EXCEPTION)
+
+    err = next((t.exception() for t in completed if t.exception() is not None), None)
+    if err is None:
+        return
+    failed[0] = True          # stop any in-flight callback from re-reporting progress
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.wait(pending)
+    raise err
+
+
 async def _run_ffmpeg(cmd, label, semaphore):
     """Run one ffmpeg command under the concurrency semaphore. Logs and
     raises with the last few lines of stderr on non-zero exit -- ffmpeg's
@@ -612,7 +686,19 @@ async def _run_ffmpeg(cmd, label, semaphore):
     async with semaphore:
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        _out, _err = await proc.communicate()
+        try:
+            _out, _err = await asyncio.wait_for(
+                proc.communicate(), timeout=_FFMPEG_TIMEOUT_SECONDS)
+        except asyncio.TimeoutError:
+            _kill_proc(proc)
+            logging.error("ffmpeg TIMEOUT after %ss (%s) cmd=%s",
+                          _FFMPEG_TIMEOUT_SECONDS, label, " ".join(cmd))
+            raise RuntimeError("ffmpeg timed out for " + label)
+        except asyncio.CancelledError:
+            # A sibling job failed (or the server is shutting down). Kill the
+            # child rather than letting it run on detached (audit 3.8).
+            _kill_proc(proc)
+            raise
         if proc.returncode != 0:
             tail = (_err or b"").decode("utf-8", "replace").strip().splitlines()[-3:]
             logging.error("ffmpeg rc=%s (%s) cmd=%s\n  %s",
@@ -812,23 +898,10 @@ async def _encode_group(media_elements, display_id, token, progress_cb=None):
     # _RENDER_CONCURRENCY. Any failure raises out of asyncio.gather
     # (return_exceptions=False default) and propagates to the caller.
     if video_jobs:
-        sem = asyncio.Semaphore(_RENDER_CONCURRENCY)
         logging.info("render: launching %d ffmpeg jobs concurrency=%d encoder=%s",
                      len(video_jobs), _RENDER_CONCURRENCY, _VIDEO_ENCODER)
         t0 = time.time()
-        total = len(video_jobs)
-        done = [0]
-
-        async def _run_and_count(cmd, lbl):
-            await _run_ffmpeg(cmd, lbl, sem)
-            done[0] += 1
-            if progress_cb:
-                try:
-                    progress_cb(done[0], total)
-                except Exception:
-                    pass
-
-        await asyncio.gather(*[_run_and_count(cmd, lbl) for cmd, lbl in video_jobs])
+        await _run_video_jobs(video_jobs, progress_cb)
         logging.info("render: %d ffmpeg jobs done in %.1fs",
                      len(video_jobs), time.time() - t0)
         # Client-pull: kick a throttled PRECACHE so each cache-eligible device
@@ -940,7 +1013,6 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         display.renders.pop(playlist_name, None)   # became N/A
         _broadcast_renders_changed(force=True)
         return
-    prev_token = (display.renders.get(playlist_name) or {}).get("token")
     token = render_token(elements, display_id)
     _set_render_state(display, playlist_name, RENDER_RENDERING, token=token,
                       percent=0, started=time.time())
@@ -964,10 +1036,20 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         # so the per-client PLAY URLs resolve the freshly-rendered assets.
         if getattr(display, "currentPlaylistName", None) == playlist_name:
             display.renderedToken = token
-        # Reclaim the superseded token's assets — but only if nothing else
-        # references it (shared-token safety).
-        if prev_token and prev_token != token and not _token_is_live(prev_token):
-            _delete_token_assets(prev_token, display_id)
+        # Reclaim superseded assets. We deliberately do NOT read the entry's
+        # previous token here: the normal (queue) path pre-writes the NEW token
+        # when it sets QUEUED, so prev_token already equalled `token` and the
+        # reclamation never fired -- disk grew until the next boot sweep
+        # (audit 1.7). Sweeping by liveness is independent of where the token
+        # came from, and it also mops up orphans left by an earlier crash.
+        # _token_is_live counts QUEUED/RENDERING entries, so a concurrent
+        # render's in-progress files are never touched.
+        try:
+            reclaimed = sweep_orphan_render_assets()
+            if reclaimed:
+                logging.info("render: reclaimed %d superseded asset file(s)", reclaimed)
+        except Exception as e:
+            logging.debug("superseded-asset reclamation failed: %s", e)
     except Exception as e:
         logging.error("render_playlist_for_group %s/%s failed: %s", playlist_name, display_id, e)
         entry = _set_render_state(display, playlist_name, RENDER_FAILED, error=str(e))
