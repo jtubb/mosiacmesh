@@ -601,3 +601,61 @@ def test_set_cache_mode_accepts_and_normalizes_legacy():
     assert discovery._normalize_cache_mode("bogus") is None
 
 
+
+
+def test_janitor_deletes_nothing_when_it_knows_nothing():
+    """BOOT WIPE (2026-09-17): this janitor erased the fleet's caches 3x in a day.
+
+    revalidate_renders_on_boot() demotes every render to STALE at startup ("READY
+    entries whose token matches AND whose assets exist stay READY; everything else
+    -> STALE"). The janitor builds `in_use` only from renders whose state is
+    READY, so at boot in_use is EMPTY -- and an empty in_use means EVERY cached
+    segment looks stale. It then SSHes to each iPad and `rm -f`s the files, which
+    is unrecoverable without a re-push.
+
+    "I don't currently know what is needed" must never be treated as "nothing is
+    needed". With no positive knowledge, delete nothing.
+    """
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "mmvideo"; c.displayID = "G"
+    c.cachedSegments = {"tok_0", "tok_1"}
+    server.settings.clients["ipad1"] = c
+
+    d = server.Display(); d.displayID = "G"
+    d.renderedToken = ""                      # cleared at boot
+    d.mediaElements = []                      # not yet repopulated
+    d.renders = {"P": {"state": "STALE", "token": "tok"}}   # demoted by revalidation
+    server.settings.displays["G"] = d
+
+    exec_mock = AsyncMock()
+    with patch("asyncio.create_subprocess_exec", exec_mock):
+        _run(server._reconcile_ipad_cache(c))
+
+    assert exec_mock.call_count == 0, "janitor ran rm -f with no READY renders"
+    assert c.cachedSegments == {"tok_0", "tok_1"}, "server-side cache record was wiped"
+
+
+def test_janitor_still_prunes_when_it_DOES_know_what_is_needed():
+    """The guard must not disable genuine pruning: with a READY render present,
+    segments outside it are still cleaned up."""
+    server.settings = server.Settings()
+    c = server.Client(); c.clientKey = "ipad1"; c.ip = "192.168.1.50"
+    c.cacheMode = "mmvideo"; c.displayID = "G"
+    c.cachedSegments = {"good_0", "orphan_9"}
+    server.settings.clients["ipad1"] = c
+
+    d = server.Display(); d.displayID = "G"; d.renderedToken = "good"
+    seg = server.MediaElement(); seg.playmode = server.PlayMode.SEGMENT
+    seg.file = "/media/server/videos/clip.mov"
+    d.mediaElements = [seg]                   # index 0 -> key good_0
+    server.settings.displays["G"] = d
+
+    fake = MagicMock(); fake.returncode = 0
+    fake.communicate = AsyncMock(return_value=(b"", b""))
+    async def fake_subproc(*a, **k): return fake
+    with patch("asyncio.create_subprocess_exec", side_effect=fake_subproc):
+        _run(server._reconcile_ipad_cache(c))
+
+    assert "good_0" in c.cachedSegments, "deleted a segment that IS in use"
+    assert "orphan_9" not in c.cachedSegments, "failed to prune a genuine orphan"

@@ -489,6 +489,26 @@ async def _reconcile_ipad_cache(client):
                     in_use.add("%s_%d" % (_rtok, _i))
                 elif _pm_name == "FULL":
                     in_use.add("full_%s_%d" % (_rtok, _i))   # seam 5
+    # NEVER delete on an empty in_use. An empty set does not mean "nothing is
+    # needed" -- it means "we do not currently know what is needed", and the two
+    # must not be conflated when the action is an irreversible `rm -f` on 24
+    # devices.
+    #
+    # This wiped the fleet's caches three times in one day (2026-09-17).
+    # revalidate_renders_on_boot() demotes every render to STALE at startup, and
+    # in_use is built only from renders whose state is READY -- so for the window
+    # between boot and the first completed render, in_use is empty and EVERY
+    # cached segment looks stale. The janitor then ssh'd to each iPad and deleted
+    # its local copies, which is unrecoverable without a full re-push: propagation
+    # 0%, screens fall back to streaming over WiFi, ~60% hit MEDIA_ERR_DECODE.
+    #
+    # Note the comment above records the SAME class of bug being fixed once
+    # before (in_use scoped too narrowly). Widening in_use treats the symptom;
+    # the structural fix is that absence of knowledge is not evidence of absence.
+    if not in_use:
+        logging.debug("cache janitor: no READY renders for %s; skipping prune",
+                      getattr(client, "displayID", None))
+        return
     stale = set(client.cachedSegments) - in_use
     if not stale:
         return
