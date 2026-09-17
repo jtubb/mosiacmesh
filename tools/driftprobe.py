@@ -29,6 +29,7 @@ wall.
 """
 import argparse
 import json
+import os
 import time
 import urllib.request
 
@@ -46,14 +47,33 @@ def load_roster(group, base):
                 for x in (devs or []) if x.get("displayID") == group)
 
 
-def collect(logpath, keys):
+TAIL_BYTES_DEFAULT = 32 * 1024 * 1024      # ~20min of telemetry at observed rates
+
+
+def collect(logpath, keys, tail_bytes=TAIL_BYTES_DEFAULT):
     """Parse probe lines, tagging each with its file position so the reader can
     order them even when the log carries no timestamps (which the live one does
-    not)."""
+    not).
+
+    Reads only the TAIL. With tdbg + the probe enabled the log grows ~24KB/s
+    (it reached 1.28GB in one session), and the liveness check parses it twice
+    per run -- whole-file reads timed out at 90s. Probe summaries are ROLLING,
+    so only recent records can matter; anything older is superseded by
+    definition. tail_bytes=0 reads the whole file.
+    """
     rows = []
     seq = 0
-    with open(logpath, encoding="utf-8", errors="replace") as f:
-        for line in f:
+    with open(logpath, "rb") as fb:
+        if tail_bytes:
+            try:
+                size = os.fstat(fb.fileno()).st_size
+                if size > tail_bytes:
+                    fb.seek(size - tail_bytes)
+                    fb.readline()      # discard the partial first line
+            except OSError:
+                pass
+        for raw in fb:
+            line = raw.decode("utf-8", "replace")
             r = dc.parse_probe_line(line, seq=seq)
             if r is None:
                 continue
