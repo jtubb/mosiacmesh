@@ -7,6 +7,8 @@
 // AVPlayerItem.status inside the periodic time-observer block.
 #import "MMTransplantEngine.h"
 #import "mmurl.h"
+#import "mmretire.h"
+#import <mach/mach_time.h>
 #import <Foundation/Foundation.h>
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
@@ -130,7 +132,13 @@ void mm_engine_load(MMEngine *e, const char *url) {
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
                      usingBlock:^(CMTime t){
-                         if (eng->dead) return;   // C1b: dropped engine — stop publishing (no flicker/UAF)
+                         // Dropped engine -> stop publishing. This read is only SOUND
+                         // because mm_engine_retire never free()s the struct (C1): the
+                         // flag lives in the memory it is guarding, so freeing it made
+                         // the guard read freed heap and, on a recycled+calloc'd block,
+                         // read back 0 and open. Retire also NULLs mp/backend/callbacks
+                         // on this same queue, so even a bypass has nowhere to go.
+                         if (eng->dead) return;
                          eng->curTime = mm_secs(t);   // cache currentTime (avoids stret read)
                          // cache duration HERE (main queue) so the WebThread vtable getter
                          // only does an atomic read — never a live valueForKey (SIGTRAP §crash).
@@ -270,8 +278,48 @@ void mm_hook_controller(void *backend){
 }
 
 
-void mm_engine_free(MMEngine *e) {
+// Monotonic seconds. mach_absolute_time never walks backwards, unlike gettimeofday --
+// a wall-clock jump FORWARD would make mm_retire_sweep reclaim an engine early, which
+// is the one direction that reintroduces the crash.
+static double mm_mono_s(void) {
+    static mach_timebase_info_data_t tb; static double scale = 0.0;
+    if (scale == 0.0) { mach_timebase_info(&tb);
+                        scale = (double)tb.numer / (double)tb.denom / 1.0e9; }
+    return (double)mach_absolute_time() * scale;
+}
+
+// Retired engines awaiting reclaim. Mutated ONLY from mm_engine_retire, which callers
+// must invoke on the main queue -- the same queue the observer block runs on.
+static mm_retire_list g_retired;
+static int g_retiredInit = 0;
+
+// RETIRE, NOT FREE (AUDIT-races-leaks.md C1 -- the Web.app EXC_BAD_ACCESS in WebCore
+// dispatched from AVFoundation on the main thread).
+//
+// The periodic-time-observer block captures the raw `MMEngine *`. -removeTimeObserver:
+// does not recall a block AVFoundation has already dispatch_async'd to the main queue,
+// so a tick can still be in flight when we tear down. The old code free()d the struct
+// right here; that in-flight block then read eng->dead out of freed heap, and because
+// the very next mm_engine_create() calloc()s the same size class the recycled block
+// reads back dead==0 -- the guard opens and the block calls
+// WebCore::MediaPlayer::timeChanged(garbage mp). That is the crash.
+//
+// So this does three things instead, ALL on the main queue so they are serialized with
+// the observer block rather than racing it:
+//   1. teardown  -- release the AV objects (the expensive part; reclaimed immediately)
+//   2. sever     -- NULL every pointer a late tick could follow into WebCore, and set
+//                   `dead` while the memory is still unambiguously ours
+//   3. park      -- hand the ~96-byte struct to a deferred-reclaim list that will not
+//                   free it until long after any in-flight tick can have run
+// The struct is tiny; holding it for MM_RETIRE_QUIESCE seconds costs nothing, and on
+// overflow mm_retire_park leaks it rather than free something still reachable.
+void mm_engine_retire(MMEngine *e) {
     if (!e) return;
+    if (!g_retiredInit) { mm_retire_init(&g_retired); g_retiredInit = 1; }
     @autoreleasepool { mm_engine_teardown(e); }
-    free(e);
+    e->mp = NULL; e->backend = NULL;                 // no route into WebCore
+    e->netChanged = e->readyChanged = e->timeChanged = NULL;
+    e->dead = 1;                                     // re-assert: retire may be reached
+                                                     // without a prior mark_dead
+    mm_retire_park(&g_retired, e, mm_mono_s(), MM_RETIRE_QUIESCE, free);
 }

@@ -31,6 +31,11 @@ void   mm_engine_attach_layer(MMEngine *e, void *figPluginView);  // 3.2b: add o
                                                        // as a sublayer of FigPluginView.layer (done
                                                        // in the engine .m where QuartzCore is already
                                                        // cleanly in play; Tweak.x just passes the ptr)
-void   mm_engine_free(MMEngine *e);
+// Drop an engine. NOT a free: the periodic-time-observer block holds the raw MMEngine*
+// and AVFoundation can have a tick already in flight on the main queue that
+// -removeTimeObserver: cannot recall, so the struct is severed and parked for deferred
+// reclaim instead (AUDIT-races-leaks.md C1). MUST be called on the MAIN QUEUE — that
+// serializes it with the observer block rather than racing it.
+void   mm_engine_retire(MMEngine *e);
 
 #endif

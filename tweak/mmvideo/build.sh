@@ -3,7 +3,7 @@ export THEOS=$HOME/theos
 SRC="$(cd "$(dirname "$0")" && pwd)"
 rm -rf ~/mmvideo && mkdir -p ~/mmvideo
 cp "$SRC"/Tweak.x "$SRC"/Makefile "$SRC"/mmvideo.plist "$SRC"/control ~/mmvideo/ 2>/dev/null
-cp "$SRC"/MMTransplantEngine.m "$SRC"/MMTransplantEngine.h "$SRC"/mmurl.h "$SRC"/mmbuiltins.c ~/mmvideo/ 2>/dev/null
+cp "$SRC"/MMTransplantEngine.m "$SRC"/MMTransplantEngine.h "$SRC"/mmurl.h "$SRC"/mmretire.h "$SRC"/mmbuiltins.c ~/mmvideo/ 2>/dev/null
 sed -i 's/\r$//' ~/mmvideo/Makefile ~/mmvideo/Tweak.x 2>/dev/null
 cd ~/mmvideo && make clean >/dev/null 2>&1 && make 2>&1 | grep -viE "tbd file|deprecated|Simulator" | tail -20
 NM=/home/jtubb/theos/toolchain/linux/iphone/bin/llvm-nm

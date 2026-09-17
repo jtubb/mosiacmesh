@@ -28,7 +28,13 @@ static void dropEngine(void *self){
     id k = keyFor(self), v = [gEngines objectForKey:k];
     if (v){ MMEngine *e=(MMEngine *)[v pointerValue];
             [gEngines removeObjectForKey:k]; mm_engine_mark_dead(e);
-            dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_pause(e); mm_engine_free(e); });   // all-AV-on-main: pause+free where the player's timers live
+            // all-AV-on-main: pause+retire where the player's timers live. RETIRE, not
+            // free -- an in-flight periodic-time-observer tick still holds `e` and
+            // free()ing it here was the C1 use-after-free that crashes Web.app in
+            // WebCore. Running on the main queue also serializes the sever step with
+            // the observer block. mark_dead above is the WebThread-side early-out; it
+            // is a single word write and is now read from memory that is never freed.
+            dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_pause(e); mm_engine_retire(e); });
     }
 }
 
@@ -67,6 +73,16 @@ static void h_load(void *self, void *strRef){
     MMEngine *eng = mm_engine_create(self, mp);  // self = backend, for ivar mirroring (Option A)
     if (!eng) return;
     [gEngines setObject:[NSValue valueWithPointer:eng] forKey:keyFor(self)];
+    // EVIDENCE PROBE (log-only, no behavior change) for the second, UNPROVEN leg of the
+    // Web.app crash: we only ever drop an engine from h_load or h_cancelLoad. If WebCore
+    // destroys a MediaPlayerPrivateiPhone by another route (element removed, page
+    // navigated) the engine is ORPHANED -- still ticking at 4Hz, still calling into a
+    // freed MediaPlayer. The double-buffer in index.html owns exactly 2 <video> elements,
+    // so a steady count of <=2 is healthy and a climbing one proves orphaning.
+    // NOT proof of absence: a new backend can land on a recycled address and silently
+    // replace its orphan. Quiet on a healthy fleet -- only fires past the expected 2.
+    { NSUInteger n = [gEngines count];
+      if (n > 2) { char b[64]; snprintf(b, sizeof b, "[mmvideo] live engines=%u", (unsigned)n); mmlog(b); } }
     dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_load(eng, [url UTF8String]); });   // all-AV-on-main: player born on the main runloop
 }
 static void h_seek(void *self, float t){ MMEngine *e=engineFor(self); if(e) dispatch_async(dispatch_get_main_queue(), ^{ mm_engine_seek(e,(double)t); }); else o_seek(self,t); }
