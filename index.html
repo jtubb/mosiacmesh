@@ -345,7 +345,16 @@
 	// rate PLL on median-filtered err with a deadband. Replaces the old fixed
 	// 30ms seek threshold + rate=1-err/2000 (±15%) that oscillated on mmvideo's live rate.
 	var DRIFT_OPTS = {
-		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.035, RATE_GAIN: 0.0002,
+		// RATE_CLAMP raised 0.035 -> 0.06 (2026-09-17). Measured on-wall with the
+		// staleness corrector on: 98.3% of rate commands were PINNED at the old
+		// +3.5% clamp while the wall sat 213ms behind -- i.e. the fleet's real decode
+		// deficit IS ~3.5%, so the controller had zero authority left to close any
+		// error on top of it. The raw sensor's ~120ms lie used to cancel that deficit
+		// by accident; once the sensor is corrected the deficit is exposed and the
+		// controller needs headroom ABOVE it. 6% clears the measured 2-3.5% range with
+		// margin and stays far below the +/-15% term that caused a limit cycle
+		// historically. mmvideo honors fractional rate ~1:1 via CMTimebase.
+		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.06, RATE_GAIN: 0.0002,
 		ERR_FILTER_N: 5, LIVENESS_EPS: 0.02, LIVENESS_K: 4, PROBE_TICKS: 8, PROBE_DELTA: 0.03
 	};
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
