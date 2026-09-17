@@ -354,7 +354,37 @@
 		// controller needs headroom ABOVE it. 6% clears the measured 2-3.5% range with
 		// margin and stays far below the +/-15% term that caused a limit cycle
 		// historically. mmvideo honors fractional rate ~1:1 via CMTimebase.
-		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.035, RATE_GAIN: 0.0002,
+		// RATE_CLAMP 0.06 (was 0.035) -- paired with the staleness corrector. Measured:
+		// with the corrector on and the old clamp, 98.3% of rate commands were PINNED
+		// at +3.5% while the wall sat 213ms behind, i.e. the fleet's real decode
+		// deficit IS ~3.5% and the controller had no authority left above it. The raw
+		// sensor's ~128ms lie used to cancel that deficit by accident; correcting the
+		// sensor exposes it, so the controller needs headroom ABOVE it or it rails.
+		// RATE_IGAIN enables the PI integral. Only viable now that BOTH preconditions
+		// hold: the sensor is corrected (an integral on a stale sensor drives the
+		// MEASURED error to zero and parks the TRUE position at the staleness) and the
+		// clamp has headroom (at 3.5% there was no authority left to apply it).
+		// Targets the residual 79ms video-offset, which is P-droop from the spread of
+		// per-screen decode deficits.
+		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.06, RATE_GAIN: 0.0002,
+		// RATE_IGAIN DISABLED (0). An integral cannot help here and the on-wall run
+		// showed why: over 28 continuous minutes the commanded rate sat pinned at the
+		// 6% clamp ~100% of the time while ferr stayed dead-constant at ~-220ms. The
+		// ACTUATOR is maxed, so adding integral authority on top of a saturated output
+		// does nothing -- it just holds the rail.
+		//
+		// (An anti-windup freeze was suspected first and is NOT the cause: tests that
+		// drive into the rail and back show the integral unwinds correctly, because a
+		// sign change in the P term desaturates the output and accumulation resumes.)
+		//
+		// The gap is EFFECTIVE authority: mmvideo scales the commanded delta by
+		// MM_CM_SCALE (0.45) before applying it to CMTimebase, so clamp 0.06 delivers
+		// only ~2.7% at the timebase. That also reconciles both arms -- droop =
+		// deficit/(GAIN*0.45) = 0.02/0.00009 ~= 222ms, matching the observed ferr.
+		// Re-enabling the integral is pointless until the actuator stops saturating:
+		// raise RATE_CLAMP further, or raise MM_CM_SCALE (live-tunable via
+		// tools/_set_scale.py, no redeploy).
+		RATE_IGAIN: 0,
 		ERR_FILTER_N: 5, LIVENESS_EPS: 0.02, LIVENESS_K: 4, PROBE_TICKS: 8, PROBE_DELTA: 0.03
 	};
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given

@@ -8,7 +8,21 @@
     COARSE_SEEK_MS: 350,    // coarse/fine regime boundary
     FINE_DEADBAND_MS: 20,   // below this filtered err, hold rate=1
     RATE_CLAMP: 0.035,      // max fractional rate delta (±3.5%)
-    RATE_GAIN: 0.0002,      // rate delta per ms of filtered err
+    RATE_GAIN: 0.0002,      // PROPORTIONAL: rate delta per ms of filtered err
+    // INTEGRAL: rate delta per ms-tick of accumulated err. DEFAULT 0 = pure P,
+    // byte-identical for callers that don't opt in.
+    //
+    // Why it matters: a P-only law parks each screen at droop = deficit/GAIN, and
+    // screens have DIFFERENT decode deficits (2-4.4% measured on the fleet), so
+    // they settle at DIFFERENT offsets -- and that spread IS the visible desync.
+    // After the sensor fix + clamp raise the residual video-offset was 79ms, very
+    // close to (spread of deficits)/GAIN. An integral converges each screen to its
+    // OWN deficit, so all of them reach err~0 however much they individually lag.
+    //
+    // This could not work before: with the stale sensor the integral would drive
+    // the MEASURED error to zero and park the TRUE position at the staleness, and
+    // with the old 3.5% clamp there was no authority left to apply the correction.
+    RATE_IGAIN: 0,
     ERR_FILTER_N: 5,        // median filter window
     LIVENESS_EPS: 0.02,     // rateGot-vs-cmd tolerance (Task 2)
     LIVENESS_K: 4,          // consecutive inert ticks -> seek-primary (Task 2)
@@ -27,7 +41,8 @@
   }
 
   function mmDriftState() {
-    return { ring: [], inertCount: 0, rateLive: true, lastRateCmd: 1, probeCountdown: 0 };
+    return { ring: [], inertCount: 0, rateLive: true, lastRateCmd: 1, probeCountdown: 0,
+             integral: 0 };
   }
 
   function mmDriftCommand(state, err, obs, opts) {
@@ -81,16 +96,33 @@
       return { action: 'hold', rate: 1, filteredErr: fErr, rateLive: false };
     }
 
-    // fine regime: deadband, then damped rate on FILTERED err
-    if (Math.abs(fErr) < DEAD) {
-      state.lastRateCmd = 1;
-      return { action: 'hold', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
+    // Fine regime: PI. P reacts to the error; I accumulates it to cancel this
+    // screen's steady decode deficit, so screens with DIFFERENT deficits all
+    // converge to err~0 instead of parking at different P-droop offsets.
+    var IGAIN = opt(opts, 'RATE_IGAIN');
+    var iMax = (IGAIN > 0) ? (CLAMP / IGAIN) : 0;   // bound the integral's authority to +/-CLAMP
+    // The DEADBAND applies to the PROPORTIONAL term only. Inside it the integral
+    // HOLDS its accumulated value rather than snapping the rate back to 1 -- that
+    // held rate IS the deficit cancellation, and dropping it would make the screen
+    // immediately start drifting again.
+    var pErr = (Math.abs(fErr) < DEAD) ? 0 : fErr;
+    // CLAMPING ANTI-WINDUP: accumulate only while the output is NOT saturated. A
+    // big transient pins the P term at the clamp; integrating there would wind up
+    // and overshoot. So the integral only trims the STEADY residual once P has
+    // pulled the error into the linear range.
+    var unclamped = 1 - pErr * GAIN - state.integral * IGAIN;
+    var saturated = (unclamped > 1 + CLAMP) || (unclamped < 1 - CLAMP);
+    if (IGAIN > 0 && Math.abs(fErr) >= DEAD && !saturated) {
+      state.integral += fErr;
+      if (state.integral > iMax) { state.integral = iMax; }
+      if (state.integral < -iMax) { state.integral = -iMax; }
     }
-    var rate = 1 - fErr * GAIN;   // err<0 (behind) => rate>1 (speed up)
+    var rate = 1 - pErr * GAIN - state.integral * IGAIN;   // err<0 (behind) => rate>1
     if (rate < 1 - CLAMP) { rate = 1 - CLAMP; }
     if (rate > 1 + CLAMP) { rate = 1 + CLAMP; }
     state.lastRateCmd = rate;
-    return { action: 'rate', rate: rate, filteredErr: fErr, rateLive: state.rateLive };
+    var act = (Math.abs(rate - 1) < 1e-9) ? 'hold' : 'rate';
+    return { action: act, rate: rate, filteredErr: fErr, rateLive: state.rateLive };
   }
 
   root.mmDriftState = mmDriftState;
