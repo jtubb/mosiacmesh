@@ -537,6 +537,15 @@
 		playback.shownIndex = -1;
 		if (playback.timer) { clearTimeout(playback.timer); playback.timer = null; }
 		try { renderPlayback(); } catch (e2) {}
+		// Give the FRESH element a full grace period + ladder. The tick only resets
+		// its counters when it sees a NEW src -- but a recreate reloads the SAME file
+		// into a new element, so src is unchanged, no reset fires, the retry/recache
+		// budgets stay exhausted and _wdClipStart stays stale. Measured on-wall: the
+		// new element was declared 'dead' 2.3s after every recreate, which is nowhere
+		// near long enough for an iPad-1 to cold-load a video. Clearing _wdSrc makes
+		// the next tick treat this as a new clip. The recreate COOLDOWN (not the
+		// per-clip counter) remains the bound, so this cannot loop.
+		_wdSrc = null;
 	}
 	function _wdKick(v) {
 		try { v.load(); } catch (e) {}
