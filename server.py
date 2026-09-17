@@ -2236,8 +2236,18 @@ if __name__ == '__main__':
     runner = None
 
     try:
-        if args.Verbose:
-            logging.basicConfig(level=logging.DEBUG,format='%(asctime)s %(levelname)s %(message)s')
+        # Timestamps ALWAYS; only the LEVEL depends on -v. Previously the format was
+        # configured only under -v, so a normal (non-verbose) run fell back to
+        # Python's default "LEVEL:logger:message" with NO timestamp -- which silently
+        # blinds tools/synctool.py, whose regex requires an "HH:MM:SS,mmm" prefix and
+        # whose whole method needs the server-receive time to interpolate each
+        # screen's ct to a COMMON instant. The result was that the project's primary
+        # clock-independent sync metric reported "no telemetry" whenever the server
+        # was started without -v, with no error to explain why. Getting timestamps
+        # should not cost a DEBUG-level log flood.
+        logging.basicConfig(
+            level=logging.DEBUG if args.Verbose else logging.WARNING,
+            format='%(asctime)s %(levelname)s %(message)s')
 
         if( os.path.isfile('settings.dat')):
             data = Path('settings.dat').read_text(encoding="utf-8")
