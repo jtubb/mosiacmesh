@@ -22,6 +22,7 @@
 #import <stdio.h>
 #import <stdarg.h>
 #import <unistd.h>
+#import "mmcachefile.h"    /* mm_cached_size — the fetch fast path (audit 1.15) */
 
 #define MM_CACHE_DIR "/var/mobile/Media/MosaicMeshCache"   /* no trailing slash; appended below */
 
@@ -182,6 +183,26 @@ static void handle_mmcache(const char *url) {
         size_t l = e ? (size_t)(e - a) : strlen(a); pct_decode(a, l, token, sizeof token); } }
     if (!token_is_safe(token)) { mmclog("[mmcache] unsafe token rejected\n"); return; }
     if (strncmp(op, "fetch", 5) == 0) {
+        /* FAST PATH (audit 1.15): the segment may already be on disk from a previous
+           page session. The JS _present map is per-page-load and nothing enumerates
+           the cache dir at startup, so WITHOUT this every reload re-downloaded every
+           segment -- ~440 MB across the fleet at 19 MB segments, throttled 3-at-a-time,
+           12+ minutes of screens streaming centrally or hanging into wd-dead.
+           Presence is sufficient evidence of validity: mm_download below rejects any
+           transfer whose length != expectedContentLength BEFORE writing and writes
+           atomically, so a partial file cannot exist here. mm_cached_size additionally
+           treats a zero-byte file as a miss -- the one shape that could exist without
+           having gone through that verified write. */
+        {
+            char have[320];
+            long sz = mm_cached_size(MM_CACHE_DIR, token, have, sizeof have);
+            if (sz > 0) {
+                mmclog("[mmcache] HIT token=%s bytes=%ld (already on disk, no download)\n",
+                       token, sz);
+                dispatch_done(token, sz);
+                return;
+            }
+        }
         char urlbuf[600]; urlbuf[0] = 0;
         { const char *a = strstr(query, "url="); if (a) { a += 4; const char *e = strchr(a, '&');
             size_t l = e ? (size_t)(e - a) : strlen(a); pct_decode(a, l, urlbuf, sizeof urlbuf); } }
