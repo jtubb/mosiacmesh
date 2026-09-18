@@ -195,7 +195,33 @@ static void handle_mmcache(const char *url) {
            having gone through that verified write. */
         {
             char have[320];
-            long sz = mm_cached_size(MM_CACHE_DIR, token, have, sizeof have);
+            long sz = 0;
+            if (mm_cache_path(MM_CACHE_DIR, token, have, sizeof have)) {
+                /* Facts via NSFileManager, NOT stat(): `_stat` is unbindable on the
+                   5.1-era libSystem and SIGKILLed the load (see mmcachefile.h). Every
+                   symbol used here — objc_getClass/sel_registerName/objc_msgSend and
+                   the CFConstantString class behind @"..." — is already bound by this
+                   dylib, so this adds nothing new for dyld to resolve.
+                   The attribute KEYS are spelled as literals on purpose: referencing
+                   NSFileSize/NSFileType/NSFileTypeRegular would pull in new undefined
+                   symbols. Their documented values are exactly these strings. */
+                id fm = ((id (*)(id, SEL))objc_msgSend)(
+                    (id)objc_getClass("NSFileManager"), sel_registerName("defaultManager"));
+                id attrs = fm ? ((id (*)(id, SEL, id, id *))objc_msgSend)(
+                    fm, sel_registerName("attributesOfItemAtPath:error:"), nsstr(have), (id *)0)
+                    : (id)0;
+                if (attrs) {
+                    id type = ((id (*)(id, SEL, id))objc_msgSend)(
+                        attrs, sel_registerName("objectForKey:"), @"NSFileType");
+                    int is_regular = type && ((int (*)(id, SEL, id))objc_msgSend)(
+                        type, sel_registerName("isEqualToString:"), @"NSFileTypeRegular");
+                    id num = ((id (*)(id, SEL, id))objc_msgSend)(
+                        attrs, sel_registerName("objectForKey:"), @"NSFileSize");
+                    long long bytes = num ? ((long long (*)(id, SEL))objc_msgSend)(
+                        num, sel_registerName("longLongValue")) : 0LL;
+                    sz = mm_cache_usable_size(1, is_regular, bytes);
+                }
+            }
             if (sz > 0) {
                 mmclog("[mmcache] HIT token=%s bytes=%ld (already on disk, no download)\n",
                        token, sz);
