@@ -1,0 +1,9 @@
+Package: com.mosaicmesh.mmprobe
+Name: mmprobe
+Version: 0.0.1
+Architecture: iphoneos-arm
+Description: Load probe for Logos %subclass on iOS 5.1 (REFINDINGS 11/12 retest)
+Maintainer: MosaicMesh
+Author: MosaicMesh
+Section: Tweaks
+Depends: mobilesubstrate

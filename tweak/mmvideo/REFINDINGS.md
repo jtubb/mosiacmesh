@@ -496,6 +496,82 @@ AVPlayer KVO + the time-observer block):
 
 ## §12 — Redesign validation: runtime-class BLOCKED, class-free C is the path (2026-06-29)
 
+> **CORRECTION 2026-09-18 — §12's premise is REFUTED BY THE SHIPPING BINARY. Do not cite it
+> as a reason to avoid runtime classes.**
+>
+> §12 concluded that the objc runtime class-creation route is dead because those symbols "fail
+> to flat-bind", and named among the non-binders **`objc_getClass`** and **`sel_registerName`**
+> alongside `objc_allocateClassPair`/`class_addMethod`.
+>
+> Those two demonstrably DO bind. `llvm-nm -u` on the mmcache dylib currently running on all 24
+> screens:
+> ```
+> _objc_getClass
+> _objc_msgSend
+> _sel_registerName
+> ```
+> The whole tweak is built on `objc_getClass` + `sel_registerName` + `objc_msgSend` and has been
+> in production since July.
+>
+> **Why the original measurement was right at the time and wrong now:** §12 was taken under
+> `-Wl,-undefined,dynamic_lookup`, which defers every symbol to a flat load-time lookup that some
+> present-on-device symbols genuinely fail. §14 then **dropped dynamic_lookup** for two-level
+> namespace linking with per-symbol `-U` — binding objc/Foundation/CoreMedia to their specific
+> dylib at link time. §12 was never re-measured under that model; its conclusion is an artifact
+> of a link configuration the project abandoned three months ago.
+>
+> **What that re-opens:** `objc_allocateClassPair`/`class_addMethod`/`objc_registerClassPair` live
+> in the same libobjc as the three symbols above and are very likely to bind identically. That
+> puts **Logos `%subclass`** (documented in `~/theos/docs/Logos-Syntax.html` — builds the class at
+> RUNTIME, instantiate with `%c`) back on the table. A runtime subclass emits **no static class
+> metadata**, so it sidesteps the §11 wall (see §11-RETEST and
+> [[ios5-static-objc-class-now-loads]]: an EMPTY static class loads, a static class with a
+> method+ivar crashes) by construction.
+>
+> That matters well beyond one download: KVO observers and ObjC delegates — ruled out across this
+> codebase on §11+§12 grounds — may be available. Both mmvideo (polling a 250ms periodic-time
+> observer *because* KVO "needs an observer object") and mmcache (chunked ranges *because* an
+> NSURLConnection delegate "needs a delegate object") were designed around this constraint.
+>
+> **TESTED AND CONFIRMED 2026-09-18 — `%subclass` WORKS. Runtime ObjC classes, delegates and KVO
+> observers are available on this fleet.**
+>
+> `tweak/mmprobe/` builds two arms from one source (regions stripped by `build.sh`, not `#ifdef`
+> — the Logos preprocessor runs first, so an `#ifdef`'d `%subclass` still emits its scaffolding
+> and the control would not be a control). Run on sign1screen12:
+> ```
+> [mmprobe] CONTROL arm: dylib loaded, ctor running (no class of any kind)
+> [mmprobe] SUBCLASS arm: dylib loaded, ctor running
+> [mmprobe] SUBCLASS OK: class=MMProbeDelegate bump=2277713,2277714 (method + property both work)
+> ```
+> Web.app stayed alive throughout. The subclass arm links `objc_allocateClassPair`,
+> `class_addMethod`, `class_addProperty`, `objc_registerClassPair`,
+> `objc_get/setAssociatedObject` and `_OBJC_CLASS_$_NSValue` — **exactly the symbol set §12
+> declared unbindable** — and they bind.
+>
+> So the wall was never "ObjC classes"; it was **static class metadata** specifically (§11), which
+> a runtime-created class does not emit.
+>
+> TWO GOTCHAS, both cost a cycle here:
+> 1. **`%init;` is mandatory.** Without it Logos registers nothing: the first run loaded cleanly
+>    and `%c(MMProbeDelegate)` still returned nil. Per `~/theos/docs/Logos-Syntax.html`, all
+>    ungrouped hooks/subclasses live in the default group, initialized by `%init` with no args.
+> 2. **`%property` on a runtime subclass is NOT zero-initialized.** Logos backs it with associated
+>    objects, and an unset one reads back garbage (the probe's counter started at 2277713, then
+>    incremented correctly). Any real delegate must set its properties before first read.
+>
+> Also note: the control arm — a dylib built from scratch by today's toolchain — **loads fine**.
+> That narrows audit 1.16 (a fresh mmcache rebuild does not load) to something specific about the
+> mmcache build, not a globally broken toolchain.
+>
+> WHAT THIS RE-OPENS. Two designs in this codebase exist only to avoid an observer object:
+>   - mmcache polls chunked HTTP ranges because "an NSURLConnection delegate needs a delegate
+>     object" — a real streaming delegate is now possible.
+>   - mmvideo polls `AVPlayerItem.status` inside a 250ms periodic-time-observer block because
+>     "KVO needs an observer object" — and that 250ms cadence is the documented zero-order-hold
+>     that limits currentTime resolution ([[mmvideo-currenttime-observer-bimodal]]). Event-driven
+>     KVO readiness is back on the table.
+
 Tested fix-option-1 (runtime class via objc_allocateClassPair) under the §10 control
 protocol: `avsmoke(no class)=LOADED` then `avsmoke3(builds a class at runtime)=CRASHED
 at load`. avsmoke3 has NO static ObjC class, so the crash is the **objc runtime
