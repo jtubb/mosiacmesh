@@ -331,10 +331,19 @@
 	// up (NEEDS_ARM) on 'failed'. No wall-clock bound, so any seg size self-heals. Never central.
 	var ARM_MAX_RECACHES = 1;
 	var ARM_RECACHE_POLL_MS = 500;
-	var KEYFRAME_GRID_MS = 250;  // MUST match server KEYFRAME_GRID_SEC (0.25s): drift
-	                             // re-aligns by seeking to this keyframe grid so iOS-5
-	                             // (keyframe-accurate seek) and modern clients land on
-	                             // the same frame -> the wall agrees with itself.
+	var KEYFRAME_GRID_MS = 1000; // Kept in step with server KEYFRAME_GRID_SEC (1.0s).
+	                             // This is the quantum driftTick rounds a re-align seek
+	                             // UP to, so every screen aims at the SAME instant and
+	                             // the wall agrees with itself.
+	                             // It no longer has to MATCH the encoder's grid: under
+	                             // mmvideo the seek is frame-accurate at any keyframe
+	                             // spacing (zero-tolerance seekToTime), so this is now a
+	                             // shared CLOCK quantum, not a keyframe target. Kept
+	                             // equal anyway so a screen where mmvideo failed to
+	                             // inject (the dyld load-gate does happen) still lands
+	                             // on a real keyframe under stock WebKit's snap.
+	                             // Coarser = a coarse seek waits up to this long to
+	                             // issue; irrelevant at the measured 0.023% seek rate.
 	// Drift past this triggers a BOUNDARY-aligned re-align seek (see driftTick). With
 	// boundary alignment the residual is the lead-estimate error + timer jitter, NOT a
 	// grid-snap, so the threshold is jitter-based (not grid-relative): high enough that
@@ -366,7 +375,19 @@
 		// clamp has headroom (at 3.5% there was no authority left to apply it).
 		// Targets the residual 79ms video-offset, which is P-droop from the spread of
 		// per-screen decode deficits.
-		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.06, RATE_GAIN: 0.0002,
+		// RATE_CLAMP 0.12 (was 0.06). At 0.06 the controller was pinned ~100% of the
+		// time for 28 minutes with a constant -220ms error: the actuator was maxed.
+		// mmvideo scales the delta by MM_CM_SCALE (0.45), so 0.12 commanded delivers
+		// only ~5.4% at the timebase. NOTE this is approaching the +/-15% term that
+		// historically produced a ~140ms limit cycle -- watch for oscillation in ferr,
+		// not just its magnitude.
+		// RATE_GAIN 0.0003 (was 0.0002). THIS is the lever on the residual spread:
+		// droop = deficit/(GAIN*0.45), so the per-screen spread of droop -- the visible
+		// video-layer desync -- scales as 1/GAIN. 1.5x should take the ~79ms video
+		// offset toward ~53ms. Safe only because the 200ms tick cut the median-filter
+		// lag from ~1000ms to ~400ms; more gain against the old lag is what destabilised
+		// the wall at clamp 0.12. Deliberately 1.5x, not 2x.
+		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.06, RATE_GAIN: 0.0003,
 		// RATE_IGAIN DISABLED (0). An integral cannot help here and the on-wall run
 		// showed why: over 28 continuous minutes the commanded rate sat pinned at the
 		// 6% clamp ~100% of the time while ferr stayed dead-constant at ~-220ms. The
@@ -1264,7 +1285,24 @@
 	function startDriftLoop() {
 		if (playback.driftTimer) { clearInterval(playback.driftTimer); }
 		playback.driftState = mmDriftState();
-		playback.driftTimer = setInterval(driftTick, 500);
+		// 200ms (was 500ms). LOOP DELAY, not gain, is what caps this controller:
+		// raising authority against a fixed phase lag destabilised the wall at clamp
+		// 0.12 (ferr stdev ~5s on every screen). Sampling 2.5x faster cuts the lag and
+		// widens the stability margin, which is the precondition for raising RATE_GAIN
+		// -- and GAIN is what actually sets the droop (deficit/GAIN) whose per-screen
+		// SPREAD is the residual visible desync.
+		//
+		// This is only useful because the sensor is corrected: ticking faster against a
+		// raw 256ms zero-order hold would just resample the same stale staircase. The
+		// corrector refreshes its estimate at 20Hz, so a 200ms tick has genuinely new
+		// information each time.
+		//
+		// Note ERR_FILTER_N is counted in TICKS, so the median window shortens 2.5s ->
+		// 1.0s. That is acceptable: the filter existed to reject the bimodal readback
+		// spike, which the corrector now absorbs, and the shorter window is itself less
+		// lag. (If the integral is ever re-enabled, RATE_IGAIN accumulates PER TICK and
+		// would need scaling by the same factor.)
+		playback.driftTimer = setInterval(driftTick, 200);
 	}
 
 	// ---- Drift MEASUREMENT probe (js/driftprobeflag.js, audit 0.3) ----------

@@ -44,16 +44,39 @@ from mosaicmesh.calibration import (
 # Render encode note: segments use plain libx264 Constrained Baseline + CRF
 # (NO VBV -maxrate/-bufsize, which injects HRD into the SPS that iOS-5 /
 # Chrome-29 UIWebView reject with MEDIA_ERR_SRC_NOT_SUPPORTED), plus a
-# REGULAR keyframe grid every KEYFRAME_GRID_SEC. iOS-5 seeks
-# keyframe-accurately (currentTime snaps to a keyframe), so x264's default
-# ragged scene-cut keyframes (1-10s apart) made mid-clip drift-correction
-# snap unpredictably far. A fixed grid lets every client seek to the SAME
-# grid keyframe (shared GoTime clock + shared grid => mutual sync).
-# All-intra (-g 1) is still avoided: it blew the bitrate past the iPad-1
-# decoder. Denser grid => smaller snap: the iPad seek lands within
-# +-KEYFRAME_GRID_SEC/2 of the clock, so a tighter grid both reduces the
-# residual AND its run-to-run spread.
-KEYFRAME_GRID_SEC = 0.25
+# REGULAR keyframe grid every KEYFRAME_GRID_SEC. x264's default ragged
+# scene-cut keyframes (1-10s apart) are still disabled; a fixed grid is kept
+# so the client's boundary-aligned seek has a predictable target.
+#
+# 0.25 -> 1.0 (2026-09-17). The original 0.25 existed because STOCK iOS-5 seeks
+# keyframe-ACCURATELY -- WebKit snapped currentTime to the nearest keyframe, so
+# a sparse grid meant a seek landed up to +-grid/2 from the clock and the wall
+# disagreed with itself. The mmvideo transplant removed that: mm_engine_seek
+# does seekToTime:toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero, which
+# AVFoundation honors frame-accurately at ANY keyframe spacing (decoding forward
+# from the preceding keyframe). The snap the dense grid was compensating for no
+# longer happens.
+#
+# What still argues for some density is seek COST, not accuracy: a zero-tolerance
+# seek decodes from the preceding keyframe, so the grid bounds that work. At 1s /
+# 24fps that is <=24 frames. Measured on the wall 2026-09-17: ONE seek in 4371
+# drift ticks across 15 screens over 5 minutes (0.023%) -- the rate PLL does
+# essentially all the correcting now and seeks are startup/loop-restart events.
+#
+# Measured cost on real content (BBB, same encoder args): 0.25s = 3.44 Mbps,
+# 0.5s = 2.33, 1s = 1.76, 2s = 1.52, 4s = 1.41. Returns flatten past ~1-2s
+# because at 24fps even a 1s grid is 1-in-24 I-frames and P-frames dominate.
+# 1.0 takes ~49% off the bitrate for <=24 frames of seek decode.
+#
+# This matters beyond bandwidth: mmcache buffers a whole segment in RAM
+# (audit 1.13), so segment size caps usable clip length. Halving the bitrate
+# doubles the clip we can ship inside the iPad-1's memory envelope.
+# All-intra (-g 1) is still avoided: it blew the bitrate past the iPad-1 decoder.
+# NOTE: index.html's KEYFRAME_GRID_MS is the client-side counterpart; it no
+# longer has to MATCH this (the client grid is now just a shared clock quantum
+# every screen aims at, not a keyframe target) but is kept in step so a screen
+# where mmvideo failed to inject still lands on a real keyframe.
+KEYFRAME_GRID_SEC = 1.0
 
 # Fallback window for an item with no explicit duration ("Auto") whose
 # natural length can't be resolved server-side (image, animation, or a
@@ -444,7 +467,10 @@ def render_token(media_elements, display_id):
     # v8: setsar=1 on the warp/transcode output — scale inherited the source's
     #     16:9 display aspect (SAR!=1), so the iPad DISPLAYED the portrait frame
     #     letterboxed to 16:9. Forces re-encode with square pixels.
-    encode_ver = "grid025-cbl-v8"
+    # v9: KEYFRAME_GRID_SEC 0.25 -> 1.0 (mmvideo seeks frame-accurately, so the
+    #     dense grid's anti-snap rationale is obsolete; halves the bitrate, which
+    #     is what caps clip length via mmcache's in-RAM buffer — audit 1.13).
+    encode_ver = "grid100-cbl-v9"
     raw = repr((items, display.boundingBox, clients, encode_ver))
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]
 

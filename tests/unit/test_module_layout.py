@@ -203,15 +203,46 @@ def test_render_pipeline_importable():
 
 
 def test_render_keyframe_grid_args_behavior():
-    """Pure-function behavior check: _keyframe_grid_args returns the
-    canonical 0.25s ffmpeg keyframe-grid args. iPad-1 seeks to grid
-    keyframes, so a future commit accidentally changing the grid step
-    would silently de-sync multi-client mosaic playback. The expression
-    'expr:gte(t,n_forced*0.25)' embeds KEYFRAME_GRID_SEC, so this also
-    catches an accidental change to that constant."""
-    from mosaicmesh.render import _keyframe_grid_args
+    """Tripwire on the canonical 1.0s ffmpeg keyframe-grid args.
+
+    Changing the grid is a real decision, not an incidental edit: it moves the
+    segment BITRATE (measured on BBB: 0.25s=3.44 Mbps, 1s=1.76, 2s=1.52), and
+    segment size is what caps usable clip length, because mmcache buffers a whole
+    segment in RAM on a 247 MB device (audit 1.13). It also bounds how much decode
+    a zero-tolerance seek costs (grid x fps frames).
+
+    It is NO LONGER about seek accuracy: that rationale ('iPad-1 snaps currentTime
+    to a keyframe') was stock-WebKit behavior, which the mmvideo transplant replaced
+    with a frame-accurate seekToTime at any keyframe spacing.
+
+    Whoever changes this must ALSO bump encode_ver in render_token (or stale renders
+    never re-encode) and keep index.html's KEYFRAME_GRID_MS in step -- see
+    test_keyframe_grid_client_server_agree."""
+    from mosaicmesh.render import _keyframe_grid_args, KEYFRAME_GRID_SEC
+    assert KEYFRAME_GRID_SEC == 1.0, KEYFRAME_GRID_SEC
     result = _keyframe_grid_args()
-    assert result == ["-force_key_frames", "expr:gte(t,n_forced*0.25)"], result
+    assert result == ["-force_key_frames", "expr:gte(t,n_forced*1.0)"], result
+
+
+def test_keyframe_grid_client_server_agree():
+    """index.html's KEYFRAME_GRID_MS must track mosaicmesh.render.KEYFRAME_GRID_SEC.
+
+    driftTick rounds a re-align seek UP to the client grid so every screen aims at
+    the same instant. Under mmvideo the seek is frame-accurate, so the client grid
+    is a shared CLOCK quantum rather than a keyframe target -- but a screen where
+    mmvideo failed to inject (the dyld load-gate is real) falls back to stock
+    WebKit, which snaps to a keyframe. If the client grid is finer than the
+    encoder's, that screen lands up to half an encoder-grid off the rest of the
+    wall. The source comments assert this coupling; nothing enforced it until now."""
+    import re
+    from pathlib import Path
+    from mosaicmesh.render import KEYFRAME_GRID_SEC
+    html = Path(__file__).resolve().parents[2] / "index.html"
+    m = re.search(r"var KEYFRAME_GRID_MS = (\d+)", html.read_text(encoding="utf-8"))
+    assert m, "KEYFRAME_GRID_MS not found in index.html"
+    assert int(m.group(1)) == int(KEYFRAME_GRID_SEC * 1000), (
+        "index.html KEYFRAME_GRID_MS=%s but render.KEYFRAME_GRID_SEC=%s"
+        % (m.group(1), KEYFRAME_GRID_SEC))
 
 
 def test_device_scripts_importable():

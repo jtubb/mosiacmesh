@@ -103,7 +103,19 @@ static void mm_download(void *p) {
     /* iOS-5 has NO NSURLSession. dataWithContentsOfURL: hides the response, so a
        truncated transfer returns partial data (non-nil, no error) that we used to cache
        + ack CACHED -> verr=3 on playback. sendSynchronousRequest gives us the response
-       (Content-Length) so we can verify completeness BEFORE writing. */
+       (Content-Length) so we can verify completeness BEFORE writing.
+
+       SIZE CEILING (audit 1.13, 2026-09-17): this buffers the WHOLE body in RAM before
+       the write below. The iPad-1 has 247 MB total (hw.memsize 258981888) and Web.app
+       idles ~40 MB, so a segment much past ~15-20 MB risks jetsam -- and a jetsammed
+       webclip is never relaunched by anything, i.e. a permanently dark screen. Every
+       segment shipped to date is 3.5-6 MB; a 10-min render produced 150 MB and would
+       NOT survive. That caps usable clip length at roughly 2 min (0.128 MB/s at a 1 s
+       keyframe grid).
+       TO LIFT IT: stream to disk -- async NSURLConnection delegate appending each
+       connection:didReceiveData: chunk to an NSFileHandle, then compare the accumulated
+       count against expectedContentLength in connectionDidFinishLoading:. Keeps the
+       completeness guard, drops the buffer, makes memory independent of clip length. */
     id req = ((id (*)(id, SEL, id))objc_msgSend)(
         (id)objc_getClass("NSURLRequest"), sel_registerName("requestWithURL:"), url);
     id resp = (id)0, err = (id)0;
