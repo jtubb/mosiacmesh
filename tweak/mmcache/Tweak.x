@@ -22,7 +22,8 @@
 #import <stdio.h>
 #import <stdarg.h>
 #import <unistd.h>
-#import "mmcachefile.h"    /* mm_cached_size — the fetch fast path (audit 1.15) */
+#import "mmcachefile.h"    /* mm_cache_path / mm_cache_usable_size — fetch fast path (audit 1.15) */
+#import "mmrange.h"        /* mm_next_range / mm_parse_content_range — chunked download (audit 1.13) */
 
 #define MM_CACHE_DIR "/var/mobile/Media/MosaicMeshCache"   /* no trailing slash; appended below */
 
@@ -95,65 +96,137 @@ static int token_is_safe(const char *t) {
 /* ---- background download worker (dispatch_async_f target; NO Blocks) --------------------- */
 typedef struct { char token[128]; char url[600]; } dlctx;
 
+/* CHUNKED, CONSTANT-MEMORY DOWNLOAD (audit 1.13).
+   The previous implementation used one sendSynchronousRequest: for the whole body,
+   which materializes the entire segment as an in-memory NSData. On a 247 MB iPad-1
+   with Web.app idling ~22 MB that capped a segment at ~15-20 MB, and therefore
+   capped CLIP LENGTH at roughly 2 minutes: a 10-minute render produced 150 MB per
+   screen, which would jetsam the webclip -- and nothing relaunches a dead webclip.
+
+   The textbook fix (async NSURLConnection delegate appending didReceiveData:) is
+   NOT available here: a delegate is an object, and this tweak must define NO ObjC
+   class (a static class SIGKILLs the dylib load on iOS 5.1; objc_allocateClassPair
+   does not flat-bind -- REFINDINGS 11/12). So we keep the synchronous call and ask
+   for one MM_RANGE_CHUNK window at a time, appending each to a temp file. Peak RAM
+   is one chunk whatever the file size, with no delegate and no new linker symbols.
+   The server already serves 206 range replies (media_handler does this for iPad-1
+   video seeking), so the transport is production-exercised.
+
+   COMPLETENESS is preserved, and the fast path in handle_mmcache depends on it:
+   bytes accumulate in a TEMP file and are renamed into the cache dir only once the
+   total matches what the server advertised, so a partial file can never appear
+   there. Everything here goes through objc_msgSend on already-bound classes, so no
+   libSystem symbol is added -- an earlier cut that called stat() SIGKILLed the load
+   (see mmcachefile.h). */
 static void mm_download(void *p) {
     dlctx *c = (dlctx *)p;
     id url = ((id (*)(id, SEL, id))objc_msgSend)(
         (id)objc_getClass("NSURL"), sel_registerName("URLWithString:"), nsstr(c->url));
     if (!url) { mmclog("[mmcache] bad url token=%s\n", c->token);
                 dispatch_fail(c->token, "url"); free(c); return; }
-    /* iOS-5 has NO NSURLSession. dataWithContentsOfURL: hides the response, so a
-       truncated transfer returns partial data (non-nil, no error) that we used to cache
-       + ack CACHED -> verr=3 on playback. sendSynchronousRequest gives us the response
-       (Content-Length) so we can verify completeness BEFORE writing.
 
-       SIZE CEILING (audit 1.13, 2026-09-17): this buffers the WHOLE body in RAM before
-       the write below. The iPad-1 has 247 MB total (hw.memsize 258981888) and Web.app
-       idles ~40 MB, so a segment much past ~15-20 MB risks jetsam -- and a jetsammed
-       webclip is never relaunched by anything, i.e. a permanently dark screen. Every
-       segment shipped to date is 3.5-6 MB; a 10-min render produced 150 MB and would
-       NOT survive. That caps usable clip length at roughly 2 min (0.128 MB/s at a 1 s
-       keyframe grid).
-       TO LIFT IT: stream to disk -- async NSURLConnection delegate appending each
-       connection:didReceiveData: chunk to an NSFileHandle, then compare the accumulated
-       count against expectedContentLength in connectionDidFinishLoading:. Keeps the
-       completeness guard, drops the buffer, makes memory independent of clip length. */
-    id req = ((id (*)(id, SEL, id))objc_msgSend)(
-        (id)objc_getClass("NSURLRequest"), sel_registerName("requestWithURL:"), url);
-    id resp = (id)0, err = (id)0;
-    id data = req ? ((id (*)(id, SEL, id, id *, id *))objc_msgSend)(
-        (id)objc_getClass("NSURLConnection"),
-        sel_registerName("sendSynchronousRequest:returningResponse:error:"),
-        req, &resp, &err) : (id)0;
-    if (!data) { mmclog("[mmcache] download FAILED token=%s\n", c->token);
-                 dispatch_fail(c->token, "net"); free(c); return; }
-    /* HTTP status must be 200 (reject 206 partial / 4xx / 5xx). */
-    int status = 0;
-    if (resp && ((int (*)(id, SEL, id))objc_msgSend)(
-            resp, sel_registerName("isKindOfClass:"), (id)objc_getClass("NSHTTPURLResponse")))
-        status = ((int (*)(id, SEL))objc_msgSend)(resp, sel_registerName("statusCode"));
-    if (status != 200) { mmclog("[mmcache] bad status=%d token=%s\n", status, c->token);
-                         dispatch_fail(c->token, "http"); free(c); return; }
-    /* Completeness: downloaded length must equal the response's Content-Length. */
-    long long expect = ((long long (*)(id, SEL))objc_msgSend)(
-        resp, sel_registerName("expectedContentLength"));
-    unsigned long got = ((unsigned long (*)(id, SEL))objc_msgSend)(
-        data, sel_registerName("length"));
-    if (expect <= 0 || (long long)got != expect) {
-        mmclog("[mmcache] TRUNCATED token=%s got=%lu expect=%lld\n", c->token, got, expect);
-        dispatch_fail(c->token, "len"); free(c); return;
-    }
-    /* Verified complete -> write + ack CACHED. */
     id fm = ((id (*)(id, SEL))objc_msgSend)(
         (id)objc_getClass("NSFileManager"), sel_registerName("defaultManager"));
     ((int (*)(id, SEL, id, int, id, id))objc_msgSend)(
         fm, sel_registerName("createDirectoryAtPath:withIntermediateDirectories:attributes:error:"),
         nsstr(MM_CACHE_DIR), 1, (id)0, (id)0);
-    char pathc[320];
-    snprintf(pathc, sizeof pathc, "%s/%s.mp4", MM_CACHE_DIR, c->token);
-    int ok = ((int (*)(id, SEL, id, int))objc_msgSend)(
-        data, sel_registerName("writeToFile:atomically:"), nsstr(pathc), 1);
-    mmclog("[mmcache] %s token=%s bytes=%lu -> %s\n", ok ? "OK" : "WRITEFAIL", c->token, got, pathc);
-    if (ok) dispatch_done(c->token, (long)got); else dispatch_fail(c->token, "write");
+
+    char tmpc[320], pathc[320];
+    snprintf(tmpc,  sizeof tmpc,  "%s/.%s.part", MM_CACHE_DIR, c->token);
+    snprintf(pathc, sizeof pathc, "%s/%s.mp4",   MM_CACHE_DIR, c->token);
+    /* Start clean: a leftover .part from an interrupted pull must never be mistaken
+       for progress. */
+    ((int (*)(id, SEL, id, id))objc_msgSend)(
+        fm, sel_registerName("removeItemAtPath:error:"), nsstr(tmpc), (id)0);
+    ((int (*)(id, SEL, id, id, id))objc_msgSend)(
+        fm, sel_registerName("createFileAtPath:contents:attributes:"), nsstr(tmpc), (id)0, (id)0);
+    id fh = ((id (*)(id, SEL, id))objc_msgSend)(
+        (id)objc_getClass("NSFileHandle"),
+        sel_registerName("fileHandleForWritingAtPath:"), nsstr(tmpc));
+    if (!fh) { mmclog("[mmcache] cannot open %s\n", tmpc);
+               dispatch_fail(c->token, "open"); free(c); return; }
+
+    long long total = -1, got = 0, rs = 0, re = 0;
+    int guard = 0, ok = 1, failed = 0;
+    while (guard++ < 4096) {
+        char hdr[64];
+        /* First pass the total is unknown, so ask for one chunk from the current
+           offset and learn the real total from the reply's Content-Range. */
+        long long cap = (total > 0) ? total : (got + MM_RANGE_CHUNK);
+        if (!mm_next_range(cap, got, MM_RANGE_CHUNK, &rs, &re)) { break; }
+        if (!mm_range_header(hdr, sizeof hdr, rs, re)) { ok = 0; break; }
+
+        id req = ((id (*)(id, SEL, id))objc_msgSend)(
+            (id)objc_getClass("NSMutableURLRequest"), sel_registerName("requestWithURL:"), url);
+        if (!req) { ok = 0; break; }
+        ((void (*)(id, SEL, id, id))objc_msgSend)(
+            req, sel_registerName("setValue:forHTTPHeaderField:"), nsstr(hdr), nsstr("Range"));
+
+        id resp = (id)0, err = (id)0;
+        id data = ((id (*)(id, SEL, id, id *, id *))objc_msgSend)(
+            (id)objc_getClass("NSURLConnection"),
+            sel_registerName("sendSynchronousRequest:returningResponse:error:"), req, &resp, &err);
+        if (!data || !resp) {
+            mmclog("[mmcache] chunk net fail token=%s at %lld\n", c->token, got);
+            ok = 0; failed = 1; dispatch_fail(c->token, "net"); break;
+        }
+
+        int status = 0;
+        if (((int (*)(id, SEL, id))objc_msgSend)(
+                resp, sel_registerName("isKindOfClass:"), (id)objc_getClass("NSHTTPURLResponse")))
+            status = ((int (*)(id, SEL))objc_msgSend)(resp, sel_registerName("statusCode"));
+        /* 206 only. A 200 means the server ignored Range and is handing us the whole
+           body in RAM -- precisely what this rewrite exists to avoid. */
+        if (status != 206) {
+            mmclog("[mmcache] no range support (status=%d) token=%s\n", status, c->token);
+            ok = 0; failed = 1; dispatch_fail(c->token, "norange"); break;
+        }
+
+        if (total < 0) {
+            id hdrs = ((id (*)(id, SEL))objc_msgSend)(resp, sel_registerName("allHeaderFields"));
+            id cr = hdrs ? ((id (*)(id, SEL, id))objc_msgSend)(
+                        hdrs, sel_registerName("objectForKey:"), @"Content-Range") : (id)0;
+            if (!cr && hdrs) cr = ((id (*)(id, SEL, id))objc_msgSend)(
+                        hdrs, sel_registerName("objectForKey:"), @"content-range");
+            const char *crs = cr ? ((const char *(*)(id, SEL))objc_msgSend)(
+                        cr, sel_registerName("UTF8String")) : (const char *)0;
+            long long a = 0, b = 0;
+            if (!crs || !mm_parse_content_range(crs, &a, &b, &total)) {
+                mmclog("[mmcache] unusable Content-Range token=%s\n", c->token);
+                ok = 0; failed = 1; dispatch_fail(c->token, "range"); break;
+            }
+        }
+
+        unsigned long n = ((unsigned long (*)(id, SEL))objc_msgSend)(
+            data, sel_registerName("length"));
+        if (!n) {
+            mmclog("[mmcache] empty chunk token=%s at %lld\n", c->token, got);
+            ok = 0; failed = 1; dispatch_fail(c->token, "short"); break;
+        }
+        ((void (*)(id, SEL, id))objc_msgSend)(fh, sel_registerName("writeData:"), data);
+        got += (long long)n;
+        if (total > 0 && got >= total) { break; }
+    }
+    ((void (*)(id, SEL))objc_msgSend)(fh, sel_registerName("closeFile"));
+
+    if (ok && total > 0 && got == total) {
+        ((int (*)(id, SEL, id, id))objc_msgSend)(
+            fm, sel_registerName("removeItemAtPath:error:"), nsstr(pathc), (id)0);
+        int moved = ((int (*)(id, SEL, id, id, id))objc_msgSend)(
+            fm, sel_registerName("moveItemAtPath:toPath:error:"),
+            nsstr(tmpc), nsstr(pathc), (id)0);
+        mmclog("[mmcache] %s token=%s bytes=%lld chunks=%d -> %s\n",
+               moved ? "OK" : "MOVEFAIL", c->token, got, guard, pathc);
+        if (moved) dispatch_done(c->token, (long)got);
+        else       dispatch_fail(c->token, "write");
+    } else {
+        if (!failed) {
+            mmclog("[mmcache] TRUNCATED token=%s got=%lld expect=%lld\n", c->token, got, total);
+            dispatch_fail(c->token, "len");
+        }
+        ((int (*)(id, SEL, id, id))objc_msgSend)(
+            fm, sel_registerName("removeItemAtPath:error:"), nsstr(tmpc), (id)0);
+    }
     free(c);
 }
 

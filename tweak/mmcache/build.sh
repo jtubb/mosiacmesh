@@ -3,7 +3,7 @@
 export THEOS=$HOME/theos
 SRC="$(cd "$(dirname "$0")" && pwd)"
 rm -rf ~/mmcache && mkdir -p ~/mmcache
-cp "$SRC"/Tweak.x "$SRC"/mmcachefile.h "$SRC"/Makefile "$SRC"/mmcache.plist "$SRC"/control ~/mmcache/ 2>/dev/null
+cp "$SRC"/Tweak.x "$SRC"/mmcachefile.h "$SRC"/mmrange.h "$SRC"/Makefile "$SRC"/mmcache.plist "$SRC"/control ~/mmcache/ 2>/dev/null
 sed -i 's/\r$//' ~/mmcache/Makefile ~/mmcache/Tweak.x 2>/dev/null
 cd ~/mmcache && make clean >/dev/null 2>&1 && make 2>&1 | grep -viE "tbd file|deprecated|Simulator" | tail -25
 NM=/home/jtubb/theos/toolchain/linux/iphone/bin/llvm-nm
