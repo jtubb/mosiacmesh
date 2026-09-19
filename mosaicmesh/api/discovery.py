@@ -207,6 +207,11 @@ def get_discovered_devices():
             "isOnline": client.isOnline,
             "synced": client.synced,
             "readyToDisplay": client.ready,
+            # Play-delivery ack state, surfaced so the silent-PLAY-miss self-heal
+            # is observable. Without these the only way to tell a healthy client
+            # from one that never received its PLAY is to read settings.dat.
+            "supportsPlayAck": bool(getattr(client, "supportsPlayAck", False)),
+            "lastPlayAck": getattr(client, "lastPlayAck", None),
             # Derived calibration flag: the Fleet UI's calibrationSummary needs
             # to know a screen is calibrated without shipping the full
             # measuredPerimeter coordinate array on every discovery poll.
