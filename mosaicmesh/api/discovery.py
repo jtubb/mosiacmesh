@@ -28,6 +28,10 @@ __all__ = [
     "_expected_segments_for_client",
     "_propagation_percent_for_client",
     "sync_new_client_to_group",
+    "needs_play_reissue",
+    "heal_missing_play",
+    "PLAY_ACK_GRACE_MS",
+    "PLAY_HEAL_THROTTLE_MS",
     "api_discovery_devices",
     "api_discovery_stats",
     "api_discovery_configure",
@@ -253,6 +257,92 @@ def sync_new_client_to_group(client_key, client):
                     "seed": getattr(display, "playSeed", 0),
                     "meshCells": mesh_cells}
     })
+
+
+# ---------------------------------------------------------------------------
+# Silent PLAY-miss self-heal.
+#
+# A client can sit ONLINE, clock-ready, calibrated and cache-complete while
+# holding no content at all, and nothing on the server notices. Seen on-wall
+# 2026-09-19 (sign1screen15): its PLAY landed ~300-500ms before a page boot and
+# was discarded with the page, and after the following clean REGISTER no further
+# PLAY ever arrived -- even though display.action was PLAY, mediaElements was
+# populated and the client was in the group. The screen stayed dark for hours
+# and only a group-wide PLAY recovered it.
+#
+# Why nothing caught it: `_deliver` reported no miss. The targeted send
+# succeeded into a SockJS session the client was no longer reading, so there was
+# no warning, no retry and no fallback -- the message simply evaporated.
+#
+# That is also why tracking what the server SENT cannot work here: by that
+# measure the send succeeded. The invariant actually violated is that the client
+# has ACKNOWLEDGED the group's current playback epoch, so that is what is
+# checked. The client echoes startEpoch back in a PLAYACK; a client that has not
+# acked the live epoch once the grace has passed gets PRELOAD+PLAY re-issued.
+#
+# Deliberately NOT keyed on client.ready: READY is only ever sent from the
+# PREPARE handshake, so a client synced mid-playback by sync_new_client_to_group
+# never sends one and would false-positive forever.
+PLAY_ACK_GRACE_MS = 20000       # a normal PREPARE -> GO -> PLAY round trip fits well inside
+PLAY_HEAL_THROTTLE_MS = 30000   # per-client floor between re-issues
+
+
+def needs_play_reissue(client, display, now_ms,
+                       grace_ms=PLAY_ACK_GRACE_MS,
+                       throttle_ms=PLAY_HEAL_THROTTLE_MS):
+    """True when `client` has silently missed the group's current PLAY.
+
+    Pure: no I/O, no clock read -- `now_ms` is supplied so the decision is
+    testable and so one sweep judges every client against the same instant.
+    """
+    if client is None or display is None:
+        return False
+    if not getattr(client, "isOnline", False):
+        return False
+    # Only clients whose JS actually sends PLAYACK can ever satisfy the ack
+    # check. Without this an older client would be re-issued PLAY every throttle
+    # period forever -- and PLAY forces a fresh mount (shownIndex = -1), so that
+    # is a visible re-mount on every healthy pre-upgrade screen. Capability is
+    # declared at REGISTER, which happens independently of PLAY, so it has no
+    # bootstrap problem: a new-JS client that never got a PLAY still registers.
+    if not getattr(client, "supportsPlayAck", False):
+        return False
+    if getattr(display, "action", None) != PlayState.PLAY:
+        return False
+    if not getattr(display, "mediaElements", None):
+        return False
+    epoch = getattr(display, "playStartEpoch", 0) or 0
+    if not epoch:
+        return False
+    if getattr(client, "lastPlayAck", None) == epoch:
+        return False                                  # acked the live epoch: healthy
+    if (now_ms - epoch) < grace_ms:
+        return False                                  # too soon to call it missed
+    last_heal = getattr(client, "lastPlayHealMs", 0) or 0
+    if (now_ms - last_heal) < throttle_ms:
+        return False                                  # already re-issued recently
+    return True
+
+
+def heal_missing_play(now_ms):
+    """Re-issue PRELOAD+PLAY to every client that silently missed the group's
+    current playback. Returns the client keys healed (for logging/tests)."""
+    import server
+    healed = []
+    for key, client in list(server.settings.clients.items()):
+        display = server.settings.displays.get(getattr(client, "displayID", None))
+        if not needs_play_reissue(client, display, now_ms):
+            continue
+        client.lastPlayHealMs = now_ms
+        logging.warning(
+            "play-heal: %s (%s) is online but never acked epoch %s; re-issuing PLAY",
+            key, getattr(client, "friendlyName", "?"), display.playStartEpoch)
+        try:
+            sync_new_client_to_group(key, client)
+            healed.append(key)
+        except Exception as e:                        # never let one client stall the sweep
+            logging.error("play-heal failed for %s: %s", key, e)
+    return healed
 
 
 async def api_discovery_devices(request):

@@ -301,6 +301,11 @@ def msg_response(msg,session):
         # Rendered viewport (older clients omit it -> fall back to device res)
         client.canvasWidth = msg["PAYLOAD"].get("canvasWidth") or client.deviceWidth
         client.canvasHeight = msg["PAYLOAD"].get("canvasHeight") or client.deviceHeight
+        # Does this client's JS confirm PLAY delivery? Gates the silent-PLAY-miss
+        # self-heal in process(): re-issuing PLAY to a client that CANNOT ack would
+        # force a fresh mount on it every throttle period, forever. Re-read on every
+        # REGISTER so a screen that reloads onto newer JS is picked up immediately.
+        client.supportsPlayAck = bool(msg["PAYLOAD"].get("playAck"))
         _new_ip = server._client_ip(req) if req is not None else getattr(client, 'ip', '')
         if _new_ip != getattr(client, 'ip', ''):
             client.hostnameResolved = False   # new IP -> re-resolve its hostname
@@ -449,6 +454,20 @@ def msg_response(msg,session):
             # release the wall without it (see _release_expired_prepares).
             display.armPending.add(msg["SRC"])
             asyncio.ensure_future(server._auto_arm_client(msg["SRC"]))
+
+    elif(msg["REQUEST"] == "PLAYACK"):
+        # The client confirms it APPLIED a PLAY, echoing that payload's
+        # startEpoch. This is the only evidence the server has that a PLAY
+        # actually landed: a targeted send can succeed into a SockJS session the
+        # client is no longer reading, so `_deliver` returning OK proves nothing.
+        # process() re-issues PRELOAD+PLAY to any online client that has not
+        # acked the group's live epoch (see discovery.needs_play_reissue).
+        client = server.settings.clients.get(msg["SRC"])
+        if client:
+            epoch = (msg.get("PAYLOAD") or {}).get("startEpoch")
+            if epoch:
+                client.lastPlayAck = epoch
+        response["PAYLOAD"] = "SUCCESS"
 
     elif(msg["REQUEST"] == "CLIENTLOG"):
         # Client-side debug stream (opt-in via ?tdbg). Surfaced in the server log

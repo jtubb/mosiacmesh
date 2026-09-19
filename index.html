@@ -2068,6 +2068,12 @@
 				playback.active = true;
 				playback.paused = false;
 				dbg("recv-PLAY");
+				// Confirm delivery. The server cannot tell a PLAY that ARRIVED from one
+				// that vanished into a stale SockJS session (a targeted send into a
+				// session the page is no longer reading still "succeeds"), so it re-issues
+				// PLAY to any online client that has not acked the live epoch. Echo it
+				// back. dbg() is ?tdbg-gated and must NOT be used for this.
+				sendMsg("PLAYACK", { startEpoch: playback.startEpoch });
 				if (playback.startTimer) { clearTimeout(playback.startTimer); playback.startTimer = null; }
 				var _delay = playback.startEpoch - GoTime.now();
 				// Defer ONLY for a plausible coordinated GO (the start epoch is at most

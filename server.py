@@ -90,6 +90,8 @@ from mosaicmesh.api.discovery import (
     auto_configure_client, get_discovered_devices,
     _expected_seg_keys_for_display, _expected_segments_for_client,
     _propagation_percent_for_client, sync_new_client_to_group,
+    needs_play_reissue, heal_missing_play,
+    PLAY_ACK_GRACE_MS, PLAY_HEAL_THROTTLE_MS,
     api_discovery_devices, api_discovery_stats, api_discovery_configure,
 )
 from mosaicmesh.api.playlists import (
@@ -2191,6 +2193,18 @@ async def process():
                 precache_windows.pop(_grp, None)
         except Exception as _e:
             logging.error("precache window sweep failed for %s: %s", _grp, _e)
+
+    # Silent PLAY-miss self-heal: re-issue PRELOAD+PLAY to any ONLINE client that
+    # never acked the group's live playback epoch. A targeted send can succeed
+    # into a SockJS session the client is no longer reading -- `_deliver` reports
+    # no miss, so without this a screen sits online, clock-ready and cache-complete
+    # showing nothing, indefinitely (sign1screen15, 2026-09-19: dark for hours,
+    # recovered only by a group-wide PLAY). Grace + per-client throttle live in
+    # needs_play_reissue; this is a no-op on a healthy fleet.
+    try:
+        heal_missing_play(int(current_time * 1000))
+    except Exception as e:
+        logging.error("play-heal sweep failed: %s", e)
 
     # Fill-reconcile: re-PRECACHE cache-capable clients missing the current
     # render's segments (e.g. offline/reconnecting when the render's PRECACHE

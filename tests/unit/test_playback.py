@@ -250,3 +250,131 @@ class TestScriptPlayback:
         sent = jsonpickle.decode(server.socketmanager.broadcast.call_args_list[0].args[0])
         assert sent["PAYLOAD"]["items"][0]["playmode"] == "SCRIPT"
         assert sent["PAYLOAD"]["items"][0]["file"] == "bouncingBalls"
+
+
+class TestSilentPlayMiss:
+    """A client can sit online, clock-ready, calibrated and cache-complete while
+    holding NO content, and nothing notices.
+
+    Seen on-wall 2026-09-19 (sign1screen15): its PLAY landed ~300-500ms before a
+    page boot and was discarded, and after a clean REGISTER no further PLAY ever
+    arrived -- despite display.action == PLAY, mediaElements populated, and the
+    client being in the group. `_deliver` reported no miss (the targeted send
+    succeeded into a session the client was no longer reading), so there was no
+    warning, no retry and no recovery path. The screen stayed dark for hours.
+
+    Recording what the server SENT cannot detect this -- the send "succeeded".
+    The violated invariant is that the client has ACKNOWLEDGED the group's
+    current playback epoch, so that is what is checked.
+    """
+
+    def _playing(self, mock_settings, epoch=1000000):
+        disp = mock_settings.displays["Default"]
+        me = server.MediaElement(); me.file = "/media/server/a.mp4"; me.duration = 1000
+        disp.mediaElements = [me]
+        disp.action = server.PlayState.PLAY
+        disp.playStartEpoch = epoch
+        c = server.Client(); c.displayID = "Default"; c.isOnline = True
+        c.supportsPlayAck = True        # modern client JS; the False case is its own test
+        mock_settings.clients["c1"] = c
+        return disp, c
+
+    def test_client_that_never_acked_is_healed_after_the_grace(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is True
+
+    def test_client_that_acked_the_current_epoch_is_left_alone(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        c.lastPlayAck = disp.playStartEpoch
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_a_stale_ack_from_a_previous_playback_does_not_count(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        c.lastPlayAck = 999999           # acked an EARLIER epoch
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is True
+
+    def test_grace_period_protects_a_normal_start(self, mock_settings):
+        """Right after PLAY every client is legitimately un-acked."""
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        assert server.needs_play_reissue(c, disp, 1000000 + 500) is False
+
+    def test_throttled_so_one_client_cannot_be_spammed(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        now = 1000000 + 60000
+        assert server.needs_play_reissue(c, disp, now) is True
+        c.lastPlayHealMs = now                       # just healed
+        assert server.needs_play_reissue(c, disp, now + 1000) is False
+        assert server.needs_play_reissue(c, disp, now + 120000) is True
+
+    def test_offline_client_is_not_healed(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        c.isOnline = False
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_idle_group_is_not_healed(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        disp.action = server.PlayState.STOP
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_group_with_no_media_is_not_healed(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        disp.mediaElements = []
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_missing_epoch_is_not_healed(self, mock_settings):
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        disp.playStartEpoch = 0
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_playack_handler_records_the_epoch(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp, c = self._playing(mock_settings)
+        session = MagicMock()
+        session.request.headers = {"User-Agent": "x"}
+        session.request.remote = "1.1.1.1"
+        server.msg_response({"SRC": "c1", "DEST": "SRV", "REQUEST": "PLAYACK",
+                             "PAYLOAD": {"startEpoch": disp.playStartEpoch}}, session)
+        assert c.lastPlayAck == disp.playStartEpoch
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_a_client_that_cannot_ack_is_NEVER_healed(self, mock_settings):
+        """Old client JS does not send PLAYACK, so it can never satisfy the ack
+        check. Without this guard the sweep would re-issue PLAY to every healthy
+        pre-upgrade screen every throttle period -- and PLAY sets shownIndex=-1
+        to force a fresh mount, so that is a visible re-mount on the whole wall.
+        Capability is declared at REGISTER, which happens regardless of PLAY, so
+        it does not have the bootstrap problem an ack-based probe would."""
+        server.settings = mock_settings
+        disp, c = self._playing(mock_settings)
+        c.supportsPlayAck = False
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+
+    def test_register_records_the_playack_capability(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        session = MagicMock()
+        session.request.headers = {"User-Agent": "x"}
+        session.request.remote = "1.1.1.1"
+        server.msg_response({"SRC": "newk", "DEST": "SRV", "REQUEST": "REGISTER",
+                             "PAYLOAD": {"width": 768, "height": 1024, "playAck": True}}, session)
+        assert server.settings.clients["newk"].supportsPlayAck is True
+
+    def test_register_without_the_flag_marks_the_client_unable(self, mock_settings):
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        session = MagicMock()
+        session.request.headers = {"User-Agent": "x"}
+        session.request.remote = "1.1.1.1"
+        server.msg_response({"SRC": "oldk", "DEST": "SRV", "REQUEST": "REGISTER",
+                             "PAYLOAD": {"width": 768, "height": 1024}}, session)
+        assert server.settings.clients["oldk"].supportsPlayAck is False

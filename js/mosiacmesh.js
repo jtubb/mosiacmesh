@@ -125,7 +125,12 @@ function getUDID() {
 			var ch = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || screen.height;
 			sock.send(generateMessage("SRV","REGISTER",{"width": screen.width, "height": screen.height,
 				"canvasWidth": cw, "canvasHeight": ch, "touch": hasTouch, "cacheCapable": !!(window.mmCache && window.mmCache.backend),
-					"cacheBackend": (window.mmCache && window.mmCache.backend && window.mmCache.backend.name) ? window.mmCache.backend.name : null}));
+					"cacheBackend": (window.mmCache && window.mmCache.backend && window.mmCache.backend.name) ? window.mmCache.backend.name : null,
+					// This build confirms PLAY delivery with a PLAYACK. The server only
+					// applies its silent-PLAY-miss self-heal to clients that declare this;
+					// an older client could never ack and would be re-issued PLAY (and so
+					// re-mounted) on every sweep.
+					"playAck": true}));
 			// Re-report the viewport whenever it changes (e.g. entering full screen
 			// for calibration, or rotating). REGISTER only captures it once; if the
 			// page registered while NOT full screen, the stored canvas dims would be

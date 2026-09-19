@@ -218,6 +218,16 @@ class Client():
         self.ready = False      # ready to display: media cached & client ready
         self.isOnline = False   # alive: connected / recent heartbeat
         self.synced = False     # SYN/SYNACK handshake (clock/group) complete
+        # Playback-delivery ack. The client echoes the PLAY payload's startEpoch
+        # back in a PLAYACK; process() re-issues PRELOAD+PLAY to any online
+        # client that never acked the group's live epoch. This exists because a
+        # targeted send can succeed into a session the client is no longer
+        # reading -- so "the server sent it" is not evidence it arrived.
+        # NOT client.ready: that is only sent from the PREPARE handshake, so a
+        # client synced mid-playback never sends one.
+        self.lastPlayAck = None     # startEpoch the client confirmed receiving
+        self.lastPlayHealMs = 0     # last re-issue, for per-client throttling
+        self.supportsPlayAck = False  # client JS sends PLAYACK (declared at REGISTER)
         # Enhanced discovery fields
         self.discoveryTime = time.time()
         self.lastSeen = time.time()
@@ -279,6 +289,16 @@ def migrate_client_objects():
             client.lastSeen = current_time
         if not hasattr(client, 'connectionCount'):
             client.connectionCount = 1
+        # Play-ack self-heal fields (2026-09-19). A Client loaded from an older
+        # settings.dat has neither; default them so the first sweep treats the
+        # client as un-acked (it will simply be re-issued PLAY once) rather than
+        # raising on a missing attribute.
+        if not hasattr(client, 'lastPlayAck'):
+            client.lastPlayAck = None
+        if not hasattr(client, 'lastPlayHealMs'):
+            client.lastPlayHealMs = 0
+        if not hasattr(client, 'supportsPlayAck'):
+            client.supportsPlayAck = False
         if not hasattr(client, 'capabilities'):
             client.capabilities = []
         if not hasattr(client, 'autoConfigured'):
