@@ -50,8 +50,34 @@
     // correction is 0.10 ms/s median across the fleet, so ONE seek fixes a
     // screen and holds it for minutes -- no continuous authority required.
     INERT_SEEK_MS: 90,      // once inert, seek above this (well over the ~50ms noise)
-    STALL_TICKS: 8,         // railed-and-not-improving ticks before declaring inert
-    STALL_EPS_MS: 25        // |fErr| must close by more than this to count as progress
+
+    // ---- PROBE-based inertness detection (2026-09-19) --------------------
+    // The first detector keyed on "railed at the clamp", which needs
+    // |fErr| >= CLAMP/GAIN = 200ms, leaving the whole 20-200ms band invisible:
+    // too small to rail (so no inert verdict and no INERT_SEEK_MS fallback) and
+    // too small for COARSE_SEEK_MS. On-wall that was rlive=0 on only 11-14 of
+    // 24 screens with a 100-155ms residual spread.
+    //
+    // A PASSIVE test cannot fix it. At a P-controller's steady state the net
+    // movement is ZERO BY DEFINITION: a working actuator holding station
+    // against a decode deficit commands +3% and moves nothing, and so does an
+    // inert one. Achieved d(ct)/d(wall) reads exactly 1.000 in both cases too.
+    //
+    // So PERTURB. Model the plant as d(err)/dt = (r-1) - deficit when the rate
+    // works, and ~0 regardless of r when it does not. Measure movement over a
+    // BASELINE window, then over a PROBE window with the command offset by
+    // PROBE_DELTA. The CHANGE between the two windows is the offset if the rate
+    // works and zero if it does not -- and the deficit, being present in both,
+    // CANCELS. That is the whole reason this works where the passive test could
+    // not: it compares two windows on the same plant instead of comparing
+    // absolute movement against an absolute expectation.
+    PROBE_WINDOW: 10,          // ticks per window (baseline, then probe)
+    TICK_MS: 200,              // drift-loop period; turns a rate delta into ms
+    PROBE_MIN_RESPONSE: 0.35,  // fraction of the offset that must materialise
+    PROBE_MAX_DRIFT_MS: 30,    // baseline must be quiet, else the verdict is noise
+    // Probing perturbs a WORKING plant (~60ms, self-corrected) and costs an
+    // inert one nothing. Keep cycles rare either way.
+    PROBE_COOLDOWN: 900        // ticks between cycles (~3 min at 200ms)
   };
 
   function opt(opts, k) { return (opts && opts[k] !== undefined) ? opts[k] : DEFAULTS[k]; }
@@ -91,9 +117,14 @@
   function mmDriftState() {
     return { ring: [], inertCount: 0, rateLive: true, lastRateCmd: 1, probeCountdown: 0,
              integral: 0,
-             // stall detector: rateStalled latches the "proven inert" verdict so a
-             // tautological rateGot match cannot silently undo it (see DEFAULTS).
-             rateStalled: false, satRun: 0, satBest: null };
+             // rateStalled LATCHES the proven-inert verdict so the tautological
+             // rateGot match above cannot silently resurrect the screen.
+             rateStalled: false,
+             // probe cycle: 0 idle, 1 baseline, 2 probing. probeApplied is the
+             // offset ACTUALLY delivered (the clamp may eat part of it), so the
+             // verdict is judged against what was really asked for.
+             probePhase: 0, probeTicks: 0, probeErrStart: 0,
+             probeBaseMove: 0, probeDir: 1, probeApplied: 0, probeCooldown: 0 };
   }
 
   function mmDriftCommand(state, err, obs, opts) {
@@ -134,27 +165,66 @@
     // median equals the lone sample so real startup jumps still react fast).
     if (Math.abs(fErr) > COARSE && canSeek) {
       state.lastRateCmd = 1;   // rate resets to 1 after a seek
-      state.satRun = 0; state.satBest = null;
+      state.probePhase = 0;    // seek jumps err: any window in flight is void
       return { action: 'seek', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
     }
 
-    // STALL DETECTOR: judge LAST tick's command by THIS tick's filtered error.
-    // Railed at the clamp and not closing the error => the actuator is inert.
-    if (Math.abs(state.lastRateCmd - 1) >= CLAMP - 1e-9) {
-      var mag = Math.abs(fErr);
-      if (state.satBest === null || mag < state.satBest - opt(opts, 'STALL_EPS_MS')) {
-        state.satBest = mag;               // genuine progress: the rate IS working
-        state.satRun = 0;
-        state.rateStalled = false;
-      } else {
-        state.satRun += 1;
-        if (state.satRun >= opt(opts, 'STALL_TICKS')) {
-          state.rateStalled = true;
-          state.rateLive = false;
+    // PROBE CYCLE (see DEFAULTS): baseline window, then a window with the
+    // command offset, and compare the CHANGE in movement. Only runs while
+    // actually steering -- inside the deadband we command nothing, so there is
+    // no evidence either way and no reason to perturb.
+    var WIN = opt(opts, 'PROBE_WINDOW');
+    var PDELTA = opt(opts, 'PROBE_DELTA');
+    if (state.probeCooldown > 0) { state.probeCooldown -= 1; }
+    if (WIN <= 0 || Math.abs(fErr) < DEAD) {
+      state.probePhase = 0;    // disabled, or not steering: nothing to measure
+    } else if (state.probePhase === 0) {
+      if (state.probeCooldown <= 0) {
+        state.probePhase = 1;                  // begin BASELINE
+        state.probeTicks = 0;
+        state.probeErrStart = fErr;
+      }
+    } else if (state.probePhase === 1) {
+      state.probeTicks += 1;
+      if (state.probeTicks >= WIN) {
+        state.probeBaseMove = fErr - state.probeErrStart;
+        // Only probe from a QUIET baseline. Two windows isolate the offset only
+        // if the underlying movement is steady; mid-transient the difference
+        // between them is dominated by the transient and the verdict is noise.
+        // (Measured: a baseline drift of -137ms produced a confident wrong
+        // "inert" on a perfectly good actuator.)
+        if (Math.abs(state.probeBaseMove) > opt(opts, 'PROBE_MAX_DRIFT_MS')) {
+          state.probePhase = 0;                // still settling: try again later
+          state.probeCooldown = WIN;
+        } else {
+          // Offset AWAY from the clamp, else it would swallow the perturbation.
+          // Judge from the REAL last command -- it includes the integral, which
+          // a P-only estimate ignores, and that mis-picked the direction.
+          state.probeDir = (state.lastRateCmd + PDELTA <= 1 + CLAMP + 1e-9) ? 1 : -1;
+          state.probePhase = 2;                // begin PROBE
+          state.probeTicks = 0;
+          state.probeErrStart = fErr;
+          state.probeApplied = 0;
         }
       }
-    } else {
-      state.satRun = 0; state.satBest = null;   // off the rail: nothing to judge
+    } else if (state.probePhase === 2) {
+      state.probeTicks += 1;
+      if (state.probeTicks >= WIN) {
+        var moved = (fErr - state.probeErrStart) - state.probeBaseMove;
+        // Inconclusive if the clamp left no usable offset -- say nothing rather
+        // than guess, and wait out the cooldown before trying again.
+        if (Math.abs(state.probeApplied) > 1e-6) {
+          if ((moved / state.probeApplied) < opt(opts, 'PROBE_MIN_RESPONSE')) {
+            state.rateStalled = true;
+            state.rateLive = false;
+          } else {
+            state.rateStalled = false;
+            state.rateLive = true;
+          }
+        }
+        state.probePhase = 0;
+        state.probeCooldown = opt(opts, 'PROBE_COOLDOWN');
+      }
     }
 
     // SEEK FALLBACK. With the rate path inert, seek is the only actuator left,
@@ -164,7 +234,7 @@
     // refill with post-seek samples before another seek can fire.
     if (!state.rateLive && canSeek && Math.abs(fErr) > opt(opts, 'INERT_SEEK_MS')) {
       state.lastRateCmd = 1;
-      state.satRun = 0; state.satBest = null;
+      state.probePhase = 0;    // seek jumps err: any window in flight is void
       return { action: 'seek', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
     }
 
@@ -206,6 +276,15 @@
     var rate = 1 - pErr * GAIN - state.integral * IGAIN;   // err<0 (behind) => rate>1
     if (rate < 1 - CLAMP) { rate = 1 - CLAMP; }
     if (rate > 1 + CLAMP) { rate = 1 + CLAMP; }
+    // PROBE: ride the offset on top of the P/PI command and bank what was
+    // ACTUALLY delivered, since the clamp may trim it.
+    if (state.probePhase === 2) {
+      var baseRate = rate;
+      rate = baseRate + state.probeDir * opt(opts, 'PROBE_DELTA');
+      if (rate > 1 + CLAMP) { rate = 1 + CLAMP; }
+      if (rate < 1 - CLAMP) { rate = 1 - CLAMP; }
+      state.probeApplied += (rate - baseRate) * opt(opts, 'TICK_MS');
+    }
     state.lastRateCmd = rate;
     var act = (Math.abs(rate - 1) < 1e-9) ? 'hold' : 'rate';
     return { action: act, rate: rate, filteredErr: fErr, rateLive: state.rateLive };

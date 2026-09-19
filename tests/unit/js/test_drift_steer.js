@@ -151,6 +151,9 @@ test('the default clamp is unchanged for callers that do not override it', () =>
 
 // Closed-loop sim: plant advances at (rate - deficit); controller sees the error.
 function simulateLoop(deficit, opts, ticks) {
+  // This sim advances the plant in 500ms steps, so the detector must be told
+  // that tick length or its expected-offset arithmetic is scaled 2.5x wrong.
+  opts = Object.assign({ TICK_MS: 500 }, opts);
   const s = g.mmDriftState();
   let err = 0, got = 1, c = null;
   for (let i = 0; i < (ticks || 4000); i++) {
@@ -232,11 +235,12 @@ test('PI: inside the deadband the integral HOLDS its correction', () => {
  */
 
 test('anti-windup: a saturated integral can still unwind', () => {
-  // STALL_TICKS disabled on purpose: this test isolates INTEGRAL unwind, and its
-  // scenario -- err pinned at -300 for 400 ticks while the command is honored --
-  // is by definition an inert plant, so the stall detector would (correctly) rule
-  // the actuator dead and hand over to seek before the integral ever accumulated.
-  const o = { RATE_CLAMP: 0.06, RATE_IGAIN: 0.000002, STALL_TICKS: Infinity };
+  // Probing disabled on purpose (PROBE_WINDOW 0): this test isolates INTEGRAL
+  // unwind, and its scenario -- err pinned at -300 for 400 ticks regardless of
+  // the command -- is by definition an inert plant, so the detector would
+  // (correctly) rule the actuator dead and hand over to seek before the
+  // integral ever accumulated.
+  const o = { RATE_CLAMP: 0.06, RATE_IGAIN: 0.000002, PROBE_WINDOW: 0 };
   const s = g.mmDriftState();
   let got = 1;
   // Drive hard NEGATIVE (behind) until the output saturates high.
@@ -296,7 +300,7 @@ const PROD = { RATE_CLAMP: 0.06, RATE_GAIN: 0.0003, COARSE_SEEK_MS: 350 };
 test('inert: mirrored rateGot defeats the OLD check -- stall detector must catch it', () => {
   const s = g.mmDriftState();
   let last = 1;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 30; i++) {   // probe cycle = baseline(10)+probe(10)
     const c = g.mmDriftCommand(s, -337, { rateGot: last, canSeek: false }, PROD);
     last = c.rate;                      // mmvideo mirrors: rateGot == what we set
   }
@@ -306,7 +310,7 @@ test('inert: mirrored rateGot defeats the OLD check -- stall detector must catch
 test('inert: a responding actuator under saturation stays live', () => {
   const s = g.mmDriftState();
   let last = 1, e = -337;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 30; i++) {   // probe cycle = baseline(10)+probe(10)
     const c = g.mmDriftCommand(s, e, { rateGot: last, canSeek: false }, PROD);
     last = c.rate; e += 25;             // error genuinely closing
   }
@@ -316,7 +320,7 @@ test('inert: a responding actuator under saturation stays live', () => {
 test('inert: seeks on a sub-COARSE error that the rate path can never fix', () => {
   const s = g.mmDriftState();
   let last = 1, c;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 30; i++) {   // probe cycle = baseline(10)+probe(10)
     c = g.mmDriftCommand(s, -258, { rateGot: last, canSeek: true }, PROD);
     last = c.rate;
   }
@@ -327,7 +331,7 @@ test('inert: seeks on a sub-COARSE error that the rate path can never fix', () =
 test('inert: still respects a deadband -- a small residual does not seek', () => {
   const s = g.mmDriftState();
   let last = 1, c;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 30; i++) {   // probe cycle = baseline(10)+probe(10)
     c = g.mmDriftCommand(s, -337, { rateGot: last, canSeek: true }, PROD);
     last = c.rate;
   }
@@ -342,7 +346,7 @@ test('inert: still respects a deadband -- a small residual does not seek', () =>
 test('inert: cannot seek when canSeek is false -> holds, no crash', () => {
   const s = g.mmDriftState();
   let last = 1, c;
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 30; i++) {   // probe cycle = baseline(10)+probe(10)
     c = g.mmDriftCommand(s, -258, { rateGot: last, canSeek: false }, PROD);
     last = c.rate;
   }
@@ -421,30 +425,14 @@ function runLoop(s, startErr, ticks, live, opts, canSeek) {
 }
 
 
-/* WHY THESE TWO ARE todo -- the obvious fix is unsound.
+/* RESOLVED by the probe-based detector below.
  *
- * Replacing "railed at the clamp" with a model test ("a working actuator moves
- * err by ~(rate-1)*dt, an inert one by ~0") WAS implemented and did make both
- * of these pass -- but it broke all five PI/anti-windup tests, for a reason
- * that is fundamental rather than a tuning problem:
- *
- *   At a P-controller's steady state the net movement is ZERO BY DEFINITION.
- *   A working actuator holding station against a decode deficit commands +3%
- *   and achieves zero net movement; an inert actuator commands +3% and also
- *   achieves nothing. Passively the two are identical. Measuring the achieved
- *   d(ct)/d(wall) does not help either -- both read exactly 1.000 at steady
- *   state. So no passive test can separate equilibrium from inertness.
- *
- * The sound discriminator is PERTURBATION: change the command and see whether
- * the error responds. A constant deficit cancels out of a delta; an inert
- * actuator does not respond to one. The PROBE_DELTA / PROBE_TICKS scaffolding
- * already in mmDriftCommand is the natural place to build that, promoting the
- * model test from a verdict to a "suspect" trigger that arms a probe.
- *
- * Until then the detector only fires above |fErr| = CLAMP/GAIN = 200ms and the
- * 20-200ms band stays uncorrected (measured: rlive=0 on 11-14 of 24 screens,
- * residual spread 100-155ms). Known and deliberate, not forgotten. */
-test('sub-clamp: a 120ms error with an INERT actuator is detected', { todo: true }, () => {
+ * The passive model test ("a working actuator moves err by ~(rate-1)*dt") was
+ * tried first and is UNSOUND: at a P-controller's steady state the net movement
+ * is zero BY DEFINITION, so a working actuator holding station against a deficit
+ * is indistinguishable from an inert one. Achieved d(ct)/d(wall) reads 1.000 for
+ * both. Only PERTURBATION separates them -- see the probe tests at the end. */
+test('sub-clamp: a 120ms error with an INERT actuator is detected', () => {
   const s = g.mmDriftState();
   runLoop(s, -120, 40, false, PROD2, false);
   assert.equal(s.rateLive, false,
@@ -457,7 +445,7 @@ test('sub-clamp: a 120ms error with a WORKING actuator stays live', () => {
   assert.equal(s.rateLive, true, 'the error is closing, so the actuator works');
 });
 
-test('sub-clamp: once inert, the seek fallback corrects it', { todo: true }, () => {
+test('sub-clamp: once inert, the seek fallback corrects it', () => {
   const s = g.mmDriftState();
   const r = runLoop(s, -120, 40, false, PROD2, true);
   assert.equal(s.rateLive, false);
@@ -488,4 +476,79 @@ test('sub-clamp: overshoot reads as WORKING, not stalled', () => {
     err += (c.rate - 1) * 200 * 3;
   }
   assert.equal(s.rateLive, true, 'an over-responsive actuator is still an actuator');
+});
+
+/* ---- Probe-based inertness detection (2026-09-19) ------------------------
+ * Perturbation is the only sound discriminator (see the todo note above): a
+ * constant deficit cancels out of a DELTA, an inert actuator does not respond
+ * to one. Baseline window, then a probe window offset by PROBE_DELTA; the
+ * CHANGE in error movement between them is Δ if the rate works and 0 if not. */
+const PROBE_OPTS = { RATE_CLAMP: 0.06, RATE_GAIN: 0.0002, COARSE_SEEK_MS: 350,
+                     PROBE_DELTA: 0.03, PROBE_WINDOW: 10, TICK_MS: 200 };
+
+/** plant: working -> err moves by (rate-1-deficit)*TICK; inert -> err frozen. */
+function plant(s, startErr, ticks, opts, { live, deficit = 0, canSeek = false }) {
+  let err = startErr, last = 1, c = null, seeks = 0;
+  const TICK = opts.TICK_MS;
+  for (let i = 0; i < ticks; i++) {
+    c = g.mmDriftCommand(s, err, { rateGot: last, canSeek }, opts);
+    last = c.rate;
+    if (c.action === 'seek') { err = 0; seeks++; }
+    else if (live) { err += (c.rate - 1 - deficit) * TICK; }
+  }
+  return { err, seeks, cmd: c };
+}
+
+test('probe: an INERT actuator at 120ms is detected (below the clamp)', () => {
+  const s = g.mmDriftState();
+  plant(s, -120, 120, PROBE_OPTS, { live: false });
+  assert.equal(s.rateLive, false, '120ms never rails, but the rate does nothing');
+});
+
+test('probe: a WORKING actuator holding station against a deficit stays LIVE', () => {
+  /* THE case that broke the passive model test. At equilibrium this plant has
+   * net movement of exactly zero -- identical to an inert one -- yet the rate
+   * is working. Only the probe can tell them apart. */
+  const s = g.mmDriftState();
+  plant(s, -150, 200, PROBE_OPTS, { live: true, deficit: 0.03 });
+  assert.equal(s.rateLive, true, 'zero net movement at equilibrium is NOT inertness');
+  assert.equal(s.rateStalled, false);
+});
+
+test('probe: a WORKING actuator with no deficit stays LIVE', () => {
+  const s = g.mmDriftState();
+  plant(s, -120, 120, PROBE_OPTS, { live: true });
+  assert.equal(s.rateLive, true);
+});
+
+test('probe: once inert, the seek fallback corrects the sub-clamp error', () => {
+  const s = g.mmDriftState();
+  const r = plant(s, -120, 120, PROBE_OPTS, { live: false, canSeek: true });
+  assert.equal(s.rateLive, false);
+  assert.ok(Math.abs(r.err) < 90, `must be seeked back, ended at ${r.err}`);
+});
+
+test('probe: inside the deadband there is no steering, so no probing', () => {
+  const s = g.mmDriftState();
+  plant(s, -8, 120, PROBE_OPTS, { live: false });
+  assert.equal(s.rateLive, true, 'not steering means no evidence either way');
+});
+
+test('probe: the railed+frozen case is still caught (regression)', () => {
+  const s = g.mmDriftState();
+  plant(s, -337, 120, PROBE_OPTS, { live: false });
+  assert.equal(s.rateLive, false);
+});
+
+test('probe: the perturbation is bounded and does not run every tick', () => {
+  const s = g.mmDriftState();
+  let err = -150, last = 1, probing = 0;
+  for (let i = 0; i < 300; i++) {
+    const c = g.mmDriftCommand(s, err, { rateGot: last, canSeek: false }, PROBE_OPTS);
+    last = c.rate;
+    err += (c.rate - 1 - 0.03) * 200;           // working plant, at equilibrium
+    if (s.probePhase === 2) probing++;
+  }
+  assert.ok(probing > 0, 'it must actually probe at least once');
+  assert.ok(probing < 90, `probing ${probing}/300 ticks is too intrusive`);
 });
