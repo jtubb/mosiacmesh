@@ -348,3 +348,44 @@ test('inert: cannot seek when canSeek is false -> holds, no crash', () => {
   }
   assert.notEqual(c.action, 'seek');
 });
+
+/* ---- Loop-boundary circular error (2026-09-19) ---------------------------
+ * The clock position and the video's currentTime both wrap at the loop, but
+ * NOT at the same instant. For the moment one has wrapped and the other has
+ * not, a raw (ct - target) reports a FULL-LOOP error: on-wall ferr hit
+ * +119699 and +119655 on a 120s loop. That spike blows past COARSE_SEEK_MS
+ * and fires a seek at every wrap -- 270 of 295 fleet seeks (91.5%) targeted
+ * the first 10s of the 120s loop, and |ferr| p99 sat at ~262ms in every
+ * reading while p50 was 24ms. Taking the SHORT way round is what synctool
+ * already does server-side (circular_spread). */
+
+test('wrapErr: a full-loop spike becomes the small true error', () => {
+  assert.equal(g.mmWrapErr(119900, 120000), -100);   // clock wrapped, video hasn't
+  assert.equal(g.mmWrapErr(-119900, 120000), 100);   // video wrapped, clock hasn't
+});
+
+test('wrapErr: ordinary small errors pass through untouched', () => {
+  assert.equal(g.mmWrapErr(-258, 120000), -258);
+  assert.equal(g.mmWrapErr(37, 120000), 37);
+  assert.equal(g.mmWrapErr(0, 120000), 0);
+});
+
+test('wrapErr: picks the short way round past the half-loop', () => {
+  assert.equal(g.mmWrapErr(70000, 120000), -50000);
+  assert.equal(g.mmWrapErr(60000, 120000), 60000);   // exactly half stays positive
+});
+
+test('wrapErr: unknown/zero loop length is a passthrough', () => {
+  assert.equal(g.mmWrapErr(119900, 0), 119900);
+  assert.equal(g.mmWrapErr(-42, undefined), -42);
+});
+
+test('wrapErr: the on-wall spike no longer triggers a coarse seek', () => {
+  const s = g.mmDriftState();
+  const raw = g.mmDriftCommand(g.mmDriftState(), 119699, { rateGot: 1, canSeek: true });
+  assert.equal(raw.action, 'seek', 'raw full-loop error DOES seek (the bug)');
+  const wrapped = g.mmWrapErr(119699, 120000);
+  const c = g.mmDriftCommand(s, wrapped, { rateGot: 1, canSeek: true });
+  assert.notEqual(c.action, 'seek', 'wrapped error is small and must not seek');
+  assert.ok(Math.abs(wrapped) < 350, `wrapped to ${wrapped}`);
+});

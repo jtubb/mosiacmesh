@@ -1187,6 +1187,27 @@
 			if (ctEst !== null) { ctMs = ctEst; ctFixed = 1; }
 		}
 		var errorMs = ctMs - pos.offsetMs;   // <0 = BEHIND clock, >0 = AHEAD
+		// LOOP BOUNDARY: a single looping item self-wraps (native v.loop, or the
+		// explicit 'ended' restart) while the clock target wraps via playlistIndex's
+		// modulo -- but not at the same instant. Raw, that momentary mismatch reads as
+		// a FULL-LOOP error (+-119,900 on a 120s loop, seen on-wall as ferr 119699)
+		// and fires a hard seek at EVERY wrap: 91.5% of all fleet seeks targeted the
+		// first 10s of the loop. Position is a phase on a circle -- take the short way
+		// round. Multi-item playlists advance via showItem rather than self-wrapping,
+		// so they pass 0 here and are untouched.
+		if (playback.loop && playback.items.length === 1) {
+			errorMs = mmWrapErr(errorMs, durations[pos.index] || 0);
+		}
+		// A loop RESTART has settled: converge its own lead on the residual, the same
+		// x0.9 law the seek path uses, but on a separate term (see onVideoEnded).
+		// err<0 => came back behind -> grow the lead.
+		if (playback.loopPending) {
+			playback.loopPending = false;
+			dbg("loopland", { clk: Math.round(errorMs), lead: Math.round(playback.loopLeadMs || 0) });
+			playback.loopLeadMs = (playback.loopLeadMs || 0) - errorMs * 0.9;
+			if (playback.loopLeadMs < 0) { playback.loopLeadMs = 0; }
+			if (playback.loopLeadMs > 1200) { playback.loopLeadMs = 1200; }
+		}
 		// A prior BOUNDARY-aligned seek has settled: tune the seek-ahead lead from its
 		// residual. Boundary-aligned err has NO keyframe snap (the seek is timed to land
 		// as the clock reaches the keyframe), so it's a clean latency-estimate error ->
@@ -1372,7 +1393,34 @@
 		var durations = [], k;
 		for (k = 0; k < playback.items.length; k++) { durations.push(playback.items[k].duration); }
 		var pos = playlistIndex(GoTime.now() - playback.startEpoch, durations, playback.loop);
-		try { vv.currentTime = (pos ? pos.offsetMs : 0) / 1000; } catch (e) {}
+		// LOOP-RESTART LEAD. Restarting is NOT instantaneous: measured on-wall the
+		// element loses ~300-600ms between 'ended' and playback actually resuming
+		// (ct goes 119061 -> 0 -> 443 across two 1s ticks while the clock runs on).
+		// Landing at exactly pos.offsetMs therefore puts the screen ~300ms behind for
+		// ~2s after EVERY wrap -- that transient is the |ferr| p99 (~260ms, identical
+		// in every reading) and it spikes the cross-screen spread once per loop.
+		// Restart AHEAD by the same latency the seek path already learns
+		// (seekAheadMs, ~220-300ms on the fleet), and reuse the seek-landing feedback
+		// so the lead keeps adapting and the cooldown suppresses a redundant
+		// corrective seek piled on top of the restart.
+		var total = 0;
+		for (k = 0; k < durations.length; k++) { total += durations[k]; }
+		// The restart lead is learned SEPARATELY from seekAheadMs. Sharing them was
+		// measured to be worse: a restart residual biased inside INERT_SEEK_MS parks
+		// where nothing corrects it (canary p50 went 22ms -> 70ms, flat across the
+		// whole window), because the two latencies differ and one adaptive term
+		// cannot serve both. Seeded from seekAheadMs so it starts in the right
+		// decade, then converged on its OWN residual by the loopPending feedback.
+		if (playback.loopLeadMs === undefined || playback.loopLeadMs === null) {
+			playback.loopLeadMs = playback.seekAheadMs || 0;
+		}
+		var lead = playback.loopLeadMs;
+		var tgt = (pos ? pos.offsetMs : 0) + lead;
+		if (total > 0 && tgt > total - 50) { tgt = total - 50; }
+		if (tgt < 0) { tgt = 0; }
+		try { vv.currentTime = tgt / 1000; } catch (e) {}
+		playback.loopPending = true;      // residual feeds loopLeadMs, NOT seekAheadMs
+		playback.lastSeekAt = GoTime.now();   // cooldown: no redundant seek on the restart
 		var p = vv.play(); if (p && p['catch']) { p['catch'](function () {}); }
 	}
 

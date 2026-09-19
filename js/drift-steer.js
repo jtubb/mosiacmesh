@@ -64,6 +64,30 @@
     return (n % 2) ? a[mid] : (a[mid - 1] + a[mid]) / 2;
   }
 
+  /* Circular error across the loop boundary.
+   *
+   * The clock-derived target and the video's currentTime BOTH wrap at the loop,
+   * but not at the same instant. For the moment one has wrapped and the other
+   * has not, a raw (ct - target) reports a FULL-LOOP error -- measured on-wall,
+   * ferr hit +119699 and +119655 on a 120s loop. That spike blows straight past
+   * COARSE_SEEK_MS and fires a hard seek at every single wrap: 270 of 295 fleet
+   * seeks (91.5%) targeted the first 10s of the 120s loop, and |ferr| p99 sat at
+   * ~262ms in every reading while p50 was 24ms.
+   *
+   * The position is a phase on a circle, so the difference must be taken the
+   * SHORT way round -- exactly what synctool does server-side in
+   * circular_spread(). The client never had the equivalent.
+   *
+   * Only meaningful when the element self-loops (a single looping item); the
+   * caller passes loopMs = that item's duration, and 0/undefined otherwise,
+   * which is a passthrough so multi-item playlists are untouched. */
+  function mmWrapErr(err, loopMs) {
+    if (!loopMs || loopMs <= 0) { return err; }
+    var e = ((err % loopMs) + loopMs) % loopMs;   // -> [0, loopMs)
+    if (e > loopMs / 2) { e -= loopMs; }          // -> (-loopMs/2, loopMs/2]
+    return e;
+  }
+
   function mmDriftState() {
     return { ring: [], inertCount: 0, rateLive: true, lastRateCmd: 1, probeCountdown: 0,
              integral: 0,
@@ -189,5 +213,6 @@
 
   root.mmDriftState = mmDriftState;
   root.mmDriftCommand = mmDriftCommand;
+  root.mmWrapErr = mmWrapErr;
   root._mmDriftMedian = median;
 })(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
