@@ -25,7 +25,12 @@ build_arm() {           # $1 = arm name, $2 = sed program applied to Tweak.x
   "$NM" -u "$DY" 2>/dev/null | grep -iE "objc|class_|sel_" | sed 's/^/    /'
 }
 
-echo "===== CONTROL arm (subclass + exercise stripped) ====="
-build_arm control '-e /PROBE-SUBCLASS-BEGIN/,/PROBE-SUBCLASS-END/d -e /PROBE-EXERCISE-BEGIN/,/PROBE-EXERCISE-END/d'
+STRIP_HOOK='-e /PROBE-HOOK-BEGIN/,/PROBE-HOOK-END/d -e /PROBE-HOOKINIT-BEGIN/,/PROBE-HOOKINIT-END/d'
+STRIP_SUB='-e /PROBE-SUBCLASS-BEGIN/,/PROBE-SUBCLASS-END/d -e /PROBE-EXERCISE-BEGIN/,/PROBE-EXERCISE-END/d'
+
+echo "===== CONTROL arm (no hook, no class) ====="
+build_arm control "$STRIP_HOOK $STRIP_SUB"
+echo "===== HOOK arm (%hook only -- pulls in CydiaSubstrate/MSHookMessageEx) ====="
+build_arm hook "$STRIP_SUB"
 echo "===== SUBCLASS arm (runtime class + method + property) ====="
-build_arm subclass ''
+build_arm subclass "$STRIP_HOOK"

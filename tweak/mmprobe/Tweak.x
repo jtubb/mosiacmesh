@@ -51,6 +51,21 @@ static void mmplog(const char *m) {
     if (f) { fprintf(f, "%s\n", m); fclose(f); }
 }
 
+/* PROBE-HOOK-BEGIN */
+/* Arm 3 isolates HOOKING. mmcache %hooks WebAppController; the control arm hooks
+ * nothing and therefore never links CydiaSubstrate or references MSHookMessageEx.
+ * That is the one structural difference between the probe that LOADS and the mmcache
+ * build that does not (audit 1.16). If this arm fails, hooking from a fresh build is
+ * the trigger; if it loads, hooking is exonerated and the cause is elsewhere in the
+ * mmcache source. */
+%hook WebAppController
+- (void)viewDidLoad {
+    %orig;
+    mmplog("[mmprobe] HOOK fired: WebAppController viewDidLoad");
+}
+%end
+/* PROBE-HOOK-END */
+
 /* PROBE-SUBCLASS-BEGIN */
 /* A runtime subclass with a method AND a property -- deliberately the shape that
  * crashes the load when written as a STATIC class. If this loads, the wall was
@@ -69,6 +84,11 @@ static void mmplog(const char *m) {
 
 %ctor {
     @autoreleasepool {
+/* PROBE-HOOKINIT-BEGIN */
+        mmplog("[mmprobe] HOOK arm: dylib loaded, ctor running");
+        %init;
+        return;
+/* PROBE-HOOKINIT-END */
 /* PROBE-EXERCISE-BEGIN */
         mmplog("[mmprobe] SUBCLASS arm: dylib loaded, ctor running");
         /* Register the default (ungrouped) group. Logos does NOT install hooks or
