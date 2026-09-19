@@ -389,3 +389,103 @@ test('wrapErr: the on-wall spike no longer triggers a coarse seek', () => {
   assert.notEqual(c.action, 'seek', 'wrapped error is small and must not seek');
   assert.ok(Math.abs(wrapped) < 350, `wrapped to ${wrapped}`);
 });
+
+/* ---- Inertness detection below the clamp (2026-09-19) --------------------
+ * The first detector keyed on "railed at the clamp", which needs
+ * |fErr| >= CLAMP/GAIN = 0.06/0.0003 = 200ms. Everything under that was
+ * invisible: too small to rail (no stall verdict, so no INERT_SEEK_MS
+ * fallback) and too small for COARSE_SEEK_MS=350. Those screens simply parked.
+ *
+ * Measured on-wall after the loop-boundary fix: rlive=0 on only 11-14 of 24
+ * screens, |ferr| p90 59-95ms and a residual cross-screen spread of 100-155ms
+ * -- sitting squarely in the uncovered band. Removing the big wrap excursions
+ * is what exposed this: fewer screens ever reach 200ms now, so fewer trip it.
+ *
+ * The replacement is model-based: a working actuator moves err by about
+ * (rate-1)*dt per tick, an inert one by ~0. Signed, so an overshoot reads as
+ * WORKING (ratio > 1) rather than as a stall -- which a test on shrinking
+ * |fErr| would get exactly backwards. */
+const PROD2 = { RATE_CLAMP: 0.06, RATE_GAIN: 0.0003, COARSE_SEEK_MS: 350 };
+
+/** Closed-loop tick: plant moves err by (rate-1)*TICK when live, else not. */
+function runLoop(s, startErr, ticks, live, opts, canSeek) {
+  let err = startErr, last = 1, c = null;
+  const TICK = (opts && opts.TICK_MS) || 200;
+  for (let i = 0; i < ticks; i++) {
+    c = g.mmDriftCommand(s, err, { rateGot: last, canSeek: !!canSeek }, opts);
+    last = c.rate;
+    if (c.action === 'seek') { err = 0; }            // a seek lands it
+    else if (live) { err += (c.rate - 1) * TICK; }   // working actuator
+  }
+  return { err, cmd: c };
+}
+
+
+/* WHY THESE TWO ARE todo -- the obvious fix is unsound.
+ *
+ * Replacing "railed at the clamp" with a model test ("a working actuator moves
+ * err by ~(rate-1)*dt, an inert one by ~0") WAS implemented and did make both
+ * of these pass -- but it broke all five PI/anti-windup tests, for a reason
+ * that is fundamental rather than a tuning problem:
+ *
+ *   At a P-controller's steady state the net movement is ZERO BY DEFINITION.
+ *   A working actuator holding station against a decode deficit commands +3%
+ *   and achieves zero net movement; an inert actuator commands +3% and also
+ *   achieves nothing. Passively the two are identical. Measuring the achieved
+ *   d(ct)/d(wall) does not help either -- both read exactly 1.000 at steady
+ *   state. So no passive test can separate equilibrium from inertness.
+ *
+ * The sound discriminator is PERTURBATION: change the command and see whether
+ * the error responds. A constant deficit cancels out of a delta; an inert
+ * actuator does not respond to one. The PROBE_DELTA / PROBE_TICKS scaffolding
+ * already in mmDriftCommand is the natural place to build that, promoting the
+ * model test from a verdict to a "suspect" trigger that arms a probe.
+ *
+ * Until then the detector only fires above |fErr| = CLAMP/GAIN = 200ms and the
+ * 20-200ms band stays uncorrected (measured: rlive=0 on 11-14 of 24 screens,
+ * residual spread 100-155ms). Known and deliberate, not forgotten. */
+test('sub-clamp: a 120ms error with an INERT actuator is detected', { todo: true }, () => {
+  const s = g.mmDriftState();
+  runLoop(s, -120, 40, false, PROD2, false);
+  assert.equal(s.rateLive, false,
+    'a steady 120ms error never rails, but the rate is doing nothing -- must read inert');
+});
+
+test('sub-clamp: a 120ms error with a WORKING actuator stays live', () => {
+  const s = g.mmDriftState();
+  runLoop(s, -120, 40, true, PROD2, false);
+  assert.equal(s.rateLive, true, 'the error is closing, so the actuator works');
+});
+
+test('sub-clamp: once inert, the seek fallback corrects it', { todo: true }, () => {
+  const s = g.mmDriftState();
+  const r = runLoop(s, -120, 40, false, PROD2, true);
+  assert.equal(s.rateLive, false);
+  assert.ok(Math.abs(r.err) < 90,
+    `an inert screen at 120ms must be seeked back, ended at ${r.err}`);
+});
+
+test('sub-clamp: the railed+frozen case is still caught (regression)', () => {
+  const s = g.mmDriftState();
+  runLoop(s, -337, 40, false, PROD2, false);
+  assert.equal(s.rateLive, false);
+});
+
+test('sub-clamp: inside the deadband nothing is commanded, so no false verdict', () => {
+  const s = g.mmDriftState();
+  runLoop(s, -8, 60, false, PROD2, false);   // below FINE_DEADBAND_MS -> rate 1
+  assert.equal(s.rateLive, true, 'not steering means no evidence of inertness');
+});
+
+test('sub-clamp: overshoot reads as WORKING, not stalled', () => {
+  const s = g.mmDriftState();
+  // Plant over-responds 3x: |err| does not shrink monotonically and even flips
+  // sign, but the error IS moving in the commanded direction.
+  let err = -120, last = 1;
+  for (let i = 0; i < 40; i++) {
+    const c = g.mmDriftCommand(s, err, { rateGot: last, canSeek: false }, PROD2);
+    last = c.rate;
+    err += (c.rate - 1) * 200 * 3;
+  }
+  assert.equal(s.rateLive, true, 'an over-responsive actuator is still an actuator');
+});
