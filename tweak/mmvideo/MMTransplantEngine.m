@@ -3,8 +3,11 @@
 // held as retained void* (ARC __bridge_retained/_transfer) and driven with NORMAL
 // message syntax on Apple's classes — the compiler emits the correct objc_msgSend /
 // objc_msgSend_stret / CMTime-by-value ABI from AVFoundation.h, so we never hand-cast
-// objc_msgSend. KVO (which needs an ObjC observer object) is replaced by polling
-// AVPlayerItem.status inside the periodic time-observer block.
+// objc_msgSend. No STATIC ObjC class is defined — that SIGKILLs the load (§11). Readiness
+// DOES use KVO, via an observer class built at RUNTIME (objc_allocateClassPair), which emits
+// no static class metadata; see the §KVO block below. It previously polled
+// AVPlayerItem.status inside the periodic time-observer, which is why a cold (not-yet-playing)
+// load could never reach readyState — the verr=3 freeze.
 #import "MMTransplantEngine.h"
 #import "mmurl.h"
 #import "mmretire.h"
@@ -13,6 +16,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <CoreMedia/CoreMedia.h>
 #import <objc/message.h>      // objc_msgSend for the dynamic FigPluginView.layer call (3.2b)
+#import <objc/runtime.h>      // objc_allocateClassPair/class_addMethod — the KVO observer class
 #import <substrate.h>
 
 typedef void (*MMVoidFn)(void *);
@@ -43,6 +47,7 @@ struct MMEngine {
                        // getter (WebThread) via valueForKey tripped a CF-assertion SIGTRAP.
     int playing;       // tracked via play/pause/setRate (avoids reading .rate)
     int slotted;       // 3.2b: AVPlayerLayer attached to FigPluginView (once)
+    void *statusObserver; // KVO observer on AVPlayerItem.status (retained) — see §KVO below
     int dead;          // C1b: set in dropEngine (WebThread); observer bails so it can't publish stale time
     double lastCt; int stallTicks;   // vtfix5: near-end stall watchdog
     float desiredRate; // last NONZERO rate requested — what play() resumes at (see mm_engine_play)
@@ -72,36 +77,124 @@ MMEngine *mm_engine_create(void *backend, void *mp) {
     return e;
 }
 
-// On the periodic time-observer (main queue): poll status -> net/ready, fire WebCore
-// callbacks. Runs on the main thread already, so call the callbacks directly.
-static void mm_engine_poll(MMEngine *e) {
-    if (!e || !e->item) return;
+// READINESS publisher — status -> net/ready, mirror the WebCore ivars at +0x14/+0x18, fire
+// net/readyChanged. Split out from the old mm_engine_poll BY CAUSE: readiness is an event, not
+// something that should only be noticed while the clock happens to be advancing.
+//
+// Called from the KVO status observer (marshalled to main) and once directly after the observer
+// is installed. Runs on the MAIN queue; holds the WebThreadLock across the ivar writes and the
+// callbacks — that parks the WebThread so these cannot race its timer processing, which is the
+// cross-thread CFRunLoopTimer over-release behind the intermittent WebThread SIGTRAP.
+void mm_engine_publish_ready(MMEngine *e) {
+    if (!e || e->dead || !e->item) return;
     int net = e->net, ready = e->ready;
     long st = (long)[IT(e) status];           // AVPlayerItemStatus
     mm_status_to_states((int)st, &net, &ready);
     BOOL changed = (net != e->net) || (ready != e->ready);
     e->net = net; e->ready = ready;
-    float rr = e->playing ? (e->desiredRate > 0.0f ? e->desiredRate : 1.0f) : 0.0f;
-    // WebCore's HTMLMediaElement timers are WEBTHREAD-affine. This observer runs on the MAIN
-    // thread, so hold the WebThreadLock across the ivar writes + MediaPlayer callbacks: it parks
-    // the WebThread so timeChanged()/networkStateChanged() can't race its timer processing — the
-    // cross-thread CFRunLoopTimer over-release that is the intermittent WebThread SIGTRAP.
     BOOL wtLocked = NO;
     if (gWTLock && (!gWTIsCurrent || !gWTIsCurrent())) { gWTLock(); wtLocked = YES; }
     if (e->backend) {
         *(volatile int *)((char *)e->backend + 0x14) = net;      // m_networkState (atomic ivar mirror)
         *(volatile int *)((char *)e->backend + 0x18) = ready;    // m_readyState
-        *(volatile float *)((char *)e->backend + 0x24) = rr;     // m_rate (paused = rate==0)
     }
     if (changed) {
         if (e->netChanged)   e->netChanged(e->mp);
         if (e->readyChanged) e->readyChanged(e->mp);
     }
+    if (wtLocked && gWTUnlock) gWTUnlock();
+}
+
+// TIME publisher — mirror m_rate at +0x24 and fire timeChanged. Stays on the periodic
+// time-observer because it is legitimately playback-coupled: position only changes while
+// playing. Same WebThreadLock discipline as above.
+static void mm_engine_publish_time(MMEngine *e) {
+    if (!e || e->dead) return;
+    float rr = e->playing ? (e->desiredRate > 0.0f ? e->desiredRate : 1.0f) : 0.0f;
+    BOOL wtLocked = NO;
+    if (gWTLock && (!gWTIsCurrent || !gWTIsCurrent())) { gWTLock(); wtLocked = YES; }
+    if (e->backend) {
+        // Keep the readiness mirror authoritative every tick, as the old polling implementation
+        // did. Cheap (two word writes, no callbacks) and it guarantees the backend ivars WebCore
+        // reads through MediaPlayer::networkState()/readyState() always match our cached truth.
+        //
+        // HONEST NOTE: this was added on the theory that the old 250ms re-assertion was what kept
+        // the DOM networkState at 1 (IDLE), because after the KVO switch the canary uniquely read
+        // 2 (LOADING) while 23 other screens read 1. Re-asserting did NOT change that, so the
+        // theory was wrong: the DOM value is HTMLMediaElement::m_networkState, a SEPARATE field
+        // only moved when networkStateChanged() actually fires — a backend ivar write cannot
+        // touch it. Under KVO that callback fires once, on the real status transition, instead of
+        // being re-driven by polling, and WebCore's own load state machine (which the transplant
+        // bypasses) settles the DOM value at LOADING. It is COSMETIC: nothing in index.html
+        // branches on networkState (only the debug overlay prints it), and the canary plays
+        // normally at rs=4. Flagged because "ns=2" was a diagnostic marker for WEDGED screens, so
+        // a healthy screen reporting it will mislead anyone triaging by that field.
+        *(volatile int *)((char *)e->backend + 0x14) = e->net;    // m_networkState
+        *(volatile int *)((char *)e->backend + 0x18) = e->ready;  // m_readyState
+        *(volatile float *)((char *)e->backend + 0x24) = rr;      // m_rate (paused = rate==0)
+    }
     if (e->timeChanged) e->timeChanged(e->mp);
     if (wtLocked && gWTUnlock) gWTUnlock();
 }
 
+/* ---- KVO status observer (the cold-load fix) --------------------------------------------
+ * WHY: readiness used to be polled inside the periodic time-observer, which only fires while
+ * the timebase is ADVANCING. On a cold load the player is not playing yet, so status was never
+ * polled, so WebCore's readyState never advanced and the element hung at rs=0 forever — the
+ * verr=3 cold-load freeze. It had to be playing to notice it could play. KVO is event-driven and
+ * playback-independent, so it breaks that chicken-and-egg.
+ *
+ * WHY A RUNTIME CLASS: KVO needs an observer object, and a STATIC ObjC class with a method+ivar
+ * SIGKILLs the dylib load on iOS 5.1 (REFINDINGS §11, bisected 2026-08-04). A class built at
+ * runtime emits no static class metadata and sidesteps that entirely. REFINDINGS §12 claimed the
+ * runtime APIs could not bind, but that was measured under -Wl,-undefined,dynamic_lookup, which
+ * §14 abandoned; tweak/mmprobe proved on-wall (2026-09-18) that objc_allocateClassPair /
+ * class_addMethod / objc_registerClassPair bind and work under the current two-level linking.
+ *
+ * The engine pointer travels as the KVO `context`, so the observer needs NO ivars or properties
+ * at all — which also dodges the "runtime %property is not zero-initialized" trap the probe hit.
+ */
+static void mm_kvo_status_cb(id self, SEL _cmd, id keyPath, id object,
+                             id change, void *context) {
+    MMEngine *e = (MMEngine *)context;
+    (void)self; (void)_cmd; (void)keyPath; (void)object; (void)change;
+    if (!e) return;
+    // KVO fires on AVFoundation's own queue. Every engine touch must happen on the main queue,
+    // and `dead` must be re-checked THERE — teardown may run between this callback and the
+    // block executing. Same discipline as the periodic observer block; safe to read `dead`
+    // because mm_engine_retire never frees the struct (C1).
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (e->dead) return;
+        mm_engine_publish_ready(e);
+    });
+}
+
+static Class mm_status_observer_class(void) {
+    static Class k = Nil;
+    if (!k) {
+        k = objc_allocateClassPair([NSObject class], "MMStatusObserver", 0);
+        if (k) {
+            class_addMethod(k, @selector(observeValueForKeyPath:ofObject:change:context:),
+                            (IMP)mm_kvo_status_cb, "v@:@@@^v");
+            objc_registerClassPair(k);
+        } else {
+            // Already registered (a previous engine created it) — reuse it.
+            k = objc_getClass("MMStatusObserver");
+        }
+    }
+    return k;
+}
+
 static void mm_engine_teardown(MMEngine *e) {
+    // Remove the KVO observer BEFORE the item is released: an observer still registered on a
+    // deallocating AVPlayerItem is an immediate ObjC exception ("was deallocated while key value
+    // observers were still registered"), and we build -fno-exceptions.
+    if (e->statusObserver) {
+        if (e->item) {
+            [IT(e) removeObserver:(__bridge id)e->statusObserver forKeyPath:@"status"];
+        }
+        id t = (__bridge_transfer id)e->statusObserver; e->statusObserver = NULL; (void)t;
+    }
     if (e->timeObserver && e->player) {
         [PL(e) removeTimeObserver:(__bridge id)e->timeObserver];
     }
@@ -128,6 +221,21 @@ void mm_engine_load(MMEngine *e, const char *url) {
         e->player = (__bridge_retained void *)player;
         e->layer  = (__bridge_retained void *)layer;
         e->net = 2; e->ready = 0; e->dead = 0; e->lastCt = -1.0; e->stallTicks = 0;   // Loading / HaveNothing until status advances
+
+        // KVO on status: event-driven readiness, so a cold load no longer has to be playing
+        // before WebCore can learn it is playable (the verr=3 freeze). The engine pointer rides
+        // in `context`, so the observer object carries no state of its own.
+        {
+            Class sk = mm_status_observer_class();
+            if (sk) {
+                id so = [[sk alloc] init];
+                if (so) {
+                    [item addObserver:so forKeyPath:@"status" options:0 context:e];
+                    e->statusObserver = (__bridge_retained void *)so;
+                }
+            }
+        }
+
         MMEngine *eng = e;          // capture the C pointer (no retain cycle)
         id obs = [player addPeriodicTimeObserverForInterval:CMTimeMake(1, 4)
                      queue:dispatch_get_main_queue()
@@ -155,7 +263,10 @@ void mm_engine_load(MMEngine *e, const char *url) {
                              [PL(eng) seekToTime:kCMTimeZero toleranceBefore:kCMTimeZero toleranceAfter:kCMTimeZero];
                              PL(eng).rate = (eng->desiredRate > 0.0f ? eng->desiredRate : 1.0f);
                              FILE *_f=fopen("/tmp/mmvideo.log","a"); if(_f){fprintf(_f,"[dbg] STALL-LOOP recovered near end%c",10);fclose(_f);} } }
-                         mm_engine_poll(eng);
+                         // TIME only. Readiness is no longer polled here — it is event-driven
+                         // via the KVO status observer installed above, which is what lets a
+                         // cold (not-yet-playing) load reach readyState at all.
+                         mm_engine_publish_time(eng);
                      }];
         e->timeObserver = (__bridge_retained void *)obs;
     }
