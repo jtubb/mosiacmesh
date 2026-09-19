@@ -27,7 +27,31 @@
     LIVENESS_EPS: 0.02,     // rateGot-vs-cmd tolerance (Task 2)
     LIVENESS_K: 4,          // consecutive inert ticks -> seek-primary (Task 2)
     PROBE_TICKS: 8,         // inert re-probe cadence (Task 2)
-    PROBE_DELTA: 0.03       // probe rate delta (Task 2)
+    PROBE_DELTA: 0.03,      // probe rate delta (Task 2)
+
+    // ---- Inert-actuator detection + seek fallback (2026-09-18) ------------
+    // MEASURED ON-WALL: the rate actuator does nothing on iOS 5.1. Regressing
+    // actual playback rate (d(currentTime)/d(wallclock)) against the commanded
+    // rate over 7342 fleet samples gives slope -0.004 -- commanding 0.94 and
+    // commanding 1.06 both yield ~1.000. Forcing MM_CM_SCALE to 2.0 (which
+    // should drive the timebase to 1.12) left the real rate at 0.9973.
+    //
+    // The LIVENESS_EPS check above cannot see this, because mmvideo's
+    // v.playbackRate is a MIRROR IVAR of the value we just set: it compares the
+    // command against itself, always matches, and reports rlive=1 forever.
+    // STALL_* is the honest, behavioural replacement -- "railed at the clamp
+    // and the error is not improving" -- which catches an inert actuator
+    // whatever the cause (absent selector, OS override, future regression).
+    //
+    // Consequence: seek is the ONLY working actuator, and COARSE_SEEK_MS=350
+    // left the standing ~258ms error parked permanently inside its deadband.
+    // That parked error IS what was long recorded as "P-controller droop".
+    // There is no decode deficit (regression intercept ~0) and re-drift after
+    // correction is 0.10 ms/s median across the fleet, so ONE seek fixes a
+    // screen and holds it for minutes -- no continuous authority required.
+    INERT_SEEK_MS: 90,      // once inert, seek above this (well over the ~50ms noise)
+    STALL_TICKS: 8,         // railed-and-not-improving ticks before declaring inert
+    STALL_EPS_MS: 25        // |fErr| must close by more than this to count as progress
   };
 
   function opt(opts, k) { return (opts && opts[k] !== undefined) ? opts[k] : DEFAULTS[k]; }
@@ -42,7 +66,10 @@
 
   function mmDriftState() {
     return { ring: [], inertCount: 0, rateLive: true, lastRateCmd: 1, probeCountdown: 0,
-             integral: 0 };
+             integral: 0,
+             // stall detector: rateStalled latches the "proven inert" verdict so a
+             // tautological rateGot match cannot silently undo it (see DEFAULTS).
+             rateStalled: false, satRun: 0, satBest: null };
   }
 
   function mmDriftCommand(state, err, obs, opts) {
@@ -64,7 +91,11 @@
         if (state.inertCount >= K) { state.rateLive = false; }
       } else {
         state.inertCount = 0;
-        state.rateLive = true;
+        // Do NOT resurrect a screen the stall detector has proven inert. On
+        // mmvideo this branch is a tautology (rateGot mirrors the command), so
+        // without the guard every periodic probe would "succeed" and undo the
+        // verdict a tick later, flapping live/inert forever.
+        if (!state.rateStalled) { state.rateLive = true; }
       }
     }
 
@@ -79,6 +110,37 @@
     // median equals the lone sample so real startup jumps still react fast).
     if (Math.abs(fErr) > COARSE && canSeek) {
       state.lastRateCmd = 1;   // rate resets to 1 after a seek
+      state.satRun = 0; state.satBest = null;
+      return { action: 'seek', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
+    }
+
+    // STALL DETECTOR: judge LAST tick's command by THIS tick's filtered error.
+    // Railed at the clamp and not closing the error => the actuator is inert.
+    if (Math.abs(state.lastRateCmd - 1) >= CLAMP - 1e-9) {
+      var mag = Math.abs(fErr);
+      if (state.satBest === null || mag < state.satBest - opt(opts, 'STALL_EPS_MS')) {
+        state.satBest = mag;               // genuine progress: the rate IS working
+        state.satRun = 0;
+        state.rateStalled = false;
+      } else {
+        state.satRun += 1;
+        if (state.satRun >= opt(opts, 'STALL_TICKS')) {
+          state.rateStalled = true;
+          state.rateLive = false;
+        }
+      }
+    } else {
+      state.satRun = 0; state.satBest = null;   // off the rail: nothing to judge
+    }
+
+    // SEEK FALLBACK. With the rate path inert, seek is the only actuator left,
+    // so errors BELOW the coarse threshold -- which rate could never fix and
+    // which would otherwise sit parked forever -- have to be seeked away too.
+    // Bounded by the caller's SEEK_COOLDOWN_MS, which also lets the median ring
+    // refill with post-seek samples before another seek can fire.
+    if (!state.rateLive && canSeek && Math.abs(fErr) > opt(opts, 'INERT_SEEK_MS')) {
+      state.lastRateCmd = 1;
+      state.satRun = 0; state.satBest = null;
       return { action: 'seek', rate: 1, filteredErr: fErr, rateLive: state.rateLive };
     }
 

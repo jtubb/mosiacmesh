@@ -232,7 +232,11 @@ test('PI: inside the deadband the integral HOLDS its correction', () => {
  */
 
 test('anti-windup: a saturated integral can still unwind', () => {
-  const o = { RATE_CLAMP: 0.06, RATE_IGAIN: 0.000002 };
+  // STALL_TICKS disabled on purpose: this test isolates INTEGRAL unwind, and its
+  // scenario -- err pinned at -300 for 400 ticks while the command is honored --
+  // is by definition an inert plant, so the stall detector would (correctly) rule
+  // the actuator dead and hand over to seek before the integral ever accumulated.
+  const o = { RATE_CLAMP: 0.06, RATE_IGAIN: 0.000002, STALL_TICKS: Infinity };
   const s = g.mmDriftState();
   let got = 1;
   // Drive hard NEGATIVE (behind) until the output saturates high.
@@ -268,4 +272,79 @@ test('anti-windup: the loop RECOVERS after the plant improves', () => {
   }
   assert.ok(Math.abs(err) < 60, `did not recover after the plant eased: err=${err}`);
   assert.ok(c.rate < 1.059, `still pinned at the clamp: ${c.rate}`);
+});
+
+/* ---- Inert-actuator detection + seek fallback (2026-09-18) ----------------
+ * Measured on-wall: commanding rate 0.94..1.06 moved the ACTUAL playback rate
+ * by 0.2% (regression slope -0.004 over 7342 samples), and forcing MM_CM_SCALE
+ * to 2.0 left the real rate at 0.9973 instead of the predicted 1.12. The rate
+ * actuator is inert on iOS 5.1.
+ *
+ * The old liveness check could never see this. It compares rateGot against the
+ * command, but mmvideo's rateGot IS the mirrored command, so at the PRODUCTION
+ * constants below the comparison is a tautology and rlive stayed 1 forever.
+ * (These tests MUST pass PROD: at the library defaults CLAMP=0.035 a literal
+ * rateGot of 1.06 trips the old mismatch check by accident and the tautology
+ * never gets exercised.)
+ *
+ * With rate dead, seek is the only actuator, and COARSE_SEEK_MS=350 left the
+ * standing ~258ms error permanently inside the deadband -- that parked error IS
+ * the "droop". Measured re-drift after correction is 0.10 ms/s median, so a
+ * single seek holds for minutes. */
+const PROD = { RATE_CLAMP: 0.06, RATE_GAIN: 0.0003, COARSE_SEEK_MS: 350 };
+
+test('inert: mirrored rateGot defeats the OLD check -- stall detector must catch it', () => {
+  const s = g.mmDriftState();
+  let last = 1;
+  for (let i = 0; i < 14; i++) {
+    const c = g.mmDriftCommand(s, -337, { rateGot: last, canSeek: false }, PROD);
+    last = c.rate;                      // mmvideo mirrors: rateGot == what we set
+  }
+  assert.equal(s.rateLive, false, 'railed command + frozen error must read as inert');
+});
+
+test('inert: a responding actuator under saturation stays live', () => {
+  const s = g.mmDriftState();
+  let last = 1, e = -337;
+  for (let i = 0; i < 14; i++) {
+    const c = g.mmDriftCommand(s, e, { rateGot: last, canSeek: false }, PROD);
+    last = c.rate; e += 25;             // error genuinely closing
+  }
+  assert.equal(s.rateLive, true, 'an improving error must NOT be called inert');
+});
+
+test('inert: seeks on a sub-COARSE error that the rate path can never fix', () => {
+  const s = g.mmDriftState();
+  let last = 1, c;
+  for (let i = 0; i < 14; i++) {
+    c = g.mmDriftCommand(s, -258, { rateGot: last, canSeek: true }, PROD);
+    last = c.rate;
+  }
+  assert.equal(s.rateLive, false);
+  assert.equal(c.action, 'seek', '-258ms is uncorrectable by rate and must seek once inert');
+});
+
+test('inert: still respects a deadband -- a small residual does not seek', () => {
+  const s = g.mmDriftState();
+  let last = 1, c;
+  for (let i = 0; i < 14; i++) {
+    c = g.mmDriftCommand(s, -337, { rateGot: last, canSeek: true }, PROD);
+    last = c.rate;
+  }
+  assert.equal(s.rateLive, false);
+  for (let i = 0; i < 8; i++) {
+    c = g.mmDriftCommand(s, -15, { rateGot: last, canSeek: true }, PROD);
+    last = c.rate;
+  }
+  assert.notEqual(c.action, 'seek', 'a 15ms residual must not cause seek churn');
+});
+
+test('inert: cannot seek when canSeek is false -> holds, no crash', () => {
+  const s = g.mmDriftState();
+  let last = 1, c;
+  for (let i = 0; i < 14; i++) {
+    c = g.mmDriftCommand(s, -258, { rateGot: last, canSeek: false }, PROD);
+    last = c.rate;
+  }
+  assert.notEqual(c.action, 'seek');
 });

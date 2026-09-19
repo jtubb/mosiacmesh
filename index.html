@@ -354,57 +354,33 @@
 	// rate PLL on median-filtered err with a deadband. Replaces the old fixed
 	// 30ms seek threshold + rate=1-err/2000 (±15%) that oscillated on mmvideo's live rate.
 	var DRIFT_OPTS = {
-		// RATE_CLAMP raised 0.035 -> 0.06 (2026-09-17). Measured on-wall with the
-		// staleness corrector on: 98.3% of rate commands were PINNED at the old
-		// +3.5% clamp while the wall sat 213ms behind -- i.e. the fleet's real decode
-		// deficit IS ~3.5%, so the controller had zero authority left to close any
-		// error on top of it. The raw sensor's ~120ms lie used to cancel that deficit
-		// by accident; once the sensor is corrected the deficit is exposed and the
-		// controller needs headroom ABOVE it. 6% clears the measured 2-3.5% range with
-		// margin and stays far below the +/-15% term that caused a limit cycle
-		// historically. mmvideo honors fractional rate ~1:1 via CMTimebase.
-		// RATE_CLAMP 0.06 (was 0.035) -- paired with the staleness corrector. Measured:
-		// with the corrector on and the old clamp, 98.3% of rate commands were PINNED
-		// at +3.5% while the wall sat 213ms behind, i.e. the fleet's real decode
-		// deficit IS ~3.5% and the controller had no authority left above it. The raw
-		// sensor's ~128ms lie used to cancel that deficit by accident; correcting the
-		// sensor exposes it, so the controller needs headroom ABOVE it or it rails.
-		// RATE_IGAIN enables the PI integral. Only viable now that BOTH preconditions
-		// hold: the sensor is corrected (an integral on a stale sensor drives the
-		// MEASURED error to zero and parks the TRUE position at the staleness) and the
-		// clamp has headroom (at 3.5% there was no authority left to apply it).
-		// Targets the residual 79ms video-offset, which is P-droop from the spread of
-		// per-screen decode deficits.
-		// RATE_CLAMP 0.12 (was 0.06). At 0.06 the controller was pinned ~100% of the
-		// time for 28 minutes with a constant -220ms error: the actuator was maxed.
-		// mmvideo scales the delta by MM_CM_SCALE (0.45), so 0.12 commanded delivers
-		// only ~5.4% at the timebase. NOTE this is approaching the +/-15% term that
-		// historically produced a ~140ms limit cycle -- watch for oscillation in ferr,
-		// not just its magnitude.
-		// RATE_GAIN 0.0003 (was 0.0002). THIS is the lever on the residual spread:
-		// droop = deficit/(GAIN*0.45), so the per-screen spread of droop -- the visible
-		// video-layer desync -- scales as 1/GAIN. 1.5x should take the ~79ms video
-		// offset toward ~53ms. Safe only because the 200ms tick cut the median-filter
-		// lag from ~1000ms to ~400ms; more gain against the old lag is what destabilised
-		// the wall at clamp 0.12. Deliberately 1.5x, not 2x.
+		// THE RATE ACTUATOR IS INERT ON iOS 5.1 -- measured, not inferred (2026-09-18).
+		// Regressing ACTUAL playback rate (d(currentTime)/d(wallclock)) against the
+		// commanded rate over 7342 fleet samples gives slope -0.004: commanding 0.94
+		// and commanding 1.06 both produce ~1.000. Forcing MM_CM_SCALE to 2.0, which
+		// should drive the timebase to 1.12, left the real rate at 0.9973.
+		//
+		// This RETRACTS the model the surrounding tuning was built on. Superseded:
+		//   "the fleet's real decode deficit IS ~3.5%"  -> there is NO deficit; the
+		//      regression intercept is ~0 and playback runs at 1.000x real time.
+		//   "mmvideo honors fractional rate ~1:1 via CMTimebase" -> it does not.
+		//   "clamp 0.06 delivers only ~2.7%, so raise RATE_CLAMP or MM_CM_SCALE"
+		//      -> it delivers ~0; neither knob can help.
+		//   "the residual is P-controller droop" -> there is no droop because there
+		//      is no control. The ~258ms was a STATIC startup misalignment sitting
+		//      inside the 350ms seek deadband, which nothing ever corrected.
+		//
+		// Why it hid for months: rlive compares rateGot against the command, but
+		// mmvideo's v.playbackRate is a MIRROR IVAR of what we set, so the check is
+		// a tautology and reported rlive=1 forever. drift-steer.js now also runs a
+		// behavioural STALL detector (railed at the clamp + error not closing) and
+		// falls back to seek, the one actuator proven to work.
+		//
+		// These P/I constants are retained only because they are harmless while the
+		// stall detector hands control to seek. Do NOT tune them against the wall
+		// until an actuator is shown to move the ACTUAL rate; measure that with the
+		// d(ct)/d(wall) regression, never with rateGot.
 		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.06, RATE_GAIN: 0.0003,
-		// RATE_IGAIN DISABLED (0). An integral cannot help here and the on-wall run
-		// showed why: over 28 continuous minutes the commanded rate sat pinned at the
-		// 6% clamp ~100% of the time while ferr stayed dead-constant at ~-220ms. The
-		// ACTUATOR is maxed, so adding integral authority on top of a saturated output
-		// does nothing -- it just holds the rail.
-		//
-		// (An anti-windup freeze was suspected first and is NOT the cause: tests that
-		// drive into the rail and back show the integral unwinds correctly, because a
-		// sign change in the P term desaturates the output and accumulation resumes.)
-		//
-		// The gap is EFFECTIVE authority: mmvideo scales the commanded delta by
-		// MM_CM_SCALE (0.45) before applying it to CMTimebase, so clamp 0.06 delivers
-		// only ~2.7% at the timebase. That also reconciles both arms -- droop =
-		// deficit/(GAIN*0.45) = 0.02/0.00009 ~= 222ms, matching the observed ferr.
-		// Re-enabling the integral is pointless until the actuator stops saturating:
-		// raise RATE_CLAMP further, or raise MM_CM_SCALE (live-tunable via
-		// tools/_set_scale.py, no redeploy).
 		RATE_IGAIN: 0,
 		ERR_FILTER_N: 5, LIVENESS_EPS: 0.02, LIVENESS_K: 4, PROBE_TICKS: 8, PROBE_DELTA: 0.03
 	};
