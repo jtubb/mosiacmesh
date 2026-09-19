@@ -564,6 +564,28 @@ AVPlayer KVO + the time-observer block):
 > That narrows audit 1.16 (a fresh mmcache rebuild does not load) to something specific about the
 > mmcache build, not a globally broken toolchain.
 >
+> **THE KVO READINESS FIX IS VALIDATED ON-WALL (2026-09-18).** Readiness moved from polling
+> `AVPlayerItem.status` inside the periodic time-observer to a KVO observer built with
+> `objc_allocateClassPair` (the engine pointer rides in the KVO `context`, so the observer needs no
+> ivars or properties).
+>
+> The trigger matters: a SINGLE-item playlist loops one src and never cold-loads after the first,
+> which is why a 16-trial page-reload experiment was inconclusive. A MULTI-item playlist does —
+> Demo (butterfly 19.1s + waterfall 15.0s) hands every screen a genuinely new src every ~17s, the
+> exact case the old code could not satisfy.
+>
+> 300s window, same playlist/minutes/mmcache, differing only in the mmvideo build:
+>
+> | build | screens | bad samples (rs<3 or verr) |
+> |---|---|---|
+> | KVO | 2 | **0 / 60 (0.0%)** |
+> | old polling | 22 | **74 / 660 (11.2%)** |
+>
+> 21 of 22 old-build screens stalled (3-20% of samples); both KVO screens were clean.
+> P(0 bad in 60 at the old rate) ≈ 0.0008. **Scope:** a "bad sample" is rs<3 or verr at a 10s
+> sample — a TRANSIENT boundary stall. Every screen still reached both items (`srcs_seen=2`), so
+> this measures the stall the fix targets, not the permanent verr=3 freeze.
+>
 > WHAT THIS RE-OPENS. Two designs in this codebase exist only to avoid an observer object:
 >   - mmcache polls chunked HTTP ranges because "an NSURLConnection delegate needs a delegate
 >     object" — a real streaming delegate is now possible.
