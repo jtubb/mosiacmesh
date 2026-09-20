@@ -169,8 +169,56 @@ precache_urls = {}          # client_key -> central segment URL
 precache_group = {}         # client_key -> group
 precache_token = None       # token currently being pushed
 precache_segtoken = {}      # client_key -> segment NAME (the PRECACHE token = url basename)
-PRECACHE_ACK_TIMEOUT = 20.0  # s: advance the throttle window past a client that never acks
-                             # a PRECACHE grant (offline / stale client JS with no handler)
+PRECACHE_ACK_TIMEOUT = 20.0  # s: FALLBACK only, for a grant whose size is unknown.
+                             # Real grants get a size-aware deadline -- see below.
+
+# Size-aware PRECACHE ack deadline.
+#
+# The flat 20s above was sized when segments were ~11MB. A 93MB segment
+# (PullTest/big_buck_bunny, 2026-09-20) cannot cross iPad-1 WiFi in 20s, so
+# EVERY grant timed out: the slot was freed, the client marked failed, and the
+# next reconcile cycle re-issued -- restarting the transfer from zero. Measured
+# on-wall: 26 PRECACHE instructions in 5 minutes to the same clients, one .part
+# frozen at exactly 7 x 1MB chunks, another at 0 bytes, and not one CACHED ack
+# for that token in two days. The transfer could never complete, and enabling
+# the reconcile only made it retry harder.
+#
+# A client that genuinely fails acks CACHE_FAILED and advances the window at
+# once, so this deadline only guards a client that says NOTHING (offline, or
+# stale JS with no PRECACHE handler). Being generous there costs throughput on
+# one of n slots; being strict makes large segments impossible. So scale with
+# the bytes actually being moved, against a deliberately pessimistic floor rate.
+PRECACHE_ACK_BASE = 20.0            # s: handshake + startup, independent of size
+PRECACHE_MIN_RATE = 100 * 1024      # bytes/s: pessimistic iPad-1 WiFi floor under load
+PRECACHE_ACK_MAX = 1800.0           # s: cap, so one dead slot cannot stall a group forever
+
+
+def precache_ack_timeout(size_bytes):
+    """Ack deadline for a grant moving `size_bytes`. Unknown/zero size falls back
+    to the flat base rather than guessing."""
+    try:
+        n = float(size_bytes or 0)
+    except (TypeError, ValueError):
+        n = 0.0
+    if n <= 0:
+        return PRECACHE_ACK_BASE
+    return min(PRECACHE_ACK_BASE + n / PRECACHE_MIN_RATE, PRECACHE_ACK_MAX)
+
+
+def _precache_asset_size(client_key):
+    """Bytes of the asset `client_key` is being asked to pull, or 0 if unknown.
+    Derived from the central URL the grant carries -- /media/<key>/videos/<f> --
+    so it reflects THIS client's own warp, which differs per screen (measured
+    7-104MB across the fleet for the same render)."""
+    url = precache_urls.get(client_key) or ""
+    try:
+        rel = url.split("/media/", 1)[1] if "/media/" in url else None
+        if not rel:
+            return 0
+        path = os.path.join("media", *rel.split("?")[0].split("/"))
+        return os.path.getsize(path)
+    except (OSError, IndexError, ValueError):
+        return 0
 
 
 def _seg_name_from_url(url):
@@ -202,7 +250,12 @@ def start_precache(group, token, client_urls, n=3):
         precache_urls[k] = u
         precache_group[k] = group
         precache_segtoken[k] = _seg_name_from_url(u)
-    win = cache_pull.PrecacheWindow(list(client_urls.keys()), n=n)
+    # Each grant gets a deadline sized to ITS OWN segment (per-client warps differ
+    # in size), read from the asset the client is about to pull.
+    def _timeout_for(key):
+        return precache_ack_timeout(_precache_asset_size(key))
+    win = cache_pull.PrecacheWindow(list(client_urls.keys()), n=n,
+                                    timeout_for=_timeout_for)
     precache_windows[group] = win
     for k in win.start(time.time()):
         _send_precache(k, precache_urls.get(k), precache_segtoken.get(k))
