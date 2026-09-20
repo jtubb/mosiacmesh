@@ -55,13 +55,20 @@ def test_encode_group_callable_signature(fresh_settings):
     assert "progress_cb" in params
 
 
-def test_render_group_async_no_clients_returns_ready_token(fresh_settings):
+def test_render_group_async_no_clients_returns_ready_token(fresh_settings, tmp_path, monkeypatch):
     # Intent: render_group_async with no renderable work (SCRIPT animation, no
     # encode needed) returns status="ready" immediately. Migrated from a FULL item
     # (PT-T4: FULL is now renderable and needs a real file) to a SCRIPT item so
     # the "no encode work -> ready" path is exercised without real media.
     from mosaicmesh.state import Display, MediaElement, PlayMode
     import asyncio
+    # chdir to a tmpdir: this exercises the REAL render path, which calls
+    # sweep_orphan_render_assets() on success. Without it the sweep runs
+    # against the repo's live media/ tree with only this test's token in the
+    # live set, and deletes every real render asset on the box. That is not
+    # hypothetical -- it destroyed 144 production assets twice on 2026-09-19,
+    # silently (the reclaim log was INFO and the logger sits at WARNING).
+    monkeypatch.chdir(tmp_path)
     d = Display(); d.boundingBox = [0, 0, 10, 10]
     me = MediaElement(); me.id = 0; me.file = "bouncingBalls"; me.playmode = PlayMode.SCRIPT
     d.mediaElements = [me]
@@ -72,9 +79,16 @@ def test_render_group_async_no_clients_returns_ready_token(fresh_settings):
     assert d.renderedToken == out["token"]
 
 
-def test_render_playlist_for_group_sets_ready(fresh_settings, monkeypatch):
+def test_render_playlist_for_group_sets_ready(fresh_settings, monkeypatch, tmp_path):
     from mosaicmesh.state import Display, Playlist, Client
     import asyncio
+    # chdir to a tmpdir: this exercises the REAL render path, which calls
+    # sweep_orphan_render_assets() on success. Without it the sweep runs
+    # against the repo's live media/ tree with only this test's token in the
+    # live set, and deletes every real render asset on the box. That is not
+    # hypothetical -- it destroyed 144 production assets twice on 2026-09-19,
+    # silently (the reclaim log was INFO and the logger sits at WARNING).
+    monkeypatch.chdir(tmp_path)
     d = Display(); d.boundingBox = [0, 0, 10, 10]
     fresh_settings.displays["G1"] = d
     c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100
@@ -95,9 +109,16 @@ def test_render_playlist_for_group_sets_ready(fresh_settings, monkeypatch):
     assert entry["percent"] == 100
 
 
-def test_render_playlist_for_group_failed(fresh_settings, monkeypatch):
+def test_render_playlist_for_group_failed(fresh_settings, monkeypatch, tmp_path):
     from mosaicmesh.state import Display, Playlist, Client
     import asyncio
+    # chdir to a tmpdir: this exercises the REAL render path, which calls
+    # sweep_orphan_render_assets() on success. Without it the sweep runs
+    # against the repo's live media/ tree with only this test's token in the
+    # live set, and deletes every real render asset on the box. That is not
+    # hypothetical -- it destroyed 144 production assets twice on 2026-09-19,
+    # silently (the reclaim log was INFO and the logger sits at WARNING).
+    monkeypatch.chdir(tmp_path)
     d = Display(); d.boundingBox = [0, 0, 10, 10]
     fresh_settings.displays["G1"] = d
     c = Client(); c.displayID = "G1"; c.deviceWidth = 100; c.deviceHeight = 100

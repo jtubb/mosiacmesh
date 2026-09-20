@@ -210,3 +210,45 @@ class TestConfig:
     TEST_HOST = "127.0.0.1"
     WEBSOCKET_TIMEOUT = 5.0
     API_TIMEOUT = 3.0
+
+# ---------------------------------------------------------------------------
+# Tripwire: no test may delete the repo's REAL render assets.
+#
+# On 2026-09-19 three tests in test_render_registry.py exercised the real
+# render path (render_group_async / render_playlist_for_group_async) without
+# chdir'ing to a tmpdir. That path calls sweep_orphan_render_assets() on
+# success, which walks media/<key>/{videos,images} relative to the CURRENT
+# WORKING DIRECTORY and deletes every asset whose token is not in the live set.
+# Under a test fixture the live set holds only that test's token, so running
+# pytest from the repo root destroyed all 144 production render assets -- twice,
+# silently, and the wasted investigation blamed the boot sequence and then the
+# fleet state before the suite itself was suspected.
+#
+# The chdir fixes are the actual prevention; this is the guard that stops it
+# regressing unnoticed. Session-scoped so it costs one scan per run.
+import os as _os
+import pytest as _pytest
+
+
+def _count_render_assets():
+    n = 0
+    for root, _dirs, files in _os.walk("media"):
+        for f in files:
+            if f.startswith(("seg_", "ind_", "full_")):
+                n += 1
+    return n
+
+
+@_pytest.fixture(scope="session", autouse=True)
+def _guard_real_render_assets():
+    before = _count_render_assets() if _os.path.isdir("media") else 0
+    yield
+    if not _os.path.isdir("media"):
+        return
+    after = _count_render_assets()
+    if after < before:
+        _pytest.fail(
+            "TESTS DELETED %d REAL RENDER ASSET(S) under media/ (%d -> %d).\n"
+            "A test ran the real render/sweep path without monkeypatch.chdir(tmp_path); "
+            "sweep_orphan_render_assets() resolves media/ from the CWD."
+            % (before - after, before, after), pytrace=False)

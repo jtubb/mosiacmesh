@@ -1092,7 +1092,12 @@ async def render_playlist_for_group_async(playlist_name, display_id):
         try:
             reclaimed = sweep_orphan_render_assets()
             if reclaimed:
-                logging.info("render: reclaimed %d superseded asset file(s)", reclaimed)
+                # WARNING, not INFO: this DELETES files, and the server runs at
+                # WARNING level, so at INFO the deletions were invisible. Two
+                # separate losses of all 144 render assets on 2026-09-19 left no
+                # trace in the log and cost hours to attribute -- a destructive
+                # action must be audible at the level the process actually logs.
+                logging.warning("render: reclaimed %d superseded asset file(s)", reclaimed)
         except Exception as e:
             logging.debug("superseded-asset reclamation failed: %s", e)
     except Exception as e:
