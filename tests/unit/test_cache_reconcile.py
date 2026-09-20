@@ -130,3 +130,60 @@ def test_reconcile_all_is_off_by_default(fresh_settings, monkeypatch):
     monkeypatch.setattr(server, "reconcile_group_cache", lambda did: called.append(did))
     server._reconcile_all_group_caches()
     assert called == []   # gated off; no reconcile runs
+
+
+def test_reconcile_works_after_stop_clears_the_playlist_name(fresh_settings, monkeypatch):
+    """The reconcile located the render entry by currentPlaylistName, but a STOP
+    clears that field while leaving renderedToken set -- so from that moment it
+    returned immediately, every cycle, silently, and caches could never self-heal
+    while a group was stopped. Which is exactly when filling them is safest.
+
+    Observed on-wall 2026-09-20: renderedToken=4298b787efa0 with a READY entry for
+    'PullTest', currentPlaylistName=None, 11 screens missing the segment, and zero
+    precache grants for 24 minutes with nothing logged. Resolve the entry by TOKEN,
+    which is the thing the clients are actually being asked to pull."""
+    monkeypatch.setattr(server, "precache_windows", {})
+    d = Display()
+    d.renderedToken = "tok"
+    d.currentPlaylistName = None                    # STOP cleared it
+    d.renders = {"PullTest": {"state": "READY", "token": "tok"}}
+    fresh_settings.displays["G1"] = d
+    monkeypatch.setattr(server, "clients_needing_precache", lambda did: {"ck1": ["tok_0"]})
+    calls = []
+    monkeypatch.setattr(server, "start_precache",
+                        lambda group, token, urls, **k: calls.append((group, token, urls)))
+    server.reconcile_group_cache("G1")
+    assert len(calls) == 1, "a stopped group with a READY render must still self-heal"
+    assert calls[0][1] == "tok"
+
+
+def test_reconcile_still_requires_the_tokens_entry_to_be_ready(fresh_settings, monkeypatch):
+    """Resolving by token must not weaken the readiness gate: a token whose entry
+    is mid-render must not be pushed."""
+    monkeypatch.setattr(server, "precache_windows", {})
+    d = Display()
+    d.renderedToken = "tok"
+    d.currentPlaylistName = None
+    d.renders = {"PullTest": {"state": "RENDERING", "token": "tok"}}
+    fresh_settings.displays["G1"] = d
+    monkeypatch.setattr(server, "clients_needing_precache", lambda did: {"ck1": ["tok_0"]})
+    called = []
+    monkeypatch.setattr(server, "start_precache", lambda *a, **k: called.append(a))
+    server.reconcile_group_cache("G1")
+    assert called == []
+
+
+def test_reconcile_ignores_a_ready_entry_for_a_DIFFERENT_token(fresh_settings, monkeypatch):
+    """Only the entry matching renderedToken counts -- another playlist being READY
+    says nothing about the segments these clients are being asked to fetch."""
+    monkeypatch.setattr(server, "precache_windows", {})
+    d = Display()
+    d.renderedToken = "tok"
+    d.currentPlaylistName = None
+    d.renders = {"Other": {"state": "READY", "token": "SOMETHING_ELSE"}}
+    fresh_settings.displays["G1"] = d
+    monkeypatch.setattr(server, "clients_needing_precache", lambda did: {"ck1": ["tok_0"]})
+    called = []
+    monkeypatch.setattr(server, "start_precache", lambda *a, **k: called.append(a))
+    server.reconcile_group_cache("G1")
+    assert called == []

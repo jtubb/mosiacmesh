@@ -297,8 +297,28 @@ def reconcile_group_cache(display_id):
     token = getattr(display, "renderedToken", None)
     if not token:
         return
-    cur = getattr(display, "currentPlaylistName", None)
-    entry = (getattr(display, "renders", None) or {}).get(cur) if cur else None
+    # Resolve the render entry by TOKEN, not by the applied playlist name. A STOP
+    # clears currentPlaylistName but leaves renderedToken set, so the old lookup
+    # returned None from that moment on and the reconcile did nothing -- silently,
+    # every cycle, for as long as the group stayed stopped. Caches could therefore
+    # never self-heal while idle, which is precisely when filling them is safest
+    # and cheapest. Seen on-wall 2026-09-20: renderedToken=4298b787efa0 with a
+    # READY entry for 'PullTest', currentPlaylistName=None, 11 screens missing the
+    # segment, and not one grant in 24 minutes.
+    #
+    # The token is what the clients are actually being asked to pull, so it is the
+    # correct key. Readiness is still enforced, and an entry for a DIFFERENT token
+    # says nothing about these segments and must not qualify.
+    entry = None
+    for _e in (getattr(display, "renders", None) or {}).values():
+        if _e.get("token") == token:
+            entry = _e
+            break
+    if entry is None:
+        # Fall back to the applied playlist for entries written before tokens were
+        # recorded per entry, so older state still reconciles.
+        cur = getattr(display, "currentPlaylistName", None)
+        entry = (getattr(display, "renders", None) or {}).get(cur) if cur else None
     if not entry or entry.get("state") != RENDER_READY:
         return
     needing = clients_needing_precache(display_id)
