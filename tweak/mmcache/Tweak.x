@@ -22,6 +22,7 @@
 #import <stdio.h>
 #import <stdarg.h>
 #import <unistd.h>
+#import "mmresume.h"       /* mm_resume_decide — resumable partial pulls */
 #import "mmcachefile.h"    /* mm_cache_path / mm_cache_usable_size — fetch fast path (audit 1.15) */
 #import "mmrange.h"        /* mm_next_range / mm_parse_content_range — chunked download (audit 1.13) */
 
@@ -118,6 +119,62 @@ typedef struct { char token[128]; char url[600]; } dlctx;
    there. Everything here goes through objc_msgSend on already-bound classes, so no
    libSystem symbol is added -- an earlier cut that called stat() SIGKILLed the load
    (see mmcachefile.h). */
+
+/* ---- resumable-download helpers ------------------------------------------------
+ * All ObjC access goes through sel_registerName/objc_getClass (RUNTIME lookups, no
+ * new linker symbols) and @"..." literals rather than Foundation string constants
+ * such as NSFileSize, which would pull in undefineds the dylib cannot bind. */
+
+/* Bytes currently in `path`, or 0 when absent/unreadable. */
+static long long mm_file_size(id fm, const char *path) {
+    id attrs = ((id (*)(id, SEL, id, id *))objc_msgSend)(
+        fm, sel_registerName("attributesOfItemAtPath:error:"), nsstr(path), (id *)0);
+    if (!attrs) { return 0; }
+    id n = ((id (*)(id, SEL, id))objc_msgSend)(
+        attrs, sel_registerName("objectForKey:"), @"NSFileSize");
+    if (!n) { return 0; }
+    return ((long long (*)(id, SEL))objc_msgSend)(n, sel_registerName("longLongValue"));
+}
+
+/* Read the saved validator into `out`. Leaves out[0]=0 when there is none. */
+static void mm_tag_read(const char *path, char *out, unsigned long cap) {
+    out[0] = 0;
+    id data = ((id (*)(id, SEL, id))objc_msgSend)(
+        (id)objc_getClass("NSData"), sel_registerName("dataWithContentsOfFile:"), nsstr(path));
+    if (!data) { return; }
+    unsigned long n = ((unsigned long (*)(id, SEL))objc_msgSend)(data, sel_registerName("length"));
+    if (!n || n >= cap) { return; }              /* absurd tag -> treat as none */
+    const char *p = (const char *)((const void *(*)(id, SEL))objc_msgSend)(
+        data, sel_registerName("bytes"));
+    if (!p) { return; }
+    { unsigned long i; for (i = 0; i < n; i++) { out[i] = p[i]; } }
+    out[n] = 0;
+}
+
+/* Persist the validator beside the .part so a later pull can verify the bytes. */
+static void mm_tag_write(id fm, const char *path, const char *tag) {
+    if (!tag || !*tag) { return; }
+    id data = ((id (*)(id, SEL, const void *, unsigned long))objc_msgSend)(
+        (id)objc_getClass("NSData"), sel_registerName("dataWithBytes:length:"),
+        (const void *)tag, (unsigned long)strlen(tag));
+    if (!data) { return; }
+    ((int (*)(id, SEL, id, id))objc_msgSend)(
+        fm, sel_registerName("removeItemAtPath:error:"), nsstr(path), (id)0);
+    ((int (*)(id, SEL, id, id, id))objc_msgSend)(
+        fm, sel_registerName("createFileAtPath:contents:attributes:"), nsstr(path), data, (id)0);
+}
+
+/* The response's ETag, or NULL. Header case varies by server/proxy. */
+static const char *mm_resp_etag(id resp) {
+    id hdrs = ((id (*)(id, SEL))objc_msgSend)(resp, sel_registerName("allHeaderFields"));
+    if (!hdrs) { return (const char *)0; }
+    id v = ((id (*)(id, SEL, id))objc_msgSend)(hdrs, sel_registerName("objectForKey:"), @"Etag");
+    if (!v) v = ((id (*)(id, SEL, id))objc_msgSend)(hdrs, sel_registerName("objectForKey:"), @"ETag");
+    if (!v) v = ((id (*)(id, SEL, id))objc_msgSend)(hdrs, sel_registerName("objectForKey:"), @"etag");
+    if (!v) { return (const char *)0; }
+    return ((const char *(*)(id, SEL))objc_msgSend)(v, sel_registerName("UTF8String"));
+}
+
 static void mm_download(void *p) {
     dlctx *c = (dlctx *)p;
     id url = ((id (*)(id, SEL, id))objc_msgSend)(
@@ -131,23 +188,48 @@ static void mm_download(void *p) {
         fm, sel_registerName("createDirectoryAtPath:withIntermediateDirectories:attributes:error:"),
         nsstr(MM_CACHE_DIR), 1, (id)0, (id)0);
 
-    char tmpc[320], pathc[320];
-    snprintf(tmpc,  sizeof tmpc,  "%s/.%s.part", MM_CACHE_DIR, c->token);
-    snprintf(pathc, sizeof pathc, "%s/%s.mp4",   MM_CACHE_DIR, c->token);
-    /* Start clean: a leftover .part from an interrupted pull must never be mistaken
-       for progress. */
-    ((int (*)(id, SEL, id, id))objc_msgSend)(
-        fm, sel_registerName("removeItemAtPath:error:"), nsstr(tmpc), (id)0);
-    ((int (*)(id, SEL, id, id, id))objc_msgSend)(
-        fm, sel_registerName("createFileAtPath:contents:attributes:"), nsstr(tmpc), (id)0, (id)0);
+    char tmpc[320], pathc[320], tagc[320];
+    snprintf(tmpc,  sizeof tmpc,  "%s/.%s.part",     MM_CACHE_DIR, c->token);
+    snprintf(pathc, sizeof pathc, "%s/%s.mp4",       MM_CACHE_DIR, c->token);
+    snprintf(tagc,  sizeof tagc,  "%s/.%s.part.tag", MM_CACHE_DIR, c->token);
+
+    /* RESUME rather than restart. The previous code removed any leftover .part --
+       right that a partial must never be mistaken for a finished file, wrong that
+       the bytes had to be thrown away. A 93MB segment takes long enough on iPad-1
+       WiFi that a reload/respring/reboot almost always lands mid-transfer, so
+       restarting from zero meant it could never finish: on-wall the .part files
+       sat frozen at 7MB and 1MB for two days across 26 re-issued grants with not
+       one ack. Completeness is still enforced by the byte-count check before the
+       rename -- resume changes where counting STARTS, never that rule. */
+    char saved_tag[128];
+    long long part_have = mm_file_size(fm, tmpc);
+    mm_tag_read(tagc, saved_tag, sizeof saved_tag);
+    int plan = mm_resume_decide(part_have, saved_tag, (const char *)0, 0);
+
+    long long total = -1, got = 0, rs = 0, re = 0;
+    if (plan != MM_DL_RESUME) {
+        ((int (*)(id, SEL, id, id))objc_msgSend)(
+            fm, sel_registerName("removeItemAtPath:error:"), nsstr(tmpc), (id)0);
+        ((int (*)(id, SEL, id, id))objc_msgSend)(
+            fm, sel_registerName("removeItemAtPath:error:"), nsstr(tagc), (id)0);
+        ((int (*)(id, SEL, id, id, id))objc_msgSend)(
+            fm, sel_registerName("createFileAtPath:contents:attributes:"), nsstr(tmpc), (id)0, (id)0);
+        saved_tag[0] = 0;
+    } else {
+        got = part_have;
+    }
     id fh = ((id (*)(id, SEL, id))objc_msgSend)(
         (id)objc_getClass("NSFileHandle"),
         sel_registerName("fileHandleForWritingAtPath:"), nsstr(tmpc));
     if (!fh) { mmclog("[mmcache] cannot open %s\n", tmpc);
                dispatch_fail(c->token, "open"); free(c); return; }
+    if (got > 0) {
+        /* append; never overwrite the bytes being continued from */
+        ((unsigned long long (*)(id, SEL))objc_msgSend)(fh, sel_registerName("seekToEndOfFile"));
+        mmclog("[mmcache] resume token=%s from=%lld\n", c->token, got);
+    }
 
-    long long total = -1, got = 0, rs = 0, re = 0;
-    int guard = 0, ok = 1, failed = 0;
+    int guard = 0, ok = 1, failed = 0, discard = 0;
     while (guard++ < 4096) {
         char hdr[64];
         /* First pass the total is unknown, so ask for one chunk from the current
@@ -180,6 +262,30 @@ static void mm_download(void *p) {
         if (status != 206) {
             mmclog("[mmcache] no range support (status=%d) token=%s\n", status, c->token);
             ok = 0; failed = 1; dispatch_fail(c->token, "norange"); break;
+        }
+
+        /* VALIDATOR. Resuming into a file that changed on the server would splice
+           two different videos, and the byte-count check could not catch it. The
+           server sends a strong ETag on every 206; HTTP's If-Range would be the
+           textbook mechanism but this server ignores it (a bogus validator still
+           yields 206), so compare here. On a mismatch discard everything and let
+           the next grant start clean -- never continue. */
+        {
+            const char *etag = mm_resp_etag(resp);
+            if (etag && *etag) {
+                if (!saved_tag[0]) {
+                    unsigned long tn = (unsigned long)strlen(etag);
+                    if (tn < sizeof saved_tag) {
+                        { unsigned long i; for (i = 0; i < tn; i++) { saved_tag[i] = etag[i]; } }
+                        saved_tag[tn] = 0;
+                        mm_tag_write(fm, tagc, saved_tag);
+                    }
+                } else if (mm_resume_decide(got, saved_tag, etag, total) == MM_DL_RESTART) {
+                    mmclog("[mmcache] entity changed token=%s -- discarding partial\n", c->token);
+                    ok = 0; failed = 1; discard = 1;
+                    dispatch_fail(c->token, "etag"); break;
+                }
+            }
         }
 
         if (total < 0) {
@@ -215,17 +321,33 @@ static void mm_download(void *p) {
         int moved = ((int (*)(id, SEL, id, id, id))objc_msgSend)(
             fm, sel_registerName("moveItemAtPath:toPath:error:"),
             nsstr(tmpc), nsstr(pathc), (id)0);
+        ((int (*)(id, SEL, id, id))objc_msgSend)(
+            fm, sel_registerName("removeItemAtPath:error:"), nsstr(tagc), (id)0);
         mmclog("[mmcache] %s token=%s bytes=%lld chunks=%d -> %s\n",
                moved ? "OK" : "MOVEFAIL", c->token, got, guard, pathc);
         if (moved) dispatch_done(c->token, (long)got);
         else       dispatch_fail(c->token, "write");
     } else {
         if (!failed) {
+            /* Loop ended without an error but short of the advertised total: the
+               accumulated bytes cannot be trusted as a prefix, so start over. */
             mmclog("[mmcache] TRUNCATED token=%s got=%lld expect=%lld\n", c->token, got, total);
             dispatch_fail(c->token, "len");
+            discard = 1;
         }
-        ((int (*)(id, SEL, id, id))objc_msgSend)(
-            fm, sel_registerName("removeItemAtPath:error:"), nsstr(tmpc), (id)0);
+        if (discard) {
+            ((int (*)(id, SEL, id, id))objc_msgSend)(
+                fm, sel_registerName("removeItemAtPath:error:"), nsstr(tmpc), (id)0);
+            ((int (*)(id, SEL, id, id))objc_msgSend)(
+                fm, sel_registerName("removeItemAtPath:error:"), nsstr(tagc), (id)0);
+        } else {
+            /* Transient failure (network dropped, chunk request failed): KEEP the
+               .part and its validator so the NEXT grant continues instead of
+               starting from zero. This is the entire point of the change --
+               progress has to survive interruption, or a 93MB segment never
+               completes on hardware that reloads this often. */
+            mmclog("[mmcache] keeping partial token=%s at=%lld for resume\n", c->token, got);
+        }
     }
     free(c);
 }
