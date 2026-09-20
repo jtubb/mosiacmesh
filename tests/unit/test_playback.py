@@ -378,3 +378,27 @@ class TestSilentPlayMiss:
         server.msg_response({"SRC": "oldk", "DEST": "SRV", "REQUEST": "REGISTER",
                              "PAYLOAD": {"width": 768, "height": 1024}}, session)
         assert server.settings.clients["oldk"].supportsPlayAck is False
+
+    def test_register_invalidates_a_previous_ack(self, mock_settings):
+        """A REGISTER means a FRESH page that has applied no PLAY, so whatever it
+        acked before is void.
+
+        Found on-wall 2026-09-20: sign1screen15 sat with src=None / ns=0
+        (NETWORK_EMPTY) while lastPlayAck still matched the live epoch from 13
+        hours earlier, so the heal correctly declined to fire and the screen
+        stayed dark through repeated reloads. The ack was write-once: it
+        recorded 'a PLAY landed once', not 'this client has content now'.
+        Clearing it on REGISTER is what makes the heal cover the reload case --
+        the exact case it was built for."""
+        server.settings = mock_settings
+        server.socketmanager = MagicMock()
+        disp, c = self._playing(mock_settings)
+        c.lastPlayAck = disp.playStartEpoch
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is False
+        session = MagicMock()
+        session.request.headers = {"User-Agent": "x"}
+        session.request.remote = "1.1.1.1"
+        server.msg_response({"SRC": "c1", "DEST": "SRV", "REQUEST": "REGISTER",
+                             "PAYLOAD": {"width": 768, "height": 1024, "playAck": True}}, session)
+        assert c.lastPlayAck is None, "a reloaded page has applied no PLAY"
+        assert server.needs_play_reissue(c, disp, 1000000 + 60000) is True

@@ -306,6 +306,15 @@ def msg_response(msg,session):
         # force a fresh mount on it every throttle period, forever. Re-read on every
         # REGISTER so a screen that reloads onto newer JS is picked up immediately.
         client.supportsPlayAck = bool(msg["PAYLOAD"].get("playAck"))
+        # A REGISTER means a FRESH page, which has applied no PLAY -- so whatever
+        # this client acked previously is void. Without this the ack is
+        # write-once and records "a PLAY landed once" rather than "this client
+        # has content now": sign1screen15 sat at src=None / ns=0 through repeated
+        # reloads on 2026-09-20 while its 13-hour-old ack still matched the live
+        # epoch, so the self-heal correctly declined to fire and the screen
+        # stayed dark. Clearing it here is what makes the heal cover the reload
+        # case, which is the case it exists for.
+        client.lastPlayAck = None
         _new_ip = server._client_ip(req) if req is not None else getattr(client, 'ip', '')
         if _new_ip != getattr(client, 'ip', ''):
             client.hostnameResolved = False   # new IP -> re-resolve its hostname
