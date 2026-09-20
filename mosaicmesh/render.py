@@ -1008,19 +1008,38 @@ def _broadcast_renders_changed(force=False):
         {"REQUEST": "RENDERS_CHANGED", "PAYLOAD": {"renders": renders_snapshot()}}))
 
 
-def renders_snapshot():
+def renders_snapshot(with_assets=False):
     """Flat list of every render entry across all groups, for the fleet-wide
-    Render Status panel + GET /api/renders."""
+    Render Status panel + GET /api/renders.
+
+    `token` is included because it is how you tell a render whose assets match
+    the current inputs from one whose do not. It was tracked in state but never
+    serialised, so the endpoint reported token=None for every entry and sent a
+    live debugging session down the wrong path twice (2026-09-19).
+
+    `with_assets` additionally reports whether each READY entry's files are
+    actually on disk -- the one condition that silently invalidates a render,
+    and until now discoverable only by hand. It is OPT-IN because
+    _render_assets_exist does a listdir per client directory, and this endpoint
+    is polled by the admin UI; the default snapshot stays free of disk I/O."""
     import server
     out = []
     for did, display in server.settings.displays.items():
         for name, e in (getattr(display, "renders", {}) or {}).items():
-            out.append({
+            row = {
                 "displayID": did, "playlist": name,
-                "state": e.get("state"), "percent": e.get("percent"),
+                "state": e.get("state"), "token": e.get("token"),
+                "percent": e.get("percent"),
                 "eta": e.get("eta"), "startedAt": e.get("startedAt"),
                 "error": e.get("error"), "updatedAt": e.get("updatedAt"),
-            })
+            }
+            if with_assets:
+                tok = e.get("token")
+                try:
+                    row["assetsPresent"] = bool(tok) and _render_assets_exist(name, did, tok)
+                except Exception:
+                    row["assetsPresent"] = None   # never let a stat error 500 the panel
+            out.append(row)
     return out
 
 

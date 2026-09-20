@@ -192,3 +192,45 @@ def test_migration_backfills_playseed(fresh_settings):
     fresh_settings.displays["G1"] = d
     migrate_client_objects()
     assert fresh_settings.displays["G1"].playSeed == 0
+
+
+def test_renders_snapshot_exposes_the_token(fresh_settings):
+    """The token was tracked in state but never serialised, so /api/renders
+    reported token=None for every entry. That is not cosmetic: the token is how
+    you tell a render whose assets match the current inputs from one whose do
+    not, and its absence sent a live debugging session down the wrong path
+    twice (2026-09-19) -- once concluding renders were 'tokenless', once
+    reading a key that simply was not in the response."""
+    from mosaicmesh.state import Display
+    d = Display()
+    fresh_settings.displays["G1"] = d
+    R._set_render_state(d, "P", R.RENDER_READY, token="abc123def456")
+    row = next(r for r in R.renders_snapshot() if r["playlist"] == "P")
+    assert row["token"] == "abc123def456"
+
+
+def test_renders_snapshot_omits_asset_check_by_default(fresh_settings, monkeypatch):
+    """/api/renders is polled by the admin UI, and _render_assets_exist does a
+    listdir per client dir. Keep the default poll free of filesystem work."""
+    from mosaicmesh.state import Display
+    d = Display()
+    fresh_settings.displays["G1"] = d
+    R._set_render_state(d, "P", R.RENDER_READY, token="t")
+    called = []
+    monkeypatch.setattr(R, "_render_assets_exist", lambda *a: called.append(a) or True)
+    row = next(r for r in R.renders_snapshot() if r["playlist"] == "P")
+    assert "assetsPresent" not in row
+    assert called == [], "the default snapshot must not touch the filesystem"
+
+
+def test_renders_snapshot_can_report_missing_assets(fresh_settings, monkeypatch):
+    """Opt-in: the one thing that silently invalidates a READY render is its
+    assets going missing, and today that was only discoverable by hand."""
+    from mosaicmesh.state import Display
+    d = Display()
+    fresh_settings.displays["G1"] = d
+    R._set_render_state(d, "P", R.RENDER_READY, token="t")
+    monkeypatch.setattr(R, "_render_assets_exist", lambda *a: False)
+    row = next(r for r in R.renders_snapshot(with_assets=True) if r["playlist"] == "P")
+    assert row["assetsPresent"] is False
+    assert row["token"] == "t"

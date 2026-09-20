@@ -10,9 +10,15 @@ __all__ = ["api_renders_list"]
 
 
 async def api_renders_list(request):
-    """GET /api/renders -> {success, renders: [...], queueDepth: N}."""
+    """GET /api/renders -> {success, renders: [...], queueDepth: N}.
+
+    `?assets=1` adds an assetsPresent flag per entry. Opt-in: it costs a listdir
+    per client directory, so the UI's routine poll must not ask for it -- use it
+    when diagnosing a READY entry whose files may have gone missing.
+    """
+    want_assets = str(request.query.get("assets", "")).lower() in ("1", "true", "yes")
     return web.json_response({
         "success": True,
-        "renders": _render.renders_snapshot(),
+        "renders": _render.renders_snapshot(with_assets=want_assets),
         "queueDepth": render_queue.queue_depth(),
     })
