@@ -47,6 +47,27 @@ class PrecacheWindow:
             return k
         return None
 
+    def touch(self, key, now=0.0, stall_s=None):
+        """Record PROGRESS on an active grant. Returns False if `key` is not
+        currently granted (unknown, or already completed).
+
+        Two effects, both needed:
+          - resets the grant's clock, so a transfer that is visibly moving is
+            never mistaken for a dead one however long it takes;
+          - once `stall_s` is given, replaces the whole-file deadline with that
+            much shorter no-progress window, so a client that DIES mid-transfer
+            frees its slot in seconds instead of minutes.
+
+        A client that never reports progress is never touched and keeps its
+        original deadline, so old client JS behaves exactly as before -- absence
+        of progress is the backward-compatible fallback, which is why this needs
+        no capability flag."""
+        if key not in self._active:
+            return False
+        _t, per = self._active[key]
+        self._active[key] = (now, per if stall_s is None else float(stall_s))
+        return True
+
     def sweep_timeouts(self, now, timeout_s=None):
         """Advance past any active grant past ITS OWN deadline (a client that never
         acked). Returns (timed_out_keys, newly_granted_keys) so the caller can mark the

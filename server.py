@@ -192,6 +192,14 @@ PRECACHE_ACK_BASE = 20.0            # s: handshake + startup, independent of siz
 PRECACHE_MIN_RATE = 100 * 1024      # bytes/s: pessimistic iPad-1 WiFi floor under load
 PRECACHE_ACK_MAX = 1800.0           # s: cap, so one dead slot cannot stall a group forever
 
+# Once a client has reported PROGRESS we know it is alive and talking, so silence
+# becomes meaningful: this much of it means the transfer died and the slot should
+# be freed. Without progress reporting the only signal was the whole-file deadline
+# (~16 min at 93MB), which held one of three slots that long and stretched a
+# rotation across 11 screens to ~50 minutes. Generous enough for one 1MB chunk on
+# bad WiFi (~10s at the pessimistic floor rate) with several chunks of slack.
+PRECACHE_STALL_TIMEOUT = 90.0
+
 
 def precache_ack_timeout(size_bytes):
     """Ack deadline for a grant moving `size_bytes`. Unknown/zero size falls back

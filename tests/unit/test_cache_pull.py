@@ -84,3 +84,67 @@ def test_precache_ack_timeout_scales_with_segment_size():
 def test_precache_ack_timeout_is_capped():
     import server
     assert server.precache_ack_timeout(100 * 1024**3) <= server.PRECACHE_ACK_MAX
+
+
+# ---------------------------------------------------------------------------
+# Progress-driven liveness.
+#
+# The size-aware deadline (de70b7b) let large segments finish, but it traded one
+# problem for another: the server still cannot tell "transferring" from "died",
+# so a grant that goes silent holds one of n slots for its FULL deadline. At 93MB
+# that is ~16 minutes, and with 11 screens needing the segment a full rotation
+# went from ~1 minute to ~50. Measured on-wall 2026-09-20: 24 minutes of watching
+# with zero grants reaching the queued canaries.
+#
+# A progress report resets the grant's clock AND shortens its deadline to a stall
+# timeout, so death is detected in seconds. A client that never reports is simply
+# never touched and keeps the size-aware deadline -- absence of progress is the
+# backward-compatible fallback, so no capability flag is needed.
+
+def test_touch_resets_the_deadline_clock():
+    w = PrecacheWindow(["a"], n=1, timeout_for=lambda k: 600.0)
+    assert w.start(now=0.0) == ["a"]
+    assert w.sweep_timeouts(now=500.0) == ([], []), "inside the 600s deadline"
+    assert w.touch("a", now=500.0) is True
+    # without the touch this would expire at 600; the clock restarted at 500
+    assert w.sweep_timeouts(now=900.0) == ([], []), "progress must postpone expiry"
+
+
+def test_touch_shortens_the_deadline_to_a_stall_timeout():
+    """Once a client proves it is alive and reporting, a silence of stall_s is
+    enough to call it dead -- no need to wait out the whole-file deadline."""
+    w = PrecacheWindow(["a", "b"], n=1, timeout_for=lambda k: 600.0)
+    assert w.start(now=0.0) == ["a"]
+    assert w.touch("a", now=100.0, stall_s=90.0) is True
+    assert w.sweep_timeouts(now=180.0) == ([], []), "80s of silence is not a stall yet"
+    stale, granted = w.sweep_timeouts(now=200.0)     # 100s since last progress
+    assert stale == ["a"], "a reporting client that goes quiet must be dropped fast"
+    assert granted == ["b"]
+
+
+def test_touch_on_an_unknown_or_finished_grant_is_a_noop():
+    w = PrecacheWindow(["a"], n=1)
+    w.start(now=0.0)
+    assert w.touch("nobody", now=1.0) is False
+    w.advance("a", now=1.0)
+    assert w.touch("a", now=2.0) is False, "a completed grant is not active"
+
+
+def test_a_client_that_never_reports_keeps_the_size_aware_deadline():
+    """Old client JS sends no progress. It must behave exactly as before."""
+    w = PrecacheWindow(["a", "b"], n=1, timeout_for=lambda k: 600.0)
+    assert w.start(now=0.0) == ["a"]
+    assert w.sweep_timeouts(now=300.0) == ([], []), "must not be dropped early"
+    stale, _ = w.sweep_timeouts(now=700.0)
+    assert stale == ["a"]
+
+
+def test_progress_then_completion_advances_normally():
+    w = PrecacheWindow(["a", "b"], n=1, timeout_for=lambda k: 600.0)
+    w.start(now=0.0)
+    w.touch("a", now=10.0, stall_s=90.0)
+    w.touch("a", now=20.0, stall_s=90.0)
+    assert w.advance("a", now=25.0) == "b"
+    assert w.drained() is False
+    assert w.advance("b", now=26.0) is None
+    assert w.drained() is True

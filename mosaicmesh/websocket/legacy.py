@@ -86,8 +86,12 @@ from mosaicmesh.websocket.session_store import session_request
 
 
 def handle_cache_ack(msg):
-    """CACHED / CACHE_FAILED from a client: record state, advance that group's
-    throttle window, and grant PRECACHE to the next waiting client."""
+    """CACHED / CACHE_FAILED / CACHE_PROGRESS from a client.
+
+    CACHED/CACHE_FAILED are terminal: record state and advance the group's
+    throttle window to the next waiting client. CACHE_PROGRESS is NOT terminal --
+    it only proves the transfer is still moving, so it refreshes the grant's
+    deadline and must never advance the window."""
     import sys
     _server = globals().get("server") or sys.modules.get("server")
     if _server is None:
@@ -117,6 +121,18 @@ def handle_cache_ack(msg):
             else:
                 cs.discard(segkey)   # discard of an absent key is a safe no-op
     win = getattr(_server, "precache_windows", {}).get(group)
+
+    if req == "CACHE_PROGRESS":
+        # Liveness, not completion. Refreshing the clock is what lets a slow
+        # transfer run as long as it needs, and swapping in the much shorter
+        # stall window is what lets a client that DIES mid-transfer free its slot
+        # in seconds instead of waiting out the whole-file deadline (~16 min at
+        # 93MB, which stalled rotation across the fleet for ~50 min).
+        if win is not None:
+            win.touch(src, time.time(),
+                      stall_s=getattr(_server, "PRECACHE_STALL_TIMEOUT", None))
+        return
+
     if win is not None:
         nxt = win.advance(src, time.time())
         if nxt is not None:
@@ -263,7 +279,8 @@ def msg_response(msg,session):
             client.cacheMode = mode
         response["PAYLOAD"] = {"cacheMode": getattr(client, "cacheMode", "none")}
 
-    elif(msg["REQUEST"] == "CACHED" or msg["REQUEST"] == "CACHE_FAILED"):
+    elif(msg["REQUEST"] == "CACHED" or msg["REQUEST"] == "CACHE_FAILED"
+         or msg["REQUEST"] == "CACHE_PROGRESS"):
         handle_cache_ack(msg)
 
     elif(msg["REQUEST"] == "REMOVE_CLIENT"):

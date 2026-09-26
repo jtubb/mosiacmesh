@@ -59,6 +59,18 @@
     var p = _pending[token]; delete _pending[token];
     if (p && p.onDone) { p.onDone(token); }
   };
+  // Liveness, not completion: the native downloader reports bytes-so-far every
+  // few MB so the server can tell a slow transfer from a dead one. Without it the
+  // only signal was the whole-file ack deadline, which held one of the three
+  // throttle slots for ~16 minutes at 93MB and stretched a fleet rotation to ~50.
+  // Reuses the existing onAck transport, so nothing else needs to change; a
+  // build that does not emit this is simply never touched and keeps the old
+  // deadline, which is the backward-compatible fallback.
+  root.__mmCacheProgress = function (token, bytes) {
+    if (root.mmCache && root.mmCache.onAck) {
+      root.mmCache.onAck('CACHE_PROGRESS', { token: token, bytes: bytes || 0 });
+    }
+  };
   root.__mmCacheFail = function (token, reason) {
     var p = _pending[token]; delete _pending[token];
     if (p && p.onFail) { p.onFail(token, reason); }

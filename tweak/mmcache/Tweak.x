@@ -23,6 +23,8 @@
 #import <stdarg.h>
 #import <unistd.h>
 #import "mmresume.h"       /* mm_resume_decide — resumable partial pulls */
+/* Bytes between progress reports (see dispatch_progress). */
+#define MM_PROGRESS_EVERY (2 * 1024 * 1024)
 #import "mmcachefile.h"    /* mm_cache_path / mm_cache_usable_size — fetch fast path (audit 1.15) */
 #import "mmrange.h"        /* mm_next_range / mm_parse_content_range — chunked download (audit 1.13) */
 
@@ -58,6 +60,18 @@ static void dispatch_done(const char *token, long bytes) {
     char *buf = (char *)malloc(320);
     if (!buf) return;
     snprintf(buf, 320, "if(window.__mmCacheDone)window.__mmCacheDone('%s',%ld)", token, bytes);
+    dispatch_async_f(dispatch_get_main_queue(), buf, eval_and_free);
+}
+/* Liveness, not completion. The server cannot otherwise distinguish a transfer
+   that is still moving from one that died, so a silent grant held one of three
+   throttle slots for its whole-file deadline (~16 min at 93MB) and stretched a
+   rotation across 11 screens to ~50 minutes. Reporting bytes-so-far lets the
+   server refresh the deadline while bytes flow and fail fast when they stop. */
+static void dispatch_progress(const char *token, long long bytes) {
+    char *buf = (char *)malloc(320);
+    if (!buf) return;
+    snprintf(buf, 320, "if(window.__mmCacheProgress)window.__mmCacheProgress('%s',%lld)",
+             token, bytes);
     dispatch_async_f(dispatch_get_main_queue(), buf, eval_and_free);
 }
 static void dispatch_fail(const char *token, const char *reason) {
@@ -229,6 +243,7 @@ static void mm_download(void *p) {
         mmclog("[mmcache] resume token=%s from=%lld\n", c->token, got);
     }
 
+    long long reported = got;      /* bytes at the last progress report */
     int guard = 0, ok = 1, failed = 0, discard = 0;
     while (guard++ < 4096) {
         char hdr[64];
@@ -311,6 +326,14 @@ static void mm_download(void *p) {
         }
         ((void (*)(id, SEL, id))objc_msgSend)(fh, sel_registerName("writeData:"), data);
         got += (long long)n;
+        /* Report every few MB rather than every chunk: each report costs a main-queue
+           evaluateWebScript, and the main thread is also decoding video. At the
+           pessimistic 100KB/s floor rate 2MB is ~20s, comfortably inside the
+           server's 90s stall window with several reports of slack. */
+        if (got - reported >= MM_PROGRESS_EVERY) {
+            reported = got;
+            dispatch_progress(c->token, got);
+        }
         if (total > 0 && got >= total) { break; }
     }
     ((void (*)(id, SEL))objc_msgSend)(fh, sel_registerName("closeFile"));

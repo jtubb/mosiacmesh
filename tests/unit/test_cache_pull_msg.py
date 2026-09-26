@@ -47,3 +47,50 @@ def test_cache_failed_removes_present_segment(monkeypatch):
     legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_FAILED", "PAYLOAD": {"token": "seg_T1_0"}})
     assert "T1_0" not in srv.settings.clients["a"].cachedSegments   # failed pull -> record corrected
     assert sent[0][0] == "b"                                        # still advances the window
+
+
+def test_progress_does_not_advance_the_window(monkeypatch):
+    """CACHE_PROGRESS is liveness, NOT completion. If it advanced the window the
+    server would hand the slot to the next client while the current one was still
+    mid-transfer, so n clients would pull concurrently and the whole point of the
+    throttle (bounded peak WiFi) would be lost -- on a 93MB segment that is the
+    difference between 3 and 24 simultaneous transfers."""
+    sent = []
+    srv = _make_server(sent)
+    srv.PRECACHE_STALL_TIMEOUT = 90.0
+    monkeypatch.setattr(legacy, "server", srv, raising=False)
+    srv.precache_windows["G1"].start(now=0.0)          # a active; b, c waiting
+    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_PROGRESS",
+                             "PAYLOAD": {"token": "seg_T1_0", "bytes": 3145728}})
+    assert sent == [], "progress must not grant the next client"
+    # and it must not be mistaken for completion either
+    assert "T1_0" not in srv.settings.clients["a"].cachedSegments
+
+
+def test_progress_refreshes_the_deadline(monkeypatch):
+    """The reported progress has to actually postpone expiry, else a slow-but-alive
+    transfer is still killed."""
+    sent = []
+    srv = _make_server(sent)
+    srv.PRECACHE_STALL_TIMEOUT = 90.0
+    monkeypatch.setattr(legacy, "server", srv, raising=False)
+    win = PrecacheWindow(["a", "b"], n=1, timeout_for=lambda k: 600.0)
+    srv.precache_windows["G1"] = win
+    win.start(now=0.0)
+    legacy.handle_cache_ack({"SRC": "a", "REQUEST": "CACHE_PROGRESS",
+                             "PAYLOAD": {"token": "seg_T1_0", "bytes": 1048576}})
+    # the grant's clock restarted at ~now, and its deadline is now the stall window
+    import time as _t
+    assert win.sweep_timeouts(now=_t.time() + 30.0) == ([], []), "30s after progress: alive"
+    stale, granted = win.sweep_timeouts(now=_t.time() + 200.0)
+    assert stale == ["a"], "200s of silence after progress: dead, free the slot"
+    assert granted == ["b"]
+
+
+def test_progress_for_an_unknown_client_is_harmless(monkeypatch):
+    sent = []
+    srv = _make_server(sent)
+    monkeypatch.setattr(legacy, "server", srv, raising=False)
+    legacy.handle_cache_ack({"SRC": "nobody", "REQUEST": "CACHE_PROGRESS",
+                             "PAYLOAD": {"token": "seg_T1_0", "bytes": 1}})
+    assert sent == []
