@@ -23,6 +23,7 @@
 #import <stdarg.h>
 #import <unistd.h>
 #import "mmresume.h"       /* mm_resume_decide — resumable partial pulls */
+#import "mminflight.h"     /* mm_inflight_claim/release — one downloader per token */
 /* Bytes between progress reports (see dispatch_progress). */
 #define MM_PROGRESS_EVERY (2 * 1024 * 1024)
 #import "mmcachefile.h"    /* mm_cache_path / mm_cache_usable_size — fetch fast path (audit 1.15) */
@@ -31,6 +32,14 @@
 #define MM_CACHE_DIR "/var/mobile/Media/MosaicMeshCache"   /* no trailing slash; appended below */
 
 static id g_webview;   /* the UIWebView, retained, for native->JS dispatch */
+
+/* Tokens with a download running. MAIN THREAD ONLY: claimed in the
+   WebAppController shouldStartLoadWithRequest: hook, released in eval_and_free,
+   which dispatch_done/dispatch_fail already route to the main queue. Static
+   storage is zero-initialized, and an all-zero table is an empty one (a free slot
+   is the empty string), so it needs no constructor. See mminflight.h for why the
+   guard has to live in the tweak rather than in mmCache's JS. */
+static mm_inflight g_inflight;
 
 #define MMCACHE_DEBUG 1
 static void mmclog(const char *fmt, ...) {
@@ -44,23 +53,57 @@ static id nsstr(const char *s) {
         (id)objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s);
 }
 
-/* native -> JS eval on the main queue (never from a background thread) */
+/* native -> JS eval on the main queue (never from a background thread).
+   The payload also carries the in-flight slot to free, because that table is
+   main-thread-only (mminflight.h) while mm_download runs on a global queue, and
+   these dispatches are already the hop to the main thread. */
+typedef struct {
+    int  release;                     /* 1 = terminal (done/fail): free the slot */
+    char tok[MM_INFLIGHT_TOKMAX];
+    char js[352];
+} evalctx;
+
 static void eval_and_free(void *ctx) {
-    char *js = (char *)ctx;
-    if (js) {
-        if (g_webview) {
-            id s = nsstr(js);
-            if (s) ((id (*)(id, SEL, id))objc_msgSend)(
-                g_webview, sel_registerName("stringByEvaluatingJavaScriptFromString:"), s);
-        }
-        free(js);
+    evalctx *e = (evalctx *)ctx;
+    if (!e) { return; }
+    /* Release BEFORE the eval. The JS handler runs SYNCHRONOUSLY inside
+       stringByEvaluatingJavaScriptFromString:, so freeing the slot first means an
+       onFail that re-requests the same token can never be refused by our own
+       bookkeeping. */
+    if (e->release) { mm_inflight_release(&g_inflight, e->tok); }
+    if (g_webview && e->js[0]) {
+        id s = nsstr(e->js);
+        if (s) ((id (*)(id, SEL, id))objc_msgSend)(
+            g_webview, sel_registerName("stringByEvaluatingJavaScriptFromString:"), s);
     }
+    free(e);
 }
+
+static evalctx *mm_evalctx(const char *token, int release) {
+    evalctx *e = (evalctx *)malloc(sizeof(evalctx));
+    if (!e) { return (evalctx *)0; }
+    e->release = release;
+    e->tok[0] = 0;
+    e->js[0]  = 0;
+    if (token) { strncpy(e->tok, token, sizeof e->tok - 1); e->tok[sizeof e->tok - 1] = 0; }
+    return e;
+}
+
 static void dispatch_done(const char *token, long bytes) {
-    char *buf = (char *)malloc(320);
-    if (!buf) return;
-    snprintf(buf, 320, "if(window.__mmCacheDone)window.__mmCacheDone('%s',%ld)", token, bytes);
-    dispatch_async_f(dispatch_get_main_queue(), buf, eval_and_free);
+    evalctx *e = mm_evalctx(token, 1);
+    if (!e) {
+        /* malloc failed, so the process is already in trouble -- but a slot never
+           released is a token that can NEVER be re-downloaded for the life of this
+           process, which outlives the memory pressure. Freeing it from this thread
+           breaks the main-thread-only contract; a single unsynchronized write to a
+           128-byte array on a path that only runs after malloc has already failed
+           is the lesser harm. */
+        mm_inflight_release(&g_inflight, token);
+        return;
+    }
+    snprintf(e->js, sizeof e->js,
+             "if(window.__mmCacheDone)window.__mmCacheDone('%s',%ld)", token, bytes);
+    dispatch_async_f(dispatch_get_main_queue(), e, eval_and_free);
 }
 /* Liveness, not completion. The server cannot otherwise distinguish a transfer
    that is still moving from one that died, so a silent grant held one of three
@@ -68,17 +111,20 @@ static void dispatch_done(const char *token, long bytes) {
    rotation across 11 screens to ~50 minutes. Reporting bytes-so-far lets the
    server refresh the deadline while bytes flow and fail fast when they stop. */
 static void dispatch_progress(const char *token, long long bytes) {
-    char *buf = (char *)malloc(320);
-    if (!buf) return;
-    snprintf(buf, 320, "if(window.__mmCacheProgress)window.__mmCacheProgress('%s',%lld)",
-             token, bytes);
-    dispatch_async_f(dispatch_get_main_queue(), buf, eval_and_free);
+    /* NOT terminal -> release=0: the download is still running and must keep its
+       slot, or a re-issued grant would start a second writer on the same .part. */
+    evalctx *e = mm_evalctx(token, 0);
+    if (!e) { return; }            /* a dropped progress report costs nothing */
+    snprintf(e->js, sizeof e->js,
+             "if(window.__mmCacheProgress)window.__mmCacheProgress('%s',%lld)", token, bytes);
+    dispatch_async_f(dispatch_get_main_queue(), e, eval_and_free);
 }
 static void dispatch_fail(const char *token, const char *reason) {
-    char *buf = (char *)malloc(320);
-    if (!buf) return;
-    snprintf(buf, 320, "if(window.__mmCacheFail)window.__mmCacheFail('%s','%s')", token, reason);
-    dispatch_async_f(dispatch_get_main_queue(), buf, eval_and_free);
+    evalctx *e = mm_evalctx(token, 1);
+    if (!e) { mm_inflight_release(&g_inflight, token); return; }   /* see dispatch_done */
+    snprintf(e->js, sizeof e->js,
+             "if(window.__mmCacheFail)window.__mmCacheFail('%s','%s')", token, reason);
+    dispatch_async_f(dispatch_get_main_queue(), e, eval_and_free);
 }
 
 /* ---- percent-decode ---------------------------------------------------------------------- */
@@ -447,11 +493,29 @@ static void handle_mmcache(const char *url) {
                 return;
             }
         }
+        /* ONE DOWNLOADER PER TOKEN. This handler runs on the main thread for every
+           mmcache://fetch, and the grants repeat: mmCache's _pending map is per-
+           page-load, so a webclip reload mid-transfer loses it while this process
+           keeps downloading, and the server re-grants on schedule. Without this
+           claim each grant spawned another mm_download on the GLOBAL CONCURRENT
+           queue, all appending to one .part -- and whichever one decided
+           MM_DL_CLEAN removed and re-created that file underneath its siblings, so
+           bytes could never accumulate and resume was unreachable. Canary
+           192.168.1.82 showed six `fetch` in a row with no termination between
+           them and adjacent failures at 13,631,488 and at 0.
+           Dropping the duplicate loses nothing: the download already running owns
+           this token, and its done/fail carries the same token, so the JS callback
+           registered by this grant still fires. */
+        if (!mm_inflight_claim(&g_inflight, token)) {
+            mmclog("[mmcache] already downloading token=%s (%d in flight) -- dropping duplicate grant\n",
+                   token, mm_inflight_count(&g_inflight));
+            return;
+        }
         char urlbuf[600]; urlbuf[0] = 0;
         { const char *a = strstr(query, "url="); if (a) { a += 4; const char *e = strchr(a, '&');
             size_t l = e ? (size_t)(e - a) : strlen(a); pct_decode(a, l, urlbuf, sizeof urlbuf); } }
         dlctx *c = (dlctx *)malloc(sizeof(dlctx));
-        if (!c) return;
+        if (!c) { mm_inflight_release(&g_inflight, token); return; }
         strncpy(c->token, token, sizeof c->token - 1); c->token[sizeof c->token - 1] = 0;
         strncpy(c->url, urlbuf, sizeof c->url - 1); c->url[sizeof c->url - 1] = 0;
         mmclog("[mmcache] fetch token=%s url=%s\n", c->token, c->url);

@@ -54,6 +54,7 @@
   <script src="/js/ct-fresh.js"></script>
   <script src="/js/video-buffer.js"></script>
   <script src="/js/mmCache.js"></script>
+  <script src="/js/mmAckQueue.js"></script>
   <script src="/js/mmVideoRecovery.js"></script>
   <script src="/js/mmCacheBackendMmvideo.js"></script>
   <script src="/js/mmCacheBackendModern.js"></script>
@@ -2153,11 +2154,39 @@
 	  try { navigator.serviceWorker.register('js/sw.js', { scope: '/' }); } catch (e) {}
 	}
 	if (window.mmCache) {
-	  mmCache.onAck = function (req, payload) {
-	    if (sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN) {
-	      sock.send(generateMessage('SRV', req, payload));   // req = 'CACHED' | 'CACHE_FAILED'
-	    }
-	  };
+	  // A cache ack must NOT be lost because the transport happened to be down
+	  // when it was raised. The previous wiring was a bare
+	  //   if (open) { sock.send(...); }
+	  // with no else -- so an ack raised during a blip vanished for good. It failed
+	  // asymmetrically, which is why it hid: a DOWNLOAD ack fires minutes after
+	  // page load with the socket certainly open, while a HIT ack (segment already
+	  // on disk) fires milliseconds after the grant arrives. sign1screen23 logged
+	  // `HIT token=seg_4298b787efa0_0 bytes=66665122` on 2026-09-26 and the server
+	  // still reported propagationPercent 0.0 for it.
+	  //
+	  // That is not one stale field: the terminal ack is what advances the
+	  // PrecacheWindow, and reconcile_group_cache() returns early while the group
+	  // has a window, so ONE dropped ack freezes the whole group's cache self-heal
+	  // until the grant's deadline expires (up to PRECACHE_ACK_MAX = 1800s).
+	  // See js/mmAckQueue.js for the retry/ordering/boundedness rules.
+	  var _mmAcks = (typeof mmAckQueue === 'function') ? mmAckQueue(
+	    function (req, payload) { sock.send(generateMessage('SRV', req, payload)); },
+	    function () {
+	      return !!(sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN);
+	    }) : null;
+
+	  mmCache.onAck = _mmAcks
+	    ? function (req, payload) { _mmAcks.push(req, payload); }   // 'CACHED' | 'CACHE_FAILED' | 'CACHE_PROGRESS'
+	    : function (req, payload) {                                 // pre-mmAckQueue fallback
+	        if (sock && typeof SockJS !== 'undefined' && sock.readyState === SockJS.OPEN) {
+	          sock.send(generateMessage('SRV', req, payload));
+	        }
+	      };
+
+	  // Retry on its own fixed timer, NOT the GoTime tick (which stops when the
+	  // server is unreachable -- exactly when there is a backlog to drain). Same
+	  // reasoning as reconnectWatchdog above.
+	  if (_mmAcks) { setInterval(function () { _mmAcks.flush(); }, 3000); }
 	}
 
 	mosiacMeshConnect(mosiacMeshCallback);

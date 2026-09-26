@@ -148,3 +148,95 @@ def test_progress_then_completion_advances_normally():
     assert w.drained() is False
     assert w.advance("b", now=26.0) is None
     assert w.drained() is True
+
+
+# ---------------------------------------------------------------------------
+# snapshot(): read-only introspection of a live window.
+#
+# WHY: on 2026-09-26 two canaries sat with an empty cache and propagationPercent
+# 0.0 while NOT ONE grant reached them for 14 minutes, and there was no way to ask
+# the server why. Every explanation offered -- reconcile disabled, window wedged,
+# grant delivered into a stale SockJS session -- was consistent with the evidence
+# available from outside, and all of them were unfalsifiable because
+# `precache_windows` is in-memory with no accessor and `_send_precache` logs at
+# INFO while the server runs at WARNING. Debugging by hypothesis is what this
+# removes: snapshot() states which grants exist, how old they are, and which
+# deadline each is measured against.
+
+def test_snapshot_reports_active_grants_with_age_and_deadline():
+    w = PrecacheWindow(["a", "b", "c"], n=2, timeout_for=lambda k: 100.0 if k == "a" else 50.0)
+    w.start(now=1000.0)
+    snap = w.snapshot(now=1030.0)
+    assert snap["n"] == 2
+    assert snap["waiting"] == ["c"]
+    act = {e["key"]: e for e in snap["active"]}
+    assert set(act) == {"a", "b"}
+    assert act["a"]["ageS"] == 30.0
+    assert act["a"]["deadlineS"] == 100.0      # per-grant, not the flat fallback
+    assert act["b"]["deadlineS"] == 50.0
+    assert act["a"]["overdue"] is False
+    assert act["b"]["overdue"] is False
+
+
+def test_snapshot_marks_a_grant_overdue_against_its_own_deadline():
+    # The distinction that matters: 'b' is past ITS deadline while 'a' is not,
+    # even though both were granted at the same instant. A flat view of the
+    # window cannot show that, and it is exactly what a size-aware deadline
+    # makes possible to get wrong.
+    w = PrecacheWindow(["a", "b"], n=2, timeout_for=lambda k: 100.0 if k == "a" else 20.0)
+    w.start(now=1000.0)
+    snap = w.snapshot(now=1060.0)
+    act = {e["key"]: e for e in snap["active"]}
+    assert act["a"]["overdue"] is False
+    assert act["b"]["overdue"] is True
+    assert snap["overdueCount"] == 1
+
+
+def test_snapshot_uses_the_flat_fallback_when_a_grant_has_no_deadline():
+    # A window built without timeout_for stores None per grant; the snapshot must
+    # report the caller's fallback rather than claiming a deadline of 0, which
+    # would paint every healthy grant as overdue.
+    w = PrecacheWindow(["a"], n=1)
+    w.start(now=1000.0)
+    snap = w.snapshot(now=1010.0, timeout_s=20.0)
+    assert snap["active"][0]["deadlineS"] == 20.0
+    assert snap["active"][0]["overdue"] is False
+    assert w.snapshot(now=1030.0, timeout_s=20.0)["active"][0]["overdue"] is True
+
+
+def test_snapshot_reflects_a_progress_touch_resetting_the_clock():
+    # A transfer reporting progress must not read as stale, and after the touch the
+    # deadline shown has to be the SHORT stall window -- otherwise the snapshot
+    # would say a dead-but-recently-touched client had minutes left.
+    w = PrecacheWindow(["a"], n=1, timeout_for=lambda k: 600.0)
+    w.start(now=1000.0)
+    assert w.snapshot(now=1500.0)["active"][0]["ageS"] == 500.0
+    w.touch("a", now=1500.0, stall_s=90.0)
+    snap = w.snapshot(now=1510.0)
+    assert snap["active"][0]["ageS"] == 10.0
+    assert snap["active"][0]["deadlineS"] == 90.0
+    assert snap["active"][0]["overdue"] is False
+    assert w.snapshot(now=1600.0)["active"][0]["overdue"] is True
+
+
+def test_snapshot_of_a_drained_window_is_empty_not_an_error():
+    w = PrecacheWindow(["a"], n=1)
+    w.start(now=0.0)
+    w.advance("a", now=1.0)
+    snap = w.snapshot(now=2.0)
+    assert snap["active"] == []
+    assert snap["waiting"] == []
+    assert snap["overdueCount"] == 0
+    assert snap["drained"] is True
+
+
+def test_snapshot_does_not_mutate_the_window():
+    # It is called from a debug HTTP handler, which must never be able to change
+    # fleet behaviour by being polled.
+    w = PrecacheWindow(["a", "b", "c"], n=1, timeout_for=lambda k: 1.0)
+    w.start(now=0.0)
+    for _ in range(5):
+        w.snapshot(now=1000.0)                   # wildly overdue, polled repeatedly
+    assert w.snapshot(now=1000.0)["waiting"] == ["b", "c"]
+    stale, granted = w.sweep_timeouts(now=1000.0)
+    assert stale == ["a"] and granted == ["b"]   # sweeping still works normally

@@ -291,47 +291,104 @@ def clients_needing_precache(display_id):
     return out
 
 
+def reconcile_enabled():
+    """Is the periodic cache fill-reconcile switched on?
+
+    PAUSED BY DEFAULT behind MM_CACHE_RECONCILE -- see _reconcile_all_group_caches
+    for why. Factored out so reconcile_decision can REPORT the gate: "is the
+    reconcile even running?" was unanswerable from outside the process, and it cost
+    a long investigation on 2026-09-26."""
+    return os.environ.get("MM_CACHE_RECONCILE") in ("1", "on", "true", "yes")
+
+
+def reconcile_decision(display_id):
+    """Why the cache fill-reconcile will or will not grant for `display_id`.
+
+    Returns {displayID, reason, willGrant, needing, token, playlist, renderState}.
+    `reason` is one of:
+        grant              -- will PRECACHE the clients in `needing`
+        disabled           -- MM_CACHE_RECONCILE is not set
+        window-active      -- a PrecacheWindow is still draining for this group
+        no-display         -- unknown group
+        no-rendered-token  -- the group has never had a render applied
+        render-not-ready   -- the entry for renderedToken is not READY
+        nothing-missing    -- every eligible client already holds every seg
+
+    WHY THIS IS A FUNCTION AND NOT JUST CODE INSIDE THE RECONCILE (2026-09-26):
+    two canaries sat with an empty cache and propagationPercent 0.0 while not one
+    PRECACHE reached them for 14 minutes. The reconcile has five early returns and
+    logs on none of them, so from outside every candidate explanation fitted the
+    evidence equally well -- gate off, window wedged by a lost ack, render not
+    READY, nothing missing, or a grant delivered into a stale SockJS session. Each
+    was argued in turn and none could be checked.
+
+    /debug/precache reports this, and reconcile_group_cache OBEYS it, so the
+    explanation and the behaviour cannot drift apart. A debug view that recomputed
+    the reasons independently would eventually lie, which is worse than none.
+
+    `needing` is populated even when willGrant is False wherever it is knowable, so
+    an operator can see the cost of the reason (e.g. how many screens a disabled
+    reconcile is leaving uncached)."""
+    out = {"displayID": display_id, "reason": None, "willGrant": False,
+           "needing": {}, "token": None, "playlist": None, "renderState": None}
+    display = settings.displays.get(display_id)
+    if display is None:
+        out["reason"] = "no-display"
+        return out
+    token = getattr(display, "renderedToken", None)
+    out["token"] = token
+    if not token:
+        out["reason"] = "no-rendered-token"
+        return out
+    # Resolve the render entry by TOKEN, not by the applied playlist name -- see
+    # the note in reconcile_group_cache below.
+    entry = None
+    entry_name = None
+    for _name, _e in (getattr(display, "renders", None) or {}).items():
+        if _e.get("token") == token:
+            entry, entry_name = _e, _name
+            break
+    if entry is None:
+        cur = getattr(display, "currentPlaylistName", None)
+        if cur:
+            entry = (getattr(display, "renders", None) or {}).get(cur)
+            entry_name = cur if entry else None
+    out["playlist"] = entry_name
+    out["renderState"] = entry.get("state") if entry else None
+    if not entry or entry.get("state") != RENDER_READY:
+        out["reason"] = "render-not-ready"
+        return out
+    needing = clients_needing_precache(display_id)
+    out["needing"] = needing
+    if not needing:
+        out["reason"] = "nothing-missing"
+        return out
+    # Checked AFTER `needing` so the reason still carries the cost of the block.
+    if display_id in precache_windows:
+        out["reason"] = "window-active"
+        return out
+    if not reconcile_enabled():
+        out["reason"] = "disabled"
+        return out
+    out["reason"] = "grant"
+    out["willGrant"] = True
+    return out
+
+
 def reconcile_group_cache(display_id):
     """Self-heal: if the group's current render is READY and no PrecacheWindow is
     active, re-PRECACHE ONE missing seg per online cache-capable client that lacks
     it. Skipping while a window is in flight throttles a mass reconnect (3-at-a-
     time via the window); multiple missing segs per client resolve over successive
-    process() cycles. Only re-sends EXISTING assets -- never encodes."""
-    if display_id in precache_windows:
-        return   # a window is draining -- don't clobber
-    display = settings.displays.get(display_id)
-    if display is None:
+    process() cycles. Only re-sends EXISTING assets -- never encodes.
+
+    The go/no-go and its reason live in reconcile_decision so that /debug/precache
+    reports exactly what this does."""
+    decision = reconcile_decision(display_id)
+    if not decision["willGrant"]:
         return
-    token = getattr(display, "renderedToken", None)
-    if not token:
-        return
-    # Resolve the render entry by TOKEN, not by the applied playlist name. A STOP
-    # clears currentPlaylistName but leaves renderedToken set, so the old lookup
-    # returned None from that moment on and the reconcile did nothing -- silently,
-    # every cycle, for as long as the group stayed stopped. Caches could therefore
-    # never self-heal while idle, which is precisely when filling them is safest
-    # and cheapest. Seen on-wall 2026-09-20: renderedToken=4298b787efa0 with a
-    # READY entry for 'PullTest', currentPlaylistName=None, 11 screens missing the
-    # segment, and not one grant in 24 minutes.
-    #
-    # The token is what the clients are actually being asked to pull, so it is the
-    # correct key. Readiness is still enforced, and an entry for a DIFFERENT token
-    # says nothing about these segments and must not qualify.
-    entry = None
-    for _e in (getattr(display, "renders", None) or {}).values():
-        if _e.get("token") == token:
-            entry = _e
-            break
-    if entry is None:
-        # Fall back to the applied playlist for entries written before tokens were
-        # recorded per entry, so older state still reconciles.
-        cur = getattr(display, "currentPlaylistName", None)
-        entry = (getattr(display, "renders", None) or {}).get(cur) if cur else None
-    if not entry or entry.get("state") != RENDER_READY:
-        return
-    needing = clients_needing_precache(display_id)
-    if not needing:
-        return
+    token = decision["token"]
+    needing = decision["needing"]
     client_urls = {}
     for key, missing in needing.items():
         client_urls[key] = pull_url_for_seg_key(key, missing[0])   # one/cycle, sorted
@@ -346,8 +403,12 @@ def _reconcile_all_group_caches():
     PAUSED BY DEFAULT: gated behind MM_CACHE_RECONCILE because the client-pull
     cache-write can produce unplayable local copies on iPad-1 at scale (verr=3
     decode errors) that the reconcile then propagates fleet-wide. Set
-    MM_CACHE_RECONCILE=1 to re-enable once the pull/cache-write is verified reliable."""
-    if os.environ.get("MM_CACHE_RECONCILE") not in ("1", "on", "true", "yes"):
+    MM_CACHE_RECONCILE=1 to re-enable once the pull/cache-write is verified reliable.
+
+    The gate is also checked inside reconcile_decision (as reason "disabled") so
+    /debug/precache can report it; this early return just avoids the per-group work
+    when it is off."""
+    if not reconcile_enabled():
         return
     for _did in list(settings.displays.keys()):
         try:
@@ -2022,6 +2083,66 @@ async def memory_stats_handler(request):
     return web.json_response(memdebug.snapshot(full=True))
 
 
+async def precache_debug_handler(request):
+    """Debug endpoint: the complete state of client-pull cache grants.
+
+    WHY THIS EXISTS (2026-09-26): the client-pull machinery was effectively
+    unobservable. `precache_windows` is an in-memory dict with no accessor,
+    `_send_precache` logs at INFO while the server runs at WARNING, and
+    reconcile_group_cache had five silent early returns. Two canaries sat with an
+    empty cache and propagationPercent 0.0 while not one grant reached them for 14
+    minutes, and every candidate explanation -- reconcile gate off, window wedged
+    by a lost ack, render not READY, nothing missing, grant delivered into a stale
+    SockJS session -- fitted the available evidence equally well. Hours went into
+    arguing hypotheses that a single readable endpoint settles.
+
+    Read-only: PrecacheWindow.snapshot does not mutate, and reconcile_decision is
+    the SAME function reconcile_group_cache obeys, so what this reports cannot
+    drift from what the server actually does.
+
+    ?group=<displayID> narrows to one group."""
+    now = time.time()
+    want = request.query.get("group")
+    groups = []
+    for did in sorted(settings.displays.keys()):
+        if want and did != want:
+            continue
+        win = precache_windows.get(did)
+        try:
+            decision = reconcile_decision(did)
+        except Exception as e:                      # never let a debug view 500
+            decision = {"reason": "error", "error": str(e), "willGrant": False}
+        entry = {
+            "displayID": did,
+            "reconcile": decision,
+            "window": win.snapshot(now, timeout_s=PRECACHE_ACK_TIMEOUT) if win else None,
+        }
+        # What each granted client was actually asked to pull, and how big it is.
+        # The size is the input to the grant's deadline, so a wrong one is the
+        # difference between a 20s and a 1800s window -- worth showing.
+        if win is not None:
+            grants = {}
+            for e in entry["window"]["active"]:
+                k = e["key"]
+                grants[k] = {
+                    "url": precache_urls.get(k),
+                    "segToken": precache_segtoken.get(k),
+                    "assetBytes": _precache_asset_size(k),
+                }
+            entry["grants"] = grants
+        groups.append(entry)
+    return web.json_response({
+        "now": now,
+        "reconcileEnabled": reconcile_enabled(),
+        "ackTimeoutFallbackS": PRECACHE_ACK_TIMEOUT,
+        "ackTimeoutBaseS": PRECACHE_ACK_BASE,
+        "ackTimeoutMaxS": PRECACHE_ACK_MAX,
+        "ackMinRateBps": PRECACHE_MIN_RATE,
+        "stallTimeoutS": PRECACHE_STALL_TIMEOUT,
+        "groups": groups,
+    })
+
+
 # --- Granular discovery REST endpoints (one handler per resource) ---
 
 # (path, mtime) -> duration in seconds (or None). Avoids re-probing unchanged
@@ -2268,6 +2389,14 @@ async def process():
     for _grp, _win in list(precache_windows.items()):
         try:
             _timed_out, _granted = _win.sweep_timeouts(current_time, PRECACHE_ACK_TIMEOUT)
+            # WARNING, not INFO: a grant reaching its deadline without an ack is an
+            # anomaly that must always appear in the log, because it is the point
+            # where a group's client-pull starts costing real time. The whole
+            # 2026-09-26 investigation ran blind partly because every precache line
+            # was INFO while the server ran at WARNING.
+            for _k in _timed_out:
+                logging.warning("precache grant TIMED OUT group=%s client=%s token=%s bytes=%s",
+                                _grp, _k, precache_segtoken.get(_k), _precache_asset_size(_k))
             for _k in _granted:
                 _send_precache(_k, precache_urls.get(_k), precache_segtoken.get(_k))
             if _win.drained():
@@ -2510,6 +2639,7 @@ if __name__ == '__main__':
         app.router.add_route('GET', '/media/{client}/{sub}/{file}', media_handler),
         app.router.add_route('POST', '/upload/{dest}', upload_handler),
         app.router.add_route('GET', '/debug/cache', cache_stats_handler)
+        app.router.add_route('GET', '/debug/precache', precache_debug_handler)
         app.router.add_route('GET', '/debug/memory', memory_stats_handler)
         # Discovery API endpoints (granular handlers)
         app.router.add_route('GET', '/api/media', api_media)

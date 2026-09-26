@@ -87,3 +87,46 @@ class PrecacheWindow:
 
     def drained(self):
         return not self._waiting and not self._active
+
+    def snapshot(self, now, timeout_s=None):
+        """Read-only view of this window, for the /debug/precache endpoint.
+
+        WHY THIS IS NEEDED: `precache_windows` lives only in memory with no
+        accessor, and `_send_precache` logs at INFO while the server runs at
+        WARNING. On 2026-09-26 two canaries sat with an empty cache and
+        propagationPercent 0.0 while not one grant reached them for 14 minutes,
+        and every candidate explanation -- reconcile disabled, window wedged,
+        grant delivered into a stale SockJS session -- fitted the evidence
+        equally well because none of them could be checked. This makes the
+        window's actual state answerable instead of arguable.
+
+        Ages and deadlines are reported PER GRANT because that is where the
+        subtlety is: two grants issued in the same instant can have very
+        different deadlines (size-aware) and a progress `touch` swaps one for the
+        much shorter stall window. `timeout_s` is the same flat fallback
+        sweep_timeouts takes, so the view can never disagree with the sweep.
+
+        Must not mutate: a debug handler being polled cannot be allowed to change
+        fleet behaviour."""
+        active = []
+        overdue = 0
+        for k, (t, per) in self._active.items():
+            deadline = per if per is not None else (timeout_s if timeout_s is not None else 0.0)
+            age = now - t
+            is_overdue = age > deadline
+            if is_overdue:
+                overdue += 1
+            active.append({
+                "key": k,
+                "ageS": round(age, 1),
+                "deadlineS": round(float(deadline), 1),
+                "overdue": is_overdue,
+            })
+        active.sort(key=lambda e: e["key"])
+        return {
+            "n": self._n,
+            "active": active,
+            "waiting": list(self._waiting),
+            "overdueCount": overdue,
+            "drained": self.drained(),
+        }
