@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -std=c99 -Wall -D_CRT_SECURE_NO_WARNINGS
 
-test: mmcachefile mmrange mmresume mminflight
+test: mmcachefile mmrange mmresume mminflight mmchunk
 
 mmcachefile:
 	$(CC) $(CFLAGS) -o /tmp/test_mmcachefile test_mmcachefile.c && /tmp/test_mmcachefile
@@ -15,4 +15,7 @@ mmresume:
 mminflight:
 	$(CC) $(CFLAGS) -o /tmp/test_mminflight test_mminflight.c && /tmp/test_mminflight
 
-.PHONY: test mmcachefile mmrange mmresume mminflight
+mmchunk:
+	$(CC) $(CFLAGS) -o /tmp/test_mmchunk test_mmchunk.c && /tmp/test_mmchunk
+
+.PHONY: test mmcachefile mmrange mmresume mminflight mmchunk

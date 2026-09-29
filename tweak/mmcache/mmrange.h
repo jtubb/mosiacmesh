@@ -119,4 +119,63 @@ static int mm_next_range(long long total, long long got, long chunk,
     return 1;
 }
 
+/* ---- per-chunk response contract ------------------------------------------
+ * WHY (measured on-wall 2026-09-29): mm_download parsed Content-Range on the
+ * FIRST chunk only -- the parse lived inside `if (total < 0)`, whose job was to
+ * learn the entity size. Every later chunk's window went unverified, so a reply
+ * that did not correspond to the range just requested was appended at the wrong
+ * offset, silently.
+ *
+ * On the wall it surfaced as an over-read. sign1screen20 discarded six complete
+ * ~64MB transfers (got=64476672 expect=64227456, three of them byte-identical)
+ * and needed 237 chunk requests for a 62-chunk file; sign1screen1, still on the
+ * older eae0e7fb build, shows the same signature, so it predates the in-flight
+ * guard and is fleet-wide.
+ *
+ * The server is not at fault: 62 sequential and 36 concurrent 1MB windows
+ * against the live media_handler all returned the exact requested length and
+ * byte-identical content. The mismatch arises between NSURLConnection and the
+ * loop -- sendSynchronousRequest: consults the shared NSURLCache on iOS 5 and
+ * the server sends no Cache-Control, so a cached partial served against a
+ * different Range is the leading suspect. mm_download also now asks for
+ * NSURLRequestReloadIgnoringLocalCacheData; this check is what makes that
+ * belt-and-braces rather than a guess.
+ *
+ * THE OVER-READ WAS THE LUCKY CASE: it was caught only because the byte count
+ * overshot and the completeness check rejected the file. Had a mis-delivered
+ * chunk made the bytes sum to exactly `total`, the file would have PASSED that
+ * check while holding wrong bytes at a wrong offset -- an unplayable segment
+ * that every later HIT would serve. Closing that is the point; the wasted
+ * bandwidth is the lesser half.
+ *
+ * Length alone is NOT sufficient: a correctly-sized body for the wrong window is
+ * precisely the corruption case, and only comparing first/last catches it. */
+#define MM_CHUNK_OK             0
+#define MM_CHUNK_BAD_HEADER     1   /* missing/unparseable Content-Range        */
+#define MM_CHUNK_WRONG_WINDOW   2   /* reply is for a different byte range      */
+#define MM_CHUNK_ENTITY_CHANGED 3   /* advertised total differs from the known  */
+#define MM_CHUNK_BAD_LENGTH     4   /* body size disagrees with its own window  */
+
+/* Does this 206 reply actually answer the request we made?
+ *   hdr          the reply's Content-Range
+ *   want_start   / want_end   the inclusive window we asked for
+ *   body_len     bytes actually received
+ *   known_total  entity size learned earlier; <=0 when not yet known
+ * Returns MM_CHUNK_OK or the specific reason it must be rejected. The reasons
+ * are distinct because which check failed is the difference between suspecting
+ * the cache, the server, or the network -- a bare boolean would leave the next
+ * diagnosis exactly where this one started. */
+static int mm_chunk_verify(const char *hdr, long long want_start, long long want_end,
+                           long long body_len, long long known_total) {
+    long long first = 0, last = 0, total = 0;
+    if (want_start < 0 || want_end < want_start) { return MM_CHUNK_WRONG_WINDOW; }
+    if (!mm_parse_content_range(hdr, &first, &last, &total)) { return MM_CHUNK_BAD_HEADER; }
+    /* Entity identity before geometry: if the file changed, the window numbers
+       are meaningless even when they happen to line up. */
+    if (known_total > 0 && total != known_total) { return MM_CHUNK_ENTITY_CHANGED; }
+    if (first != want_start || last != want_end) { return MM_CHUNK_WRONG_WINDOW; }
+    if (body_len != (last - first + 1)) { return MM_CHUNK_BAD_LENGTH; }
+    return MM_CHUNK_OK;
+}
+
 #endif /* MMRANGE_H */

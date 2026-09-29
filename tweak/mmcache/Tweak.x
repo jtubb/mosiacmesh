@@ -225,6 +225,27 @@ static void mm_tag_write(id fm, const char *path, const char *tag) {
 }
 
 /* The response's ETag, or NULL. Header case varies by server/proxy. */
+/* The response's Content-Range, or NULL. Header case varies by server/proxy:
+   aiohttp sends "Content-Range", but this is read on EVERY chunk now, so a
+   spurious miss would stop a working pull. */
+static const char *mm_resp_content_range(id resp) {
+    id hdrs = ((id (*)(id, SEL))objc_msgSend)(resp, sel_registerName("allHeaderFields"));
+    if (!hdrs) { return (const char *)0; }
+    id v = ((id (*)(id, SEL, id))objc_msgSend)(hdrs, sel_registerName("objectForKey:"), @"Content-Range");
+    if (!v) v = ((id (*)(id, SEL, id))objc_msgSend)(hdrs, sel_registerName("objectForKey:"), @"content-range");
+    if (!v) v = ((id (*)(id, SEL, id))objc_msgSend)(hdrs, sel_registerName("objectForKey:"), @"Content-range");
+    if (!v) { return (const char *)0; }
+    return ((const char *(*)(id, SEL))objc_msgSend)(v, sel_registerName("UTF8String"));
+}
+
+static const char *mm_chunk_reason(int code) {
+    if (code == MM_CHUNK_BAD_HEADER)     { return "bad-content-range"; }
+    if (code == MM_CHUNK_WRONG_WINDOW)   { return "wrong-window"; }
+    if (code == MM_CHUNK_ENTITY_CHANGED) { return "entity-changed"; }
+    if (code == MM_CHUNK_BAD_LENGTH)     { return "bad-length"; }
+    return "ok";
+}
+
 static const char *mm_resp_etag(id resp) {
     id hdrs = ((id (*)(id, SEL))objc_msgSend)(resp, sel_registerName("allHeaderFields"));
     if (!hdrs) { return (const char *)0; }
@@ -304,6 +325,16 @@ static void mm_download(void *p) {
         if (!req) { ok = 0; break; }
         ((void (*)(id, SEL, id, id))objc_msgSend)(
             req, sel_registerName("setValue:forHTTPHeaderField:"), nsstr(hdr), nsstr("Range"));
+        /* NSURLRequestReloadIgnoringLocalCacheData (== 1). sendSynchronousRequest:
+           consults the shared NSURLCache, and the server sends no Cache-Control on
+           these 206s, so a cached partial can be handed back against a DIFFERENT
+           Range -- the leading suspect for the 2026-09-29 over-read (sign1screen20
+           discarded six complete ~64MB transfers with got > expect). Caching a
+           range reply buys nothing here anyway: every window is fetched exactly
+           once and immediately written to disk. The mm_chunk_verify check below
+           is what makes this belt-and-braces instead of a guess. */
+        ((void (*)(id, SEL, unsigned int))objc_msgSend)(
+            req, sel_registerName("setCachePolicy:"), 1u);
 
         id resp = (id)0, err = (id)0;
         id data = ((id (*)(id, SEL, id, id *, id *))objc_msgSend)(
@@ -349,26 +380,53 @@ static void mm_download(void *p) {
             }
         }
 
-        if (total < 0) {
-            id hdrs = ((id (*)(id, SEL))objc_msgSend)(resp, sel_registerName("allHeaderFields"));
-            id cr = hdrs ? ((id (*)(id, SEL, id))objc_msgSend)(
-                        hdrs, sel_registerName("objectForKey:"), @"Content-Range") : (id)0;
-            if (!cr && hdrs) cr = ((id (*)(id, SEL, id))objc_msgSend)(
-                        hdrs, sel_registerName("objectForKey:"), @"content-range");
-            const char *crs = cr ? ((const char *(*)(id, SEL))objc_msgSend)(
-                        cr, sel_registerName("UTF8String")) : (const char *)0;
-            long long a = 0, b = 0;
-            if (!crs || !mm_parse_content_range(crs, &a, &b, &total)) {
-                mmclog("[mmcache] unusable Content-Range token=%s\n", c->token);
-                ok = 0; failed = 1; dispatch_fail(c->token, "range"); break;
-            }
-        }
+        /* PER-CHUNK CONTRACT. This used to run only on the first chunk (inside
+           `if (total < 0)`, whose job was to learn the entity size), so every
+           later window went unverified and a reply that did not answer the
+           request we made was appended at the WRONG OFFSET, silently.
 
+           On the wall it surfaced as an over-read: sign1screen20 discarded six
+           complete ~64MB transfers (got=64476672 expect=64227456, three of them
+           byte-identical) and needed 237 chunk requests for a 62-chunk file;
+           sign1screen1 on the older eae0e7fb build shows the same signature, so
+           it predates the in-flight guard and is fleet-wide. The server was
+           exonerated by measurement: 62 sequential and 36 concurrent windows
+           against the live media_handler returned exact lengths and identical
+           bytes.
+
+           The over-read was the LUCKY case -- it was caught only because the
+           count overshot and the completeness check rejected the file. A
+           mis-delivered chunk that made the bytes sum to exactly `total` would
+           have passed that check holding wrong bytes, leaving an unplayable
+           cached segment that every later HIT would serve. Verifying the window
+           closes that; length alone would not, because a correctly-sized body
+           for the wrong window IS the corruption case. */
         unsigned long n = ((unsigned long (*)(id, SEL))objc_msgSend)(
             data, sel_registerName("length"));
-        if (!n) {
-            mmclog("[mmcache] empty chunk token=%s at %lld\n", c->token, got);
-            ok = 0; failed = 1; dispatch_fail(c->token, "short"); break;
+        {
+            const char *crs = mm_resp_content_range(resp);
+            int verdict = mm_chunk_verify(crs, rs, re, (long long)n, total);
+            if (verdict != MM_CHUNK_OK) {
+                mmclog("[mmcache] chunk REJECTED token=%s reason=%s want=%lld-%lld got_len=%lu cr=%s\n",
+                       c->token, mm_chunk_reason(verdict), rs, re,
+                       n, crs ? crs : "(none)");
+                ok = 0; failed = 1;
+                /* Keep the bytes already on disk: they were each verified against
+                   their own window, so they remain a valid prefix and the next
+                   grant resumes from them. The one exception is a changed entity,
+                   where continuing would splice two different videos. */
+                if (verdict == MM_CHUNK_ENTITY_CHANGED) { discard = 1; }
+                dispatch_fail(c->token, mm_chunk_reason(verdict));
+                break;
+            }
+            /* Verified -- safe to learn the entity size from it on the first pass. */
+            if (total < 0) {
+                long long a = 0, b = 0;
+                if (!mm_parse_content_range(crs, &a, &b, &total)) {
+                    mmclog("[mmcache] unusable Content-Range token=%s\n", c->token);
+                    ok = 0; failed = 1; dispatch_fail(c->token, "range"); break;
+                }
+            }
         }
         ((void (*)(id, SEL, id))objc_msgSend)(fh, sel_registerName("writeData:"), data);
         got += (long long)n;
@@ -398,9 +456,15 @@ static void mm_download(void *p) {
         else       dispatch_fail(c->token, "write");
     } else {
         if (!failed) {
-            /* Loop ended without an error but short of the advertised total: the
-               accumulated bytes cannot be trusted as a prefix, so start over. */
-            mmclog("[mmcache] TRUNCATED token=%s got=%lld expect=%lld\n", c->token, got, total);
+            /* Loop ended without an error but not AT the advertised total: the
+               accumulated bytes cannot be trusted as a prefix, so start over.
+               The message distinguishes the two shapes because they have
+               different causes -- short means the loop stopped early, while OVER
+               means a reply carried bytes that did not belong to its window. The
+               latter is what the per-chunk contract above now rejects at source;
+               seeing it here again would mean a hole that check does not cover. */
+            mmclog("[mmcache] %s token=%s got=%lld expect=%lld\n",
+                   (got > total) ? "OVER-READ" : "TRUNCATED", c->token, got, total);
             dispatch_fail(c->token, "len");
             discard = 1;
         }
