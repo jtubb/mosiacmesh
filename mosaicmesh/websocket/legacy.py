@@ -679,7 +679,23 @@ def msg_response(msg,session):
                 keys = []
             for k in keys:
                 asyncio.ensure_future(server._run_device_script(k, which))
-            logging.warning("RUN_SCRIPT %s -> %d device(s)", which, len(keys))
+            # Log WHO asked and over WHAT SCOPE, not just the count. On
+            # 2026-09-30 a fleet-wide stop->login->start (24 devices each) fired
+            # ~40s after two consecutive server restarts, and identifying the
+            # sender took a full investigation: reading every RUN_SCRIPT call
+            # site in the admin JS, proving this handler is the ONLY caller of
+            # _run_device_script (so nothing server-side can self-trigger),
+            # enumerating TCP connections to find the admin browser, and
+            # inferring the scope arithmetically from the count (24 = the
+            # "OEB Sign 1" group; {all:true} would have been 27). All of it was
+            # already in this function's hands. A 24-way SSH fan-out is also the
+            # pattern that trips AP flood protection, so "who, and how wide" is
+            # operational information, not bookkeeping.
+            scope = ("client=" + str(ck) if ck
+                     else "group=" + str(did) if did
+                     else "all")
+            logging.warning("RUN_SCRIPT %s scope=%s src=%s -> %d device(s)",
+                            which, scope, msg.get("SRC"), len(keys))
             response["PAYLOAD"] = {"status": "SUCCESS", "script": which, "count": len(keys)}
 
     elif(msg["REQUEST"] == "RENDER"):
