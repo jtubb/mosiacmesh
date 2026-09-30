@@ -115,6 +115,7 @@ from mosaicmesh.api.displays import (
 )
 from mosaicmesh.api.renders import api_renders_list
 from mosaicmesh import memdebug   # memory/thread leak instrumentation
+from mosaicmesh import vnc_reactor   # start Twisted's reactor exactly once
 from mosaicmesh.websocket.legacy import msg_response
 from mosaicmesh import cache_pull
 # Re-exported for backward-compat: tests in test_websocket_handlers.py call
@@ -155,10 +156,12 @@ VEENCY_PASSWORD = os.environ.get("MMVNCPW") or "mosaicmesh"
 # Persistent VNC connections, keyed by client_key. Created lazily on
 # first auto-arm; dropped from the pool when the client goes offline
 # or on any per-tap failure. Each entry is a ThreadedVNCClientProxy
-# from vncdotool.api -- vncdotool runs Twisted's reactor in a
-# background thread, and proxy methods are thread-safe to call from
-# the asyncio loop via run_in_executor. The lock guards cache
+# from vncdotool.api; proxy methods are thread-safe to call from the
+# asyncio loop via run_in_executor. The lock guards cache
 # read-modify-write; the proxy itself has its own internal queuing.
+# The reactor those proxies need is started by mosaicmesh.vnc_reactor,
+# NOT by vncdotool: its own starter races itself under the concurrent
+# connects a fleet-wide launch produces (see _get_pooled_vnc).
 _veency_pool = {}
 _veency_lock = asyncio.Lock()
 
@@ -538,11 +541,26 @@ async def _get_pooled_vnc(client_key, ip):
     # dozing/offline iPad can't strand a Twisted connector the error path can't free.
     if not await loop.run_in_executor(None, _veency_reachable, ip):
         raise ConnectionError("veency port unreachable at " + str(ip))
-    proxy = await loop.run_in_executor(
-        None,
-        lambda: api.connect(f"{ip}::{VEENCY_PORT}",
-                            password=VEENCY_PASSWORD,
-                            timeout=5))
+    def _connect():
+        # Start Twisted's reactor ONCE before any concurrent api.connect(). The
+        # reactor is a process-wide singleton, but vncdotool 1.3.0 starts it with
+        # an UNLOCKED check-then-act (`if not reactor.running: <spawn thread>`),
+        # and `running` is only set inside reactor.run(). Because the handshake
+        # runs outside `_veency_lock` on purpose, a fleet-wide RUN_SCRIPT start
+        # calls this 24 times at once -- several read False, several spawn a
+        # reactor thread, and every loser raises ReactorAlreadyRunning in a thread
+        # where nothing handles it. The losing thread dies WITH ITS PENDING TAPS,
+        # so those iPads never get the real tap an iPad-1 webclip needs to start
+        # video, and simply do not launch (seen 2026-09-29/30 as "screen20 did not
+        # come back", with no crash log because the process never started).
+        # ensure_reactor() returns only once `running` is True, so vncdotool then
+        # takes its false branch and never spawns a thread. See vnc_reactor.py.
+        vnc_reactor.ensure_reactor()
+        return api.connect(f"{ip}::{VEENCY_PORT}",
+                           password=VEENCY_PASSWORD,
+                           timeout=5)
+
+    proxy = await loop.run_in_executor(None, _connect)
     async with _veency_lock:
         # Race: another coroutine may have populated the pool while
         # we were handshaking. Their proxy wins; discard ours.
