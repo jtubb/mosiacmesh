@@ -3,6 +3,7 @@ tests/unit/test_synctool.py. See docs/superpowers/specs/2026-07-30-synctool-*-de
 
 import re
 import ast
+import datetime as _dt
 
 WINDOW_MS = 18000
 FRESH_MS = 20000
@@ -122,22 +123,50 @@ def playback_stale(newest_ct_ms, newest_any_ms, fresh_ms=FRESH_MS):
     return age > fresh_ms, age
 
 
-_LINE_RE = re.compile(r'(\d\d):(\d\d):(\d\d),(\d\d\d) WARNING CLIENTLOG (\S+) (\{.*\})\s*$')
+# The DATE IS REQUIRED. t_ms used to be ms-of-day, which inverts the moment a log
+# spans midnight: on 2026-10-13 the wall was demonstrably playing (89,076 CLIENTLOG
+# lines with a live ct, newest at 11:04:40) and synctool reported
+#   "NO LIVE PLAYBACK - newest video ct is 46883s old"
+# because the largest ms-of-day in the file belonged to 2026-10-12 23:59:55:
+#   max t_ms over all telemetry : 86,395,138  (23:59:55, from 10-12)
+#   max t_ms with a video ct    : 39,880,843  (11:04:40, from 10-13)
+# `latest_any = max(t_ms)` landed on a pre-midnight line and the liveness guard saw
+# the newest ct lagging it by 46,514,295 ms.
+#
+# It was never only the guard: `now = max(t_ms)`, the FRESH_MS staleness test and
+# every WINDOW_MS fit read the same field, so suppressing the guard would have
+# mixed two days of samples with inverted deltas and produced a confident wrong
+# number instead of a refusal. The server always timestamps with a date
+# (commit e53e6be), so a bare HH:MM:SS line cannot be placed on a timeline at all
+# -- refuse it rather than guess a day for it.
+_LINE_RE = re.compile(
+    r'(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d),(\d\d\d) WARNING CLIENTLOG (\S+) (\{.*\})\s*$')
+
+_EPOCH = _dt.date(1970, 1, 1)
 
 
 def parse_clientlog_line(line):
-    """Parse one CLIENTLOG line -> dict (or None). t_ms = ms-of-day from the timestamp."""
+    """Parse one CLIENTLOG line -> dict (or None).
+
+    t_ms is ABSOLUTE milliseconds (UTC-naive, from the log's own clock), so it
+    orders and subtracts correctly across midnight and across multi-day logs.
+    `t_ms % 86400000` still recovers the ms-of-day if a caller wants it."""
     m = _LINE_RE.search(line)
     if not m:
         return None
-    hh, mm, ss, ms, key, payload = m.groups()
+    yyyy, mon, dd, hh, mm, ss, ms, key, payload = m.groups()
     try:
         p = ast.literal_eval(payload)
     except Exception:
         return None
     if not isinstance(p, dict):
         return None
-    t_ms = ((int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms))
+    try:
+        days = (_dt.date(int(yyyy), int(mon), int(dd)) - _EPOCH).days
+    except ValueError:                       # impossible date in a mangled line
+        return None
+    t_ms = (days * 86400000
+            + ((int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms)))
     return {'t_ms': t_ms, 'key': key, 'tag': p.get('tag'),
             'ct': p.get('ct'), 'err': p.get('err'), 'off': p.get('off'),
             'rate': p.get('rateGot')}
