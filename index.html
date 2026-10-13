@@ -383,6 +383,25 @@
 		// d(ct)/d(wall) regression, never with rateGot.
 		COARSE_SEEK_MS: 350, FINE_DEADBAND_MS: 20, RATE_CLAMP: 0.06, RATE_GAIN: 0.0003,
 		RATE_IGAIN: 0,
+		// SEEK IS THE ONLY WORKING ACTUATOR (see above), so its threshold sets the
+		// residual. The default 90 is justified in drift-steer.js as "well over the
+		// ~50ms noise" -- but that sizing predates the 66ms readback fix and the
+		// filtered coarse-seek. MEASURED 2026-10-13 over 33,461 distinct err updates
+		// across 24 screens: update-to-update |delta err| median is 2.0 ms, so 90 is
+		// ~45x the noise floor and every residual parks inside it unseen.
+		//
+		// Each screen's own |err| p50=24 p75=43 p90=62 p99=109, all comfortably
+		// inside 90, so almost nothing seeks -- and the SPREAD of those parked
+		// residuals IS the visible desync (video-offset 127ms, spread ~170ms).
+		// Same shape as the finding one order up: COARSE_SEEK_MS=350 once parked a
+		// standing 258ms error inside its own deadband.
+		//
+		// Re-drift implied by the observed 0.177 seeks/screen/min at 90ms is
+		// ~16 ms/min, so both terms scale with the threshold: spread ~proportional,
+		// seek rate ~inverse. Prediction for 40: video-offset ~55-60ms,
+		// ~0.40 seeks/screen/min. If the spread does NOT fall roughly
+		// proportionally, the parked-in-deadband model is wrong -- stop, do not tune.
+		INERT_SEEK_MS: 40,
 		ERR_FILTER_N: 5, LIVENESS_EPS: 0.02, LIVENESS_K: 4, PROBE_TICKS: 8, PROBE_DELTA: 0.03
 	};
 	var SEEK_COOLDOWN_MS = 2500; // min gap between hard seeks: a seek must be given
