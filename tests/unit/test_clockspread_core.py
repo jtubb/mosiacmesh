@@ -105,7 +105,9 @@ class TestParse:
         r = cs.parse_elapsed_line(line)
         assert r is not None
         assert r["key"] == "abc123" and r["elapsed"] == 61234
-        assert r["t_ms"] == ((11 * 3600 + 20 * 60 + 5) * 1000 + 250)
+        # t_ms is ABSOLUTE (date included) so fit windows order correctly across
+        # midnight; the ms-of-day component must still be exact.
+        assert r["t_ms"] % 86400000 == ((11 * 3600 + 20 * 60 + 5) * 1000 + 250)
 
     def test_untimestamped_line_is_unusable(self):
         """Without a server clock there is nothing to fit against."""
@@ -115,3 +117,55 @@ class TestParse:
     def test_line_without_elapsed_is_skipped(self):
         line = "2026-09-17 11:20:05,250 WARNING CLIENTLOG abc {'tag': 'boot'}"
         assert cs.parse_elapsed_line(line) is None
+
+
+# ---------------------------------------------------------------------------
+# t_ms must be ABSOLUTE, not ms-of-day -- the same defect fixed in
+# synctool_core (584d879), present independently here.
+#
+# WHY IT MATTERS HERE TOO: clockspread selects its fit window by t_ms
+# (--window-s). On a log spanning midnight, ms-of-day makes last night's lines
+# the LARGEST values, so "the most recent window" silently resolves to
+# yesterday evening and the tool fits the wrong samples -- then reports a
+# confident number for a window the operator did not ask for. Measured on
+# 2026-10-13 against a log running 10-12 13:18 -> 10-13 14:xx.
+#
+# Two tools with the same subtle bug is the argument for testing it in both
+# rather than trusting a comment.
+
+def _el(ts, key="k", elapsed=1000, rs=4):
+    return "%s WARNING CLIENTLOG %s {'tag': 'drift', 'elapsed': %d, 'rs': %d}" % (
+        ts, key, elapsed, rs)
+
+
+def test_elapsed_t_ms_is_monotonic_across_midnight():
+    late = cs.parse_elapsed_line(_el("2026-10-12 23:59:55,138"))
+    early = cs.parse_elapsed_line(_el("2026-10-13 11:04:40,843"))
+    assert late is not None and early is not None
+    assert late["t_ms"] < early["t_ms"], (
+        "the next morning must sort AFTER the previous night, or the fit window "
+        "selects yesterday's samples")
+
+
+def test_elapsed_t_ms_delta_across_midnight_is_real_elapsed_time():
+    a = cs.parse_elapsed_line(_el("2026-10-12 23:59:00,000"))
+    b = cs.parse_elapsed_line(_el("2026-10-13 00:01:00,000"))
+    assert b["t_ms"] - a["t_ms"] == 120000
+
+
+def test_elapsed_t_ms_recovers_ms_of_day():
+    r = cs.parse_elapsed_line(_el("2026-10-13 11:04:40,843"))
+    assert r["t_ms"] % 86400000 == ((11 * 3600 + 4 * 60 + 40) * 1000 + 843)
+
+
+def test_elapsed_parse_requires_the_date_prefix():
+    # A bare HH:MM:SS line cannot be placed on a timeline; guessing a day for it
+    # is what produced the inversion.
+    assert cs.parse_elapsed_line(_el("11:04:40,843")) is None
+
+
+def test_elapsed_multi_day_ordering():
+    stamps = ["2026-10-11 08:00:00,000", "2026-10-11 23:59:59,999",
+              "2026-10-12 00:00:00,000", "2026-10-13 14:20:00,000"]
+    vals = [cs.parse_elapsed_line(_el(s))["t_ms"] for s in stamps]
+    assert vals == sorted(vals) and len(set(vals)) == len(vals)

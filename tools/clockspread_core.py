@@ -19,9 +19,22 @@ the jitter out; p10-p90 keeps a single bad radio from defining the answer.
 Pure module -- all I/O lives in tools/clockspread.py.
 """
 import ast
+import datetime as _dt
 import re
 
-_TS_RE = re.compile(r'(\d\d):(\d\d):(\d\d),(\d\d\d)\s+WARNING\s+CLIENTLOG\s+(\S+)\s+(\{.*\})\s*$')
+# The DATE IS REQUIRED, and t_ms is ABSOLUTE. Same defect as synctool_core had
+# (fixed 584d879), present independently here: with t_ms as ms-of-day, a log
+# spanning midnight makes last night's lines the LARGEST values, so the
+# --window-s "most recent window" silently resolves to yesterday evening and
+# every fit runs on the wrong samples -- reporting a confident number for a
+# window nobody asked for. Measured 2026-10-13 against a log running
+# 10-12 13:18 -> 10-13 14:xx. A bare HH:MM:SS line cannot be placed on a
+# timeline at all, so it is refused rather than assigned a guessed day.
+_TS_RE = re.compile(
+    r'(\d{4})-(\d\d)-(\d\d)\s+(\d\d):(\d\d):(\d\d),(\d\d\d)'
+    r'\s+WARNING\s+CLIENTLOG\s+(\S+)\s+(\{.*\})\s*$')
+
+_EPOCH = _dt.date(1970, 1, 1)
 
 MIN_POINTS = 8          # below this a fit is not meaningfully better than a sample
 
@@ -38,7 +51,7 @@ def parse_elapsed_line(line):
     m = _TS_RE.search(line)
     if not m:
         return None
-    hh, mm, ss, ms, key, payload = m.groups()
+    yyyy, mon, dd, hh, mm, ss, ms, key, payload = m.groups()
     try:
         p = ast.literal_eval(payload)
     except Exception:
@@ -48,8 +61,13 @@ def parse_elapsed_line(line):
     el = p.get("elapsed")
     if not isinstance(el, (int, float)):
         return None
+    try:
+        days = (_dt.date(int(yyyy), int(mon), int(dd)) - _EPOCH).days
+    except ValueError:                       # impossible date in a mangled line
+        return None
     return {"key": key,
-            "t_ms": ((int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms)),
+            "t_ms": (days * 86400000
+                     + ((int(hh) * 3600 + int(mm) * 60 + int(ss)) * 1000 + int(ms))),
             "elapsed": el,
             "rs": p.get("rs")}
 
