@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 
 static int fails = 0, tests = 0;
 #define CHECK(cond, msg) do { tests++; if (!(cond)) { printf("FAIL: %s\n", msg); fails++; } \
@@ -15,6 +16,8 @@ typedef struct {
     int      open, msg, close, err;
     uint8_t  last_op;
     uint8_t  last_msg[4096]; size_t last_msg_n;
+    size_t   last_msg_full_n;   /* unclamped, so a frame bigger than the
+                                   capture buffer can still be verified */
     uint16_t close_code;
     char     errmsg[256];
 } tctx;
@@ -27,6 +30,7 @@ static void t_event(void *ud, int ev, uint8_t op, const uint8_t *d, size_t n) {
     if (ev == MMWS_EV_OPEN) c->open++;
     else if (ev == MMWS_EV_MESSAGE) {
         c->msg++; c->last_op = op;
+        c->last_msg_full_n = n;
         c->last_msg_n = n < sizeof c->last_msg ? n : sizeof c->last_msg;
         if (d) memcpy(c->last_msg, d, c->last_msg_n);
     } else if (ev == MMWS_EV_CLOSE) { c->close++; c->close_code = (n >= 2 && d) ? ((d[0] << 8) | d[1]) : 0; }
@@ -114,6 +118,100 @@ int main(void) {
     start_conn(&sm, &c, acc);
     const char *bad = "HTTP/1.1 101 x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: WRONG\r\n\r\n";
     CHECK(mmws_sm_on_recv(&sm, (uint8_t *)bad, strlen(bad)) == -1 && c.err == 1 && sm.state == MMWS_ERR, "bad handshake -> ERROR");
+
+    /* ------------------------------------------------------------------
+     * 11) DYNAMIC rx BUFFER.
+     *
+     * WHY: rx was a fixed 128KB inline array, and a frame exceeding it emitted
+     * "rx overflow" and dropped the ws -- SockJS then fell back to XHR and the
+     * client reconnected. Measured on-wall 2026-10-13: all 23 reachable screens
+     * had hit it (89-266 times each, lifetime), with lines of the form
+     *     rx overflow rxn=127434 len=4096 cap=131072
+     * i.e. ONE frame reassembling to ~127KB, 3.6KB short of the cap, tipped over
+     * by the next 4KB read.
+     *
+     * Note what a large rxn CANNOT mean: on_recv drains every COMPLETE frame in
+     * a loop and only breaks on !complete, so rxn never holds undrained backlog.
+     * A large rxn is always a single oversized frame mid-reassembly.
+     *
+     * Growing instead of dropping is a backstop: surviving an oversized frame
+     * beats tearing down and triggering a reconnect storm. It is NOT a
+     * substitute for finding the ~128KB payload -- the meshCells dedup (85KB ->
+     * 16KB) is still in place, so something else is large at reconnect time.
+     * ------------------------------------------------------------------ */
+    start_conn(&sm, &c, acc);
+    build_resp(resp, sizeof resp, acc);
+    mmws_sm_on_recv(&sm, (uint8_t *)resp, strlen(resp));
+    CHECK(sm.state == MMWS_OPEN, "grow: handshake ok");
+    CHECK(sm.rxcap >= MMWS_RX_INIT && sm.rxcap < MMWS_RX_MAX,
+          "grow: starts at the small initial capacity, not the old 128KB");
+    {
+        const size_t PAY = 64 * 1024;
+        uint8_t *big = (uint8_t *)malloc(PAY + 10);
+        CHECK(big != NULL, "grow: test alloc");
+        big[0] = 0x81; big[1] = 127;
+        for (int i = 0; i < 8; i++) big[2 + i] = (uint8_t)((PAY >> (56 - 8 * i)) & 0xff);
+        for (size_t i = 0; i < PAY; i++) big[10 + i] = (uint8_t)(i & 0xff);
+        c.msg = 0; c.err = 0;
+        size_t total = PAY + 10, off = 0;
+        while (off < total) {
+            size_t ch = (total - off) < 4096 ? (total - off) : 4096;
+            mmws_sm_on_recv(&sm, big + off, ch);
+            off += ch;
+        }
+        CHECK(c.err == 0, "grow: 64KB frame raises no overflow error");
+        CHECK(c.msg == 1, "grow: 64KB frame delivers exactly one MESSAGE");
+        CHECK(c.last_msg_full_n == PAY, "grow: full 64KB payload length delivered");
+        CHECK(sm.rxcap >= PAY, "grow: capacity grew to hold it");
+        int ok = 1;
+        for (size_t i = 0; i < c.last_msg_n; i++)
+            if (c.last_msg[i] != (uint8_t)(i & 0xff)) { ok = 0; break; }
+        CHECK(ok, "grow: payload bytes intact across growth");
+        free(big);
+    }
+    {
+        c.msg = 0;
+        uint8_t hi2[] = { 0x81, 0x02, 'o', 'k' };
+        mmws_sm_on_recv(&sm, hi2, sizeof hi2);
+        CHECK(c.msg == 1 && c.last_msg_n == 2 && memcmp(c.last_msg, "ok", 2) == 0,
+              "grow: small frame still parses after growth");
+    }
+
+    /* 12) growth is BOUNDED. Unbounded growth on a 247MB iPad-1 whose webclip is
+     *     already jetsam-adjacent would trade a reconnect for a process kill, so
+     *     a frame beyond MMWS_RX_MAX must still be refused -- the old behaviour,
+     *     kept deliberately as the last resort. */
+    start_conn(&sm, &c, acc);
+    build_resp(resp, sizeof resp, acc);
+    mmws_sm_on_recv(&sm, (uint8_t *)resp, strlen(resp));
+    {
+        uint8_t hdr[10];
+        unsigned long long huge = (unsigned long long)MMWS_RX_MAX + 4096;
+        hdr[0] = 0x81; hdr[1] = 127;
+        for (int i = 0; i < 8; i++) hdr[2 + i] = (uint8_t)((huge >> (56 - 8 * i)) & 0xff);
+        c.err = 0;
+        mmws_sm_on_recv(&sm, hdr, sizeof hdr);
+        int errored = 0;
+        uint8_t chunk[4096];
+        memset(chunk, 'z', sizeof chunk);
+        for (int i = 0; i < 400 && !errored; i++)
+            if (mmws_sm_on_recv(&sm, chunk, sizeof chunk) == -1) errored = 1;
+        CHECK(errored && c.err == 1, "bounded: a frame past MMWS_RX_MAX still errors");
+        CHECK(strstr(c.errmsg, "rx overflow") != NULL, "bounded: error says rx overflow");
+        CHECK(sm.rxcap <= MMWS_RX_MAX, "bounded: capacity never exceeds MMWS_RX_MAX");
+    }
+
+    /* 13) dispose releases the buffer and is idempotent (the sm lives inside a
+     *     calloc'd MMWSConn, so mmwsconn_free must be able to hand it back). */
+    start_conn(&sm, &c, acc);
+    build_resp(resp, sizeof resp, acc);
+    CHECK(mmws_sm_on_recv(&sm, (uint8_t *)resp, strlen(resp)) == 0 && sm.state == MMWS_OPEN,
+          "restart after growth: handshake ok");
+    mmws_sm_dispose(&sm);
+    CHECK(sm.rx == NULL && sm.rxcap == 0 && sm.rxn == 0, "dispose: buffer released and zeroed");
+    mmws_sm_dispose(&sm);
+    CHECK(sm.rx == NULL, "dispose: idempotent");
+
 
     printf("\n%d/%d checks passed\n", tests - fails, tests);
     return fails ? 1 : 0;

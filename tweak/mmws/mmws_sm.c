@@ -2,6 +2,7 @@
 #include "mmws_sm.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>     /* malloc/free only — both already in the -U flat-bind list */
 
 static void emit_error(mmws_sm *sm, const char *msg) {
     sm->state = MMWS_ERR;
@@ -10,15 +11,53 @@ static void emit_error(mmws_sm *sm, const char *msg) {
 
 /* drop the first k bytes of the rx buffer */
 static void rx_consume(mmws_sm *sm, size_t k) {
+    if (!sm->rx) { sm->rxn = 0; return; }
     if (k >= sm->rxn) { sm->rxn = 0; return; }
     memmove(sm->rx, sm->rx + k, sm->rxn - k);
     sm->rxn -= k;
+}
+
+/* Ensure the rx buffer can hold `need` bytes, growing geometrically up to
+ * MMWS_RX_MAX. Returns 1 on success, 0 if `need` exceeds the ceiling or the
+ * allocation fails -- the caller then errors out exactly as the fixed-size
+ * version did, so the worst case is unchanged rather than a new crash.
+ *
+ * malloc/free only (both already flat-bound in the Makefile's -U list). realloc
+ * is deliberately NOT used: it is not in that list, and one unbindable symbol
+ * SIGKILLs the whole dylib at load on iOS 5.1. */
+static int rx_reserve(mmws_sm *sm, size_t need) {
+    if (need > MMWS_RX_MAX) return 0;
+    if (sm->rx && sm->rxcap >= need) return 1;
+    size_t cap = sm->rxcap ? sm->rxcap : (size_t)MMWS_RX_INIT;
+    while (cap < need) {
+        if (cap > MMWS_RX_MAX / 2) { cap = MMWS_RX_MAX; break; }
+        cap *= 2;
+    }
+    uint8_t *nb = (uint8_t *)malloc(cap);
+    if (!nb) return 0;
+    if (sm->rx && sm->rxn) memcpy(nb, sm->rx, sm->rxn);
+    if (sm->rx) free(sm->rx);
+    sm->rx = nb;
+    sm->rxcap = cap;
+    return 1;
+}
+
+void mmws_sm_dispose(mmws_sm *sm) {
+    if (!sm) return;
+    if (sm->rx) free(sm->rx);
+    sm->rx = NULL;
+    sm->rxcap = 0;
+    sm->rxn = 0;
 }
 
 int mmws_sm_start(mmws_sm *sm, const char *host, const char *path,
                   const char *ua, const char *origin, const uint8_t rnd16[16],
                   mmws_send_fn send, mmws_event_fn event, void *ud) {
     if (!sm || !host || !path || !rnd16) return -1;
+    /* rx is a heap pointer now, so the memset below would orphan a buffer from a
+     * previous use of this sm. Release it first -- with reconnect storms this
+     * would otherwise leak once per reconnect, not once per process. */
+    mmws_sm_dispose(sm);
     memset(sm, 0, sizeof *sm);
     sm->send = send; sm->event = event; sm->ud = ud; sm->state = MMWS_CONNECTING;
     char key[32];
@@ -35,10 +74,14 @@ int mmws_sm_on_recv(mmws_sm *sm, const uint8_t *bytes, size_t len) {
     if (!sm) return -1;
     if (sm->state == MMWS_CLOSED || sm->state == MMWS_ERR) return -1;
     if (len) {
-        if (sm->rxn + len > MMWS_RXCAP) {
-            static char ov[80];
-            snprintf(ov, sizeof ov, "rx overflow rxn=%u len=%u cap=%u",
-                     (unsigned)sm->rxn, (unsigned)len, (unsigned)MMWS_RXCAP);
+        /* Grow to fit instead of dropping the socket. Only a frame past
+         * MMWS_RX_MAX (or a failed allocation) still errors -- the ceiling is
+         * deliberate; see mmws_sm.h. */
+        if (!rx_reserve(sm, sm->rxn + len)) {
+            static char ov[96];
+            snprintf(ov, sizeof ov, "rx overflow rxn=%u len=%u cap=%u max=%u",
+                     (unsigned)sm->rxn, (unsigned)len,
+                     (unsigned)sm->rxcap, (unsigned)MMWS_RX_MAX);
             emit_error(sm, ov);
             return -1;
         }

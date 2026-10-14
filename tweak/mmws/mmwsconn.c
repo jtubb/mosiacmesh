@@ -181,6 +181,10 @@ void mmwsconn_close(MMWSConn *c, uint16_t code) {
 void mmwsconn_free(MMWSConn *c) {
     if (!c) return;
     conn_teardown(c);
+    /* The sm's rx buffer is heap-allocated and grown on demand, so it must be
+     * handed back here. Without this the fleet leaks one buffer per reconnect,
+     * and reconnect storms are exactly when the transport churns most. */
+    mmws_sm_dispose(&c->sm);
     if (c->rs) CFRelease(c->rs);
     if (c->ws) CFRelease(c->ws);
     free(c);

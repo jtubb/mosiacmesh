@@ -26,12 +26,71 @@ static id        g_webview;   /* the UIWebView, retained, for native->JS dispatc
  * /var/mobile/mmws.log AND per-step breadcrumbs to /var/mobile/mmws_bc.txt (bc). The LAST
  * breadcrumb before a silent crash names the operation that killed the process. */
 #define MMWS_DEBUG 1
-static void mmlog(const char *fmt, ...) {
-    if (!MMWS_DEBUG) return;
+
+/* The log is APPEND-ONLY and never rotated, which made it actively misleading on
+ * 2026-10-13: every screen showed 89-266 "rx overflow" lines accumulated over
+ * months, while the current rate was ZERO (mtime proved no write for ~2h of
+ * continuous playback). Read without that context it looks like an active
+ * fleet-wide transport failure. It cost an investigation to establish otherwise,
+ * and the next reader would have drawn the same wrong conclusion.
+ *
+ * Two cheap guards, both with NO new linker symbols (one unbindable symbol
+ * SIGKILLs the dylib at load on iOS 5.1, so time()/stat()/ftell() are all out):
+ *
+ *   1. A SESSION BANNER on the first write. `grep -c` after the last banner is
+ *      the count for THIS process, which is the number anyone actually wants.
+ *   2. A per-session byte budget. Bounds growth without needing the file size:
+ *      we only have to count what we ourselves write. On reaching it we say so
+ *      once and go quiet, so the log can never become the disk problem.
+ */
+#define MMWS_LOG_BUDGET 262144      /* ~256KB per process */
+static unsigned long g_log_bytes = 0;
+static int           g_log_banner = 0;
+static int           g_log_capped = 0;
+
+static void mmlog_raw(const char *fmt, va_list ap, int *outn) {
     static const char *paths[2] = { "/var/mobile/mmws.log", "/tmp/mmws.log" };
     for (int i = 0; i < 2; i++) {
         FILE *f = fopen(paths[i], "a");
-        if (f) { va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap); fclose(f); }
+        if (f) {
+            va_list cp;
+            va_copy(cp, ap);
+            int n = vfprintf(f, fmt, cp);
+            va_end(cp);
+            if (i == 0 && outn) *outn = (n > 0) ? n : 0;
+            fclose(f);
+        }
+    }
+}
+
+static void mmlog(const char *fmt, ...) {
+    if (!MMWS_DEBUG) return;
+    if (g_log_capped) return;
+    if (!g_log_banner) {
+        g_log_banner = 1;
+        static const char *paths[2] = { "/var/mobile/mmws.log", "/tmp/mmws.log" };
+        for (int i = 0; i < 2; i++) {
+            FILE *f = fopen(paths[i], "a");
+            if (f) {
+                fprintf(f, "[mmws] ==== session start ==== (append-only log; count"
+                           " errors only AFTER this line -- earlier ones are history)\n");
+                fclose(f);
+            }
+        }
+    }
+    int n = 0;
+    va_list ap; va_start(ap, fmt);
+    mmlog_raw(fmt, ap, &n);
+    va_end(ap);
+    g_log_bytes += (unsigned long)n;
+    if (g_log_bytes > MMWS_LOG_BUDGET) {
+        g_log_capped = 1;
+        static const char *paths[2] = { "/var/mobile/mmws.log", "/tmp/mmws.log" };
+        for (int i = 0; i < 2; i++) {
+            FILE *f = fopen(paths[i], "a");
+            if (f) { fprintf(f, "[mmws] ==== session log budget reached; further"
+                                " mmws logging suppressed ====\n"); fclose(f); }
+        }
     }
 }
 /* breadcrumb: append step+aux; read the tail after a crash to see the last op reached */

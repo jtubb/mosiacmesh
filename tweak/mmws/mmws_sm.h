@@ -16,8 +16,31 @@
 #define MMWS_SM_H
 #include "mmws.h"
 
-#define MMWS_RXCAP 131072  /* inbound reassembly buffer, 128KB (was 16KB — mesh playlist
-                              broadcasts ~20KB overflowed it and dropped the ws) */
+/* Inbound reassembly buffer: now GROWN ON DEMAND rather than fixed.
+ *
+ * History: 16KB -> 128KB (mesh playlist broadcasts ~20KB overflowed it) -> and
+ * still overflowing. Measured on-wall 2026-10-13, all 23 reachable screens had
+ * hit the 128KB ceiling, 89-266 times each over the log's lifetime:
+ *     rx overflow rxn=127434 len=4096 cap=131072
+ * One frame reassembling to ~127KB, 3.6KB short of the cap, tipped over by the
+ * next 4KB read. Overflow drops the ws, SockJS falls back to XHR, and the client
+ * reconnects -- so a single oversized broadcast costs the whole transport.
+ *
+ * A large rxn can ONLY be one oversized frame: mmws_sm_on_recv drains every
+ * COMPLETE frame in a loop and breaks only on !complete, so rxn never holds
+ * undrained backlog.
+ *
+ * Growing is a BACKSTOP, not the cure: the meshCells dedup (85KB -> 16KB,
+ * 2026-07-17) is still in place, so some other reconnect-time payload is large
+ * and should be found. Surviving it beats tearing the socket down.
+ *
+ * MMWS_RX_MAX is a hard ceiling on purpose. Unbounded growth on a 247MB iPad-1
+ * whose webclip already sits near the jetsam line would trade a reconnect for a
+ * process kill, and nothing relaunches a dead webclip. Past the ceiling we keep
+ * the old behaviour and error out. */
+#define MMWS_RX_INIT  16384    /* typical post-dedup payload; most sockets never grow */
+#define MMWS_RX_MAX   1048576  /* 1MB hard ceiling; beyond it, error as before */
+#define MMWS_RXCAP    MMWS_RX_MAX  /* back-compat for callers that referenced the old name */
 #define MMWS_TXCAP 16384   /* max single outbound message (header+payload); client-sent
                               messages (SERVERTIME/READY/REGISTER/CLIENTLOG) are all small */
 
@@ -38,15 +61,23 @@ typedef void (*mmws_event_fn)(void *ud, int event, uint8_t opcode, const uint8_t
 typedef struct {
     mmws_state    state;
     char          accept[64];       /* expected Sec-WebSocket-Accept for our sent key */
-    uint8_t       rx[MMWS_RXCAP];
-    size_t        rxn;
+    uint8_t      *rx;               /* heap, grown on demand; NULL until first recv */
+    size_t        rxn;              /* bytes buffered                               */
+    size_t        rxcap;            /* current allocation                            */
     mmws_send_fn  send;
     mmws_event_fn event;
     void         *ud;
 } mmws_sm;
 
+/* Release the heap rx buffer and zero the struct's buffer fields. Idempotent, and
+ * safe on a never-started sm. The sm is embedded in a calloc'd MMWSConn, so
+ * mmwsconn_free() must call this or the buffer leaks per connection -- and with
+ * reconnect storms that is a per-reconnect leak, not a one-off. */
+void mmws_sm_dispose(mmws_sm *sm);
+
 /* Zero-init, compute the accept from rnd_key16, and emit the opening handshake via send().
- * Returns 0 ok, -1 on bad args. State -> CONNECTING. */
+ * Returns 0 ok, -1 on bad args. State -> CONNECTING.
+ * Frees any buffer from a previous use of this sm, so restarting cannot leak. */
 int  mmws_sm_start(mmws_sm *sm, const char *host, const char *path,
                    const char *ua, const char *origin,
                    const uint8_t rnd_key16[16],
