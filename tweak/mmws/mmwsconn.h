@@ -21,11 +21,17 @@ typedef struct {
     void *ud;
 } mmwsconn_cb;
 
-/* Open a WebSocket to ws://host:port<path>. Schedules on the CURRENT run loop; callbacks fire
- * on that run loop's thread. Returns NULL on immediate failure. `cb` is copied. */
+/* Open a WebSocket to ws://host:port<path>. The connection runs on its OWN dedicated internal
+ * I/O thread (its own CFRunLoop) — NOT the caller's run loop. All the `cb` callbacks fire on
+ * that I/O thread, so callers MUST NOT touch shared state directly from a callback without
+ * synchronization; marshal back to your own thread (e.g. dispatch to the main queue) instead.
+ * Returns NULL on immediate failure. `cb` is copied. */
 MMWSConn *mmwsconn_open(const char *host, int port, const char *path, const char *ua, const char *origin, const mmwsconn_cb *cb);
 
-/* Send an application message (masked). 0 ok, -1 if not open / too big. */
+/* Send an application message (masked). Returns 0 = enqueued onto the I/O thread (payload copied),
+ * -1 only if the conn is already torn-down / not yet open or the copy failed. Oversize / closed
+ * is handled ASYNCHRONOUSLY on the I/O thread (the send is dropped, or the conn tears down on tx
+ * overflow) — it is no longer a synchronous -1. */
 int  mmwsconn_send_text  (MMWSConn *c, const uint8_t *data, size_t len);
 int  mmwsconn_send_binary(MMWSConn *c, const uint8_t *data, size_t len);
 

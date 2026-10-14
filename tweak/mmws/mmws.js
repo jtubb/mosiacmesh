@@ -14,7 +14,9 @@
  *     close: function(id, code)         // send close
  *   };
  *   // native -> JS delivery (native calls these on the main thread via evaluate-JS):
- *   window.__mmwsDispatch(id, type, data)   // type: 'open' | 'message' | 'close' | 'error'
+ *   window.__mmwsDispatch(id, type, data, recvTs)   // type: 'open' | 'message' | 'close' | 'error'
+ *     // recvTs: native off-main receipt timestamp (epoch-ms) for 'message' frames only;
+ *     // stashed on window.__mmwsRecvTs immediately before ws.onmessage fires
  * --------------------------------------------------------------------------------------------
  * The native side maps id -> MMWSConn and translates the mmwsconn_cb callbacks into
  * __mmwsDispatch(...). SockJS only ever sends/receives text frames, so binary is omitted here.
@@ -68,13 +70,15 @@
     };
 
     /* native -> JS event pump */
-    w.__mmwsDispatch = function (id, type, data) {
+    w.__mmwsDispatch = function (id, type, data, recvTs) {
         var ws = reg[id];
         if (!ws) return;
         if (type === 'open') {
             ws.readyState = OPEN;
             if (ws.onopen) try { ws.onopen({ type: 'open' }); } catch (e) {}
         } else if (type === 'message') {
+            w.__mmwsRecvTs = recvTs;   // native off-main receipt stamp for THIS frame (epoch-ms);
+                                       // read synchronously downstream (SockJS dispatches sync)
             if (ws.onmessage) try { ws.onmessage({ type: 'message', data: data }); } catch (e) {}
         } else if (type === 'close') {
             ws._closed(typeof data === 'number' ? data : 1000);

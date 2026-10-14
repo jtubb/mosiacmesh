@@ -168,7 +168,8 @@ var GoTime = (function f() {
         _dlWindowMs: 90000,
         _dlPct: 0.90,
         _dlMinSamples: 12,
-        _lastDlTarget: null
+        _lastDlTarget: null,
+        _beatRecvTolMs: 3000
     };
     
 	// Private Methods
@@ -273,6 +274,15 @@ var GoTime = (function f() {
     _beatSuppressesPoll = function (enabled, lastBeatMs, nowMs, staleMs) {
         if (!enabled || lastBeatMs === null || lastBeatMs === undefined) { return false; }
         return (nowMs - lastBeatMs) < staleMs;
+    };
+
+    // Choose localRecv for a beat: prefer a native receipt stamp (recvTs, epoch-ms
+    // from mmws' off-main I/O thread) when it's a finite value close to now; else
+    // fall back to the main-thread clock read. toleranceMs rejects stale/garbage stamps.
+    _pickRecv = function (recvTs, nowTs, toleranceMs) {
+        if (typeof recvTs === 'number' && isFinite(recvTs) &&
+            Math.abs(nowTs - recvTs) <= toleranceMs) { return recvTs; }
+        return nowTs;
     };
 
     // Pure hybrid correction step: deadband (ignore tiny error) / bounded slew /
@@ -643,10 +653,14 @@ var GoTime = (function f() {
 
 		// Server broadcast clock beat: {REQUEST:"TIMEBEAT", PAYLOAD:{t:<serverMs>}}.
 		// Message routing that calls this is a separate task; this just consumes
-		// the server-send timestamp once handed to it.
-		beatReceived: function (serverSendMs) {
-			var localRecv = getAccurateTimestamp();   // SAME clock fn now() uses
-			options._lastBeatMs = localRecv;
+		// the server-send timestamp once handed to it. recvTs is OPTIONAL: a native
+		// receipt stamp (epoch-ms) from mmws' off-main I/O thread, free of
+		// main-thread scheduling jitter. When absent/implausible, falls back to the
+		// main-thread clock read (the original one-arg behavior is unchanged).
+		beatReceived: function (serverSendMs, recvTs) {
+			var nowTs = getAccurateTimestamp();   // SAME clock fn now() uses
+			var localRecv = _pickRecv(recvTs, nowTs, options._beatRecvTolMs);
+			options._lastBeatMs = nowTs;   // freshness/failsafe uses the local read, not recvTs
 			var sample = _beatSample(serverSendMs, localRecv, options._beatPrecisionMs);
 			var revised = _reviseOffset(sample, "beat");
 			options._beatRing.push({ offset: sample.offset, t: GoTime.now() });   // v4b: pure one-way ring
@@ -726,7 +740,8 @@ var GoTime = (function f() {
 		},
 		_nextSyncDelay: _nextSyncDelay,
 		_beatSample: _beatSample,
-		_beatSuppressesPoll: _beatSuppressesPoll
+		_beatSuppressesPoll: _beatSuppressesPoll,
+		_pickRecv: _pickRecv
 	}
 
 })();

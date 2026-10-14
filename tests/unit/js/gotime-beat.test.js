@@ -124,6 +124,29 @@ test('_sync: beat mode OFF (window._mmClockBeat falsy) -> always polls even with
 // _lastAcceptTime unconditionally, WITHOUT touching the precision ratchet
 // itself (that still governs _robustTarget weighting + readyVerdict). ---
 
+// --- native recvTs (mmws off-main receipt stamp): beatReceived optionally
+// accepts a second arg, a native receipt timestamp, and prefers it over the
+// main-thread clock read when it's plausible (finite + within tolerance of
+// now). This removes main-thread scheduling jitter from the beat's localRecv.
+// _pickRecv is the pure decision, unit-tested in isolation below. ---
+
+test('_pickRecv: fresh native recvTs within tolerance is used', () => {
+  const G = loadGoTime().GoTime;
+  assert.equal(G._pickRecv(1000000, 1000120, 3000), 1000000); // 120ms apart < 3s
+});
+test('_pickRecv: implausible recvTs (too far / NaN / missing) falls back to nowTs', () => {
+  const G = loadGoTime().GoTime;
+  assert.equal(G._pickRecv(500000, 1000000, 3000), 1000000);  // 500s apart -> reject
+  assert.equal(G._pickRecv(NaN, 1000000, 3000), 1000000);
+  assert.equal(G._pickRecv(undefined, 1000000, 3000), 1000000);
+});
+test('beatReceived: with fresh recvTs, offset uses recvTs not the local read', () => {
+  const G = loadGoTime().GoTime;
+  // offset must equal serverSendMs - recvTs when recvTs is plausible
+  var off = G._beatSample(1000000, G._pickRecv(999880, 1000000, 3000), 12).offset;
+  assert.equal(off, 120);   // 1000000 - 999880
+});
+
 test('beatReceived: refreshes accAge (_lastAcceptTime) even though beat precision cannot beat a tighter /time lock', () => {
   const s = loadGoTime();
   s.GoTime.wsSend(function () { return true; });
