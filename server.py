@@ -2507,9 +2507,44 @@ if __name__ == '__main__':
         # clock-independent sync metric reported "no telemetry" whenever the server
         # was started without -v, with no error to explain why. Getting timestamps
         # should not cost a DEBUG-level log flood.
+        # SIZE-CAPPED LOG. On 2026-10-15 mm_server.err reached 2.52 GB in ~2.5
+        # days and the server died with it, behind 16.85 GB of logs across 54
+        # files. CLIENTLOG sampling (see mosaicmesh/clientlog_throttle.py) cuts
+        # the rate; this caps the total so it can never fill the disk again
+        # whatever the rate turns out to be.
+        #
+        # logging has to OWN the file for rotation to work -- basicConfig
+        # defaults to stderr, and the launcher used to redirect stderr into this
+        # same path, so a rotation rename would have left the shell writing to an
+        # orphaned inode. Launch with stderr pointed at a DIFFERENT file now.
+        #
+        # The filename stays mm_server.err because tools/synctool.py and
+        # tools/clockspread.py both default --log to it. Rotation does mean a
+        # measurement window older than the current file is in .1/.2/.3; at
+        # 128 MB that is hours, and those tools read minutes.
+        _log_path = os.environ.get("MM_LOG_FILE", "mm_server.err")
+        _log_mb = float(os.environ.get("MM_LOG_MAX_MB", "128") or 128)
+        _log_keep = int(os.environ.get("MM_LOG_BACKUPS", "3") or 3)
+        _handlers = None
+        if _log_mb > 0:
+            try:
+                from logging.handlers import RotatingFileHandler
+                _handlers = [RotatingFileHandler(
+                    _log_path, maxBytes=int(_log_mb * 1024 * 1024),
+                    backupCount=_log_keep, encoding="utf-8")]
+            except Exception as _e:
+                # Never let logging configuration stop the server from starting;
+                # fall back to the previous stderr behaviour and say so.
+                print("log rotation unavailable (%s); falling back to stderr" % _e)
+                _handlers = None
         logging.basicConfig(
             level=logging.DEBUG if args.Verbose else logging.WARNING,
-            format='%(asctime)s %(levelname)s %(message)s')
+            format='%(asctime)s %(levelname)s %(message)s',
+            handlers=_handlers)
+        if _handlers:
+            logging.warning("log rotation active: %s, %.0fMB x %d backups "
+                            "(cap ~%.0fMB)", _log_path, _log_mb, _log_keep,
+                            _log_mb * (_log_keep + 1))
 
         if( os.path.isfile('settings.dat')):
             data = Path('settings.dat').read_text(encoding="utf-8")

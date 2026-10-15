@@ -20,6 +20,7 @@ Substitutions applied (pure relocation, no semantic changes):
   - all other helpers were already moved to mosaicmesh.* modules and
     are imported at module top as bare names
 """
+import os
 import logging
 import time
 import asyncio
@@ -83,6 +84,14 @@ from mosaicmesh.calibration import (
     _group_clients,
 )
 from mosaicmesh.websocket.session_store import session_request
+from mosaicmesh.clientlog_throttle import ClientlogThrottle
+
+# MM_CLIENTLOG_THROTTLE_S=0 turns sampling off without a code change. Only
+# `clock-sync` is sampled; every other tag, including ones added later, is
+# written at full rate.
+_clientlog_throttle = ClientlogThrottle(
+    interval_s=float(os.environ.get("MM_CLIENTLOG_THROTTLE_S", "10") or 10),
+    throttled={"clock-sync"})
 
 
 def handle_cache_ack(msg):
@@ -499,7 +508,29 @@ def msg_response(msg,session):
         # Client-side debug stream (opt-in via ?tdbg). Surfaced in the server log
         # so device state (video error/readyState/events) is visible without the
         # operator relaying an on-screen HUD. No state change.
-        logging.warning("CLIENTLOG %s %s", msg.get("SRC"), msg.get("PAYLOAD"))
+        #
+        # SAMPLED, because this line alone cost the server its life on
+        # 2026-10-15: mm_server.err reached 2.52 GB in ~2.5 days and the process
+        # died, with 16.85 GB of logs across 54 files behind it. The volume is
+        # arithmetic -- 24 screens x ~1 line/s x 86400 s x ~500 B is ~1 GB/day.
+        # Measured on a fresh log with playback STOPPED, `clock-sync` alone was
+        # 83.8% of the bytes, and synctool reads that tag only as a liveness
+        # reference. drift/hb/seekland/loopland pass at FULL rate: they carry the
+        # samples synctool and clockspread fit, and thinning them would degrade
+        # the measurements directly. Unknown tags pass too -- see
+        # mosaicmesh/clientlog_throttle.py.
+        _pl = msg.get("PAYLOAD")
+        _tag = _pl.get("tag") if isinstance(_pl, dict) else None
+        if _clientlog_throttle.should_log(msg.get("SRC"), _tag):
+            _dropped = _clientlog_throttle.take_suppressed()
+            # Say so when lines were dropped, so a thinned stream never reads as
+            # a silent gap -- the mmws log's misleading lifetime counts are the
+            # cautionary case.
+            if _dropped:
+                logging.warning("CLIENTLOG %s %s [+%d sampled out]",
+                                msg.get("SRC"), _pl, _dropped)
+            else:
+                logging.warning("CLIENTLOG %s %s", msg.get("SRC"), _pl)
 
     elif(msg["REQUEST"] == "DISCOVERY_STATUS"):
         # Return discovery information for all clients
